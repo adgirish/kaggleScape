@@ -1,263 +1,203 @@
 
 # coding: utf-8
 
-# # Multivariate plotting
+# This kernel is based on my earlier "[Simple Linear Stacking](https://www.kaggle.com/aharless/simple-linear-stacking-lb-9730)" kernel. (Click on the link for more information.) This one represents the base model results as ranks instead of logits. (On the same base model data, the public LB performance was almost identical, but this one was .0001 higher.)  Also, this now uses the updated version of [anttip's FM_FTRL](https://www.kaggle.com/anttip/talkingdata-wordbatch-fm-ftrl-lb-0-9752).
 # 
-# <table>
-# <tr>
-# <td><img src="https://i.imgur.com/gJ65O47.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/3qEqPoD.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/1fmV4M2.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/H20s88a.png" width="350px"/></td>
-# </tr>
-# <tr>
-# <td style="font-weight:bold; font-size:16px;">Multivariate Scatter Plot</td>
-# <td style="font-weight:bold; font-size:16px;">Grouped Box Plot</td>
-# <td style="font-weight:bold; font-size:16px;">Heatmap</td>
-# <td style="font-weight:bold; font-size:16px;">Parallel Coordinates</td>
-# </tr>
-# <tr>
-# <td>df.plot.scatter()</td>
-# <td>df.plot.box()</td>
-# <td>sns.heatmap</td>
-# <td>pd.plotting.parallel_coordinates</td>
-# </tr>
-# <!--
-# <tr>
-# <td>Good for interval and some nominal categorical data.</td>
-# <td>Good for interval and some nominal categorical data.</td>
-# <td>Good for nominal and ordinal categorical data.</td>
-# <td>Good for ordinal categorical and interval data.</td>
-# </tr>
-# -->
-# </table>
-# 
-# For most of this tutorial we've been plotting data in one (univariate) or two (bivariate) dimensions. In the previous section we explored faceting: a multivariate plotting method that works by "gridding out" the data.
-# 
-# In this section we'll delve further into multivariate plotting. First we'll explore "truly" multivariate charts. Then we'll examine some plots that use summarization to get at the same thing.
-
-# In[2]:
-
-
-import pandas as pd
-pd.set_option('max_columns', None)
-df = pd.read_csv("../input/fifa-18-demo-player-dataset/CompleteDataset.csv", index_col=0)
-
-import re
-import numpy as np
-
-footballers = df.copy()
-footballers['Unit'] = df['Value'].str[-1]
-footballers['Value (M)'] = np.where(footballers['Unit'] == '0', 0, 
-                                    footballers['Value'].str[1:-1].replace(r'[a-zA-Z]',''))
-footballers['Value (M)'] = footballers['Value (M)'].astype(float)
-footballers['Value (M)'] = np.where(footballers['Unit'] == 'M', 
-                                    footballers['Value (M)'], 
-                                    footballers['Value (M)']/1000)
-footballers = footballers.assign(Value=footballers['Value (M)'],
-                                 Position=footballers['Preferred Positions'].str.split().str[0])
-
-
-# (Note: the first code cell above contains some data pre-processing. This is extraneous, and so I've hidden it by default.)
-
-# In[3]:
-
-
-footballers.head()
-
-
-# ## Adding more visual variables
-# 
-# The most obvious way to plot lots of variables is to augement the visualizations we've been using thus far with even more  [visual variables](http://www.infovis-wiki.net/index.php?title=Visual_Variables). A **visual variable** is any visual dimension or marker that we can use to perceptually distinguish two data elements from one another. Examples include size, color, shape, and one, two, and even three dimensional position.
-# 
-# "Good" multivariate data displays are ones that make efficient, easily-interpretable use of these parameters.
-# 
-# ### Multivariate scatter plots
-# 
-# Let's look at some examples. We'll start with the scatter plot. Supose that we are interested in seeing which type of offensive players tends to get paid the most: the striker, the right-winger, or the left-winger.
-
-# In[5]:
-
-
-import seaborn as sns
-
-sns.lmplot(x='Value', y='Overall', hue='Position', 
-           data=footballers.loc[footballers['Position'].isin(['ST', 'RW', 'LW'])], 
-           fit_reg=False)
-
-
-# This scatterplot uses three visual variables. The horizontal position (x-value) tracks the `Value` of the player (how well they are paid). The vertical position (y-value) tracks the `Overall` score of the player across all attributes. And the color (the `hue` parameter) tracks which of the three categories of interest the player the point represents is in.
-# 
-# The new variable in this chart is **color**. Color provides an aesthetically pleasing visual, but it's tricky to use. Looking at this scatter plot we see the same overplotting issue we saw in previous sections. But we no longer have an easy solution, like using a hex plot, because color doesn't make sense in that setting.
-# 
-# Another example visual variable is **shape**. Shape controls, well, the shape of the marker:
-
-# In[6]:
-
-
-sns.lmplot(x='Value', y='Overall', markers=['o', 'x', '*'], hue='Position',
-           data=footballers.loc[footballers['Position'].isin(['ST', 'RW', 'LW'])],
-           fit_reg=False
-          )
-
-
-# `seaborn` is opinionated about what kinds of visual variables you should use, and doesn't provide a shape option very often. This is because simple shapes, though nifty, are perceptually inferior to colors in terms of their distinguishability.
-
-# ### Grouped box plot
-# 
-# Another demonstrative plot is the grouped box plot. This plot takes advantage of **grouping**. Suppose we're interested in the following question: do Strikers score higher on "Aggression" than Goalkeepers do?
-
-# In[11]:
-
-
-f = (footballers
-         .loc[footballers['Position'].isin(['ST', 'GK'])]
-         .loc[:, ['Value', 'Overall', 'Aggression', 'Position']]
-    )
-f = f[f["Overall"] >= 80]
-f = f[f["Overall"] < 85]
-f['Aggression'] = f['Aggression'].astype(float)
-
-sns.boxplot(x="Overall", y="Aggression", hue='Position', data=f)
-
-
-# As you can see, this plot demonstrates conclusively that within our datasets goalkeepers (at least, those with an overall score between 80 and 85) have *much* lower Aggression scores than Strikers do.
-# 
-# In this plot, the horizontal axis encodes the `Overall` score, the vertical axis encodes the `Aggression` score, and the grouping encodes the `Position`.
-# 
-# Grouping is an extremely communicative visual variable: it makes this chart very easy to interpret. However, it has very low cardinality: it's very hard to use groups to fit more than a handful of categorical values. In this plot we've chosen just two player positions and five Overall player scores and the visualization is already rather crowded. Overall, grouping is very similar to faceting in terms of what it can and can't do.
-
-# ## Summarization
-# 
-# It is difficult to squeeze enough dimensions onto a plot without hurting its interpretability. Very busy plots are naturally very hard to interpret. Hence highly multivariate can be difficult to use.
-# 
-# Another way to plot many dataset features while circumnavigating this problem is to use **summarization**. Summarization is the creation and addition of new variables by mixing and matching the information provided in the old ones.
-# 
-# Summarization is a useful technique in data visualization because it allows us to "boil down" potentially very complicated relationships into simpler ones.
-# 
-# ### Heatmap
-# 
-# Probably the most heavily used summarization visualization is the **correlation plot**, in which measures the correlation between every pair of values in a dataset and plots a result in color.
-
-# In[13]:
-
-
-f = (
-    footballers.loc[:, ['Acceleration', 'Aggression', 'Agility', 'Balance', 'Ball control']]
-        .applymap(lambda v: int(v) if str.isdecimal(v) else np.nan)
-        .dropna()
-).corr()
-
-sns.heatmap(f, annot=True)
-
-
-# Each cell in this plot is the intersection of two variables; its color and label together indicate the amount of *correlation* between the two variables (how likely both variables are the increase or decrease at the same time). For example, in this dataset Agility and Acceleration are highly correlated, while Aggression and Balanced are very uncorrelated.
-# 
-# A correlation plot is a specific kind of **heatmap**. A heatmap maps one particular fact (in this case, correlation) about every pair of variables you chose from a dataset.
-# 
-# ### Parallel Coordinates
-# 
-# A **parallel coordinates plot** provides another way of visualizing data across many variables.
-
-# In[14]:
-
-
-from pandas.plotting import parallel_coordinates
-
-f = (
-    footballers.iloc[:, 12:17]
-        .loc[footballers['Position'].isin(['ST', 'GK'])]
-        .applymap(lambda v: int(v) if str.isdecimal(v) else np.nan)
-        .dropna()
-)
-f['Position'] = footballers['Position']
-f = f.sample(200)
-
-parallel_coordinates(f, 'Position')
-
-
-# In the visualization above we've plotted a sample of 200 goalkeepers (in dark green) and strikers (in light green) across our five variables of interest.
-# 
-# Parallel coordinates plots are great for determining how distinguishable different classes are in the data. They standardize the variables from top to bottom... In this case, we see that strikers are almost uniformally higher rated on all of the variables we've chosen, meaning these two classes of players are very easy to distinguish.
-
-# ## Exercises
+# The latest version uses a new LightGBM model that was fit seprately to multiple periods and recombined, and it otpimizes the stacker's regularization parameter using a time-based split of the validation data.
 
 # In[15]:
 
 
-pokemon = pd.read_csv("../input/pokemon/Pokemon.csv", index_col=0)
-pokemon.head()
-
-
-# Try answering the following questions. Click the "Output" button on the cell below to see the answers.
-# 
-# 1. What are three techniques for creating multivariate data visualziations?
-# 2. Name three examples of visual variables.
-# 3. How does summarization in data visualization work?
-
-# In[ ]:
-
-
-from IPython.display import HTML
-HTML("""
-<ol>
-<li>The three techniques we have covered in this tutorial are faceting, using more visual variables, and summarization.</li>
-<br/>
-<li>Some examples of visual variables are shape, color, size, x-position, y-position, and grouping. However there are many more that are possible!</li>
-<br/>
-<li>In data visualization, summarization works by compressing complex data into simpler, easier-to-plot indicators.</li>
-</ol>
-""")
-
-
-# For the exercises that follow, try forking this notebook and replicating the plots that follow. To see the answers, hit the "Input" button below to un-hide the code.
-
-# In[ ]:
-
-
-import seaborn as sns
-
-sns.lmplot(x='Attack', y='Defense', hue='Legendary', 
-           markers=['x', 'o'],
-           fit_reg=False, data=pokemon)
-
-
-# In[ ]:
-
-
-sns.boxplot(x="Generation", y="Total", hue='Legendary', data=pokemon)
-
-
-# In[ ]:
-
-
-sns.heatmap(
-    pokemon.loc[:, ['HP', 'Attack', 'Sp. Atk', 'Defense', 'Sp. Def', 'Speed']].corr(),
-    annot=True
-)
+# File containing validation data
+# (These are selected from the last day of the original training set
+#  to correspond to the times of day used in the test set.)
+VAL_FILE = '../input/training-and-validation-data-pickle/validation.pkl.gz'
 
 
 # In[16]:
 
 
+import numpy as np
 import pandas as pd
-from pandas.plotting import parallel_coordinates
+import os
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
 
-p = (pokemon[(pokemon['Type 1'].isin(["Psychic", "Fighting"]))]
-         .loc[:, ['Type 1', 'Attack', 'Sp. Atk', 'Defense', 'Sp. Def']]
-    )
-
-parallel_coordinates(p, 'Type 1')
+print(os.listdir("../input"))
 
 
-# # Conclusion
-# 
-# In this tutorial we followed up on faceting, covered in the last section, by diving into two other multivariate data visualization techniques.
-# 
-# The first technique, adding more visual variables, results in more complicated but potentially more detailed plots. The second technique, summarization, compresses variable information to a summary statistic, resulting in a simple output&mdash;albeit at the cost of expressiveness.
-# 
-# Faceting, adding visual variables, and summarization are the three multivariate techniques that we will cover in this tutorial.
-# 
-# The rest of the material in this tutorial is optional. In the next section we will learn to use `plotly`, a very popular interactive visualization library that builds on these libraries.
-# 
-# [Click here to go to the next section, "Introduction to plotly"](https://www.kaggle.com/residentmario/introduction-to-plotly-optional/).
+# In[17]:
+
+
+almost_zero = 1e-10
+almost_one = 1 - almost_zero
+
+
+# In[18]:
+
+
+# Just names to identify the models
+base_models = {
+    'lgb1 ': "assemblage of krishna's LGBM with time deltas",
+    'wbftl': "anttip's Wordbatch FM-FTRL",
+    'nngpu': "Downampled Neural Network run on GPU"
+    }
+
+
+# In[19]:
+
+
+# Files with validation set predictions from each of the base models
+# (These were fit on a subset of the training data that ends a day before
+#  the end of the full training set.)
+cvfiles = {
+    'lgb1 ': '../input/validation-of-pas-un-m-lange/val_krishnas_r_lgb_bag3.csv',
+    'wbftl': '../input/validate-anttip-s-wordbatch-fm-ftrl-9752-version/wordbatch_fm_ftrl_val.csv',
+    'nngpu': '../input/gpu-nn-validation-more-features/gpu_val3.csv'
+    }
+
+
+# In[20]:
+
+
+# Files with test set predictions
+# (These were fit on the full training set
+#  or on a subset at the end, to accommodate memory limits.)
+subfiles = {
+    'lgb1 ': '../input/ceci-n-est-pas-un-m-lange/sub_krishnas_r_lgb_bag4.csv',
+    'wbftl': '../input/anttip-s-wordbatch-fm-ftrl-9752-version/wordbatch_fm_ftrl.csv',
+    'nngpu': '../input/new-talkingdata-gpu-example-with-multiple-runs/gpu_test3.csv'
+    }
+
+
+# In[21]:
+
+
+# Public leaderbaord scores, for comparison
+lbscores = {
+    'lgb1 ': .9759,
+    'wbftl': .9752,
+    'nngpu': .9695
+}
+
+
+# You can click on the "Data" tab and follow the links to the kernels that generated each of the outputs above. Usually there are "forked from" links that you can follow to see where the models originated. (In the case of Pranav's LGBM, though, the link is misleading, because the original was [a separate kernel in R](https://www.kaggle.com/pranav84/single-lightgbm-in-r-with-75-mln-rows-lb-0-9690), and the fork was from a different Python kernel.)
+
+# In[22]:
+
+
+model_order = [m for m in base_models] # To keep order consistent when converting to array
+
+
+# In[23]:
+
+
+cvdata = pd.DataFrame( { 
+    m:pd.read_csv(cvfiles[m])['is_attributed'].rank()
+    for m in base_models
+    } )
+X_train = np.array(cvdata[model_order])
+y_train = pd.read_pickle(VAL_FILE)['is_attributed']
+n = len(y_train)
+X_train /= n
+
+
+# In[24]:
+
+
+cvdata.head()
+
+
+# In[25]:
+
+
+cvdata.corr()
+
+
+# Before fitting the stacking model, let's optimize the regularization parameter.
+
+# In[26]:
+
+
+X, X_val, y, y_val = train_test_split(X_train, y_train, test_size=.33, shuffle=False )
+for c in [1e-6, 1e-5, 1e-4, 1e-3, 1e-2, 1e-1, 1, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6]:
+    mod = LogisticRegression(C=c)
+    mod.fit(X, y)
+    val_pred = mod.predict_proba(X_val)[:,1]
+    print( c, roc_auc_score(y_val, mod.predict_proba(X_val)[:,1]) )
+
+
+# Looks like it wants no regularization, which isn't too surprising, given the simplicity of the model..
+
+# In[27]:
+
+
+stack_model = LogisticRegression(C=1e6)
+stack_model.fit(X_train, y_train)
+stack_model.coef_
+
+
+# Note that the evaluation criterion for this competition (AUC) depends only on rank. Therefore:
+# 1. Any linear transformation applied to the coefficients won't affect the score of the result.
+# 2. We don't care much about the value of the intercept term (not shown above).
+# 3. It doesn't matter whether the coefficients sum to 1.
+# 4. If we normalize the coefficients to sum to 1, the result has the same interpretation as blending weights.
+
+# In[28]:
+
+
+weights = stack_model.coef_/stack_model.coef_.sum()
+columns = cvdata[model_order].columns
+scores = [ roc_auc_score( y_train, cvdata[c] )  for c in columns ]
+names = [ base_models[c] for c in columns ]
+lb = [ lbscores[c] for c in columns ]
+pd.DataFrame( data={'LB score': lb, 'CV score':scores, 'weight':weights.reshape(-1)}, index=names )
+
+
+# In[29]:
+
+
+print(  'Stacker score: ', roc_auc_score( y_train, stack_model.predict_proba(X_train)[:,1] )  )
+
+
+# In[ ]:
+
+
+final_sub = pd.DataFrame()
+subs = {m:pd.read_csv(subfiles[m]).rename({'is_attributed':m},axis=1) for m in base_models}
+first_model = list(base_models.keys())[0]
+final_sub['click_id'] = subs[first_model]['click_id']
+
+
+# In[ ]:
+
+
+df = subs[first_model]
+for m in subs:
+    if m != first_model:
+        df = df.merge(subs[m], on='click_id')  # being careful in case clicks are in different order
+df.head()
+
+
+# In[ ]:
+
+
+X_test = np.array( df.drop(['click_id'],axis=1)[model_order].rank()/df.shape[0] )
+final_sub['is_attributed'] = stack_model.predict_proba(X_test)[:,1]
+final_sub.head(10)
+
+
+# In[ ]:
+
+
+final_sub['is_attributed'] = final_sub['is_attributed'].rank(method='dense') / 1e8
+pd.options.display.float_format = ('{:,.8f}').format
+final_sub.head(10)
+
+
+# In[ ]:
+
+
+final_sub.to_csv("sub_stacked.csv", index=False, float_format='%.8f')
+

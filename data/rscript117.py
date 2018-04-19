@@ -1,124 +1,32 @@
-__author__ = 'Nick Sarris (ngs5st)'
-
+'''
+The core idea behind all blends is "diversity". 
+By blending some moderate model results (with some weights), we can create a more "diverse" stable results.
+Errors from one model will be covered by others. Same goes for all the models. 
+So, we get more stable results after blendings. 
+'''
 import pandas as pd
-import operator
+import numpy as np
 
-# reading data
-prior_orders = pd.read_csv('../input/order_products__prior.csv')
-train_orders = pd.read_csv('../input/order_products__train.csv')
-orders = pd.read_csv('../input/orders.csv')
+grucnn = pd.read_csv('../input/bi-gru-cnn-poolings/submission.csv')
+gruglo = pd.read_csv("../input/pooled-gru-glove-with-preprocessing/submission.csv")
+ave = pd.read_csv("../input/toxic-avenger/submission.csv")
+supbl= pd.read_csv('../input/blend-of-blends-1/superblend_1.csv')
+best = pd.read_csv('../input/toxic-hight-of-blending/hight_of_blending.csv')
+lgbm = pd.read_csv('../input/lgbm-with-words-and-chars-n-gram/lvl0_lgbm_clean_sub.csv')
+wordbtch = pd.read_csv('../input/wordbatch-fm-ftrl-using-mse-lb-0-9804/lvl0_wordbatch_clean_sub.csv')
+tidy = pd.read_csv('../input/tidy-xgboost-glmnet-text2vec-lsa/tidy_glm.csv')
+fast = pd.read_csv('../input/pooled-gru-fasttext-6c07c9/submission.csv')
+bilst = pd.read_csv('../input/bidirectional-lstm-with-convolution/submission.csv')
+oofs = pd.read_csv('../input/oof-stacking-regime/submission.csv')
+corrbl = pd.read_csv('../input/another-blend-tinkered-by-correlation/corr_blend.csv')
+rkera = pd.read_csv('../input/why-a-such-low-score-with-r-and-keras/submission.csv')
 
-# removing all user_ids not in the test set
-test  = orders[orders['eval_set'] == 'test' ]
-user_ids = test['user_id'].values
-orders = orders[orders['user_id'].isin(user_ids)]
+b1 = best.copy()
+col = best.columns
 
-# combine prior rows by user_id, add product_ids to a list
-prior_products = pd.DataFrame(prior_orders.groupby(
-    'order_id')['product_id'].apply(list))
-prior_products.reset_index(level=['order_id'], inplace=True)
-prior_products.columns = ['order_id','products_list']
-
-# combine train rows by user_id, add product_ids to a list
-train_products = pd.DataFrame(train_orders.groupby(
-    'order_id')['product_id'].apply(list))
-train_products.reset_index(level=['order_id'], inplace=True)
-train_products.columns = ['order_id','products_list']
-
-# seperate orders into prior/train sets
-# turns out there are no test user_ids in the training set so train will be empty
-prior = orders[orders['eval_set'] == 'prior']
-train = orders[orders['eval_set'] == 'train']
-
-# find the number of the last order placed
-prior['num_orders'] = prior.groupby(['user_id'])['order_number'].transform(max)
-train['num_orders'] = train.groupby(['user_id'])['order_number'].transform(max)
-
-# merge everything into one dataframe
-prior = pd.merge(prior, prior_products, on='order_id', how='left')
-train = pd.merge(train, train_products, on='order_id', how='left')
-comb = pd.concat([prior, train], axis=0).reset_index(drop=True)
-
-test_cols = ['order_id','user_id']
-cols = ['order_id','user_id','order_number','num_orders','products_list']
-
-comb = comb[cols]
-test = test[test_cols]
-
-# iterate through dataframe, adding data to dictionary
-# data added is in the form of a list:
-    # list[0] = weight of the data: (1 + current order number / final order number), thus later data is weighted more
-    # list[1] = how important the item is to the buyer: (order in the cart / number of items bought), thus items bought first are weighted more
-
-# also used the average amount of items bought every order as a benchmark for how many items to add per user in the final submission
-
-product_dict = {}
-for i, row in comb.iterrows():
-    if i % 100000 == 0:
-        print('Iterated Through {} Rows...'.format(i))
-
-    if row['user_id'] in product_dict:
-        index = 1
-        list.append(product_dict[row['user_id']]['len_products'], len(row['products_list']))
-        for val in row['products_list']:
-            if val in product_dict[row['user_id']]:
-                product_dict[row['user_id']][val][0] += 1 + int(row['order_number']) / int(row['num_orders'])
-                list.append(product_dict[row['user_id']][val][1], index / len(row['products_list']))
-            else:
-                product_dict[row['user_id']][val] = [1 + int(row['order_number']) / int(row['num_orders']),
-                                              [index / len(row['products_list'])]]
-            index += 1
-    else:
-        index = 1
-        product_dict[row['user_id']] = {'len_products': [
-            len(row['products_list'])]}
-        for val in row['products_list']:
-            product_dict[row['user_id']][val] = [1 + int(row['order_number']) / int(row['num_orders']),
-                                          [index / len(row['products_list'])]]
-            index += 1
-
-final_data = {}
-for user_id in product_dict:
-    final_data[user_id] = {}
-    for product_id in product_dict[user_id]:
-        if product_id == 'len_products':
-            final_data[user_id][product_id] = \
-                round(sum(product_dict[user_id][product_id])/
-                    len(product_dict[user_id][product_id]))
-        else:
-            final_data[user_id][product_id] = \
-                [product_dict[user_id][product_id][0],1/
-                 (sum(product_dict[user_id][product_id][1])/
-                len(product_dict[user_id][product_id][1]))]
-
-# iterate through testing dataframe
-# every user_id in test corresponds to a dictionary entry
-# call the dictionary with every row, products by weight, combine them into a string, and append them to products
-
-products = []
-for i, row in test.iterrows():
-    if i % 100000 == 0:
-        print('Iterated Through {} Rows...'.format(i))
-
-    final_products = []
-    len_products = None
-    total_products = final_data[row['user_id']].items()
-    for product in total_products:
-        if product[0] == 'len_products':
-            len_products = product[1]
-        else:
-            list.append(final_products, product)
-
-    output = []
-    product_list = sorted(final_products,
-        key=operator.itemgetter(1), reverse=True)
-    for val in product_list[:len_products]:
-        list.append(output, str(val[0]))
-    final_output = ' '.join(output)
-    list.append(products, final_output)
-
-# create submission
-submission = pd.DataFrame()
-submission['order_id'] = test['order_id']
-submission['products'] = products
-submission.to_csv('submission.csv', index=False)
+col = col.tolist()
+col.remove('id')
+for i in col:
+    b1[i] = (2 * fast[i]  + 2 * gruglo[i] + grucnn[i] * 4 + ave[i] + supbl[i] * 2 + best[i] * 4 +  wordbtch[i] * 2 + lgbm[i] * 2 + tidy[i] + bilst[i] * 4 + oofs[i] * 5 + corrbl[i] * 4) /  33
+    
+b1.to_csv('blend_it_all.csv', index = False)

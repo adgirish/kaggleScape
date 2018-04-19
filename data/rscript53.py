@@ -1,333 +1,208 @@
-'''
-Example of an LSTM model with GloVe embeddings along with magic features
+# Stacking Starter based on Allstate Faron's Script
+#https://www.kaggle.com/mmueller/allstate-claims-severity/stacking-starter/run/390867
+# Preprocessing from Alexandru Papiu
+#https://www.kaggle.com/apapiu/house-prices-advanced-regression-techniques/regularized-linear-models
 
-Tested under Keras 2.0 with Tensorflow 1.0 backend
-
-Single model may achieve LB scores at around 0.18+, average ensembles can get 0.17+
-'''
-
-########################################
-## import packages
-########################################
-import os
-import re
-import csv
-import codecs
-import numpy as np
 import pandas as pd
+import numpy as np
+from scipy.stats import skew
+import xgboost as xgb
+from sklearn.cross_validation import KFold
+from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_squared_error
+from sklearn.linear_model import Ridge, RidgeCV, ElasticNet, LassoCV, Lasso
+from math import sqrt
 
-from string import punctuation
-from collections import defaultdict
 
-from nltk.corpus import stopwords
-from nltk.stem import SnowballStemmer
+TARGET = 'SalePrice'
+NFOLDS = 5
+SEED = 0
+NROWS = None
+SUBMISSION_FILE = '../input/sample_submission.csv'
 
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.layers import Dense, Input, LSTM, Embedding, Dropout, Activation
-from keras.layers.merge import concatenate
-from keras.models import Model
-from keras.layers.normalization import BatchNormalization
-from keras.callbacks import EarlyStopping, ModelCheckpoint
 
-from sklearn.preprocessing import StandardScaler
+## Load the data ##
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
 
-import sys
-reload(sys)
-sys.setdefaultencoding('utf-8')
+ntrain = train.shape[0]
+ntest = test.shape[0]
 
-########################################
-## set directories and parameters
-########################################
-BASE_DIR = '../input/'
-EMBEDDING_FILE = BASE_DIR + 'glove.840B.300d.txt'
-TRAIN_DATA_FILE = BASE_DIR + 'train.csv'
-TEST_DATA_FILE = BASE_DIR + 'test.csv'
-MAX_SEQUENCE_LENGTH = 30
-MAX_NB_WORDS = 200000
-EMBEDDING_DIM = 300
-VALIDATION_SPLIT = 0.1
+## Preprocessing ##
 
-num_lstm = np.random.randint(175, 275)
-num_dense = np.random.randint(100, 150)
-rate_drop_lstm = 0.15 + np.random.rand() * 0.25
-rate_drop_dense = 0.15 + np.random.rand() * 0.25
+y_train = np.log(train[TARGET]+1)
 
-act = 'relu'
-re_weight = True # whether to re-weight classes to fit the 17.5% share in test set
 
-STAMP = 'lstm_%d_%d_%.2f_%.2f'%(num_lstm, num_dense, rate_drop_lstm, \
-        rate_drop_dense)
+train.drop([TARGET], axis=1, inplace=True)
 
-########################################
-## index word vectors
-########################################
-print('Indexing word vectors')
 
-embeddings_index = {}
-f = open(EMBEDDING_FILE)
-count = 0
-for line in f:
-    values = line.split()
-    word = values[0]
-    coefs = np.asarray(values[1:], dtype='float32')
-    embeddings_index[word] = coefs
-f.close()
+all_data = pd.concat((train.loc[:,'MSSubClass':'SaleCondition'],
+                      test.loc[:,'MSSubClass':'SaleCondition']))
 
-print('Found %d word vectors of glove.' % len(embeddings_index))
 
-########################################
-## process texts in datasets
-########################################
-print('Processing text dataset')
+#log transform skewed numeric features:
+numeric_feats = all_data.dtypes[all_data.dtypes != "object"].index
 
-# The function "text_to_wordlist" is from
-# https://www.kaggle.com/currie32/quora-question-pairs/the-importance-of-cleaning-text
-def text_to_wordlist(text, remove_stopwords=False, stem_words=False):
-    # Clean the text, with the option to remove stopwords and to stem words.
-    
-    # Convert words to lower case and split them
-    text = text.lower().split()
+skewed_feats = train[numeric_feats].apply(lambda x: skew(x.dropna())) #compute skewness
+skewed_feats = skewed_feats[skewed_feats > 0.75]
+skewed_feats = skewed_feats.index
 
-    # Optionally, remove stop words
-    if remove_stopwords:
-        stops = set(stopwords.words("english"))
-        text = [w for w in text if not w in stops]
-    
-    text = " ".join(text)
+all_data[skewed_feats] = np.log1p(all_data[skewed_feats])
 
-    # Clean the text
-    text = re.sub(r"[^A-Za-z0-9^,!.\/'+-=]", " ", text)
-    text = re.sub(r"what's", "what is ", text)
-    text = re.sub(r"\'s", " ", text)
-    text = re.sub(r"\'ve", " have ", text)
-    text = re.sub(r"can't", "cannot ", text)
-    text = re.sub(r"n't", " not ", text)
-    text = re.sub(r"i'm", "i am ", text)
-    text = re.sub(r"\'re", " are ", text)
-    text = re.sub(r"\'d", " would ", text)
-    text = re.sub(r"\'ll", " will ", text)
-    text = re.sub(r",", " ", text)
-    text = re.sub(r"\.", " ", text)
-    text = re.sub(r"!", " ! ", text)
-    text = re.sub(r"\/", " ", text)
-    text = re.sub(r"\^", " ^ ", text)
-    text = re.sub(r"\+", " + ", text)
-    text = re.sub(r"\-", " - ", text)
-    text = re.sub(r"\=", " = ", text)
-    text = re.sub(r"'", " ", text)
-    text = re.sub(r"(\d+)(k)", r"\g<1>000", text)
-    text = re.sub(r":", " : ", text)
-    text = re.sub(r" e g ", " eg ", text)
-    text = re.sub(r" b g ", " bg ", text)
-    text = re.sub(r" u s ", " american ", text)
-    text = re.sub(r"\0s", "0", text)
-    text = re.sub(r" 9 11 ", "911", text)
-    text = re.sub(r"e - mail", "email", text)
-    text = re.sub(r"j k", "jk", text)
-    text = re.sub(r"\s{2,}", " ", text)
-    
-    # Optionally, shorten words to their stems
-    if stem_words:
-        text = text.split()
-        stemmer = SnowballStemmer('english')
-        stemmed_words = [stemmer.stem(word) for word in text]
-        text = " ".join(stemmed_words)
-    
-    # Return a list of words
-    return(text)
+all_data = pd.get_dummies(all_data)
 
-texts_1 = [] 
-texts_2 = []
-labels = []
-with codecs.open(TRAIN_DATA_FILE, encoding='utf-8') as f:
-    reader = csv.reader(f, delimiter=',')
-    header = next(reader)
-    for values in reader:
-        texts_1.append(text_to_wordlist(values[3]))
-        texts_2.append(text_to_wordlist(values[4]))
-        labels.append(int(values[5]))
-print('Found %s texts in train.csv' % len(texts_1))
+#filling NA's with the mean of the column:
+all_data = all_data.fillna(all_data.mean())
 
-test_texts_1 = []
-test_texts_2 = []
-test_ids = []
-with codecs.open(TEST_DATA_FILE, encoding='utf-8') as f:
-    reader = csv.reader(f, delimiter=',')
-    header = next(reader)
-    for values in reader:
-        test_texts_1.append(text_to_wordlist(values[1]))
-        test_texts_2.append(text_to_wordlist(values[2]))
-        test_ids.append(values[0])
-print('Found %s texts in test.csv' % len(test_texts_1))
+#creating matrices for sklearn:
 
-tokenizer = Tokenizer(num_words=MAX_NB_WORDS)
-tokenizer.fit_on_texts(texts_1 + texts_2 + test_texts_1 + test_texts_2)
+x_train = np.array(all_data[:train.shape[0]])
+x_test = np.array(all_data[train.shape[0]:])
 
-sequences_1 = tokenizer.texts_to_sequences(texts_1)
-sequences_2 = tokenizer.texts_to_sequences(texts_2)
-test_sequences_1 = tokenizer.texts_to_sequences(test_texts_1)
-test_sequences_2 = tokenizer.texts_to_sequences(test_texts_2)
+kf = KFold(ntrain, n_folds=NFOLDS, shuffle=True, random_state=SEED)
 
-word_index = tokenizer.word_index
-print('Found %s unique tokens' % len(word_index))
 
-data_1 = pad_sequences(sequences_1, maxlen=MAX_SEQUENCE_LENGTH)
-data_2 = pad_sequences(sequences_2, maxlen=MAX_SEQUENCE_LENGTH)
-labels = np.array(labels)
-print('Shape of data tensor:', data_1.shape)
-print('Shape of label tensor:', labels.shape)
+class SklearnWrapper(object):
+    def __init__(self, clf, seed=0, params=None):
+        params['random_state'] = seed
+        self.clf = clf(**params)
 
-test_data_1 = pad_sequences(test_sequences_1, maxlen=MAX_SEQUENCE_LENGTH)
-test_data_2 = pad_sequences(test_sequences_2, maxlen=MAX_SEQUENCE_LENGTH)
-test_ids = np.array(test_ids)
+    def train(self, x_train, y_train):
+        self.clf.fit(x_train, y_train)
 
-########################################
-## generate leaky features
-########################################
+    def predict(self, x):
+        return self.clf.predict(x)
 
-train_df = pd.read_csv(TRAIN_DATA_FILE)
-test_df = pd.read_csv(TEST_DATA_FILE)
 
-ques = pd.concat([train_df[['question1', 'question2']], \
-        test_df[['question1', 'question2']]], axis=0).reset_index(drop='index')
-q_dict = defaultdict(set)
-for i in range(ques.shape[0]):
-        q_dict[ques.question1[i]].add(ques.question2[i])
-        q_dict[ques.question2[i]].add(ques.question1[i])
+class XgbWrapper(object):
+    def __init__(self, seed=0, params=None):
+        self.param = params
+        self.param['seed'] = seed
+        self.nrounds = params.pop('nrounds', 250)
 
-def q1_freq(row):
-    return(len(q_dict[row['question1']]))
-    
-def q2_freq(row):
-    return(len(q_dict[row['question2']]))
-    
-def q1_q2_intersect(row):
-    return(len(set(q_dict[row['question1']]).intersection(set(q_dict[row['question2']]))))
+    def train(self, x_train, y_train):
+        dtrain = xgb.DMatrix(x_train, label=y_train)
+        self.gbdt = xgb.train(self.param, dtrain, self.nrounds)
 
-train_df['q1_q2_intersect'] = train_df.apply(q1_q2_intersect, axis=1, raw=True)
-train_df['q1_freq'] = train_df.apply(q1_freq, axis=1, raw=True)
-train_df['q2_freq'] = train_df.apply(q2_freq, axis=1, raw=True)
+    def predict(self, x):
+        return self.gbdt.predict(xgb.DMatrix(x))
 
-test_df['q1_q2_intersect'] = test_df.apply(q1_q2_intersect, axis=1, raw=True)
-test_df['q1_freq'] = test_df.apply(q1_freq, axis=1, raw=True)
-test_df['q2_freq'] = test_df.apply(q2_freq, axis=1, raw=True)
 
-leaks = train_df[['q1_q2_intersect', 'q1_freq', 'q2_freq']]
-test_leaks = test_df[['q1_q2_intersect', 'q1_freq', 'q2_freq']]
+def get_oof(clf):
+    oof_train = np.zeros((ntrain,))
+    oof_test = np.zeros((ntest,))
+    oof_test_skf = np.empty((NFOLDS, ntest))
 
-ss = StandardScaler()
-ss.fit(np.vstack((leaks, test_leaks)))
-leaks = ss.transform(leaks)
-test_leaks = ss.transform(test_leaks)
+    for i, (train_index, test_index) in enumerate(kf):
+        x_tr = x_train[train_index]
+        y_tr = y_train[train_index]
+        x_te = x_train[test_index]
 
-########################################
-## prepare embeddings
-########################################
-print('Preparing embedding matrix')
+        clf.train(x_tr, y_tr)
 
-nb_words = min(MAX_NB_WORDS, len(word_index))+1
+        oof_train[test_index] = clf.predict(x_te)
+        oof_test_skf[i, :] = clf.predict(x_test)
 
-embedding_matrix = np.zeros((nb_words, EMBEDDING_DIM))
-for word, i in word_index.items():
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None:
-        embedding_matrix[i] = embedding_vector
-print('Null word embeddings: %d' % np.sum(np.sum(embedding_matrix, axis=1) == 0))
+    oof_test[:] = oof_test_skf.mean(axis=0)
+    return oof_train.reshape(-1, 1), oof_test.reshape(-1, 1)
 
-########################################
-## sample train/validation data
-########################################
-#np.random.seed(1234)
-perm = np.random.permutation(len(data_1))
-idx_train = perm[:int(len(data_1)*(1-VALIDATION_SPLIT))]
-idx_val = perm[int(len(data_1)*(1-VALIDATION_SPLIT)):]
 
-data_1_train = np.vstack((data_1[idx_train], data_2[idx_train]))
-data_2_train = np.vstack((data_2[idx_train], data_1[idx_train]))
-leaks_train = np.vstack((leaks[idx_train], leaks[idx_train]))
-labels_train = np.concatenate((labels[idx_train], labels[idx_train]))
+et_params = {
+    'n_jobs': 16,
+    'n_estimators': 100,
+    'max_features': 0.5,
+    'max_depth': 12,
+    'min_samples_leaf': 2,
+}
 
-data_1_val = np.vstack((data_1[idx_val], data_2[idx_val]))
-data_2_val = np.vstack((data_2[idx_val], data_1[idx_val]))
-leaks_val = np.vstack((leaks[idx_val], leaks[idx_val]))
-labels_val = np.concatenate((labels[idx_val], labels[idx_val]))
+rf_params = {
+    'n_jobs': 16,
+    'n_estimators': 100,
+    'max_features': 0.2,
+    'max_depth': 12,
+    'min_samples_leaf': 2,
+}
 
-weight_val = np.ones(len(labels_val))
-if re_weight:
-    weight_val *= 0.472001959
-    weight_val[labels_val==0] = 1.309028344
+xgb_params = {
+    'seed': 0,
+    'colsample_bytree': 0.7,
+    'silent': 1,
+    'subsample': 0.7,
+    'learning_rate': 0.075,
+    'objective': 'reg:linear',
+    'max_depth': 4,
+    'num_parallel_tree': 1,
+    'min_child_weight': 1,
+    'eval_metric': 'rmse',
+    'nrounds': 500
+}
 
-########################################
-## define the model structure
-########################################
-embedding_layer = Embedding(nb_words,
-        EMBEDDING_DIM,
-        weights=[embedding_matrix],
-        input_length=MAX_SEQUENCE_LENGTH,
-        trainable=False)
-lstm_layer = LSTM(num_lstm, dropout=rate_drop_lstm, recurrent_dropout=rate_drop_lstm)
 
-sequence_1_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
-embedded_sequences_1 = embedding_layer(sequence_1_input)
-x1 = lstm_layer(embedded_sequences_1)
 
-sequence_2_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
-embedded_sequences_2 = embedding_layer(sequence_2_input)
-y1 = lstm_layer(embedded_sequences_2)
+rd_params={
+    'alpha': 10
+}
 
-leaks_input = Input(shape=(leaks.shape[1],))
-leaks_dense = Dense(num_dense/2, activation=act)(leaks_input)
 
-merged = concatenate([x1, y1, leaks_dense])
-merged = BatchNormalization()(merged)
-merged = Dropout(rate_drop_dense)(merged)
+ls_params={
+    'alpha': 0.005
+}
 
-merged = Dense(num_dense, activation=act)(merged)
-merged = BatchNormalization()(merged)
-merged = Dropout(rate_drop_dense)(merged)
 
-preds = Dense(1, activation='sigmoid')(merged)
+xg = XgbWrapper(seed=SEED, params=xgb_params)
+et = SklearnWrapper(clf=ExtraTreesRegressor, seed=SEED, params=et_params)
+rf = SklearnWrapper(clf=RandomForestRegressor, seed=SEED, params=rf_params)
+rd = SklearnWrapper(clf=Ridge, seed=SEED, params=rd_params)
+ls = SklearnWrapper(clf=Lasso, seed=SEED, params=ls_params)
 
-########################################
-## add class weight
-########################################
-if re_weight:
-    class_weight = {0: 1.309028344, 1: 0.472001959}
-else:
-    class_weight = None
+xg_oof_train, xg_oof_test = get_oof(xg)
+et_oof_train, et_oof_test = get_oof(et)
+rf_oof_train, rf_oof_test = get_oof(rf)
+rd_oof_train, rd_oof_test = get_oof(rd)
+ls_oof_train, ls_oof_test = get_oof(ls)
 
-########################################
-## train the model
-########################################
-model = Model(inputs=[sequence_1_input, sequence_2_input, leaks_input], \
-        outputs=preds)
-model.compile(loss='binary_crossentropy',
-        optimizer='nadam',
-        metrics=['acc'])
-#model.summary()
-print(STAMP)
+print("XG-CV: {}".format(sqrt(mean_squared_error(y_train, xg_oof_train))))
+print("ET-CV: {}".format(sqrt(mean_squared_error(y_train, et_oof_train))))
+print("RF-CV: {}".format(sqrt(mean_squared_error(y_train, rf_oof_train))))
+print("RD-CV: {}".format(sqrt(mean_squared_error(y_train, rd_oof_train))))
+print("LS-CV: {}".format(sqrt(mean_squared_error(y_train, ls_oof_train))))
 
-early_stopping =EarlyStopping(monitor='val_loss', patience=3)
-bst_model_path = STAMP + '.h5'
-model_checkpoint = ModelCheckpoint(bst_model_path, save_best_only=True, save_weights_only=True)
 
-hist = model.fit([data_1_train, data_2_train, leaks_train], labels_train, \
-        validation_data=([data_1_val, data_2_val, leaks_val], labels_val, weight_val), \
-        epochs=200, batch_size=2048, shuffle=True, \
-        class_weight=class_weight, callbacks=[early_stopping, model_checkpoint])
+x_train = np.concatenate((xg_oof_train, et_oof_train, rf_oof_train, rd_oof_train, ls_oof_train), axis=1)
+x_test = np.concatenate((xg_oof_test, et_oof_test, rf_oof_test, rd_oof_test, ls_oof_test), axis=1)
 
-model.load_weights(bst_model_path)
-bst_val_score = min(hist.history['val_loss'])
+print("{},{}".format(x_train.shape, x_test.shape))
 
-########################################
-## make the submission
-########################################
-print('Start making the submission before fine-tuning')
+dtrain = xgb.DMatrix(x_train, label=y_train)
+dtest = xgb.DMatrix(x_test)
 
-preds = model.predict([test_data_1, test_data_2, test_leaks], batch_size=8192, verbose=1)
-preds += model.predict([test_data_2, test_data_1, test_leaks], batch_size=8192, verbose=1)
-preds /= 2
+xgb_params = {
+    'seed': 0,
+    'colsample_bytree': 0.8,
+    'silent': 1,
+    'subsample': 0.6,
+    'learning_rate': 0.01,
+    'objective': 'reg:linear',
+    'max_depth': 1,
+    'num_parallel_tree': 1,
+    'min_child_weight': 1,
+    'eval_metric': 'rmse',
+}
 
-submission = pd.DataFrame({'test_id':test_ids, 'is_duplicate':preds.ravel()})
-submission.to_csv('%.4f_'%(bst_val_score)+STAMP+'.csv', index=False)
+res = xgb.cv(xgb_params, dtrain, num_boost_round=1000, nfold=4, seed=SEED, stratified=False,
+             early_stopping_rounds=25, verbose_eval=10, show_stdv=True)
+
+best_nrounds = res.shape[0] - 1
+cv_mean = res.iloc[-1, 0]
+cv_std = res.iloc[-1, 1]
+
+print('Ensemble-CV: {0}+{1}'.format(cv_mean, cv_std))
+
+gbdt = xgb.train(xgb_params, dtrain, best_nrounds)
+
+submission = pd.read_csv(SUBMISSION_FILE)
+submission.iloc[:, 1] = gbdt.predict(dtest)
+saleprice = np.exp(submission['SalePrice'])-1
+submission['SalePrice'] = saleprice
+submission.to_csv('xgstacker_starter.sub.csv', index=None)

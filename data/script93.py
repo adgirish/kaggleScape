@@ -1,433 +1,317 @@
 
 # coding: utf-8
 
-# # This is a TF Estimator end-to-end baseline solution
+# # Crop, Save and View Nodules in 3D
 # 
-# **For local run**
+# Final results:
 # 
-# Tested with
+# ![enter image description here][1]
 # 
-# ```
-# numpy==1.13.3
-# scipy==0.19.1
-# tensorflow-gpu==1.4.0
-# tqdm
-# ```
+# This kernel shows you how to crop the nodule **with given coordinates** in patient's CT scan, how to save it in .npy and .mhd/.raw file, and how to view it in **3D**. About half of the code is learned from other kernels. (Tutorial: U-Net Segmentation Approach to Cancer Diagnosis by [Jonathan Mulholland and Aaron Sander, Booz Allen Hamilton][2], Full Preprocessing Tutorial by [Guido Zuidhof][3], Candidate Generation and LUNA16 preprocessing by [ArnavJain][4]) The most fun part of this code is also learned from the Internet. I wanted a better way to visualize the region of interest my code generated. Then I searched online and found a method to save .mhd/.raw file posted by [Price Jackson][5], with [source code][6]. The part I found useful was built on the MIT licensed work by [Bing Jian and Baba C. Vemuri][7]. I happened to know [Fiji][8] was a good tool to view volume stacks in 3D, with original intensity values. After integrating them together, I find visualize and check the results is not that much of pain. Actually, it comes with some fun and may give you some insights on the journey. This incites me to open a kernel here, though most of the code are from others.
+# 
+# Running the code below, with given CT scan and given coordinates, will give you a cropped nodule in [19, 19, 19] dimensional numpy array, with spacing [1, 1, 1]mm. I will use LUNA16 as input data in the code. Because it comes with some annotated nodules. So I cannot run it here but I put the psedo-output in Markdown cells. The code has been tested in Python 3.5.
 # 
 # 
-# I want to show usage of Estimators with custom python datagenerators.
-# 
-# 
-# Detailed documentation you can find at https://www.tensorflow.org/api_docs/python/tf/estimator/Estimator
-# 
-# I also recommend to read source code  https://github.com/tensorflow/tensorflow/blob/master/tensorflow/python/estimator/estimator.py
+#   [1]: https://i.gyazo.com/24c585876be7e54a2fc20a40fbf3b2e9.gif
+#   [2]: https://www.kaggle.com/c/data-science-bowl-2017#tutorial
+#   [3]: https://www.kaggle.com/gzuidhof/data-science-bowl-2017/full-preprocessing-tutorial
+#   [4]: https://www.kaggle.com/arnavkj95/data-science-bowl-2017/candidate-generation-and-luna16-preprocessing
+#   [5]: https://sites.google.com/site/pjmedphys/tutorials/medical-images-in-python
+#   [6]: https://sites.google.com/site/pjmedphys/scripts
+#   [7]: https://code.google.com/archive/p/diffusion-mri/
+#   [8]: https://imagej.net/Fiji/Downloads
 
-# Suppose we have following project structure:
-# ```
-# .
-# ├── data
-# │   ├── test            # extracted
-# │   │   └── audio          # all test
-# │   ├── test.7z         # downloaded
-# │   ├── train           # extracted
-# │   │   ├── audio          # folder with all train command/file.wav
-# │   │   ├── LICENSE
-# │   │   ├── README.md
-# │   │   ├── testing_list.txt
-# │   │   └── validation_list.txt
-# │   └── train.7z         # downloaded
-# ├── kernel.ipynb      # this ipynb  
-# └── model-k           # folder for model, checkpoints, logs and submission.csv
-# ```
+# ### Read annotation data and define preprocessing method
+# 
+# Please change the input path to fit your environment
 
 # In[ ]:
 
 
-DATADIR = './data' # unzipped train and test data
-OUTDIR = './model-k' # just a random name
-# Data Loading
-import os
-import re
+import SimpleITK as sitk
+import numpy as np
+
 from glob import glob
+import pandas as pd
+import scipy.ndimage
+
+import mhd_utils_3d
 
 
-POSSIBLE_LABELS = 'yes no up down left right on off stop go silence unknown'.split()
-id2name = {i: name for i, name in enumerate(POSSIBLE_LABELS)}
-name2id = {name: i for i, name in id2name.items()}
+## Read annotation data and filter those without images
+# Learned from Jonathan Mulholland and Aaron Sander, Booz Allen Hamilton
+# https://www.kaggle.com/c/data-science-bowl-2017#tutorial
+
+# Set input path
+# Change to fit your environment
+luna_path = './LUNA16/'
+luna_subset_path = luna_path + 'subset0_samples/'
+file_list = glob(luna_subset_path + "*.mhd")
+
+df_node = pd.read_csv(luna_path+'annotations.csv')
+
+def get_filename(file_list, case):
+    for f in file_list:
+        if case in f:
+            return(f)
+
+# map file full path to each record 
+df_node['file'] = df_node['seriesuid'].map(lambda file_name: get_filename(file_list, file_name))
+df_node = df_node.dropna()
+
+## Define resample method to make images isomorphic, default spacing is [1, 1, 1]mm
+# Learned from Guido Zuidhof
+# https://www.kaggle.com/gzuidhof/data-science-bowl-2017/full-preprocessing-tutorial
+def resample(image, old_spacing, new_spacing=[1, 1, 1]):
+    
+    resize_factor = old_spacing / new_spacing
+    new_real_shape = image.shape * resize_factor
+    new_shape = np.round(new_real_shape)
+    real_resize_factor = new_shape / image.shape
+    new_spacing = old_spacing / real_resize_factor
+
+    image = scipy.ndimage.interpolation.zoom(image, real_resize_factor, mode = 'nearest')
+    
+    return image, new_spacing
 
 
-def load_data(data_dir):
-    """ Return 2 lists of tuples:
-    [(class_id, user_id, path), ...] for train
-    [(class_id, user_id, path), ...] for validation
-    """
-    # Just a simple regexp for paths with three groups:
-    # prefix, label, user_id
-    pattern = re.compile("(.+\/)?(\w+)\/([^_]+)_.+wav")
-    all_files = glob(os.path.join(data_dir, 'train/audio/*/*wav'))
-
-    with open(os.path.join(data_dir, 'train/validation_list.txt'), 'r') as fin:
-        validation_files = fin.readlines()
-    valset = set()
-    for entry in validation_files:
-        r = re.match(pattern, entry)
-        if r:
-            valset.add(r.group(3))
-
-    possible = set(POSSIBLE_LABELS)
-    train, val = [], []
-    for entry in all_files:
-        r = re.match(pattern, entry)
-        if r:
-            label, uid = r.group(2), r.group(3)
-            if label == '_background_noise_':
-                label = 'silence'
-            if label not in possible:
-                label = 'unknown'
-
-            label_id = name2id[label]
-
-            sample = (label_id, uid, entry)
-            if uid in valset:
-                val.append(sample)
-            else:
-                train.append(sample)
-
-    print('There are {} train and {} val samples'.format(len(train), len(val)))
-    return train, val
-
-trainset, valset = load_data(DATADIR)
-
-
-# Let me introduce pythonic datagenerator.
-# It is just a python/numpy/... function **without tf** that yields dicts such that
-# ```
-# {
-#   'x': np.array(...),
-#   'str_key': np.string_(...),
-#   'label': np.int32(...),
-# }
-# ```
+# ### Define methods to save data
 # 
-# Be sure, every value in this dict has `.dtype` method.
+# I defined a method called "save_nodule" in this part. And it is called by:
+# 
+#     save_nodule(nodule_crop, name_index)
+#     # nodule_crop is a 3 dimensional numpy array, name_index is the name of the file. I use the index in annotation.csv.
+# 
+# If your time is limited, just try to call the method with your data. If it works, then you can focus on building the model. It will save three files: **.npy**, **.mhd**, **.raw**.
 
 # In[ ]:
 
+
+#!/usr/bin/env python
+#coding=utf-8
+
+#======================================================================
+#Program:   Diffusion Weighted MRI Reconstruction
+#Link:      https://code.google.com/archive/p/diffusion-mri
+#Module:    $RCSfile: mhd_utils.py,v $
+#Language:  Python
+#Author:    $Author: bjian $
+#Date:      $Date: 2008/10/27 05:55:55 $
+#Version:   
+#           $Revision: 1.1 by PJackson 2013/06/06 $
+#               Modification: Adapted to 3D
+#               Link: https://sites.google.com/site/pjmedphys/tutorials/medical-images-in-python
+# 
+#           $Revision: 2   by RodenLuo 2017/03/12 $
+#               Modication: Adapted to LUNA2016 data set for DSB2017
+#               Link: 
+#======================================================================
+
+import os
+import numpy
+import array
+
+def write_meta_header(filename, meta_dict):
+    header = ''
+    # do not use tags = meta_dict.keys() because the order of tags matters
+    tags = ['ObjectType','NDims','BinaryData',
+       'BinaryDataByteOrderMSB','CompressedData','CompressedDataSize',
+       'TransformMatrix','Offset','CenterOfRotation',
+       'AnatomicalOrientation',
+       'ElementSpacing',
+       'DimSize',
+       'ElementType',
+       'ElementDataFile',
+       'Comment','SeriesDescription','AcquisitionDate','AcquisitionTime','StudyDate','StudyTime']
+    for tag in tags:
+        if tag in meta_dict.keys():
+            header += '%s = %s\n'%(tag,meta_dict[tag])
+    f = open(filename,'w')
+    f.write(header)
+    f.close()
+    
+def dump_raw_data(filename, data):
+    """ Write the data into a raw format file. Big endian is always used. """
+    #Begin 3D fix
+    data=data.reshape([data.shape[0],data.shape[1]*data.shape[2]])
+    #End 3D fix
+    rawfile = open(filename,'wb')
+    a = array.array('f')
+    for o in data:
+        a.fromlist(list(o))
+    #if is_little_endian():
+    #    a.byteswap()
+    a.tofile(rawfile)
+    rawfile.close()
+    
+def write_mhd_file(mhdfile, data, dsize):
+    assert(mhdfile[-4:]=='.mhd')
+    meta_dict = {}
+    meta_dict['ObjectType'] = 'Image'
+    meta_dict['BinaryData'] = 'True'
+    meta_dict['BinaryDataByteOrderMSB'] = 'False'
+    meta_dict['ElementType'] = 'MET_FLOAT'
+    meta_dict['NDims'] = str(len(dsize))
+    meta_dict['DimSize'] = ' '.join([str(i) for i in dsize])
+    meta_dict['ElementDataFile'] = os.path.split(mhdfile)[1].replace('.mhd','.raw')
+    write_meta_header(mhdfile, meta_dict)
+
+    pwd = os.path.split(mhdfile)[0]
+    if pwd:
+        data_file = pwd +'/' + meta_dict['ElementDataFile']
+    else:
+        data_file = meta_dict['ElementDataFile']
+
+    dump_raw_data(data_file, data)
+    
+def save_nodule(nodule_crop, name_index):
+    np.save(str(name_index) + '.npy', nodule_crop)
+    write_mhd_file(str(name_index) + '.mhd', nodule_crop, nodule_crop.shape[::-1])
+
+
+# ### Read CT scan data, process and save 
+
+# In[ ]:
+
+
+## Collect patients with nodule and crop the nodule
+# In this code snippet, the cropped nodule is a [19, 19, 19] volume with [1, 1, 1]mm spacing.
+# Learned from Jonathan Mulholland and Aaron Sander, Booz Allen Hamilton
+# https://www.kaggle.com/c/data-science-bowl-2017#tutorial
+
+# Change the number in the next line to process more
+for patient in file_list[:1]:
+    print(patient)
+    
+    # Check whether this patient has nodule or not
+    if patient not in df_node.file.values:
+        print('Patient ' + patient + 'Not exist!')
+        continue
+    patient_nodules = df_node[df_node.file == patient]
+    
+    full_image_info = sitk.ReadImage(patient)
+    full_scan = sitk.GetArrayFromImage(full_image_info)
+    
+    origin = np.array(full_image_info.GetOrigin())[::-1] # get [z, y, x] origin
+    old_spacing = np.array(full_image_info.GetSpacing())[::-1] # get [z, y, x] spacing
+    
+    image, new_spacing = resample(full_scan, old_spacing)
+    
+    print('Resample Done')
+    
+
+    for index, nodule in patient_nodules.iterrows():
+        nodule_center = np.array([nodule.coordZ, nodule.coordY, nodule.coordX]) 
+        # Attention: Z, Y, X
+
+        v_center = np.rint( (nodule_center - origin) / new_spacing )
+        v_center = np.array(v_center, dtype=int)
+
+#         print(v_center)
+        window_size = 9 # This will give you the volume length = 9 + 1 + 9 = 19
+        # Why the magic number 19, I found that in "LUNA16/annotations.csv", 
+        # the 95th percentile of the nodules' diameter is about 19.
+        # This is kind of a hyperparameter, will affect your final score.
+        # Change it if you want.
+        zyx_1 = v_center - window_size # Attention: Z, Y, X
+        zyx_2 = v_center + window_size + 1
+
+#         print('Crop range: ')
+#         print(zyx_1)
+#         print(zyx_2)
+
+        # This will give you a [19, 19, 19] volume
+        img_crop = image[ zyx_1[0]:zyx_2[0], zyx_1[1]:zyx_2[1], zyx_1[2]:zyx_2[2] ]
+        
+        # save the nodule 
+        save_nodule(img_crop, index)
+    
+    print('Done for this patient!\n\n')
+print('Done for all!')
+
+
+# Sample output:
+# 
+#     ./LUNA16/subset0_samples/1.3.6.1.4.1.14519.5.2.1.6279.6001.109002525524522225658609808059.mhd
+#     Resample Done
+#     Done for this patient!
+# 
+# 
+#     Done for all!
+
+# ### Plot in 2D
+
+# In[ ]:
+
+
+## Plot volume in 2D
 
 import numpy as np
-from scipy.io import wavfile
+from matplotlib import pyplot as plt
 
-def data_generator(data, params, mode='train'):
-    def generator():
-        if mode == 'train':
-            np.random.shuffle(data)
-        # Feel free to add any augmentation
-        for (label_id, uid, fname) in data:
-            try:
-                _, wav = wavfile.read(fname)
-                wav = wav.astype(np.float32) / np.iinfo(np.int16).max
-
-                L = 16000  # be aware, some files are shorter than 1 sec!
-                if len(wav) < L:
-                    continue
-                # let's generate more silence!
-                samples_per_file = 1 if label_id != name2id['silence'] else 20
-                for _ in range(samples_per_file):
-                    if len(wav) > L:
-                        beg = np.random.randint(0, len(wav) - L)
-                    else:
-                        beg = 0
-                    yield dict(
-                        target=np.int32(label_id),
-                        wav=wav[beg: beg + L],
-                    )
-            except Exception as err:
-                print(err, label_id, uid, fname)
-
-    return generator
-
-
-# 
-# Suppose, we have spectrograms and want to write feature extractor that produces logits.
-# 
-# 
-# Let's write some simple net, treat sound as a picture.
-# 
-# 
-# **Spectrograms** (input x) have shape `(batch_size, time_frames, freq_bins, 2)`.
-# 
-# **Logits** is a tensor with shape `(batch_size, num_classes)`.
-
-# In[ ]:
-
-
-import tensorflow as tf
-from tensorflow.contrib import layers
-
-def baseline(x, params, is_training):
-    x = layers.batch_norm(x, is_training=is_training)
-    for i in range(4):
-        x = layers.conv2d(
-            x, 16 * (2 ** i), 3, 1,
-            activation_fn=tf.nn.elu,
-            normalizer_fn=layers.batch_norm if params.use_batch_norm else None,
-            normalizer_params={'is_training': is_training}
-        )
-        x = layers.max_pool2d(x, 2, 2)
-
-    # just take two kind of pooling and then mix them, why not :)
-    mpool = tf.reduce_max(x, axis=[1, 2], keep_dims=True)
-    apool = tf.reduce_mean(x, axis=[1, 2], keep_dims=True)
-
-    x = 0.5 * (mpool + apool)
-    # we can use conv2d 1x1 instead of dense
-    x = layers.conv2d(x, 128, 1, 1, activation_fn=tf.nn.elu)
-    x = tf.nn.dropout(x, keep_prob=params.keep_prob if is_training else 1.0)
+def plot_nodule(nodule_crop):
     
-    # again conv2d 1x1 instead of dense layer
-    logits = layers.conv2d(x, params.num_classes, 1, 1, activation_fn=None)
-    return tf.squeeze(logits, [1, 2])
-
-
-# We need to write a model handler for three regimes:
-# - train
-# - eval
-# - predict
-# 
-# Loss function, train_op, additional metrics and summaries should be defined.
-# 
-# Also, we need to convert sound waveform into spectrograms (we could do it with numpy/scipy/librosa in data generator, but TF has new signal processing API)
-
-# In[ ]:
-
-
-from tensorflow.contrib import signal
-
-# features is a dict with keys: tensors from our datagenerator
-# labels also were in features, but excluded in generator_input_fn by target_key
-
-def model_handler(features, labels, mode, params, config):
-    # Im really like to use make_template instead of variable_scopes and re-usage
-    extractor = tf.make_template(
-        'extractor', baseline,
-        create_scope_now_=True,
-    )
-    # wav is a waveform signal with shape (16000, )
-    wav = features['wav']
-    # we want to compute spectograms by means of short time fourier transform:
-    specgram = signal.stft(
-        wav,
-        400,  # 16000 [samples per second] * 0.025 [s] -- default stft window frame
-        160,  # 16000 * 0.010 -- default stride
-    )
-    # specgram is a complex tensor, so split it into abs and phase parts:
-    phase = tf.angle(specgram) / np.pi
-    # log(1 + abs) is a default transformation for energy units
-    amp = tf.log1p(tf.abs(specgram))
+    # Learned from ArnavJain
+    # https://www.kaggle.com/arnavkj95/data-science-bowl-2017/candidate-generation-and-luna16-preprocessing
+    f, plots = plt.subplots(int(nodule_crop.shape[0]/4)+1, 4, figsize=(10, 10))
     
-    x = tf.stack([amp, phase], axis=3) # shape is [bs, time, freq_bins, 2]
-    x = tf.to_float(x)  # we want to have float32, not float64
-
-    logits = extractor(x, params, mode == tf.estimator.ModeKeys.TRAIN)
-
-    if mode == tf.estimator.ModeKeys.TRAIN:
-        loss = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits))
-        # some lr tuner, you could use move interesting functions
-        def learning_rate_decay_fn(learning_rate, global_step):
-            return tf.train.exponential_decay(
-                learning_rate, global_step, decay_steps=10000, decay_rate=0.99)
-
-        train_op = tf.contrib.layers.optimize_loss(
-            loss=loss,
-            global_step=tf.contrib.framework.get_global_step(),
-            learning_rate=params.learning_rate,
-            optimizer=lambda lr: tf.train.MomentumOptimizer(lr, 0.9, use_nesterov=True),
-            learning_rate_decay_fn=learning_rate_decay_fn,
-            clip_gradients=params.clip_gradients,
-            variables=tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES))
-
-        specs = dict(
-            mode=mode,
-            loss=loss,
-            train_op=train_op,
-        )
-
-    if mode == tf.estimator.ModeKeys.EVAL:
-        prediction = tf.argmax(logits, axis=-1)
-        acc, acc_op = tf.metrics.mean_per_class_accuracy(
-            labels, prediction, params.num_classes)
-        loss = tf.reduce_mean(
-            tf.nn.sparse_softmax_cross_entropy_with_logits(labels=labels, logits=logits))
-        specs = dict(
-            mode=mode,
-            loss=loss,
-            eval_metric_ops=dict(
-                acc=(acc, acc_op),
-            )
-        )
-
-    if mode == tf.estimator.ModeKeys.PREDICT:
-        predictions = {
-            'label': tf.argmax(logits, axis=-1),  # for probability just take tf.nn.softmax()
-            'sample': features['sample'], # it's a hack for simplicity
-        }
-        specs = dict(
-            mode=mode,
-            predictions=predictions,
-        )
-    return tf.estimator.EstimatorSpec(**specs)
+    for z_ in range(nodule_crop.shape[0]): 
+        plots[int(z_/4), z_ % 4].imshow(nodule_crop[z_,:,:])
+    
+    # The last subplot has no image because there are only 19 images.
+    plt.show()
+    
+# Plot one example
+img_crop = np.load('25.npy')
+plot_nodule(img_crop)
 
 
-def create_model(config=None, hparams=None):
-    return tf.estimator.Estimator(
-        model_fn=model_handler,
-        config=config,
-        params=hparams,
-    )
-
-
-# Define some params. Move model hyperparams (optimizer, extractor, num of layers, activation fn, ...) here
-
-# In[ ]:
-
-
-params=dict(
-    seed=2018,
-    batch_size=64,
-    keep_prob=0.5,
-    learning_rate=1e-3,
-    clip_gradients=15.0,
-    use_batch_norm=True,
-    num_classes=len(POSSIBLE_LABELS),
-)
-
-hparams = tf.contrib.training.HParams(**params)
-os.makedirs(os.path.join(OUTDIR, 'eval'), exist_ok=True)
-model_dir = OUTDIR
-
-run_config = tf.contrib.learn.RunConfig(model_dir=model_dir)
-
-
-# **Let's run training!**
-
-# In[ ]:
-
-
-# it's a magic function :)
-from tensorflow.contrib.learn.python.learn.learn_io.generator_io import generator_input_fn
-            
-train_input_fn = generator_input_fn(
-    x=data_generator(trainset, hparams, 'train'),
-    target_key='target',  # you could leave target_key in features, so labels in model_handler will be empty
-    batch_size=hparams.batch_size, shuffle=True, num_epochs=None,
-    queue_capacity=3 * hparams.batch_size + 10, num_threads=1,
-)
-
-val_input_fn = generator_input_fn(
-    x=data_generator(valset, hparams, 'val'),
-    target_key='target',
-    batch_size=hparams.batch_size, shuffle=True, num_epochs=None,
-    queue_capacity=3 * hparams.batch_size + 10, num_threads=1,
-)
-            
-
-def _create_my_experiment(run_config, hparams):
-    exp = tf.contrib.learn.Experiment(
-        estimator=create_model(config=run_config, hparams=hparams),
-        train_input_fn=train_input_fn,
-        eval_input_fn=val_input_fn,
-        train_steps=10000, # just randomly selected params
-        eval_steps=200,  # read source code for steps-epochs ariphmetics
-        train_steps_per_iteration=1000,
-    )
-    return exp
-
-tf.contrib.learn.learn_runner.run(
-    experiment_fn=_create_my_experiment,
-    run_config=run_config,
-    schedule="continuous_train_and_eval",
-    hparams=hparams)
-
-
+# Sample output:
 # 
-# While it trains (~10-20min on i5 + 1080), you could start tensorboard on model_dir and see live chart like this
+# [![https://gyazo.com/31240b93448349629652fe56cfd3f48f](https://i.gyazo.com/31240b93448349629652fe56cfd3f48f.png)](https://gyazo.com/31240b93448349629652fe56cfd3f48f)
+
+# ### Plot in 3D by Fiji
+
+# In your output path (default is the same as your working directory), there should be some .mhd/.raw files. Follow the steps below to open it in 3D viewer. (I also made a video (18min) and posted in [this discussion thread][1]. You may want to watch it if you like video tutorials. Excuse me that I'm not fluent in English. So the video is recorded kind of slow, you may want to watch it with 1.5 or 2 times speed.)
 # 
-# ![Tensorboard](https://pp.userapi.com/c841329/v841329524/3db60/fdNDyRMJHMQ.jpg)
+# ### Steps to open nodules in 3D Viewer 
+# 1. Download [Fiji][2]
+# 2. Drag one .mhd file to Fiji **status bar**
 # 
+#     ![enter image description here][3]
 # 
-# Now we want to predict testset and make submission file.
+# 3. Click on the new image window. Press "control +" to zoom in, "control -" to zoom out.
+# 4. In the **Menubar**, Click "Image > Stacks > Orthogonal Views" to see it. Scroll to go through all slices. **Notice that when your cursor moves around in the image window, the Fiji Status Bar shows you the XY coordinates and the value, this value is the same as that in Python numpy array**
+# 5. In the **Menubar**, Click "Plugins > 3D viewer", in the "Add ..." window, change "Resampling factor" to 1, click "OK", click "OK" to convert to 8-bit.
+# 6. Click on the "ImageJ 3D Viewer", In the **Menubar**, click "Edit > Adjust threshold". Drag threshold bar to around 150.
+# 7.  **Drag** the object to rotate it. Hold "shift" and **drag** to move it. Scroll to zoom. 
+# 8. In the **Menubar**, click "View > Start animation" to activate it.
+# 9. Click on the image stack, in the **Menubar**, click "Image > Adjust > threshold", check "Dark background", move the first threshold bar to around -400, click "Apply > OK > Yes". 
+# 10. Either use step 5 to open another 3D viewer, or click on the current "ImageJ 3D Viewer", in the **Menubar** click "add > from image" to add another object. Click on the object and "shift" drag to move it. Thresholding on the raw image then creating 3D object gives you different rendering. 
 # 
-# 1. Create datagenerator and input_function
-# 2. Load model
-# 3. Iterate over predictions and store results
-
-# In[ ]:
-
-
-from tqdm import tqdm
-# now we want to predict!
-paths = glob(os.path.join(DATADIR, 'test/audio/*wav'))
-
-def test_data_generator(data):
-    def generator():
-        for path in data:
-            _, wav = wavfile.read(path)
-            wav = wav.astype(np.float32) / np.iinfo(np.int16).max
-            fname = os.path.basename(path)
-            yield dict(
-                sample=np.string_(fname),
-                wav=wav,
-            )
-
-    return generator
-
-test_input_fn = generator_input_fn(
-    x=test_data_generator(paths),
-    batch_size=hparams.batch_size, 
-    shuffle=False, 
-    num_epochs=1,
-    queue_capacity= 10 * hparams.batch_size, 
-    num_threads=1,
-)
-
-model = create_model(config=run_config, hparams=hparams)
-it = model.predict(input_fn=test_input_fn)
-
-
-# last batch will contain padding, so remove duplicates
-submission = dict()
-for t in tqdm(it):
-    fname, label = t['sample'].decode(), id2name[t['label']]
-    submission[fname] = label
-
-with open(os.path.join(model_dir, 'submission.csv'), 'w') as fout:
-    fout.write('fname,label\n')
-    for fname, label in submission.items():
-        fout.write('{},{}\n'.format(fname, label))
-
-
-# ## About tf.Estimators
+# **Sample visualizations:**
 # 
-# **Pros**:
-# - no need to control Session
-# - datagenerator feeds model via queues without explicit queue coding :)
-# - you could naturaly export models into production
-#     
-# **Cons**:
-# - it's very hard to debug computational graph (use `tf.add_check_numerics()` and `tf.Print` in case of problems)
-# - boilerplate code
-# - need to read source code for making interesting things
+# 25 in LUNA16/annotation.csv
 # 
+# ![enter image description here][4]
 # 
-# **Conclusion**:
-# Estimator is a nice abstraction with some boilerplate code :)
+# 26 in LUNA16/annotation.csv
 # 
-# 
-# ## About Speech Recognition Challenge:
-# 
-# You could start from this end-to-end ipynb, improving several functions for much better results.
+# ![enter image description here][5]
 # 
 # 
 # 
-# May the gradient flow be with you. 
+# 
+# **Please feel free to comment if you have questions or suggestions. Please upvote the above mentioned kernels if you find they are helpful. Please upvote this kernel if it helps you on the journey.**
+# 
+# 
+# 
+# ## Updates:
+# 
+# Changed "nodule_crop.shape" to "nodule_crop.shape[::-1]" in method "save_nodule(nodule_crop, name_index)"
+# 
+#   [1]: https://www.kaggle.com/c/data-science-bowl-2017/discussion/28502
+#   [2]: https://imagej.net/Fiji/Downloads
+#   [3]: https://imagej.net/_images/6/67/Fiji-main-window.jpg
+#   [4]: https://i.gyazo.com/d9eea0182a10af8b8af8f6cf88c3a0e7.gif
+#   [5]: https://i.gyazo.com/3c69952f966704b4055e25bc07495748.gif

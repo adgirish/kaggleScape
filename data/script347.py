@@ -1,288 +1,316 @@
 
 # coding: utf-8
 
-# ## Manifold Learning And Autoencoders
+# A simple exploration notebook to get some insights about the data.
 # 
-# Author: Alexandru Papiu
-
-# The MNIST competition is slowly coming to an end so I figured I'd try something slightly different - let's try to see if we can get some intuition about the geometry and topology of the MNIST dataset.
-
-# ### Loading required packages and data:
+# **Please check the output tab for animation**
+# 
+# **Objective:**
+# 
+# In this competition, The Nature Conservancy asks you to help them detect which species of fish appears on a fishing boat, based on images captured from boat cameras of various angles.  
+# 
+# Your goal is to predict the likelihood of fish species in each picture.
+# 
+# As mentioned in the data page, there are eight target categories available in the dataset.
+# 
+#  1. Albacore tuna
+#  2. Bigeye tuna
+#  3. Yellowfin tuna
+#  4. Mahi Mahi
+#  5. Opah
+#  6. Sharks
+#  7. Other (meaning that there are fish present but not in the above categories)
+#  8. No Fish (meaning that no fish is in the picture)
+# 
+# **Important points to note:**
+# 
+#  1. Pre-trained models and external data are allowed in the competition, but need to be posted on this [official forum thread][1]
+#  2. The competition comprises of two stages. Test data for second stage will be released in the last week.   
+# 
+# First let us see the number of image files present for each of the species
+# 
+# 
+#   [1]: https://www.kaggle.com/c/the-nature-conservancy-fisheries-monitoring/forums/t/25428/official-pre-trained-model-and-data-thread/144487#post144487
 
 # In[ ]:
 
 
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from scipy.misc import imread
+import matplotlib.pyplot as plt
+import seaborn as sns
 get_ipython().run_line_magic('matplotlib', 'inline')
 
+from subprocess import check_output
+print(check_output(["ls", "../input/train/"]).decode("utf8"))
+
+
+# So there are 8 folders present inside the train folder, one for each species.
+# 
+# Now let us check the number of files present in each of these sub folders. 
+
+# In[ ]:
+
+
+sub_folders = check_output(["ls", "../input/train/"]).decode("utf8").strip().split('\n')
+count_dict = {}
+for sub_folder in sub_folders:
+    num_of_files = len(check_output(["ls", "../input/train/"+sub_folder]).decode("utf8").strip().split('\n'))
+    print("Number of files for the species",sub_folder,":",num_of_files)
+    count_dict[sub_folder] = num_of_files
+    
+plt.figure(figsize=(12,4))
+sns.barplot(list(count_dict.keys()), list(count_dict.values()), alpha=0.8)
+plt.xlabel('Fish Species', fontsize=12)
+plt.ylabel('Number of Images', fontsize=12)
+plt.show()
+    
+    
+
+
+# So the number of files for species ALB (Albacore tuna) is much higher than other species. 
+# 
+# Let us look at the number of files present in the test folder.
+
+# In[ ]:
+
+
+num_test_files = len(check_output(["ls", "../input/test_stg1/"]).decode("utf8").strip().split('\n'))
+print("Number of test files present :", num_test_files)
+
+
+# **Image Size:**
+# 
+# Now let us look at the image size of each of the files and see what different sizes are available.
+
+# In[ ]:
+
+
+train_path = "../input/train/"
+sub_folders = check_output(["ls", train_path]).decode("utf8").strip().split('\n')
+different_file_sizes = {}
+for sub_folder in sub_folders:
+    file_names = check_output(["ls", train_path+sub_folder]).decode("utf8").strip().split('\n')
+    for file_name in file_names:
+        im_array = imread(train_path+sub_folder+"/"+file_name)
+        size = "_".join(map(str,list(im_array.shape)))
+        different_file_sizes[size] = different_file_sizes.get(size,0) + 1
+
+plt.figure(figsize=(12,4))
+sns.barplot(list(different_file_sizes.keys()), list(different_file_sizes.values()), alpha=0.8)
+plt.xlabel('Image size', fontsize=12)
+plt.ylabel('Number of Images', fontsize=12)
+plt.title("Image size present in train dataset")
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# So 720_1280_3 is the most common image size available in the train data and 10 different sizes are available. 
+# 
+# 720_1244_3 is the smallest size of the available images in train set and 974_1732_3 is the largest one.
+# 
+# Now let us look at the distribution in test dataset as well.
+
+# In[ ]:
+
+
+test_path = "../input/test_stg1/"
+file_names = check_output(["ls", test_path]).decode("utf8").strip().split('\n')
+different_file_sizes = {}
+for file_name in file_names:
+        size = "_".join(map(str,list(imread(test_path+file_name).shape)))
+        different_file_sizes[size] = different_file_sizes.get(size,0) + 1
+
+plt.figure(figsize=(12,4))
+sns.barplot(list(different_file_sizes.keys()), list(different_file_sizes.values()), alpha=0.8)
+plt.xlabel('File size', fontsize=12)
+plt.ylabel('Number of Images', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.title("Image size present in test dataset")
+plt.show()
+
+
+# Test set also has a very similar distribution.
+# 
+# **Animation:**
+# 
+# Let us try to have some animation on the available images.  Not able to embed the video in the notebook.
+# 
+# **Please check the output tab for the animation**
+
+# In[ ]:
+
+
+
+import random
+"""
+import matplotlib.animation as animation
+from matplotlib import animation, rc
+from IPython.display import HTML
+
+random.seed(12345)
+train_path = "../input/train/"
+sub_folders = check_output(["ls", train_path]).decode("utf8").strip().split('\n')
+different_file_sizes = {}
+all_files = []
+for sub_folder in sub_folders:
+    file_names = check_output(["ls", train_path+sub_folder]).decode("utf8").strip().split('\n')
+    selected_files = random.sample(file_names, 10)
+    for file_name in selected_files:
+        all_files.append([sub_folder,file_name])
+
+fig = plt.figure()
+sns.set_style("whitegrid", {'axes.grid' : False})
+img_file = "".join([train_path, sub_folder, "/", file_name])
+im = plt.imshow(imread(img_file), vmin=0, vmax=255)
+
+def updatefig(ind):
+    sub_folder = all_files[ind][0]
+    file_name = all_files[ind][1]
+    img_file = "".join([train_path, sub_folder, "/", file_name])
+    im.set_array(imread(img_file))
+    plt.title("Species : "+sub_folder, fontsize=15)
+    return im,
+
+ani = animation.FuncAnimation(fig, updatefig, frames=len(all_files))
+ani.save('lb.gif', fps=1, writer='imagemagick')
+#rc('animation', html='html5')
+#HTML(ani.to_html5_video())
+plt.show()
+"""
+
+
+# **Basic CNN Model using Keras:**
+# 
+# Now let us try to build a CNN model on the dataset. Due to the memory constraints of the kernels, let us take only (500,500,3) array from top left corner of each image and then try to classify based on that portion.
+# 
+# Kindly note that running it offline with the full image will give much better results.
+
+# In[ ]:
+
+
+
+import random
+from subprocess import check_output
+from scipy.misc import imread
 import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
+np.random.seed(2016)
+from keras.datasets import mnist
+from keras.models import Sequential
+from keras.layers import Dense, Dropout, Activation, Flatten
+from keras.layers import Convolution2D, MaxPooling2D
+from keras.utils import np_utils
+from keras import backend as K
+
+batch_size = 1
+nb_classes = 8
+nb_epoch = 1
+
+img_rows, img_cols, img_rgb = 500, 500, 3
+nb_filters = 4
+pool_size = (2, 2)
+kernel_size = (3, 3)
+input_shape = (img_rows, img_cols, 3)
+
+species_map_dict = {
+'ALB':0,
+'BET':1,
+'DOL':2,
+'LAG':3,
+'NoF':4,
+'OTHER':5,
+'SHARK':6,
+'YFT':7
+}
+
+def batch_generator_train(sample_size):
+	train_path = "../input/train/"
+	all_files = []
+	y_values = []
+	sub_folders = check_output(["ls", train_path]).decode("utf8").strip().split('\n')
+	for sub_folder in sub_folders:
+		file_names = check_output(["ls", train_path+sub_folder]).decode("utf8").strip().split('\n')
+		for file_name in file_names:
+			all_files.append([sub_folder, '/', file_name])
+			y_values.append(species_map_dict[sub_folder])
+	number_of_images = range(len(all_files))
+
+	counter = 0
+	while True:
+		image_index = random.choice(number_of_images)
+		file_name = "".join([train_path] + all_files[image_index])
+		print(file_name)
+		y = [0]*8
+		y[y_values[image_index]] = 1
+		y = np.array(y).reshape(1,8)
+		
+		im_array = imread(file_name)
+		X = np.zeros([1, img_rows, img_cols, img_rgb])
+		#X[:im_array.shape[0], :im_array.shape[1], 3] = im_array.copy().astype('float32')
+		X[0, :, :, :] = im_array[:500,:500,:].astype('float32')
+		X /= 255.
+        
+		print(X.shape)
+		yield X,y
+		
+		counter += 1
+		#if counter == sample_size:
+		#	break
+
+def batch_generator_test(all_files):
+	for file_name in all_files:
+		file_name = test_path + file_name
+		
+		im_array = imread(file_name)
+		X = np.zeros([1, img_rows, img_cols, img_rgb])
+		X[0,:, :, :] = im_array[:500,:500,:].astype('float32')
+		X /= 255.
+
+		yield X
+
+
+def keras_cnn_model():
+	model = Sequential()
+	model.add(Convolution2D(nb_filters, kernel_size[0], kernel_size[1],
+                        border_mode='valid',
+                        input_shape=input_shape))
+	model.add(Activation('relu'))
+	model.add(Convolution2D(nb_filters, kernel_size[0], kernel_size[1]))
+	model.add(Activation('relu'))
+	model.add(MaxPooling2D(pool_size=pool_size))
+	model.add(Dropout(0.25))	
+	model.add(Flatten())
+	model.add(Dense(128))
+	model.add(Activation('relu'))
+	model.add(Dropout(0.5))
+	model.add(Dense(nb_classes))
+	model.add(Activation('softmax'))
+	model.compile(loss='categorical_crossentropy', optimizer='adadelta')
+	return model
+
+model = keras_cnn_model()
+fit= model.fit_generator(
+	generator = batch_generator_train(100),
+	nb_epoch = 1,
+	samples_per_epoch = 100
+)
+
+test_path = "../input/test_stg1/"
+all_files = []
+file_names = check_output(["ls", test_path]).decode("utf8").strip().split('\n')
+for file_name in file_names:
+	all_files.append(file_name)
+#preds = model.predict_generator(generator=batch_generator_test(all_files), val_samples=len(all_files))
 
-from sklearn import metrics
-from sklearn.neighbors import NearestNeighbors
+#out_df = pd.DataFrame(preds)
+#out_df.columns = ['ALB', 'BET', 'DOL', 'LAG', 'NoF', 'OTHER', 'SHARK', 'YFT']
+#out_df['image'] = all_files
+#out_df.to_csv("sample_sub_keras.csv", index=False)
 
-from keras.models import Sequential, Model
-from keras.layers import Dense, Dropout, Convolution2D, MaxPooling2D, Flatten, Input
-from keras.optimizers import adam
-from keras.utils.np_utils import to_categorical
 
-get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina'")
-
-
-# In[ ]:
-
-
-train = pd.read_csv("../input/train.csv")
-
-X_train = train.iloc[:,1:].values
-X_train = X_train.reshape(X_train.shape[0], 28, 28) #reshape to rectangular
-X_train = X_train/255 #pixel values are 0 - 255 - this makes puts them in the range 0 - 1
-
-y_train = train["label"].values
-
-
-# In[ ]:
-
-
-#define a function that allows us to see the digits:
-def show(img):
-    plt.imshow(img, cmap = "gray", interpolation = "none")
-
-
-# Let's pick one image to be our default image - just so we have a reference point. We'll call this the **"eight" image** - simply because, well it's an eight:
-
-# In[ ]:
-
-
-img = X_train[10]
-show(img)
-
-
-# In[ ]:
-
-
-pd.DataFrame(img)
-
-
-# Ok so our digits are in a space in which every pixel is a variable or a feature. Since there are 28*28 = 784 pixels per image we can thing of the images as sitting in $\mathbb{R}^{784}$ - a real 784 dimensional vector space.
-# 
-# This space is very high dimensional and most dimensionality reduction techniques try to exploit the assumption that not all of these dimension are needed to distinguish between the digits (or more generally extract features or achieve some learning task).
-# 
-# Where does this intuition come from? To see this let's generate a point uniformly at random in the unit 784 dimensional hypercube and see what it looks like. We pick points in the hypercube simply because we normalized the pixel intensities. 
-# 
-# Maybe a 784-hypercube sounds intimidating but it has a very easy mathematical definition: it's the set composed of all  vectors in $\mathbb{R}^{784}$ that have all coordinates less than or equal to one: $$\{x \in \mathbb{R}^{784} | |x_i| < 1\} = [0,1]^{784}$$
-
-# In[ ]:
-
-
-#generating a random 28 by 28 image:
-rand_img = np.random.randint(0, 255, (28, 28))
-rand_img = rand_img/255.0
-
-show(rand_img)
-
-
-# Doesn't look like anything to me!
-# 
-# We can try to sample at random many times but unless we get extremely lucky all we'll get is static and nothing resembling an actual digit. This is good empirical evidence that the meaningful images - in this case images of digits, are clustered in smaller dimensional subsets in the original 784 dimensional pixel space. This is what is called the **manifold hypothesis**. And the promise is that if we better understand the structure of the manifold we will have an easier time building machine learning systems.
-
-# Before we try to see how to figure out the manifold structure let's take a closer look at out space. For example what happens if we start at the point of a digit and start traveling in a random direction? Will we get any meaningful images?
-
-# In[ ]:
-
-
-rand_direction = np.random.rand(28, 28) 
-
-
-# ### Moving in a random direction away from a digit in the 784 dimensional image space:
-
-# In[ ]:
-
-
-for i in range(16):
-    plt.subplot(4,4,i+1)
-    show(img + i/4*rand_direction)    
-    plt.xticks([])
-    plt.yticks([])
-
-
-# We can see that as we move away from the digit, the images we encounter become less and less distinguishable. At first we can still see the eight shape but before we know it we're back in static land.
-# 
-# Perhaps a good analogy here is that of a solar system: the surface of our planets are the manifolds we're interested in, one for each digit. Now say you're on the surface of the earth which is a 2-manifold and you start moving in a random direction (let's assume gravity doesn't exist and you can go through solid objects). If you don't understand the structure of earth you'll quickly find yourself in space or inside the earth. But if you instead move within the local earth (say spherical) coordinates you will stay on the surface and get to see all the cool stuff. 
-# 
-# There are however some differences: first of all we're in a much higher dimensional space and we're not sure how many dimensions we need to capture the structure of the digit subspaces. Secondly these subspaces could be really crazy looking - think for example two donuts entangled in some weird way. You could in fact get from one manifold to another without going into static space as all.
-
-# ### Our digits' best friends aka Nearest Neighbors:
-# 
-# Another thing to do to understand better the structure of the image space is to look at what images are closest to the "eight" image using some metric. In this case I'll use the sklearn knn wrap with l_2 distance as the metric on the flattened images. 
-
-# In[ ]:
-
-
-X_flat = X_train.reshape(X_train.shape[0], X_train.shape[1]*X_train.shape[2])
-
-knn = NearestNeighbors(5000)
-
-knn.fit(X_flat[:5000])
-
-
-# In[ ]:
-
-
-distances, neighbors = knn.kneighbors(img.flatten().reshape(1, -1))
-neighbors = neighbors[0]
-distances = distances[0]
-
-
-# ### Histogram of L_2 distances from the "eight" digit:
-
-# In[ ]:
-
-
-plt.hist(distances[1:])
-
-
-# The distances of the first 5000 images from the "eight" image is roughly normally distributed - in fact it's much more well behaved than I expected. At first I though I'd see multiple modes and a higher variance given that we have different classes. 
-
-# ### 32 Nearest Neighbors for our "eight" image:
-
-# In[ ]:
-
-
-for digit_num, num in enumerate(neighbors[:36]):
-    plt.subplot(6,6,digit_num+1)
-    grid_data = X_train[num]  # reshape from 1d to 2d pixel array
-    show(grid_data)
-    plt.xticks([])
-    plt.yticks([])
-
-
-# Interesting stuff - most of the neighbors are also eight but not all - we see some five and some nines as well. However all in all it looks like KNN would be a decent way to attack this problem - maybe with 5 or 10 neighbors.
-
-# ### Learning the manifold with an autoencoder:
-# 
-# Ok so how do we figure out what (combinations of) dimensions in the image space are important? One option would be to hand engineer features - for examples the mean of all pixels is probably a good feature to have. Other worthwhile features would be the slant, and the vertical or horizontal symmetry. 
-# 
-# But we want do to machine learning not hand-craft features because we're lazy and machines tend to better capture important features in messy datasets. There are many ways to try to reduce the dimensionality - hereI am going to use an autoencoder. I like autoencoders because they have a nice intuitive appeal and you can train them relatively fast. 
-# 
-# An **autoencoder ** is a feed- forward neural network who tries to learn a lower dimensional representation of our data. It does that by decreasing the number of layers in the middle of the network and then increasing it back to the dimension of the original image. 
-# 
-# Since the autoencoder is forced to reconstruct the images from a smaller representation it discards any variation that it doesn't find useful. Here is a great description form the [Deep Learning](http://www.deeplearningbook.org/contents/autoencoders.html) book:
-# 
-# "The important principle is that the autoencoder can aﬀord to represent only the variations that are needed to reconstruct training examples. If the data generating distribution concentrates near a low-dimensional manifold, this yields representations that implicitly capture a local coordinate system for this manifold: only the variations tangent to the manifold around x need to correspond to changes in h=f(x)."
-
-# Let's build an autoencoder in keras - It will have 3 hidden layers with 64, 2, and 64 units respectively. Our model will compress the image to a 2-dimensional vector and then try to reconstruct it . Note that we don't use the target y at all, instead we use X_flat for both the input and the target i.e. we're doing unsupervised learning.
-
-# In[ ]:
-
-
-input_img = Input(shape=(784,))
-encoded = Dense(64, activation='relu')(input_img)
-
-encoded = Dense(2)(encoded) #keep it linear here.
-
-decoded = Dense(64, activation='relu')(encoded)
-decoded = Dense(784, activation = 'sigmoid')(decoded)
-
-autoencoder = Model(input=input_img, output=decoded)
-
-
-# In[ ]:
-
-
-autoencoder.compile(optimizer = "adam", loss = "mse")
-autoencoder.fit(X_flat, X_flat, batch_size = 128,
-                nb_epoch = 10, verbose = 3)
-
-
-# In[ ]:
-
-
-encoder = Model(input = input_img, output = encoded)
-
-#building the decoder:
-encoded_input = Input(shape=(2,))
-encoded_layer_1 = autoencoder.layers[-2]
-encoded_layer_2 = autoencoder.layers[-1]
-
-
-decoder = encoded_layer_1(encoded_input)
-decoder = encoded_layer_2(decoder)
-decoder = Model(input=encoded_input, output=decoder)
-
-
-# ### 2D - representation learned by the autoencoder:
-
-# In[ ]:
-
-
-import seaborn as sns
-
-X_proj = encoder.predict(X_flat[:10000])
-X_proj.shape
-
-proj = pd.DataFrame(X_proj)
-proj.columns = ["comp_1", "comp_2"]
-proj["labels"] = y_train[:10000]
-sns.lmplot("comp_1", "comp_2",hue = "labels", data = proj, fit_reg=False)
-
-
-# We can see the autoencoder does a decent job of separating certain classes like 1, 0 and 4. It does better than PCA but is not as good as TSNE. The autoencoder learns a better representation that simpler methods like PCA because it can detect nonlinearities in the data due to its relu activations. In fact if we used linear activation functions and only one hidden layer we would have recovered the PCA case.
-# 
-# 
-# Can we recover the images from their 2-dimensional represetation?
-
-# In[ ]:
-
-
-
-#how well does the autoencoder decode:w1
-plt.subplot(2,2,1)
-show(X_train[160])
-plt.subplot(2,2,2)
-show(autoencoder.predict(np.expand_dims(X_train[160].flatten(), 0)).reshape(28, 28))
-plt.subplot(2,2,3)
-show(X_train[150])
-plt.subplot(2,2,4)
-show(autoencoder.predict(np.expand_dims(X_train[150].flatten(), 0)).reshape(28, 28))
-
-
-# Not really - the encoding decoding process is quite lossy - but that makes sense since we're converting a 784 dimensional vector into 2 dimensions.
-
-# ### Generating new digits by moving in the latent 2D - space:
-
-# Now the hope is that the new 2-D representation of the data is a good coordinate system for the subspace of the data that is actually meaningful i.e. the digits. One (hand-wavy) way to check this is to see what happens if we sample points in the 2-D representation space and move in various directions - do we get some meaningful change in the decoded image of the path or just noise as we did in the original space?
-
-# In[ ]:
-
-
-#moving along the x axis:
-for i in range(64):
-    plt.subplot(8,8,i+1)
-    pt = np.array([[i/3,0]])
-    show(decoder.predict(pt).reshape((28, 28)))
-    plt.xticks([])
-    plt.yticks([])
-
-
-# Pretty neat! We see that moving in a given direction in the 2D representation corresponds to staying on the digits manifolds in the original space. We never end up in static space. Sure not all the images are exactly digits but they are all digit-like. You can also clearly see the transition from one class to another.
-# 
-# Note that the way we're generating images here doesn't have very good statistical properties since we have to look at the 2-d plot first. Using a variational autoencoder makes the generative process more rigorous but we'll settle for this.
-
-# In[ ]:
-
-
-#moving along the y axis:
-for i in range(64):
-    plt.subplot(8,8,i+1)
-    pt = np.array([[10,i/3]])
-    show(decoder.predict(pt).reshape((28, 28)))
-    plt.xticks([])
-    plt.yticks([])
-
-
-# ### References:
-# 
-# -  [Autoencoder in Keras](https://blog.keras.io/building-autoencoders-in-keras.html) by Francois Chollet
-# 
-# - [Deep Learning Book Ch 14](http://www.deeplearningbook.org/contents/autoencoders.html) by Ian Goodfellow and Yoshua Bengio and Aaron Courville.
+# More to come.!

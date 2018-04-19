@@ -1,247 +1,318 @@
+"""
+A non-blending lightGBM model that incorporates portions and ideas from various public kernels.
+"""
+WHERE = 'kaggle'
+
+if WHERE=='kaggle':
+	inpath = '../input/'
+	suffix = ''
+	outpath = ''
+	savepath = ''
+elif WHERE=='gcloud':
+	inpath = '../.kaggle/competitions/talkingdata-adtracking-fraud-detection/'
+	suffix = '.zip'
+	outpath = '../sub/'
+	savepath = '../data/'
+
 import pandas as pd
+import time
 import numpy as np
-import os
-import imageio
-
-from keras.utils import plot_model
-from keras.models import Model
-from keras.layers import Input
-from keras.layers import Dense
-from keras.layers import Flatten
-from keras.layers import Activation
-from keras.layers import Dropout
-from keras.layers import Maximum
-from keras.layers import ZeroPadding2D
-from keras.layers.convolutional import Conv2D
-from keras.layers.pooling import MaxPooling2D
-from keras.layers.merge import concatenate
-from keras import regularizers
-from keras.layers import BatchNormalization
-from keras.optimizers import Adam, SGD
-from keras.preprocessing.image import ImageDataGenerator
-from keras.callbacks import ModelCheckpoint, ReduceLROnPlateau
-from keras.layers.advanced_activations import LeakyReLU
-from keras.utils import to_categorical
 from sklearn.model_selection import train_test_split
-from skimage.transform import resize as imresize
-from tqdm import tqdm
+import lightgbm as lgb
+import gc
+import matplotlib.pyplot as plt
+import os
 
+def do_count( df, group_cols, agg_name, agg_type='uint32', show_max=False, show_agg=True ):
+    if show_agg:
+        print( "Aggregating by ", group_cols , '...' )
+    gp = df[group_cols][group_cols].groupby(group_cols).size().rename(agg_name).to_frame().reset_index()
+    df = df.merge(gp, on=group_cols, how='left')
+    del gp
+    if show_max:
+        print( agg_name + " max value = ", df[agg_name].max() )
+    df[agg_name] = df[agg_name].astype(agg_type)
+    gc.collect()
+    return( df )
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+def do_countuniq( df, group_cols, counted, agg_name, agg_type='uint32', show_max=False, show_agg=True ):
+    if show_agg:
+        print( "Counting unqiue ", counted, " by ", group_cols , '...' )
+    gp = df[group_cols+[counted]].groupby(group_cols)[counted].nunique().reset_index().rename(columns={counted:agg_name})
+    df = df.merge(gp, on=group_cols, how='left')
+    del gp
+    if show_max:
+        print( agg_name + " max value = ", df[agg_name].max() )
+    df[agg_name] = df[agg_name].astype(agg_type)
+    gc.collect()
+    return( df )
+    
+def do_cumcount( df, group_cols, counted, agg_name, agg_type='uint32', show_max=False, show_agg=True ):
+    if show_agg:
+        print( "Cumulative count by ", group_cols , '...' )
+    gp = df[group_cols+[counted]].groupby(group_cols)[counted].cumcount()
+    df[agg_name]=gp.values
+    del gp
+    if show_max:
+        print( agg_name + " max value = ", df[agg_name].max() )
+    df[agg_name] = df[agg_name].astype(agg_type)
+    gc.collect()
+    return( df )
 
+def do_mean( df, group_cols, counted, agg_name, agg_type='float32', show_max=False, show_agg=True ):
+    if show_agg:
+        print( "Calculating mean of ", counted, " by ", group_cols , '...' )
+    gp = df[group_cols+[counted]].groupby(group_cols)[counted].mean().reset_index().rename(columns={counted:agg_name})
+    df = df.merge(gp, on=group_cols, how='left')
+    del gp
+    if show_max:
+        print( agg_name + " max value = ", df[agg_name].max() )
+    df[agg_name] = df[agg_name].astype(agg_type)
+    gc.collect()
+    return( df )
 
-BATCH_SIZE = 16
-EPOCHS = 30
-RANDOM_STATE = 11
+def do_var( df, group_cols, counted, agg_name, agg_type='float32', show_max=False, show_agg=True ):
+    if show_agg:
+        print( "Calculating variance of ", counted, " by ", group_cols , '...' )
+    gp = df[group_cols+[counted]].groupby(group_cols)[counted].var().reset_index().rename(columns={counted:agg_name})
+    df = df.merge(gp, on=group_cols, how='left')
+    del gp
+    if show_max:
+        print( agg_name + " max value = ", df[agg_name].max() )
+    df[agg_name] = df[agg_name].astype(agg_type)
+    gc.collect()
+    return( df )
 
-CLASS = {
-    'Black-grass': 0,
-    'Charlock': 1,
-    'Cleavers': 2,
-    'Common Chickweed': 3,
-    'Common wheat': 4,
-    'Fat Hen': 5,
-    'Loose Silky-bent': 6,
-    'Maize': 7,
-    'Scentless Mayweed': 8,
-    'Shepherds Purse': 9,
-    'Small-flowered Cranesbill': 10,
-    'Sugar beet': 11
-}
+debug=0 
+if debug:
+    print('*** debug parameter set: this is a test run for debugging purposes ***')
 
-INV_CLASS = {
-    0: 'Black-grass',
-    1: 'Charlock',
-    2: 'Cleavers',
-    3: 'Common Chickweed',
-    4: 'Common wheat',
-    5: 'Fat Hen',
-    6: 'Loose Silky-bent',
-    7: 'Maize',
-    8: 'Scentless Mayweed',
-    9: 'Shepherds Purse',
-    10: 'Small-flowered Cranesbill',
-    11: 'Sugar beet'
-}
+def lgb_modelfit_nocv(params, dtrain, dvalid, predictors, target='target', objective='binary', metrics='auc',
+                 feval=None, early_stopping_rounds=20, num_boost_round=3000, verbose_eval=10, categorical_features=None):
+    lgb_params = {
+        'boosting_type': 'gbdt',
+        'objective': objective,
+        'metric':metrics,
+        'learning_rate': 0.2,
+        #'is_unbalance': 'true',  #because training data is unbalance (replaced with scale_pos_weight)
+        'num_leaves': 31,  # we should let it be smaller than 2^(max_depth)
+        'max_depth': -1,  # -1 means no limit
+        'min_child_samples': 20,  # Minimum number of data need in a child(min_data_in_leaf)
+        'max_bin': 255,  # Number of bucketed bin for feature values
+        'subsample': 0.6,  # Subsample ratio of the training instance.
+        'subsample_freq': 0,  # frequence of subsample, <=0 means no enable
+        'colsample_bytree': 0.3,  # Subsample ratio of columns when constructing each tree.
+        'min_child_weight': 5,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
+        'subsample_for_bin': 200000,  # Number of samples for constructing bin
+        'min_split_gain': 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
+        'reg_alpha': 0,  # L1 regularization term on weights
+        'reg_lambda': 0,  # L2 regularization term on weights
+        'nthread': 4,
+        'verbose': 0,
+        'metric':metrics
+    }
 
-# Dense layers set
-def dense_set(inp_layer, n, activation, drop_rate=0.):
-    dp = Dropout(drop_rate)(inp_layer)
-    dns = Dense(n)(dp)
-    bn = BatchNormalization(axis=-1)(dns)
-    act = Activation(activation=activation)(bn)
-    return act
+    lgb_params.update(params)
 
-# Conv. layers set
-def conv_layer(feature_batch, feature_map, kernel_size=(3, 3),strides=(1,1), zp_flag=False):
-    if zp_flag:
-        zp = ZeroPadding2D((1,1))(feature_batch)
+    print("preparing validation datasets")
+
+    xgtrain = lgb.Dataset(dtrain[predictors].values, label=dtrain[target].values,
+                          feature_name=predictors,
+                          categorical_feature=categorical_features
+                          )
+    xgvalid = lgb.Dataset(dvalid[predictors].values, label=dvalid[target].values,
+                          feature_name=predictors,
+                          categorical_feature=categorical_features
+                          )
+
+    evals_results = {}
+
+    bst1 = lgb.train(lgb_params, 
+                     xgtrain, 
+                     valid_sets=[xgtrain, xgvalid], 
+                     valid_names=['train','valid'], 
+                     evals_result=evals_results, 
+                     num_boost_round=num_boost_round,
+                     early_stopping_rounds=early_stopping_rounds,
+                     verbose_eval=10, 
+                     feval=feval)
+
+    print("\nModel Report")
+    print("bst1.best_iteration: ", bst1.best_iteration)
+    print(metrics+":", evals_results['valid'][metrics][bst1.best_iteration-1])
+
+    return (bst1,bst1.best_iteration)
+
+def DO(frm,to,fileno):
+    dtypes = {
+            'ip'            : 'uint32',
+            'app'           : 'uint16',
+            'device'        : 'uint16',
+            'os'            : 'uint16',
+            'channel'       : 'uint16',
+            'is_attributed' : 'uint8',
+            'click_id'      : 'uint32',
+            }
+
+    print('loading train data...',frm,to)
+    train_df = pd.read_csv("../input/train.csv", parse_dates=['click_time'], skiprows=range(1,frm), nrows=to-frm, dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'is_attributed'])
+
+    print('loading test data...')
+    if debug:
+        test_df = pd.read_csv("../input/test.csv", nrows=100000, parse_dates=['click_time'], dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'click_id'])
     else:
-        zp = feature_batch
-    conv = Conv2D(filters=feature_map, kernel_size=kernel_size, strides=strides)(zp)
-    bn = BatchNormalization(axis=3)(conv)
-    act = LeakyReLU(1/10)(bn)
-    return act
+        test_df = pd.read_csv("../input/test.csv", parse_dates=['click_time'], dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'click_id'])
 
-# simple model 
-def get_model():
-    inp_img = Input(shape=(51, 51, 3))
-
-    # 51
-    conv1 = conv_layer(inp_img, 64, zp_flag=False)
-    conv2 = conv_layer(conv1, 64, zp_flag=False)
-    mp1 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2))(conv2)
-    # 23
-    conv3 = conv_layer(mp1, 128, zp_flag=False)
-    conv4 = conv_layer(conv3, 128, zp_flag=False)
-    mp2 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2))(conv4)
-    # 9
-    conv7 = conv_layer(mp2, 256, zp_flag=False)
-    conv8 = conv_layer(conv7, 256, zp_flag=False)
-    conv9 = conv_layer(conv8, 256, zp_flag=False)
-    mp3 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2))(conv9)
-    # 1
-    # dense layers
-    flt = Flatten()(mp3)
-    ds1 = dense_set(flt, 128, activation='tanh')
-    out = dense_set(ds1, 12, activation='softmax')
-
-    model = Model(inputs=inp_img, outputs=out)
+    len_train = len(train_df)
+    train_df=train_df.append(test_df)
     
-    # The first 50 epochs are used by Adam opt.
-    # Then 30 epochs are used by SGD opt.
+    del test_df
+    gc.collect()
     
-    #mypotim = Adam(lr=2 * 1e-3, beta_1=0.9, beta_2=0.999, epsilon=1e-08)
-    mypotim = SGD(lr=1 * 1e-1, momentum=0.9, nesterov=True)
-    model.compile(loss='categorical_crossentropy',
-                   optimizer=mypotim,
-                   metrics=['accuracy'])
-    model.summary()
-    return model
+    print('Extracting new features...')
+    train_df['hour'] = pd.to_datetime(train_df.click_time).dt.hour.astype('uint8')
+    train_df['day'] = pd.to_datetime(train_df.click_time).dt.day.astype('uint8')
+    
+    gc.collect()
+    train_df = do_countuniq( train_df, ['ip'], 'channel', 'X0', 'uint8', show_max=True ); gc.collect()
+    train_df = do_cumcount( train_df, ['ip', 'device', 'os'], 'app', 'X1', show_max=True ); gc.collect()
+    train_df = do_countuniq( train_df, ['ip', 'day'], 'hour', 'X2', 'uint8', show_max=True ); gc.collect()
+    train_df = do_countuniq( train_df, ['ip'], 'app', 'X3', 'uint8', show_max=True ); gc.collect()
+    train_df = do_countuniq( train_df, ['ip', 'app'], 'os', 'X4', 'uint8', show_max=True ); gc.collect()
+    train_df = do_countuniq( train_df, ['ip'], 'device', 'X5', 'uint16', show_max=True ); gc.collect()
+    train_df = do_countuniq( train_df, ['app'], 'channel', 'X6', show_max=True ); gc.collect()
+    train_df = do_cumcount( train_df, ['ip'], 'os', 'X7', show_max=True ); gc.collect()
+    train_df = do_countuniq( train_df, ['ip', 'device', 'os'], 'app', 'X8', show_max=True ); gc.collect()
+    train_df = do_count( train_df, ['ip', 'day', 'hour'], 'ip_tcount', show_max=True ); gc.collect()
+    train_df = do_count( train_df, ['ip', 'app'], 'ip_app_count', show_max=True ); gc.collect()
+    train_df = do_count( train_df, ['ip', 'app', 'os'], 'ip_app_os_count', 'uint16', show_max=True ); gc.collect()
+    train_df = do_var( train_df, ['ip', 'day', 'channel'], 'hour', 'ip_tchan_count', show_max=True ); gc.collect()
+    train_df = do_var( train_df, ['ip', 'app', 'os'], 'hour', 'ip_app_os_var', show_max=True ); gc.collect()
+    train_df = do_var( train_df, ['ip', 'app', 'channel'], 'day', 'ip_app_channel_var_day', show_max=True ); gc.collect()
+    train_df = do_mean( train_df, ['ip', 'app', 'channel'], 'hour', 'ip_app_channel_mean_hour', show_max=True ); gc.collect()
 
+    print('doing nextClick')
+    predictors=[]
+    
+    new_feature = 'nextClick'
+    filename='nextClick_%d_%d.csv'%(frm,to)
 
-def get_callbacks(filepath, patience=5):
-    lr_reduce = ReduceLROnPlateau(monitor='val_acc', factor=0.1, epsilon=1e-5, patience=patience, verbose=1)
-    msave = ModelCheckpoint(filepath, save_best_only=True)
-    return [lr_reduce, msave]
+    if os.path.exists(filename):
+        print('loading from save file')
+        QQ=pd.read_csv(filename).values
+    else:
+        D=2**26
+        train_df['category'] = (train_df['ip'].astype(str) + "_" + train_df['app'].astype(str) + "_" + train_df['device'].astype(str) \
+            + "_" + train_df['os'].astype(str)).apply(hash) % D
+        click_buffer= np.full(D, 3000000000, dtype=np.uint32)
 
-# I trained model about 12h on GTX 950.
-def train_model(img, target):
-    callbacks = get_callbacks(filepath='model_weight_SGD.hdf5', patience=6)
-    gmodel = get_model()
-    gmodel.load_weights(filepath='model_weight_Adam.hdf5')
-    x_train, x_valid, y_train, y_valid = train_test_split(
-                                                        img,
-                                                        target,
-                                                        shuffle=True,
-                                                        train_size=0.8,
-                                                        random_state=RANDOM_STATE
-                                                        )
-    gen = ImageDataGenerator(
-            rotation_range=360.,
-            width_shift_range=0.3,
-            height_shift_range=0.3,
-            zoom_range=0.3,
-            horizontal_flip=True,
-            vertical_flip=True
-    )
-    gmodel.fit_generator(gen.flow(x_train, y_train,batch_size=BATCH_SIZE),
-               steps_per_epoch=10*len(x_train)/BATCH_SIZE,
-               epochs=EPOCHS,
-               verbose=1,
-               shuffle=True,
-               validation_data=(x_valid, y_valid),
-               callbacks=callbacks)
+        train_df['epochtime']= train_df['click_time'].astype(np.int64) // 10 ** 9
+        next_clicks= []
+        for category, t in zip(reversed(train_df['category'].values), reversed(train_df['epochtime'].values)):
+            next_clicks.append(click_buffer[category]-t)
+            click_buffer[category]= t
+        del(click_buffer)
+        QQ= list(reversed(next_clicks))
 
-def test_model(img, label):
-    gmodel = get_model()
-    gmodel.load_weights(filepath='../input/plant-weight/model_weight_SGD.hdf5')
-    prob = gmodel.predict(img, verbose=1)
-    pred = prob.argmax(axis=-1)
-    sub = pd.DataFrame({"file": label,
-                         "species": [INV_CLASS[p] for p in pred]})
-    sub.to_csv("sub.csv", index=False, header=True)
+        if not debug:
+            print('saving')
+            pd.DataFrame(QQ).to_csv(filename,index=False)
+            
+    train_df.drop(['epochtime','category','click_time'], axis=1, inplace=True)
 
-# Resize all image to 51x51 
-def img_reshape(img):
-    img = imresize(img, (51, 51, 3))
-    return img
+    train_df[new_feature] = pd.Series(QQ).astype('float32')
+    predictors.append(new_feature)
 
-# get image tag
-def img_label(path):
-    return str(str(path.split('/')[-1]))
+    train_df[new_feature+'_shift'] = train_df[new_feature].shift(+1).values
+    predictors.append(new_feature+'_shift')
+    
+    del QQ
+    gc.collect()
 
-# get plant class on image
-def img_class(path):
-    return str(path.split('/')[-2])
+    print("vars and data type: ")
+    train_df.info()
+    train_df['ip_tcount'] = train_df['ip_tcount'].astype('uint16')
+    train_df['ip_app_count'] = train_df['ip_app_count'].astype('uint16')
+    train_df['ip_app_os_count'] = train_df['ip_app_os_count'].astype('uint16')
 
-# fill train and test dict
-def fill_dict(paths, some_dict):
-    text = ''
-    if 'train' in paths[0]:
-        text = 'Start fill train_dict'
-    elif 'test' in paths[0]:
-        text = 'Start fill test_dict'
+    target = 'is_attributed'
+    predictors.extend(['app','device','os', 'channel', 'hour', 'day', 
+                  'ip_tcount', 'ip_tchan_count', 'ip_app_count',
+                  'ip_app_os_count', 'ip_app_os_var',
+                  'ip_app_channel_var_day','ip_app_channel_mean_hour',
+                  'X0', 'X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7', 'X8'])
+    categorical = ['app', 'device', 'os', 'channel', 'hour', 'day']
+    print('predictors',predictors)
 
-    for p in tqdm(paths, ascii=True, ncols=85, desc=text):
-        img = imageio.imread(p)
-        img = img_reshape(img)
-        some_dict['image'].append(img)
-        some_dict['label'].append(img_label(p))
-        if 'train' in paths[0]:
-            some_dict['class'].append(img_class(p))
+    test_df = train_df[len_train:]
+    val_df = train_df[(len_train-val_size):len_train]
+    train_df = train_df[:(len_train-val_size)]
 
-    return some_dict
+    print("train size: ", len(train_df))
+    print("valid size: ", len(val_df))
+    print("test size : ", len(test_df))
 
-# read image from dir. and fill train and test dict
-def reader():
-    file_ext = []
-    train_path = []
-    test_path = []
+    sub = pd.DataFrame()
+    sub['click_id'] = test_df['click_id'].astype('int')
 
-    for root, dirs, files in os.walk('../input'):
-        if dirs != []:
-            print('Root:\n'+str(root))
-            print('Dirs:\n'+str(dirs))
-        else:
-            for f in files:
-                ext = os.path.splitext(str(f))[1][1:]
+    gc.collect()
 
-                if ext not in file_ext:
-                    file_ext.append(ext)
+    print("Training...")
+    start_time = time.time()
 
-                if 'train' in root:
-                    path = os.path.join(root, f)
-                    train_path.append(path)
-                elif 'test' in root:
-                    path = os.path.join(root, f)
-                    test_path.append(path)
-    train_dict = {
-        'image': [],
-        'label': [],
-        'class': []
+    params = {
+        'learning_rate': 0.20,
+        #'is_unbalance': 'true', # replaced with scale_pos_weight argument
+        'num_leaves': 7,  # 2^max_depth - 1
+        'max_depth': 3,  # -1 means no limit
+        'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
+        'max_bin': 100,  # Number of bucketed bin for feature values
+        'subsample': 0.7,  # Subsample ratio of the training instance.
+        'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
+        'colsample_bytree': 0.9,  # Subsample ratio of columns when constructing each tree.
+        'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
+        'scale_pos_weight':200 # because training data is extremely unbalanced 
     }
-    test_dict = {
-        'image': [],
-        'label': []
-    }
+    (bst,best_iteration) = lgb_modelfit_nocv(params, 
+                            train_df, 
+                            val_df, 
+                            predictors, 
+                            target, 
+                            objective='binary', 
+                            metrics='auc',
+                            early_stopping_rounds=30, 
+                            verbose_eval=True, 
+                            num_boost_round=1000, 
+                            categorical_features=categorical)
 
-    #train_dict = fill_dict(train_path, train_dict)
-    test_dict = fill_dict(test_path, test_dict)
-    return train_dict, test_dict
-# I commented out some of the code for learning the model.
-def main():
-    train_dict, test_dict = reader()
-    #X_train = np.array(train_dict['image'])
-    #y_train = to_categorical(np.array([CLASS[l] for l in train_dict['class']]))
+    print('[{}]: model training time'.format(time.time() - start_time))
+    del train_df
+    del val_df
+    gc.collect()
 
-    X_test = np.array(test_dict['image'])
-    label = test_dict['label']
-    
-    # I do not recommend trying to train the model on a kaggle.
-    #train_model(X_train, y_train)
-    test_model(X_test, label)
+    if WHERE!='gcloud':
+        print('Plot feature importances...')
+        ax = lgb.plot_importance(bst, max_num_features=100)
+        plt.show()
 
-if __name__=='__main__':
-    main()
+    print("Predicting...")
+    sub['is_attributed'] = bst.predict(test_df[predictors],num_iteration=best_iteration)
+    if not debug:
+        print("writing...")
+        sub.to_csv('sub_it%d.csv'%(fileno),index=False,float_format='%.9f')
+    print("done...")
+    return sub
+
+nrows=184903891-1
+nchunk=25000000
+val_size=2500000
+
+frm=nrows-75000000
+if debug:
+    frm=0
+    nchunk=100000
+    val_size=10000
+
+to=frm+nchunk
+
+sub=DO(frm,to,0)

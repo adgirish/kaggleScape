@@ -1,165 +1,174 @@
-#!/usr/bin/python
 
-'''
-Based on https://www.kaggle.com/justdoit/rossmann-store-sales/xgboost-in-python-with-rmspe/code
-Public Score :  0.11389
-Private Validation Score :  0.096959
-'''
+"""
+Beating the Benchmark 
+Search Results Relevance @ Kaggle
+__author__ : Abhishek
 
+"""
 import pandas as pd
 import numpy as np
-from sklearn.cross_validation import train_test_split
-import xgboost as xgb
-import operator
-import matplotlib
-matplotlib.use("Agg") #Needed to save figures
-import matplotlib.pyplot as plt
+from sklearn.linear_model import LogisticRegression
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.svm import SVC
+from sklearn.decomposition import TruncatedSVD
+from sklearn.preprocessing import StandardScaler
+from sklearn import decomposition, pipeline, metrics, grid_search
 
-def create_feature_map(features):
-    outfile = open('xgb.fmap', 'w')
-    for i, feat in enumerate(features):
-        outfile.write('{0}\t{1}\tq\n'.format(i, feat))
-    outfile.close()
-
-def rmspe(y, yhat):
-    return np.sqrt(np.mean((yhat/y-1) ** 2))
-
-def rmspe_xg(yhat, y):
-    y = np.expm1(y.get_label())
-    yhat = np.expm1(yhat)
-    return "rmspe", rmspe(y,yhat)
-
-# Gather some features
-def build_features(features, data):
-    # remove NaNs
-    data.fillna(0, inplace=True)
-    data.loc[data.Open.isnull(), 'Open'] = 1
-    # Use some properties directly
-    features.extend(['Store', 'CompetitionDistance', 'Promo', 'Promo2', 'SchoolHoliday'])
-
-    # Label encode some features
-    features.extend(['StoreType', 'Assortment', 'StateHoliday'])
-    mappings = {'0':0, 'a':1, 'b':2, 'c':3, 'd':4}
-    data.StoreType.replace(mappings, inplace=True)
-    data.Assortment.replace(mappings, inplace=True)
-    data.StateHoliday.replace(mappings, inplace=True)
-
-    features.extend(['DayOfWeek', 'Month', 'Day', 'Year', 'WeekOfYear'])
-    data['Year'] = data.Date.dt.year
-    data['Month'] = data.Date.dt.month
-    data['Day'] = data.Date.dt.day
-    data['DayOfWeek'] = data.Date.dt.dayofweek
-    data['WeekOfYear'] = data.Date.dt.weekofyear
-
-    # CompetionOpen en PromoOpen from https://www.kaggle.com/ananya77041/rossmann-store-sales/randomforestpython/code
-    # Calculate time competition open time in months
-    features.append('CompetitionOpen')
-    data['CompetitionOpen'] = 12 * (data.Year - data.CompetitionOpenSinceYear) + \
-        (data.Month - data.CompetitionOpenSinceMonth)
-    # Promo open time in months
-    features.append('PromoOpen')
-    data['PromoOpen'] = 12 * (data.Year - data.Promo2SinceYear) + \
-        (data.WeekOfYear - data.Promo2SinceWeek) / 4.0
-    data['PromoOpen'] = data.PromoOpen.apply(lambda x: x if x > 0 else 0)
-    data.loc[data.Promo2SinceYear == 0, 'PromoOpen'] = 0
-
-    # Indicate that sales on that day are in promo interval
-    features.append('IsPromoMonth')
-    month2str = {1:'Jan', 2:'Feb', 3:'Mar', 4:'Apr', 5:'May', 6:'Jun', \
-             7:'Jul', 8:'Aug', 9:'Sept', 10:'Oct', 11:'Nov', 12:'Dec'}
-    data['monthStr'] = data.Month.map(month2str)
-    data.loc[data.PromoInterval == 0, 'PromoInterval'] = ''
-    data['IsPromoMonth'] = 0
-    for interval in data.PromoInterval.unique():
-        if interval != '':
-            for month in interval.split(','):
-                data.loc[(data.monthStr == month) & (data.PromoInterval == interval), 'IsPromoMonth'] = 1
-
-    return data
+# The following 3 functions have been taken from Ben Hamner's github repository
+# https://github.com/benhamner/Metrics
+def confusion_matrix(rater_a, rater_b, min_rating=None, max_rating=None):
+    """
+    Returns the confusion matrix between rater's ratings
+    """
+    assert(len(rater_a) == len(rater_b))
+    if min_rating is None:
+        min_rating = min(rater_a + rater_b)
+    if max_rating is None:
+        max_rating = max(rater_a + rater_b)
+    num_ratings = int(max_rating - min_rating + 1)
+    conf_mat = [[0 for i in range(num_ratings)]
+                for j in range(num_ratings)]
+    for a, b in zip(rater_a, rater_b):
+        conf_mat[a - min_rating][b - min_rating] += 1
+    return conf_mat
 
 
-## Start of main script
+def histogram(ratings, min_rating=None, max_rating=None):
+    """
+    Returns the counts of each type of rating that a rater made
+    """
+    if min_rating is None:
+        min_rating = min(ratings)
+    if max_rating is None:
+        max_rating = max(ratings)
+    num_ratings = int(max_rating - min_rating + 1)
+    hist_ratings = [0 for x in range(num_ratings)]
+    for r in ratings:
+        hist_ratings[r - min_rating] += 1
+    return hist_ratings
 
-print("Load the training, test and store data using pandas")
-types = {'CompetitionOpenSinceYear': np.dtype(int),
-         'CompetitionOpenSinceMonth': np.dtype(int),
-         'StateHoliday': np.dtype(str),
-         'Promo2SinceWeek': np.dtype(int),
-         'SchoolHoliday': np.dtype(float),
-         'PromoInterval': np.dtype(str)}
-train = pd.read_csv("../input/train.csv", parse_dates=[2], dtype=types)
-test = pd.read_csv("../input/test.csv", parse_dates=[3], dtype=types)
-store = pd.read_csv("../input/store.csv")
 
-print("Assume store open, if not provided")
-train.fillna(1, inplace=True)
-test.fillna(1, inplace=True)
+def quadratic_weighted_kappa(y, y_pred):
+    """
+    Calculates the quadratic weighted kappa
+    axquadratic_weighted_kappa calculates the quadratic weighted kappa
+    value, which is a measure of inter-rater agreement between two raters
+    that provide discrete numeric ratings.  Potential values range from -1
+    (representing complete disagreement) to 1 (representing complete
+    agreement).  A kappa value of 0 is expected if all agreement is due to
+    chance.
+    quadratic_weighted_kappa(rater_a, rater_b), where rater_a and rater_b
+    each correspond to a list of integer ratings.  These lists must have the
+    same length.
+    The ratings should be integers, and it is assumed that they contain
+    the complete range of possible ratings.
+    quadratic_weighted_kappa(X, min_rating, max_rating), where min_rating
+    is the minimum possible rating, and max_rating is the maximum possible
+    rating
+    """
+    rater_a = y
+    rater_b = y_pred
+    min_rating=None
+    max_rating=None
+    rater_a = np.array(rater_a, dtype=int)
+    rater_b = np.array(rater_b, dtype=int)
+    assert(len(rater_a) == len(rater_b))
+    if min_rating is None:
+        min_rating = min(min(rater_a), min(rater_b))
+    if max_rating is None:
+        max_rating = max(max(rater_a), max(rater_b))
+    conf_mat = confusion_matrix(rater_a, rater_b,
+                                min_rating, max_rating)
+    num_ratings = len(conf_mat)
+    num_scored_items = float(len(rater_a))
 
-print("Consider only open stores for training. Closed stores wont count into the score.")
-train = train[train["Open"] != 0]
-print("Use only Sales bigger then zero. Simplifies calculation of rmspe")
-train = train[train["Sales"] > 0]
+    hist_rater_a = histogram(rater_a, min_rating, max_rating)
+    hist_rater_b = histogram(rater_b, min_rating, max_rating)
 
-print("Join with store")
-train = pd.merge(train, store, on='Store')
-test = pd.merge(test, store, on='Store')
+    numerator = 0.0
+    denominator = 0.0
 
-features = []
+    for i in range(num_ratings):
+        for j in range(num_ratings):
+            expected_count = (hist_rater_a[i] * hist_rater_b[j]
+                              / num_scored_items)
+            d = pow(i - j, 2.0) / pow(num_ratings - 1, 2.0)
+            numerator += d * conf_mat[i][j] / num_scored_items
+            denominator += d * expected_count / num_scored_items
 
-print("augment features")
-build_features(features, train)
-build_features([], test)
-print(features)
+    return (1.0 - numerator / denominator)
 
-print('training data processed')
 
-params = {"objective": "reg:linear",
-          "booster" : "gbtree",
-          "eta": 0.3,
-          "max_depth": 10,
-          "subsample": 0.9,
-          "colsample_bytree": 0.7,
-          "silent": 1,
-          "seed": 1301
-          }
-num_boost_round = 300
+if __name__ == '__main__':
 
-print("Train a XGBoost model")
-X_train, X_valid = train_test_split(train, test_size=0.012, random_state=10)
-y_train = np.log1p(X_train.Sales)
-y_valid = np.log1p(X_valid.Sales)
-dtrain = xgb.DMatrix(X_train[features], y_train)
-dvalid = xgb.DMatrix(X_valid[features], y_valid)
-
-watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
-gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, \
-  early_stopping_rounds=100, feval=rmspe_xg, verbose_eval=True)
-
-print("Validating")
-yhat = gbm.predict(xgb.DMatrix(X_valid[features]))
-error = rmspe(X_valid.Sales.values, np.expm1(yhat))
-print('RMSPE: {:.6f}'.format(error))
-
-print("Make predictions on the test set")
-dtest = xgb.DMatrix(test[features])
-test_probs = gbm.predict(dtest)
-# Make Submission
-result = pd.DataFrame({"Id": test["Id"], 'Sales': np.expm1(test_probs)})
-result.to_csv("xgboost_10_submission.csv", index=False)
-
-# XGB feature importances
-# Based on https://www.kaggle.com/mmueller/liberty-mutual-group-property-inspection-prediction/xgb-feature-importance-python/code
-
-create_feature_map(features)
-importance = gbm.get_fscore(fmap='xgb.fmap')
-importance = sorted(importance.items(), key=operator.itemgetter(1))
-
-df = pd.DataFrame(importance, columns=['feature', 'fscore'])
-df['fscore'] = df['fscore'] / df['fscore'].sum()
-
-featp = df.plot(kind='barh', x='feature', y='fscore', legend=False, figsize=(6, 10))
-plt.title('XGBoost Feature Importance')
-plt.xlabel('relative importance')
-fig_featp = featp.get_figure()
-fig_featp.savefig('feature_importance_xgb.png', bbox_inches='tight', pad_inches=1)
-
+    # Load the training file
+    train = pd.read_csv('../input/train.csv')
+    test = pd.read_csv('../input/test.csv')
+    
+    # we dont need ID columns
+    idx = test.id.values.astype(int)
+    train = train.drop('id', axis=1)
+    test = test.drop('id', axis=1)
+    
+    # create labels. drop useless columns
+    y = train.median_relevance.values
+    train = train.drop(['median_relevance', 'relevance_variance'], axis=1)
+    
+    # do some lambda magic on text columns
+    traindata = list(train.apply(lambda x:'%s %s' % (x['query'],x['product_title']),axis=1))
+    testdata = list(test.apply(lambda x:'%s %s' % (x['query'],x['product_title']),axis=1))
+    
+    # the infamous tfidf vectorizer (Do you remember this one?)
+    tfv = TfidfVectorizer(min_df=3,  max_features=None, 
+            strip_accents='unicode', analyzer='word',token_pattern=r'\w{1,}',
+            ngram_range=(1, 5), use_idf=1,smooth_idf=1,sublinear_tf=1,
+            stop_words = 'english')
+    
+    # Fit TFIDF
+    tfv.fit(traindata)
+    X =  tfv.transform(traindata) 
+    X_test = tfv.transform(testdata)
+    
+    # Initialize SVD
+    svd = TruncatedSVD()
+    
+    # Initialize the standard scaler 
+    scl = StandardScaler()
+    
+    # We will use SVM here..
+    svm_model = SVC()
+    
+    # Create the pipeline 
+    clf = pipeline.Pipeline([('svd', svd),
+    						 ('scl', scl),
+                    	     ('svm', svm_model)])
+    
+    # Create a parameter grid to search for best parameters for everything in the pipeline
+    param_grid = {'svd__n_components' : [200, 400],
+                  'svm__C': [10, 12]}
+    
+    # Kappa Scorer 
+    kappa_scorer = metrics.make_scorer(quadratic_weighted_kappa, greater_is_better = True)
+    
+    # Initialize Grid Search Model
+    model = grid_search.GridSearchCV(estimator = clf, param_grid=param_grid, scoring=kappa_scorer,
+                                     verbose=10, n_jobs=-1, iid=True, refit=True, cv=2)
+                                     
+    # Fit Grid Search Model
+    model.fit(X, y)
+    print("Best score: %0.3f" % model.best_score_)
+    print("Best parameters set:")
+    best_parameters = model.best_estimator_.get_params()
+    for param_name in sorted(param_grid.keys()):
+    	print("\t%s: %r" % (param_name, best_parameters[param_name]))
+    
+    # Get best model
+    best_model = model.best_estimator_
+    
+    # Fit model with best parameters optimized for quadratic_weighted_kappa
+    best_model.fit(X,y)
+    preds = best_model.predict(X_test)
+    
+    # Create your first submission file
+    submission = pd.DataFrame({"id": idx, "prediction": preds})
+    submission.to_csv("beating_the_benchmark_yet_again.csv", index=False)

@@ -1,823 +1,612 @@
 
 # coding: utf-8
 
-# # In this notebook, we aim to create a model to predict which passengers would survive/die in the Titanic Crash
+# Yellow Cabs tell The Story of New York City
+# -----------------------------------------
 # 
-# **The outline of the notebook will be:**
+# In this script we will explore the spatial and temporal behavior of the people of New York as can be inferred by examining their cab usage.  
 # 
-# **1) Getting the dataset**
+# The main fields of this dataset are taxi pickup time and location, as well as dropoff location and trip duration.  
+# There is a total of around 1.4 Million trips in the dataset that took place during the first half of 2016.  
 # 
-# **2) Exploratory Data Analysis**
+# We will see how the patterns of cab usage change throughout the year, throughout the week and throughout the day, and we will focus on difference between weekdays and weekends.
 # 
-# **3) Feature Engineering**
-# 
-# **4) Building Models**
-# 
-# **5) Submission**
-
-# **Importing relevant libraries for explaratory analysis**
+# ![](http://blog.christinaczybik.com/wp-content/uploads/2015/08/New-York-Street-Mix016.jpg)
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-import numpy as np 
-import scipy as sp 
-import matplotlib as mpl
-import matplotlib.cm as cm 
+import numpy as np
+import pandas as pd
+import matplotlib
 import matplotlib.pyplot as plt
-import pandas as pd 
-from pandas.tools.plotting import scatter_matrix
-pd.set_option('display.width', 500)
-pd.set_option('display.max_columns', 100)
-pd.set_option('display.notebook_repr_html', True)
-import seaborn as sns
-sns.set(style="whitegrid")
-import warnings
-warnings.filterwarnings('ignore')
+from sklearn import decomposition
+from scipy import stats
+from sklearn import cluster
 
+matplotlib.style.use('fivethirtyeight')
+matplotlib.rcParams['font.size'] = 12
+matplotlib.rcParams['figure.figsize'] = (10,10)
 
-# # 1) Getting the dataset
 
-# In[ ]:
-
-
-train=pd.read_csv("../input/train.csv")
-Test=pd.read_csv("../input/test.csv")
-
-
-# In[ ]:
-
-
-train.tail()
-
-
-# # 2) Exploratory Data Analysis
-
-# **Data dictionary and notes from https://www.kaggle.com/c/titanic/data**
-
-# ![titdatapic3.PNG](attachment:titdatapic3.PNG)
-
-# In[ ]:
-
-
-train.info()
-
-
-# In[ ]:
-
-
-Test.info()
-
-
-# # 2.1 Plotting and visualising the distributions of different variables
-
-# In[ ]:
-
-
-train["Survived"].value_counts().plot(kind="bar")
-train["Survived"].value_counts()
-
-
-# Our dataset shows that there were 549 passengers who died while 342 survived.
-
-# In[ ]:
-
-
-train["Age"].hist(width=6)
-
-
-# In[ ]:
-
-
-train["Sex"].value_counts().plot(kind="bar")
-
-
-# In[ ]:
-
-
-labels="Cherbourg","Queenstown","Southampton"
-sizes=[sum(train["Embarked"]=="C"),sum(train["Embarked"]=="Q"),sum(train["Embarked"]=="S")]
-colors=["yellow","aqua","lime"]
-plt.pie(sizes, labels=labels, colors=colors,
-        autopct='%1.1f%%',startangle=90)
- 
-plt.axis('equal')
-plt.show()
-
-
-# # 2.2 Comparing survival rates among different variables
-
-# In[ ]:
-
-
-def survival_stacked_bar(variable):
-    Died=train[train["Survived"]==0][variable].value_counts()/len(train["Survived"]==0)
-    Survived=train[train["Survived"]==1][variable].value_counts()/len(train["Survived"]==1)
-    data=pd.DataFrame([Died,Survived])
-    data.index=["Did not survived","Survived"]
-    data.plot(kind="bar",stacked=True,title="Percentage")
-    return data.head()
-
-
-# In[ ]:
-
-
-survival_stacked_bar("Sex")
-
-
-# We can see from the plot that females tend to survived more than males.
-
-# In[ ]:
-
-
-survival_stacked_bar("Pclass")
-
-
-# We can see from the plot that people of higher social-economic status (Pclass = 1) tend to have a higher chance of surviving compared to those of lower social-economic status.
-
-# In[ ]:
-
-
-survival_stacked_bar("Embarked")
-
-
-# We can see that a person embarked on Cherbourg Port has a higher chance of surviving compared to those embarked on Southampton Port and Queenstown Port.
-
-# In[ ]:
-
-
-survival_stacked_bar("SibSp")
-
-
-#  
-
-# In[ ]:
-
-
-survival_stacked_bar("Parch")
-
-
-# We can see that passengers that boarded alone have a lower survival rate compared to those that board with parents or children.
-
-# # 2.3 Correlation heatmap of all variables
-
-# In[ ]:
-
-
-f,ax = plt.subplots(figsize=(10, 10))
-sns.heatmap(train.corr(), annot=True, linewidths=0.5, fmt= '.2f',ax=ax)
-
-
-# We can see from the plots above and from the  correlation heatmap the more prominent relationship between:
-# -  **"sex" and "survived"**
-#     -  As shown in the plots above, it is quite obvious that females tend to have a higher survival rate than males
-# -  **"Pclass" and "fare"**
-#     -  A passenger with a higher social-economic status would most likely pay a higher fare, hence the relatively high correlation between the 2 variables
+# Load data, remove obvious outliers and convert everything to sensible units
+# --------------------------------------------------------------------
 # 
-
-# # 3. Feature Engineering
-
-# **Combining the 2 datasets**
-
-# In[ ]:
-
-
-traintestdata=pd.concat([train,Test])
-traintestdata.shape
-
-
-# ## 3.1 "Sex" Mapping and Encoding
-
-# In[ ]:
-
-
-sex_map={"male":1,"female":0}
-train["Sex"]=train["Sex"].map(sex_map)
-Test["Sex"]=Test["Sex"].map(sex_map)
-survival_stacked_bar("Sex")
-
-
-# # 3.2 Name/Title mapping
-
-# In[ ]:
-
-
-train.insert(value=train.Name.map(lambda name: name.split(",")[1].split(".")[0].strip()),loc=12,column="Title")
-Test.insert(value=Test.Name.map(lambda name: name.split(",")[1].split(".")[0].strip()),loc=11,column="Title")
-
-
-# We then assign social status titles to them for more in-depth analysis.
-
-# In[ ]:
-
-
-title_map={"Capt": "Officer",
-            "Col": "Officer",
-            "Major": "Officer",
-            "Jonkheer": "Royalty",
-            "Don": "Royalty",
-            "Sir" : "Royalty",
-            "Dr": "Officer",
-            "Rev": "Officer",
-            "the Countess":"Royalty",
-            "Dona": "Royalty",
-            "Mme":  "Mrs",
-            "Mlle": "Miss",
-            "Ms": "Mrs",
-            "Mr" : "Mr",
-            "Mrs" : "Mrs",
-            "Miss" : "Miss",
-            "Master" : "Master",
-            "Lady" : "Royalty"}
-train["Title"]=train.Title.map(title_map)
-Test["Title"]=Test.Title.map(title_map)
-
-
-# # 3.3 Checking for missing values in dataset:
-
-# In[ ]:
-
-
-for i in train.columns:
-    print (i + ": "+str(sum(train[i].isnull()))+" missing values")
-
-
-# In[ ]:
-
-
-for i in Test.columns:
-    print (i + ": "+str(sum(Test[i].isnull()))+" missing values")
-
-
-# **3.3.1 Dealing with Age (Missing values)**
-# It is not very accurate to replace the missing values of age with the mean or median. As such, looking at the correlation heatmap above, the 2 factors most associated with age is Pclass and SibSp. Hence, I would first differentiate our dataset by their social-economic status and number of siblings/spouses they are on board with. I would then use the median of each subset as the replacement for the respective missing values. 
-
-# In[ ]:
-
-
-train_set_1=train.groupby(["Pclass","SibSp"])
-train_set_1_median=train_set_1.median()
-train_set_1_median
-
-
-# In[ ]:
-
-
-Test_set_1=Test.groupby(["Pclass","SibSp"])
-Test_set_1_median=Test_set_1.median()
-Test_set_1_median
-
-
-# In the following funcion, the medians of each group would be used to replace missing values in the "Age" based on their groups (Pclass and SibSp) 
-
-# In[ ]:
-
-
-def fill_age(dataset,dataset_med):
-    for x in range(len(dataset)):
-        if dataset["Pclass"][x]==1:
-            if dataset["SibSp"][x]==0:
-                return dataset_med.loc[1,0]["Age"]
-            elif dataset["SibSp"][x]==1:
-                return dataset_med.loc[1,1]["Age"]
-            elif dataset["SibSp"][x]==2:
-                return dataset_med.loc[1,2]["Age"]
-            elif dataset["SibSp"][x]==3:
-                return dataset_med.loc[1,3]["Age"]
-        elif dataset["Pclass"][x]==2:
-            if dataset["SibSp"][x]==0:
-                return dataset_med.loc[2,0]["Age"]
-            elif dataset["SibSp"][x]==1:
-                return dataset_med.loc[2,1]["Age"]
-            elif dataset["SibSp"][x]==2:
-                return dataset_med.loc[2,2]["Age"]
-            elif dataset["SibSp"][x]==3:
-                return dataset_med.loc[2,3]["Age"]
-        elif dataset["Pclass"][x]==3:
-            if dataset["SibSp"][x]==0:
-                return dataset_med.loc[3,0]["Age"]
-            elif dataset["SibSp"][x]==1:
-                return dataset_med.loc[3,1]["Age"]
-            elif dataset["SibSp"][x]==2:
-                return dataset_med.loc[3,2]["Age"]
-            elif dataset["SibSp"][x]==3:
-                return dataset_med.loc[3,3]["Age"]
-            elif dataset["SibSp"][x]==4:
-                return dataset_med.loc[3,4]["Age"]
-            elif dataset["SibSp"][x]==5:
-                return dataset_med.loc[3,5]["Age"]
-            elif dataset["SibSp"][x]==8:
-                return dataset_med.loc[3]["Age"].median()  #I used the median age of Pclass=3 as a replacement as there is no median value for SibSp=8 in training dataset
-
-
-# In[ ]:
-
-
-train["Age"]=train["Age"].fillna(fill_age(train,train_set_1_median))
-Test["Age"]=Test["Age"].fillna(fill_age(Test,Test_set_1_median))
-
-
-# **3.3.2 Dealing with Cabin (Missing values)**
-# Since the cabin location would logically affect their ability to evacuate and survive, it is also not appropriate to assign the missing cabin values randomly. Instead, I would assign them **Cabin U (U for unknown)**. 
-
-# In[ ]:
-
-
-traintestdata.Cabin.unique()
-
-
-# In[ ]:
-
-
-train["Cabin"]=train["Cabin"].fillna("U")
-Test["Cabin"]=Test["Cabin"].fillna("U")
-train["Cabin"]=train["Cabin"].map(lambda x: x[0])
-Test["Cabin"]=Test["Cabin"].map(lambda x: x[0])
-
-
-# We create a column for each cabin and insert the value "1" if the passenger belongs to that cabin and "0" if the passenger do not belong to it. We only create columns for cabin A,B,C,D,E,F,G,T and **LEFT OUT CABIN U** in the columns created in order to prevent collinearity. Passengers in Cabin U would have values "0" for all the cabins columns (A,B,C,D,E,F,G,T).
 # 
 
 # In[ ]:
 
 
-def new_cabin_features(dataset):
-    dataset["Cabin A"]=np.where(dataset["Cabin"]=="A",1,0)
-    dataset["Cabin B"]=np.where(dataset["Cabin"]=="B",1,0)
-    dataset["Cabin C"]=np.where(dataset["Cabin"]=="C",1,0)
-    dataset["Cabin D"]=np.where(dataset["Cabin"]=="D",1,0)
-    dataset["Cabin E"]=np.where(dataset["Cabin"]=="E",1,0)
-    dataset["Cabin F"]=np.where(dataset["Cabin"]=="F",1,0)
-    dataset["Cabin G"]=np.where(dataset["Cabin"]=="G",1,0)
-    dataset["Cabin T"]=np.where(dataset["Cabin"]=="T",1,0)  #Cabin U is when the rest of cabins are 0
+dataDir = '../input/'
+taxiDB = pd.read_csv(dataDir + 'train.csv')
+
+# remove obvious outliers
+allLat  = np.array(list(taxiDB['pickup_latitude'])  + list(taxiDB['dropoff_latitude']))
+allLong = np.array(list(taxiDB['pickup_longitude']) + list(taxiDB['dropoff_longitude']))
+
+longLimits = [np.percentile(allLong, 0.3), np.percentile(allLong, 99.7)]
+latLimits  = [np.percentile(allLat , 0.3), np.percentile(allLat , 99.7)]
+durLimits  = [np.percentile(taxiDB['trip_duration'], 0.4), np.percentile(taxiDB['trip_duration'], 99.7)]
+
+taxiDB = taxiDB[(taxiDB['pickup_latitude']   >= latLimits[0] ) & (taxiDB['pickup_latitude']   <= latLimits[1]) ]
+taxiDB = taxiDB[(taxiDB['dropoff_latitude']  >= latLimits[0] ) & (taxiDB['dropoff_latitude']  <= latLimits[1]) ]
+taxiDB = taxiDB[(taxiDB['pickup_longitude']  >= longLimits[0]) & (taxiDB['pickup_longitude']  <= longLimits[1])]
+taxiDB = taxiDB[(taxiDB['dropoff_longitude'] >= longLimits[0]) & (taxiDB['dropoff_longitude'] <= longLimits[1])]
+taxiDB = taxiDB[(taxiDB['trip_duration']     >= durLimits[0] ) & (taxiDB['trip_duration']     <= durLimits[1]) ]
+taxiDB = taxiDB.reset_index(drop=True)
+
+allLat  = np.array(list(taxiDB['pickup_latitude'])  + list(taxiDB['dropoff_latitude']))
+allLong = np.array(list(taxiDB['pickup_longitude']) + list(taxiDB['dropoff_longitude']))
+
+# convert fields to sensible units
+medianLat  = np.percentile(allLat,50)
+medianLong = np.percentile(allLong,50)
+
+latMultiplier  = 111.32
+longMultiplier = np.cos(medianLat*(np.pi/180.0)) * 111.32
+
+taxiDB['duration [min]'] = taxiDB['trip_duration']/60.0
+taxiDB['src lat [km]']   = latMultiplier  * (taxiDB['pickup_latitude']   - medianLat)
+taxiDB['src long [km]']  = longMultiplier * (taxiDB['pickup_longitude']  - medianLong)
+taxiDB['dst lat [km]']   = latMultiplier  * (taxiDB['dropoff_latitude']  - medianLat)
+taxiDB['dst long [km]']  = longMultiplier * (taxiDB['dropoff_longitude'] - medianLong)
+
+allLat  = np.array(list(taxiDB['src lat [km]'])  + list(taxiDB['dst lat [km]']))
+allLong = np.array(list(taxiDB['src long [km]']) + list(taxiDB['dst long [km]']))
+
+
+# Plot the resulting histograms of trip duration, latitude and longitude 
+# -----------------------------------------------------------
+# 
+# 
+
+# In[ ]:
+
+
+# make sure the ranges we chose are sensible
+fig, axArray = plt.subplots(nrows=1,ncols=3,figsize=(13,4))
+axArray[0].hist(taxiDB['duration [min]'],80); 
+axArray[0].set_xlabel('trip duration [min]'); axArray[0].set_ylabel('counts')
+axArray[1].hist(allLat ,80); axArray[1].set_xlabel('latitude [km]')
+axArray[2].hist(allLong,80); axArray[2].set_xlabel('longitude [km]')
+
+
+# Plot the trip Duration vs. the Aerial Distance between pickup and dropoff
+# -----------------------------------------------------------
+# 
+
+# In[ ]:
+
+
+#%% plot scatter of trip duration vs. aerial distance between pickup and dropoff
+taxiDB['log duration']       = np.log1p(taxiDB['duration [min]'])
+taxiDB['euclidian distance'] = np.sqrt((taxiDB['src lat [km]']  - taxiDB['dst lat [km]'] )**2 + 
+                                       (taxiDB['src long [km]'] - taxiDB['dst long [km]'])**2)
+
+fig, axArray = plt.subplots(nrows=1,ncols=2,figsize=(13,6))
+axArray[0].scatter(taxiDB['euclidian distance'], taxiDB['duration [min]'],c='r',s=5,alpha=0.01); 
+axArray[0].set_xlabel('Aerial Euclidian Distance [km]'); axArray[0].set_ylabel('Duration [min]')
+axArray[0].set_xlim(taxiDB['euclidian distance'].min(),taxiDB['euclidian distance'].max())
+axArray[0].set_ylim(taxiDB['duration [min]'].min(),taxiDB['duration [min]'].max())
+axArray[0].set_title('trip Duration vs Aerial trip Distance')
+
+axArray[1].scatter(taxiDB['euclidian distance'], taxiDB['log duration'],c='r',s=5,alpha=0.01); 
+axArray[1].set_xlabel('Aerial Euclidian Distance [km]'); axArray[1].set_ylabel('log(1+Duration) [log(min)]')
+axArray[1].set_xlim(taxiDB['euclidian distance'].min(),taxiDB['euclidian distance'].max())
+axArray[1].set_ylim(taxiDB['log duration'].min(),taxiDB['log duration'].max())
+axArray[1].set_title('log of trip Duration vs Aerial trip Distance')
+
+
+# We can see that the trip distance defines the lower bound on trip duration, as one would expect
+
+# Plot spatial density plot of the pickup and dropoff locations
+# -----------------------------------------------------
+# 
+# 
+
+# In[ ]:
+
+
+# show the log density of pickup and dropoff locations
+imageSize = (700,700)
+longRange = [-5,19]
+latRange = [-13,11]
+
+allLatInds  = imageSize[0] - (imageSize[0] * (allLat  - latRange[0])  / (latRange[1]  - latRange[0]) ).astype(int)
+allLongInds =                (imageSize[1] * (allLong - longRange[0]) / (longRange[1] - longRange[0])).astype(int)
+
+locationDensityImage = np.zeros(imageSize)
+for latInd, longInd in zip(allLatInds,allLongInds):
+    locationDensityImage[latInd,longInd] += 1
+
+fig, ax = plt.subplots(nrows=1,ncols=1,figsize=(12,12))
+ax.imshow(np.log(locationDensityImage+1),cmap='hot')
+ax.set_axis_off()
+
+
+# Oh, nice!  
+# It looks a little bit of what you might expect to see from space, with Manhattan and the two airports "lighting up the sky"
+
+# Zoom in on Manhattan
+# --------------------
+
+# In[ ]:
+
+
+# zoom in on Manhattan 
+imageSizeMan = (720,480)
+latRangeMan = [-8,10]
+longRangeMan = [-5,7]
+
+indToKeep  = np.logical_and(allLat > latRangeMan[0], allLat < latRangeMan[1])
+indToKeep  = np.logical_and(indToKeep, np.logical_and(allLong > longRangeMan[0], allLong < longRangeMan[1]))
+allLatMan  = allLat[indToKeep]
+allLongMan = allLong[indToKeep]
+
+allLatIndsMan  = (imageSizeMan[0]-1) - (imageSizeMan[0] * (allLatMan  - latRangeMan[0])
+                                                        / (latRangeMan[1] - latRangeMan[0])).astype(int)
+allLongIndsMan =                       (imageSizeMan[1] * (allLongMan - longRangeMan[0])
+                                                        / (longRangeMan[1] - longRangeMan[0])).astype(int)
+
+locationDensityImageMan = np.zeros(imageSizeMan)
+for latInd, longInd in zip(allLatIndsMan,allLongIndsMan):
+    locationDensityImageMan[latInd,longInd] += 1
+
+fig, ax = plt.subplots(nrows=1,ncols=1,figsize=(12,18))
+ax.imshow(np.log(locationDensityImageMan+1),cmap='hot')
+ax.set_axis_off()
+
+
+# Create some useful fields for later
+# -------------------------
+# 
+# 
+
+# In[ ]:
+
+
+#%% create some new usefull fields
+pickupTime = pd.to_datetime(taxiDB['pickup_datetime'])
+
+taxiDB['src hourOfDay'] = (pickupTime.dt.hour*60.0 + pickupTime.dt.minute)   / 60.0
+taxiDB['dst hourOfDay'] = taxiDB['src hourOfDay'] + taxiDB['duration [min]'] / 60.0
+
+taxiDB['dayOfWeek']     = pickupTime.dt.weekday
+taxiDB['hourOfWeek']    = taxiDB['dayOfWeek']*24.0 + taxiDB['src hourOfDay']
+
+taxiDB['monthOfYear']   = pickupTime.dt.month
+taxiDB['dayOfYear']     = pickupTime.dt.dayofyear
+taxiDB['weekOfYear']    = pickupTime.dt.weekofyear
+taxiDB['hourOfYear']    = taxiDB['dayOfYear']*24.0 + taxiDB['src hourOfDay']
+
+
+# Cluster The Trips and Look at their distribution
+# ------------------------------------------------
+# 
+# every trip is essentially made up of 5 major attributes: pickup and dropoff locations and the trip duration.
+# let's cluster all 1.4 million trips to 80 stereotypical template trips and then look at the distribution of this "bag of trips" and how it changes over time
+
+# In[ ]:
+
+
+tripAttributes = np.array(taxiDB.loc[:,['src lat [km]','src long [km]','dst lat [km]','dst long [km]','duration [min]']])
+meanTripAttr = tripAttributes.mean(axis=0)
+stdTripAttr  = tripAttributes.std(axis=0)
+tripAttributes = stats.zscore(tripAttributes, axis=0)
+
+numClusters = 80
+TripKmeansModel = cluster.MiniBatchKMeans(n_clusters=numClusters, batch_size=120000, n_init=100, random_state=1)
+clusterInds = TripKmeansModel.fit_predict(tripAttributes)
+
+clusterTotalCounts, _ = np.histogram(clusterInds, bins=numClusters)
+sortedClusterInds = np.flipud(np.argsort(clusterTotalCounts))
+
+plt.figure(figsize=(12,4)); plt.title('Cluster Histogram of all trip')
+plt.bar(range(1,numClusters+1),clusterTotalCounts[sortedClusterInds])
+plt.ylabel('Frequency [counts]'); plt.xlabel('Cluster index (sorted by cluster frequency)')
+plt.xlim(0,numClusters+1)
+
+
+# Show the typical Trips on the Map
+# ---------------------------------
+# 
+# The magenta circles are sources, the green circles are destinations and the arrows between them are drawn in cyan
+
+# In[ ]:
+
+
+#%% show the templeate trips on the map
+def ConvertToImageCoords(latCoord, longCoord, latRange, longRange, imageSize):
+    latInds  = imageSize[0] - (imageSize[0] * (latCoord  - latRange[0])  / (latRange[1]  - latRange[0]) ).astype(int)
+    longInds =                (imageSize[1] * (longCoord - longRange[0]) / (longRange[1] - longRange[0])).astype(int)
+
+    return latInds, longInds
+
+templateTrips = TripKmeansModel.cluster_centers_ * np.tile(stdTripAttr,(numClusters,1)) + np.tile(meanTripAttr,(numClusters,1))
+
+srcCoords = templateTrips[:,:2]
+dstCoords = templateTrips[:,2:4]
+
+srcImCoords = ConvertToImageCoords(srcCoords[:,0],srcCoords[:,1], latRange, longRange, imageSize)
+dstImCoords = ConvertToImageCoords(dstCoords[:,0],dstCoords[:,1], latRange, longRange, imageSize)
+
+plt.figure(figsize=(12,12))
+plt.imshow(np.log(locationDensityImage+1),cmap='hot'); plt.grid('off')
+plt.scatter(srcImCoords[1],srcImCoords[0],c='m',s=200,alpha=0.8)
+plt.scatter(dstImCoords[1],dstImCoords[0],c='g',s=200,alpha=0.8)
+
+for i in range(len(srcImCoords[0])):
+    plt.arrow(srcImCoords[1][i],srcImCoords[0][i], dstImCoords[1][i]-srcImCoords[1][i], dstImCoords[0][i]-srcImCoords[0][i], 
+              edgecolor='c', facecolor='c', width=0.8,alpha=0.4,head_width=10.0,head_length=10.0,length_includes_head=True)
+
+
+# The magenta circles are sources (pickup locations), the green circles are destinations (dropoff locations) and the arrows between them are drawn in cyan.
+# we can see an uneven distribution of sources and destinations with the periphery of Manhattan mostly serve as destination. (I'm sure some people might want to kill me for calling Brooklyn and Queens "the periphery"...)
+# 
+# 
+# ----------
+# Let's now move on to examining the Temporal aspect of these trips:
+# -----------------------------------------------------------------
+# 
+# 
+# ----------
+# 
+# 
+# 
+# 
+
+# WeekDay Trip Distribution for different hours of the day
+# --------------------------------------------------------
+# How does this "bag of trips" changes during the **regular work day**?
+# 
+
+# In[ ]:
+
+
+# calculate the trip distribution for different hours of the weekday
+hoursOfDay = np.sort(taxiDB['src hourOfDay'].astype(int).unique())
+clusterDistributionHourOfDay_weekday = np.zeros((len(hoursOfDay),numClusters))
+for k, hour in enumerate(hoursOfDay):
+    slectedInds = (taxiDB['src hourOfDay'].astype(int) == hour) & (taxiDB['dayOfWeek'] <= 4)
+    currDistribution, _ = np.histogram(clusterInds[slectedInds], bins=numClusters)
+    clusterDistributionHourOfDay_weekday[k,:] = currDistribution[sortedClusterInds]
+
+fig, ax = plt.subplots(nrows=1,ncols=1,figsize=(12,6))
+ax.set_title('Trip Distribution during Weekdays', fontsize=12)
+ax.imshow(clusterDistributionHourOfDay_weekday); ax.grid('off')
+ax.set_xlabel('Trip Cluster'); ax.set_ylabel('Hour of Day')
+ax.annotate('Silent Nights', color='r', fontsize=15, xy=(52, 2), xytext=(58, 1.75),
+            arrowprops=dict(facecolor='red', shrink=0.03))
+
+
+# Each row contains the "bag of trips" distribution where intensity represents trip frequency.
+# 
+# We can see that around 6AM people start waking up and (most likely) heading off to work. 
+# There is a second surge of taxi rides at around 18:00/19:00 (6PM/7PM) which is (most likely) people getting back home.
+# It's also extreemly evindent that during weedays, people are almost not active during the night. This is marked by the red arrow.
+
+# WeekEnd Trip Distribution for different hours of the day
+# --------------------------------------------------------
+# How does this "bag of trips" changes during the **weekend**?
+# 
+
+# In[ ]:
+
+
+# calculate the trip distribution for different hours of the weekend
+hoursOfDay = np.sort(taxiDB['src hourOfDay'].astype(int).unique())
+clusterDistributionHourOfDay_weekend = np.zeros((len(hoursOfDay),numClusters))
+for k, hour in enumerate(hoursOfDay):
+    slectedInds = (taxiDB['src hourOfDay'].astype(int) == hour) & (taxiDB['dayOfWeek'] >= 5)
+    currDistribution, _ = np.histogram(clusterInds[slectedInds], bins=numClusters)
+    clusterDistributionHourOfDay_weekend[k,:] = currDistribution[sortedClusterInds]
+
+fig, ax = plt.subplots(nrows=1,ncols=1,figsize=(12,6))
+ax.set_title('Trip Distribution during Weekends', fontsize=12)
+ax.imshow(clusterDistributionHourOfDay_weekend); ax.grid('off')
+ax.set_xlabel('Trip Cluster'); ax.set_ylabel('Hour of Day')
+ax.annotate('Party Nights', color='r', fontsize=15, xy=(52, 2), xytext=(58, 1.75),
+            arrowprops=dict(facecolor='red', shrink=0.03))
+ax.annotate('Late Mornings', color='r', fontsize=15, xy=(45, 10), xytext=(58, 9.75),
+            arrowprops=dict(facecolor='red', shrink=0.03))
+
+
+# We can see that during weekends, people are much more active during the night, and also are starting their day much later in the day when compared to regular weekdays. The red arrows mark these two time points on the graph.
+
+# Weekly Trip Distribution for different days of the week
+# --------------------------------------------------------
+# How does this "bag of trips" changes during the **week**?
+# 
+
+# In[ ]:
+
+
+# calculate the trip distribution for day of week
+daysOfWeek = np.sort(taxiDB['dayOfWeek'].unique())
+clusterDistributionDayOfWeek = np.zeros((len(daysOfWeek),numClusters))
+for k, day in enumerate(daysOfWeek):
+    slectedInds = taxiDB['dayOfWeek'] == day
+    currDistribution, _ = np.histogram(clusterInds[slectedInds], bins=numClusters)
+    clusterDistributionDayOfWeek[k,:] = currDistribution[sortedClusterInds]
+
+plt.figure(figsize=(12,5)); plt.title('Trip Distribution throughout the Week')
+plt.imshow(clusterDistributionDayOfWeek); plt.grid('off')
+plt.xlabel('Trip Cluster'); plt.ylabel('Day of Week')
+
+
+# We can see a reflection of what we saw from the two previous plots here. that during weekends, the pattern of trip distributions is somewhat different than that during the weekday.
+
+# Yearly Trip Distribution for different days of the year
+# --------------------------------------------------------
+# How does this "bag of trips" changes during the **year**?
+# 
+
+# In[ ]:
+
+
+# calculate the trip distribution for day of year
+daysOfYear = taxiDB['dayOfYear'].unique()
+daysOfYear = np.sort(daysOfYear)
+clusterDistributionDayOfYear = np.zeros((len(daysOfYear),numClusters))
+for k, day in enumerate(daysOfYear):
+    slectedInds = taxiDB['dayOfYear'] == day
+    currDistribution, _ = np.histogram(clusterInds[slectedInds], bins=numClusters)
+    clusterDistributionDayOfYear[k,:] = currDistribution[sortedClusterInds]
+
+fig, ax = plt.subplots(nrows=1,ncols=1,figsize=(10,16))
+ax.set_title('Trip Distribution throughout the Year', fontsize=12)
+ax.imshow(clusterDistributionDayOfYear); ax.grid('off')
+ax.set_xlabel('Trip Cluster'); ax.set_ylabel('Day of Year')
+ax.annotate('Large Snowstorm', color='r', fontsize=15 ,xy=(35, 21), xytext=(50, 17),
+            arrowprops=dict(facecolor='red', shrink=0.03))
+ax.annotate('Memorial Day', color='r', fontsize=15, xy=(35, 151), xytext=(50, 157),
+            arrowprops=dict(facecolor='red', shrink=0.03))
+
+
+# The most obvious pattern here is the periodicity.
+# We can also see two large drops of activity in the data, one around day 20-25 (end of January), and the other around 145-150 (end of May). It turns out that at the end of January there was a large snow storm in NYC, and that in the end of May there is a Memorial Day in the US. These are marked with red arrows.
+# 
+# Let's now delve deeper into The Temporal aspect:
+# ------------------------------------------------
+# 
+
+# Let's apply PCA to reduce the dimensionality from the 80 dimensional distribution vector to something more manageable such as 3 dimensions that we can plot and visualize more easily
+
+# In[ ]:
+
+
+#%% let's apply PCA to reduce the dimentionality from 80 dimentional distribution vector 
+# to something more managble such as 3 dimentions
+
+hoursOfYear = np.sort(taxiDB['hourOfYear'].astype(int).unique())
+clusterDistributionHourOfYear = np.zeros((len(range(hoursOfYear[0],hoursOfYear[-1])),numClusters))
+dayOfYearVec  = np.zeros(clusterDistributionHourOfYear.shape[0])
+weekdayVec    = np.zeros(clusterDistributionHourOfYear.shape[0])
+weekOfYearVec = np.zeros(clusterDistributionHourOfYear.shape[0])
+for k, hour in enumerate(hoursOfYear):
+    slectedInds = taxiDB['hourOfYear'].astype(int) == hour
+    currDistribution, _ = np.histogram(clusterInds[slectedInds], bins=numClusters)
+    clusterDistributionHourOfYear[k,:] = currDistribution[sortedClusterInds]
     
+    dayOfYearVec[k]  = taxiDB[slectedInds]['dayOfYear'].mean()
+    weekdayVec[k]    = taxiDB[slectedInds]['dayOfWeek'].mean()
+    weekOfYearVec[k] = taxiDB[slectedInds]['weekOfYear'].mean()
+
+numComponents = 3
+TripDistributionPCAModel = decomposition.PCA(n_components=numComponents,whiten=True, random_state=1)
+compactClusterDistributionHourOfYear = TripDistributionPCAModel.fit_transform(clusterDistributionHourOfYear)
 
 
-# In[ ]:
-
-
-new_cabin_features(train)
-new_cabin_features(Test)
-
-
-# **3.3.3 Dealing with Embarked (Missing values)**
+# Weekly Periodicity
+# ------------------
 # 
-# Since there's only 2 missing values in "Embarked", I would just replace it with "Southampton" as a huge majority (72.4%) embarked on Southampton.
+# Here we'll show the temporal evolution of the 3 main principal components coefficients during the week
 
 # In[ ]:
 
 
-train["Embarked"]=train["Embarked"].fillna("S")
-
-
-# Similar to "Cabin", we created 2 columns (Embarked S and Embarked C), leaving out Embarked Q to prevent collinearity.
-
-# In[ ]:
-
-
-def new_embark_features(dataset):
-    dataset["Embarked S"]=np.where(dataset["Embarked"]=="S",1,0)
-    dataset["Embarked C"]=np.where(dataset["Embarked"]=="C",1,0)  #Embarked on Q is when the rest of embarked are 0
-
-
-# In[ ]:
-
-
-new_embark_features(train)
-new_embark_features(Test)
-
-
-# **3.3.4 Dealing with Fare (Missing values)**
-# Since there's only 1 missing value in "Fare" in the test set, I would just replace it with the mean.
-
-# In[ ]:
-
-
-Test["Fare"]=Test["Fare"].fillna(np.mean(Test["Fare"]))
-
-
-# # 3.4 Encoding categorical features
-
-# **3.4.1 Encoding Titles** 
-
-# In[ ]:
-
-
-title_map_2={'Mr':1, 
-           'Mrs':1, 
-           'Miss':1,
-           'Master':2,
-           'Officer':3,
-           'Royalty':4}
-train["Title"]=train["Title"].map(title_map_2)
-Test["Title"]=Test["Title"].map(title_map_2)
-
-
-# # 3.5 Adding new variable (Family size)
-
-# I use this equation (**SibSp + Parch + 1(ownself)**) to calculate the total family size that the person travelled with on board.
-
-# In[ ]:
-
-
-train["FamilySize"]=train["SibSp"]+train["Parch"]+1
-Test["FamilySize"]=Test["SibSp"]+Test["Parch"]+1
-
-
-# In[ ]:
-
-
-train.info()
-
-
-# **Now that all the variables have been encoded and there are no missing values, we are ready to build our models.** 
-
-# # 4. Building Models
-
-# **Importing libraries for classification models**
-
-# In[ ]:
-
-
-from sklearn.pipeline import make_pipeline
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.feature_selection import SelectKBest
-from sklearn.cross_validation import StratifiedKFold
-from sklearn.grid_search import GridSearchCV
-from sklearn.ensemble.gradient_boosting import GradientBoostingClassifier
-from sklearn.cross_validation import cross_val_score
-from sklearn.linear_model import LogisticRegression
-from sklearn.linear_model import LinearRegression
-import statsmodels.formula.api as sm
-from sklearn.cross_validation import train_test_split
-import scikitplot as skplt
-from sklearn.svm import SVC, LinearSVC
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.linear_model import Perceptron
-from sklearn.linear_model import SGDClassifier
-from sklearn.feature_selection import SelectFromModel
-from sklearn.model_selection import KFold
-from sklearn.model_selection import cross_val_score
-from sklearn.metrics import confusion_matrix
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
-import xgboost as xgb
-from sklearn.metrics import roc_curve, auc
-
-
-# **We will first remove "Name","Ticket","PassengerId","Embarked","Cabin" since they would play no role in helping our model. ** (Cabin and Embarked has already been encoded into different columns)
-
-# In[ ]:
-
-
-train.drop(["Name","Ticket","PassengerId","Embarked","Cabin"],inplace=True,axis=1)
-Test.drop(["Name","Ticket","Embarked","Cabin"],inplace=True,axis=1)
-train.tail()
-
-
-# **We will first sort out our training and test set.**
-
-# In[ ]:
-
-
-x=train.drop(["Survived"],axis=1)
-y=train["Survived"]
-x_train,x_test,y_train,y_test=train_test_split(x,y,test_size=0.2,random_state=0)
-
-
-# **We will use cross validation to test our models**
-
-# In[ ]:
-
-
-k_fold = KFold(n_splits=5, shuffle=True, random_state=0)
-
-
-# We first create these functions to allow us the ease of computing relevant scores and plotting of plots.
-
-# In[ ]:
-
-
-def acc_score(model):
-    return np.mean(cross_val_score(model,x_train,y_train,cv=k_fold,scoring="accuracy"))
-
-
-# In[ ]:
-
-
-def confusion_matrix_model(model_used):
-    cm=confusion_matrix(y_test,model_used.predict(x_test))
-    col=["Predicted Dead","Predicted Survived"]
-    cm=pd.DataFrame(cm)
-    cm.columns=["Predicted Dead","Predicted Survived"]
-    cm.index=["Actual Dead","Actual Survived"]
-    cm[col]=np.around(cm[col].div(cm[col].sum(axis=1),axis=0),decimals=2)
-    return cm
-
-
-# In[ ]:
-
-
-def importance_of_features(model):
-    features = pd.DataFrame()
-    features['feature'] = x_train.columns
-    features['importance'] = model.feature_importances_
-    features.sort_values(by=['importance'], ascending=True, inplace=True)
-    features.set_index('feature', inplace=True)
-    return features.plot(kind='barh', figsize=(10,10))
-
-
-# In[ ]:
-
-
-def aucscore(model,has_proba=True):
-    if has_proba:
-        fpr,tpr,thresh=skplt.metrics.roc_curve(y_test,model.predict_proba(x_test)[:,1])
-    else:
-        fpr,tpr,thresh=skplt.metrics.roc_curve(y_test,model.decision_function(x_test))
-    x=fpr
-    y=tpr
-    auc= skplt.metrics.auc(x,y)
-    return auc
-def plt_roc_curve(name,model,has_proba=True):
-    if has_proba:
-        fpr,tpr,thresh=skplt.metrics.roc_curve(y_test,model.predict_proba(x_test)[:,1])
-    else:
-        fpr,tpr,thresh=skplt.metrics.roc_curve(y_test,model.decision_function(x_test))
-    x=fpr
-    y=tpr
-    auc= skplt.metrics.auc(x,y)
-    plt.plot(x,y,label='ROC curve for %s (AUC = %0.2f)' % (name, auc))
-    plt.plot([0, 1], [0, 1], 'k--')
-    plt.xlim((0,1))
-    plt.ylim((0,1))
-    plt.xlabel("False Positive Rate")
-    plt.ylabel("True Positive Rate")
-    plt.title("ROC Curve")
-    plt.legend(loc="lower right")
-    plt.show()
-
-
-# Note that in the above function "plt_roc_curve", there is a "has_proba" argument. This is because although most classifiers can produce probability of instances being in each class, some classifiers (like Support Vector Machine) do not directly provide probabilities, hence for those kind of classifiers, we use .decision_function to give the distance to the separating hyperplanes.
+# collect traces for all weeks of year
+listOfFullWeeks = []
+for uniqueVal in np.unique(weekOfYearVec):
+    if (weekOfYearVec == uniqueVal).sum() == 24*7:
+        listOfFullWeeks.append(uniqueVal)
+
+weeklyTraces = np.zeros((24*7,numComponents,len(listOfFullWeeks)))
+for k, weekInd in enumerate(listOfFullWeeks):
+    weeklyTraces[:,:,k] = compactClusterDistributionHourOfYear[weekOfYearVec == weekInd,:]
+
+fig, axArray = plt.subplots(nrows=numComponents,ncols=1,sharex=True, figsize=(12,12))
+fig.suptitle('PCA coefficients during the Week', fontsize=25)
+for PC_coeff in range(numComponents):
+    meanTrace = weeklyTraces[:,PC_coeff,:].mean(axis=1)
+    axArray[PC_coeff].plot(weeklyTraces[:,PC_coeff,:],'y',linewidth=1.5)
+    axArray[PC_coeff].plot(meanTrace,'k',linewidth=2.5)
+    axArray[PC_coeff].set_ylabel('PC %d coeff' %(PC_coeff+1))
+    axArray[PC_coeff].vlines([0,23,47,71,95,119,143,167], weeklyTraces[:,PC_coeff,:].min(), weeklyTraces[:,PC_coeff,:].max(), colors='r', lw=2)
+    
+axArray[PC_coeff].set_xlabel('hours since start of week')
+axArray[PC_coeff].set_xlim(-0.9,24*7-0.1)
+
+
+# In yellow is the data from all full weeks overlain on top of each other. In black are the average traces.
 # 
-# Plotting confusion matrix and ROC curves are important to let us understand and visualise the respective models' prediction accuracy. 
-# 
-# For **Confusion matrix:**
-# -  **We can observe and analyse the FALSE POSITIVE and FALSE NEGATIVE rates. This is because although some models have decent accuracy score (which is calculated by  (total correct predictions/total number of predictions)), but they might have high False Positive rate and a low False Negative rate or vice versa and we do not want such 'biased' models.** 
-# 
-# For **ROC (Reciever Operating Characteristic) Curves:**
-# -  **The ROC curve plots True Positive Rate against False Positive Rate. And this also shows the tradeoff between sensitivity and specificity. An increase in sensitivity would normally cause a decrease in specificity.**
-#    **Typically, we want a high True Positive Rate and a low False Positive Rate, and as such a higher AUC (Area under the curve) score would be deemed better.**
+# We can clearly see the periodicity here as well as the **difference between the regular weekdays and the weekends**.
 
-# **We shall use the following classification models:**
+# Daily Periodicity
+# ------------------
 # 
-# 1. Logistic Regression
-# 
-# 2. Linear Discriminant Analysis
-# 
-# 3. Quadratic Discriminant Analysis 
-# 
-# 4. Support Vector Machine (Using RBF Kernel and Linear Kernel)
-# 
-# 5. K-Nearest Neighbour
-# 
-# 6. Decision Tree
-# 
-# 7. Random Forest
-# 
-# 8. XGBoost
+# Here we'll show the temporal evolution of the 3 main principal components coefficients during the day
+
+# In[ ]:
+
+
+# collect traces for weekdays and weekends 
+listOfFullWeekdays = []
+listOfFullWeekends = []
+for uniqueVal in np.unique(dayOfYearVec):
+    if (dayOfYearVec == uniqueVal).sum() == 24:
+        if weekdayVec[dayOfYearVec == uniqueVal][0] <= 4:
+            listOfFullWeekdays.append(uniqueVal)
+        else:
+            listOfFullWeekends.append(uniqueVal)
+
+weekdayTraces = np.zeros((24,numComponents,len(listOfFullWeekdays)))
+for k, dayInd in enumerate(listOfFullWeekdays):
+    weekdayTraces[:,:,k] = compactClusterDistributionHourOfYear[dayOfYearVec == dayInd,:]
+
+weekendTraces = np.zeros((24,numComponents,len(listOfFullWeekends)))
+for k, dayInd in enumerate(listOfFullWeekends):
+    weekendTraces[:,:,k] = compactClusterDistributionHourOfYear[dayOfYearVec == dayInd,:]
+
+fig, axArray = plt.subplots(nrows=numComponents,ncols=2,sharex=True,sharey=True, figsize=(12,14))
+fig.suptitle('PCA coefficients for weekdays and weekends', fontsize=25)
+for PC_coeff in range(numComponents):
+    axArray[PC_coeff][0].plot(weekdayTraces[:,PC_coeff,:],'c',linewidth=1.5)
+    axArray[PC_coeff][0].plot(weekdayTraces[:,PC_coeff,:].mean(axis=1),'k',linewidth=2.5)
+    axArray[PC_coeff][0].set_ylabel('PC %d coeff' %(PC_coeff+1))
+    
+    axArray[PC_coeff][1].plot(weekendTraces[:,PC_coeff,:],'c',linewidth=1.5)
+    axArray[PC_coeff][1].plot(weekendTraces[:,PC_coeff,:].mean(axis=1),'k',linewidth=2.5)
+    
+    if PC_coeff == 0:
+        axArray[PC_coeff][0].set_title('Weekday')
+        axArray[PC_coeff][1].set_title('Weekend')
+    
+axArray[PC_coeff][0].set_xlabel('hours of day')
+axArray[PC_coeff][1].set_xlabel('hours of day')
+axArray[PC_coeff][0].set_xlim(0,23)
+axArray[PC_coeff][0].set_ylim(-3.5,3.5)
+
+# add arrows with description
+axArray[2][0].annotate('Early Risers', color='r', fontsize=12, xy=(7, 2.5), xytext=(12, 3),
+            arrowprops=dict(facecolor='red', shrink=0.03))
+axArray[1][1].annotate('Party Nights', color='r', fontsize=12, xy=(3, 2.2), xytext=(10, 3.2),
+            arrowprops=dict(facecolor='red', shrink=0.03))
+axArray[2][1].annotate('Late Mornings', color='r', fontsize=12, xy=(9, 1.5), xytext=(1, 3.5),
+            arrowprops=dict(facecolor='red', shrink=0.03))
+
+
+# Recall that we can go back and see exactly **what each PC coefficient means** by looking at the eigenvectors (i.e. trip distributions). Let's do that:
 # 
 
-# # 4.1 Logistic Regression
-
 # In[ ]:
 
 
-log_reg=LogisticRegression()
-log_reg.fit(x_train,y_train)
+#%% examine what different PC coefficients mean by looking at their trip template distributions
+fig, axArray = plt.subplots(nrows=numComponents,ncols=1,sharex=True, figsize=(12,11))
+fig.suptitle('Trip Distribution PCA Components', fontsize=25)
+for PC_coeff in range(numComponents):
+    tripTemplateDistributionDifference = TripDistributionPCAModel.components_[PC_coeff,:] *                                          TripDistributionPCAModel.explained_variance_[PC_coeff]
+    axArray[PC_coeff].bar(range(1,numClusters+1),tripTemplateDistributionDifference)
+    axArray[PC_coeff].set_title('PCA %d component' %(PC_coeff+1))
+    axArray[PC_coeff].set_ylabel('delta frequency [counts]')
+    
+axArray[PC_coeff].set_xlabel('cluster index (sorted by cluster frequency)')
+axArray[PC_coeff].set_xlim(0,numClusters+0.5)
 
-print("Accuracy: " + str(acc_score(log_reg)))
-confusion_matrix_model(log_reg)
-
-#skplt.metrics.plot_confusion_matrix(y_test, log_reg.predict(x_test),normalize=True,figsize=(10,10))
-
-
-# In[ ]:
-
-
-plt_roc_curve("Logistic Regression",log_reg,has_proba=True)
-
-
-# # 4.2 Linear Discriminant Analysis
-
-# In[ ]:
+axArray[1].hlines([-25,25], 0, numClusters+0.5, colors='r', lw=0.7)
+axArray[2].hlines([-11,11], 0, numClusters+0.5, colors='r', lw=0.7)
 
 
-lda = LinearDiscriminantAnalysis()
-lda.fit(x_train,y_train)
-ldaA = lda.transform(x_train)
-print("Accuracy: " + str(acc_score(lda)))
-confusion_matrix_model(lda)
-
-
-# In[ ]:
-
-
-plt_roc_curve("LDA",lda,has_proba=True)
-
-
-# # 4.3 Quadratic Discriminant Analysis
-
-# In[ ]:
-
-
-qda = QuadraticDiscriminantAnalysis()
-qda.fit(x_train,y_train)
-print("Accuracy: " + str(acc_score(qda)))
-confusion_matrix_model(qda)
-
-
-# In[ ]:
-
-
-plt_roc_curve("QDA",qda,has_proba=True)
-
-
-# # 4.4 Support Vector Machine
-
-# Support vector classifier using **RBF kernel**
-
-# In[ ]:
-
-
-SVC_rbf=SVC(kernel="rbf")
-SVC_rbf.fit(x_train,y_train)
-
-print("Accuracy: " + str(acc_score(SVC_rbf)))
-confusion_matrix_model(SVC_rbf)
-
-
-# In[ ]:
-
-
-plt_roc_curve("RBF SVM",SVC_rbf,has_proba=False)
-
-
-# Support vector classifier using **Linear kernel**
-
-# In[ ]:
-
-
-SVC_lin=SVC(kernel="linear")
-SVC_lin.fit(x_train,y_train)
-
-print("Accuracy: " + str(acc_score(SVC_lin)))
-confusion_matrix_model(SVC_lin)
-
-
-# In[ ]:
-
-
-plt_roc_curve("Linear SVM",SVC_lin,has_proba=False)
-
-
-# -  **Logistic regression would not really be affected much by the distribution shape of the predictors whereas for LDA/QDA, they require the distribution of the predictors to be approximately normally distributed. Also, if the classes are very well separated, then LDA/QDA would perform better**
+# We can see that the **first PCA component** looks very similar to the overall trip distribution, suggesting that it's mainly a "gain" component that controls just the **number of total trips** in that period of time. 
 # 
-# -  **LINEAR DA would be slightly less flexible than Quadratic DA. We can see from the results that QDA perform relatively badly in this dataset**
+# The second and third components have different patterns going up and down in them. 
 # 
-# -  **SVM is another flexible method that makes no assumption of the dataset and it can be thought of as an optimization problem to find the best separating hyperplane. Linear Kernel for SVM is a parametric method while RBF Kernel is a non-parametric method. ** 
-
-# # 4.5 K-Nearest Neighbour
-
-# In[ ]:
-
-
-KNN=KNeighborsClassifier(n_neighbors=5)
-KNN.fit(x_train,y_train)
-
-print("Accuracy: " + str(acc_score(KNN)))
-confusion_matrix_model(KNN)
-
-
-# In[ ]:
-
-
-plt_roc_curve("KNN (5)",KNN,has_proba=True)
-
-
-# KNN is one of the simplest classification methods as it would predict the "group" of the new observation points as the majority group of its K-nearest neighbours (in this case, K=5). 5 was chosen as a balance between the bias and variance. Although a simple and fast method, we can see that the accuracy isn't really good in this case. 
-
-# # 4.6 Decision Tree
-
-# In[ ]:
-
-
-Dec_tree=DecisionTreeClassifier(max_depth=4,random_state=5)
-Dec_tree.fit(x_train,y_train)
-
-print("Accuracy: " + str(acc_score(Dec_tree)))
-confusion_matrix_model(Dec_tree)
-
-#skplt.metrics.plot_confusion_matrix(y_test, Dec_tree.predict(x_test),normalize=True,figsize=(6,6),text_fontsize='small')
-
-
-# In[ ]:
-
-
-plt_roc_curve("Decision Tree",Dec_tree,has_proba=True)
-
-
-# In[ ]:
-
-
-importance_of_features(Dec_tree)
-
-
-# # 4.7 Random Forest
-
-# In[ ]:
-
-
-ranfor = RandomForestClassifier(n_estimators=50, max_features='sqrt',max_depth=6,random_state=10)
-ranfor = ranfor.fit(x_train,y_train)
-print("Accuracy: " + str(acc_score(ranfor)))
-confusion_matrix_model(ranfor)
-
-
-# In[ ]:
-
-
-plt_roc_curve("Random Forest",ranfor,has_proba=True)
-
-
-# In[ ]:
-
-
-importance_of_features(ranfor)
-
-
-# **Decision Trees Classification** is a non-parametric supervised classification method. It will classify the observations by following the decision tree from top to the bottom. The disadvantage of it is that it might lead to over-fitting if the trees has too many nodes. Hence, I set the max-depth of the tree to be 4 to prevent over-fitting. 
+# **Let's examine what those patterns are, and in particular everything that deviates from the red lines:**
 # 
-# **Random Forest** is an extension of Decision Tree. Random forest creates different decision trees on different sub-samples of the dataset and use the majority class voting among all the trees to group the observation. This method would lead to better accuracy and less over-fitting.
 
-# # 4.8 XGBoost
-
-# In[ ]:
-
-
-xgclass = xgb.XGBClassifier(max_depth=3, n_estimators=300, learning_rate=0.01).fit(x_train, y_train)
-print("Accuracy: " + str(acc_score(xgclass)))
-confusion_matrix_model(xgclass)
-
+# PC 2 large deviating trips
+# --------------------------
+# Arrows in red will show trips that are increasing when PC 2 coefficient increases.
+# 
+# Arrows in blue will show trips that are decreasing when PC 2 coefficient increases.
+# 
+# Magenta circles are the sources, and Green circles are the destinations.
+# 
 
 # In[ ]:
 
 
-plt_roc_curve("XGBoosting",xgclass,has_proba=True)
+#%% put the large deviating trips of each component back on the map
+numTopTripsToShow = 8
+numBottomTripsToShow = 6
 
+# meaning of 2nd PC
+sortedTripClusters_PC2 = np.argsort(TripDistributionPCAModel.components_[1,:])
+topPositiveTripClusterInds = sortedTripClusters_PC2[-numTopTripsToShow:]
+topNegativeTripClusterInds = sortedTripClusters_PC2[:numBottomTripsToShow]
+allInds = np.hstack((topPositiveTripClusterInds,topNegativeTripClusterInds))
+
+plt.figure(figsize=(12,12))
+plt.imshow(np.log(locationDensityImage+1),cmap='hot'); plt.grid('off')
+plt.scatter(srcImCoords[1][allInds],srcImCoords[0][allInds],c='m',s=500,alpha=0.9)
+plt.scatter(dstImCoords[1][allInds],dstImCoords[0][allInds],c='g',s=500,alpha=0.9)
+
+for i in topPositiveTripClusterInds:
+    plt.arrow(srcImCoords[1][i],srcImCoords[0][i], dstImCoords[1][i]-srcImCoords[1][i], dstImCoords[0][i]-srcImCoords[0][i], 
+              edgecolor='r', facecolor='r', width=2.8,alpha=0.9,head_width=10.0,head_length=10.0,length_includes_head=True)
+
+for i in topNegativeTripClusterInds:
+    plt.arrow(srcImCoords[1][i],srcImCoords[0][i], dstImCoords[1][i]-srcImCoords[1][i], dstImCoords[0][i]-srcImCoords[0][i], 
+              edgecolor='b', facecolor='b', width=2.8,alpha=0.9,head_width=10.0,head_length=10.0,length_includes_head=True)
+plt.title('PC2 major Trip deviations')
+
+
+# **Arrows** in **red** show trips that are increasing when PC coefficient increases.  
+# **Arrows** in **blue** show trips that are decreasing when PC coefficient increases.  
+# **Magenta circles** are the sources, and **Green circles** are the destinations.  
+# 
+# We previously saw that **PC2 is about increased activity during the night**. and indeed most of the trips we see are short trips inside manhatten, perhaps people are all going to the hot places.
+
+# PC 3 large deviating trips
+# --------------------------
+# 
 
 # In[ ]:
 
 
-importance_of_features(xgclass)
+# meaning of 3rd PC
+numTopTripsToShow = 4
+numBottomTripsToShow = 10
+
+sortedTripClusters_PC3 = np.argsort(TripDistributionPCAModel.components_[2,:])
+topPositiveTripClusterInds = sortedTripClusters_PC3[-numTopTripsToShow:]
+topNegativeTripClusterInds = sortedTripClusters_PC3[:numBottomTripsToShow]
+allInds = np.hstack((topPositiveTripClusterInds,topNegativeTripClusterInds))
+
+plt.figure(figsize=(12,12))
+plt.imshow(np.log(locationDensityImage+1),cmap='hot'); plt.grid('off')
+plt.scatter(srcImCoords[1][allInds],srcImCoords[0][allInds],c='m',s=500,alpha=0.9)
+plt.scatter(dstImCoords[1][allInds],dstImCoords[0][allInds],c='g',s=500,alpha=0.9)
+
+for i in topPositiveTripClusterInds:
+    plt.arrow(srcImCoords[1][i],srcImCoords[0][i], dstImCoords[1][i]-srcImCoords[1][i], dstImCoords[0][i]-srcImCoords[0][i], 
+              edgecolor='r', facecolor='r', width=2.8,alpha=0.9,head_width=10.0,head_length=10.0,length_includes_head=True)
+
+for i in topNegativeTripClusterInds:
+    plt.arrow(srcImCoords[1][i],srcImCoords[0][i], dstImCoords[1][i]-srcImCoords[1][i], dstImCoords[0][i]-srcImCoords[0][i], 
+              edgecolor='b', facecolor='b', width=2.8,alpha=0.9,head_width=10.0,head_length=10.0,length_includes_head=True)
+plt.title('PC3 major Trip deviations')
 
 
-# XGBoosting is a more advanced gradient boosting algorithm. Unlike normal boosting algorithms, XGBoost has implemented regularization to reduce overfitting. Also, XGBoost would go through the maximum depth of a tree before pruning back to find the best optimized tree and not just stop at a node which has a negative loss in information gain. 
-
-# Looking at the importance of features for the above models, we can see that cabin E is the only cabin that has consistent impact on whether a passenger might survive. We also observe that "Sex" is significantly the most important feature in the random forest model while Fare is the most important in XGBoosting model, with the importance of "Sex" decreasing.  
-
-# # 5. Submission
-
-# **OVERVIEW**
-
-# In[ ]:
-
-
-Classifiers=["Logistic Regression","Linear Discriminant Analysis","Quadratic Discriminant Analysis","Support Vector Machine (RBF)","Support Vector Machine (Linear)","K-Nearest Neighbours","Decision Tree","Random Forest","XGBoost"]
-Acc=[acc_score(x) for x in [log_reg,lda,qda,SVC_rbf,SVC_lin,KNN,Dec_tree,ranfor,xgclass]]
-auc_scores_prob=[aucscore(x,has_proba=True) for x in [log_reg,lda,qda,KNN,Dec_tree,ranfor,xgclass]]
-auc_scores_noprob=[aucscore(x,has_proba=False) for x in [SVC_rbf,SVC_lin,]]
-auc_scores=auc_scores_prob[:3] + auc_scores_noprob + auc_scores_prob[3:]
-cols=["Classifier","Accuracy","AUC"]
-results = pd.DataFrame(columns=cols)
-results["Classifier"]=Classifiers
-results["Accuracy"]=Acc
-results["AUC"]=auc_scores
-results
-
-
-# The final model chosen would be the random forest classifier as it has the highest accuracy and AUC score. 
-
-# In[ ]:
-
-
-pred_test=ranfor.predict(Test.drop("PassengerId",axis=1).copy())
-submission=pd.DataFrame({"PassengerId": Test["PassengerId"], "Survived": pred_test})
-submission.to_csv("submission.csv",index=False)
-
-
-# # References
-# **This analysis is done by learning from https://github.com/minsuk-heo/kaggle-titanic/blob/master/titanic-solution.ipynb**
+# We previously saw that this is the principal component that indicates what trips are done by the early risers.

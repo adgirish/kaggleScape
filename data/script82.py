@@ -1,478 +1,599 @@
 
 # coding: utf-8
 
-# # Detailed Data Cleaning/Visualization
+# June 8. Version 13:  Going back to doing separate adjustments for each of the 3 micro models
 # 
-# *A blog post about the final end-to-end solution (21st place) is available [here](http://alanpryorjr.com), and the source code is [on my github](https://github.com/apryor6/Kaggle-Competition-Santander)*
+# From version 12:
 # 
-# *This is a Python version of a kernel I wrote in R for this dataset found [here](https://www.kaggle.com/apryor6/santander-product-recommendation/detailed-cleaning-visualization). There are some slight differences between how missing values are treated in Python and R, so the two kernels are not exactly the same, but I have tried to make them as similar as possible. This was done as a convenience to anybody who wanted to use my cleaned data as a starting point but prefers Python to R. It also is educational to compare how the same task can be accomplished in either language.*
+# This version adjusts results using average (log) predicted prices from a macro model.
 # 
-# The goal of this competition is to predict which new Santander products, if any, a customer will purchase in the following month. Here, I will do some data cleaning, adjust some features, and do some visualization to get a sense of what features might be important predictors. I won't be building a predictive model in this kernel, but I hope this gives you some insight/ideas and gets you excited to build your own model.
+# By default (that is, if micro_humility_factor=1), it rescales the adjusted log predictions so that the standard deviation of the raw predictions is the same as it was before the adjustment.
 # 
-# Let's get to it
-# 
-# ## First Glance
-# Limit the number of rows read in to avoid memory crashes with the kernel
+# There is also a provision for applying micro and macro humility factors .  The macro humility factor adjusts the macro predictions by averaging in a "naive" macro model.  The micro humility factor adjusts individual (log) predictions toward the (log) mean. 
+
+# In[ ]:
+
+
+# Parameters
+micro_humility_factor = 1     #    range from 0 (complete humility) to 1 (no humility)
+macro_humility_factor = 0.96
+jason_weight = .2
+bruno_weight = .2
+reynaldo_weight = 1 - jason_weight - bruno_weight
+
+
+# In[ ]:
+
+
+# Get ready for lots of annoying deprecation warnings
+import statsmodels.api as sm
+
 
 # In[ ]:
 
 
 import numpy as np
 import pandas as pd
-import seaborn as sns
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('pylab', 'inline')
-pylab.rcParams['figure.figsize'] = (10, 6)
+import seaborn as sns
+from sklearn import model_selection, preprocessing
+import xgboost as xgb
+import datetime
+import scipy as sp
 
 
 # In[ ]:
 
 
-limit_rows   = 7000000
-df           = pd.read_csv("../input/train_ver2.csv",dtype={"sexo":str,
-                                                    "ind_nuevo":str,
-                                                    "ult_fec_cli_1t":str,
-                                                    "indext":str}, nrows=limit_rows)
-unique_ids   = pd.Series(df["ncodpers"].unique())
-limit_people = 1.2e4
-unique_id    = unique_ids.sample(n=limit_people)
-df           = df[df.ncodpers.isin(unique_id)]
-df.describe()
+# Functions to use in data adjustment
+
+def scale_miss(   # Scale shifted logs and compare raw stdev to old raw stdev
+        alpha,
+        shifted_logs,
+        oldstd,
+        new_logmean
+        ):
+    newlogs = new_logmean + alpha*(shifted_logs - new_logmean)
+    newstd = np.std(np.exp(newlogs))
+    return (newstd-oldstd)**2
+    
+
+def shift_logmean_but_keep_scale(  # Or change the scale, but relative to the old scale
+        data,
+        new_logmean,
+        rescaler
+        ):
+    logdata = np.log(data)
+    oldstd = data.std()
+    shift = new_logmean - logdata.mean()
+    shifted_logs = logdata + shift
+    scale = sp.optimize.leastsq( scale_miss, 1, args=(shifted_logs, oldstd, new_logmean) )
+    alpha = scale[0][0]
+    newlogs = new_logmean + rescaler*alpha*(shifted_logs - new_logmean)
+    return np.exp(newlogs)
 
 
-# We have a number of demographics for each individual as well as the products they currently own. To make a test set, I will separate the last month from this training data, and create a feature that indicates whether or not a product was newly purchased. First convert the dates. There's `fecha_dato`, the row-identifier date, and `fecha_alta`, the date that the customer joined.
-
-# In[ ]:
-
-
-df["fecha_dato"] = pd.to_datetime(df["fecha_dato"],format="%Y-%m-%d")
-df["fecha_alta"] = pd.to_datetime(df["fecha_alta"],format="%Y-%m-%d")
-df["fecha_dato"].unique()
-
-
-# I printed the values just to double check the dates were in standard Year-Month-Day format. I expect that customers will be more likely to buy products at certain months of the year (Christmas bonuses?), so let's add a month column. I don't think the month that they joined matters, so just do it for one.
-
-# In[ ]:
-
-
-df["month"] = pd.DatetimeIndex(df["fecha_dato"]).month
-df["age"]   = pd.to_numeric(df["age"], errors="coerce")
-
-
-# Are there any columns missing values?
+# ## Fit macro model and compute average prediction
 
 # In[ ]:
 
 
-df.isnull().any()
+# Read data
+macro = pd.read_csv('../input/macro.csv')
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
 
+# Macro data monthly medians
+macro["timestamp"] = pd.to_datetime(macro["timestamp"])
+macro["year"]  = macro["timestamp"].dt.year
+macro["month"] = macro["timestamp"].dt.month
+macro["yearmonth"] = 100*macro.year + macro.month
+macmeds = macro.groupby("yearmonth").median()
 
-# Definitely. Onto data cleaning.
-# 
-# ## Data Cleaning
-# 
-# Going down the list, start with `age`
+# Price data monthly medians
+train["timestamp"] = pd.to_datetime(train["timestamp"])
+train["year"]  = train["timestamp"].dt.year
+train["month"] = train["timestamp"].dt.month
+train["yearmonth"] = 100*train.year + train.month
+prices = train[["yearmonth","price_doc"]]
+p = prices.groupby("yearmonth").median()
 
-# In[ ]:
-
-
-with sns.plotting_context("notebook",font_scale=1.5):
-    sns.set_style("whitegrid")
-    sns.distplot(df["age"].dropna(),
-                 bins=80,
-                 kde=False,
-                 color="tomato")
-    sns.plt.title("Age Distribution")
-    plt.ylabel("Count")
-
-
-# In addition to NA, there are people with very small and very high ages.
-# It's also interesting that the distribution is bimodal. There are a large number of university aged students, and then another peak around middle-age. Let's separate the distribution and move the outliers to the mean of the closest one.
-
-# In[ ]:
-
-
-df.loc[df.age < 18,"age"]  = df.loc[(df.age >= 18) & (df.age <= 30),"age"].mean(skipna=True)
-df.loc[df.age > 100,"age"] = df.loc[(df.age >= 30) & (df.age <= 100),"age"].mean(skipna=True)
-df["age"].fillna(df["age"].mean(),inplace=True)
-df["age"]                  = df["age"].astype(int)
+# Join monthly prices to macro data
+df = macmeds.join(p)
 
 
 # In[ ]:
 
 
-with sns.plotting_context("notebook",font_scale=1.5):
-    sns.set_style("whitegrid")
-    sns.distplot(df["age"].dropna(),
-                 bins=80,
-                 kde=False,
-                 color="tomato")
-    sns.plt.title("Age Distribution")
-    plt.ylabel("Count")
-    plt.xlim((15,100))
-
-
-# Looks better.  
-# 
-# Next `ind_nuevo`, which indicates whether a customer is new or not. How many missing values are there?
-
-# In[ ]:
-
-
-df["ind_nuevo"].isnull().sum()
-
-
-# Let's see if we can fill in missing values by looking how many months of history these customers have.
-
-# In[ ]:
-
-
-months_active = df.loc[df["ind_nuevo"].isnull(),:].groupby("ncodpers", sort=False).size()
-months_active.max()
-
-
-# Looks like these are all new customers, so replace accordingly.
-
-# In[ ]:
-
-
-df.loc[df["ind_nuevo"].isnull(),"ind_nuevo"] = 1
-
-
-# Now, `antiguedad`
-
-# In[ ]:
-
-
-df.antiguedad = pd.to_numeric(df.antiguedad,errors="coerce")
-np.sum(df["antiguedad"].isnull())
-
-
-# That number again. Probably the same people that we just determined were new customers. Double check.
-
-# In[ ]:
-
-
-df.loc[df["antiguedad"].isnull(),"ind_nuevo"].describe()
-
-
-# Yup, same people. Let's give them minimum seniority.
-
-# In[ ]:
-
-
-df.loc[df.antiguedad.isnull(),"antiguedad"] = df.antiguedad.min()
-df.loc[df.antiguedad <0, "antiguedad"]      = 0 # Thanks @StephenSmith for bug-find
-
-
-# Some entries don't have the date they joined the company. Just give them something in the middle of the pack
-
-# In[ ]:
-
-
-dates=df.loc[:,"fecha_alta"].sort_values().reset_index()
-median_date = int(np.median(dates.index.values))
-df.loc[df.fecha_alta.isnull(),"fecha_alta"] = dates.loc[median_date,"fecha_alta"]
-df["fecha_alta"].describe()
-
-
-# Next is `indrel`, which indicates:
-# 
-# > 1 (First/Primary), 99 (Primary customer during the month but not at the end of the month)
-# 
-# This sounds like a promising feature. I'm not sure if primary status is something the customer chooses or the company assigns, but either way it seems intuitive that customers who are dropping down are likely to have different purchasing behaviors than others.
-
-# In[ ]:
-
-
-pd.Series([i for i in df.indrel]).value_counts()
-
-
-# Fill in missing with the more common status.
-
-# In[ ]:
-
-
-df.loc[df.indrel.isnull(),"indrel"] = 1
-
-
-# > tipodom	- Addres type. 1, primary address
-#  cod_prov	- Province code (customer's address)
-# 
-# `tipodom` doesn't seem to be useful, and the province code is not needed because the name of the province exists in `nomprov`.
-
-# In[ ]:
-
-
-df.drop(["tipodom","cod_prov"],axis=1,inplace=True)
-
-
-# Quick check back to see how we are doing on missing values
-
-# In[ ]:
-
-
-df.isnull().any()
-
-
-# Getting closer.
-
-# In[ ]:
-
-
-np.sum(df["ind_actividad_cliente"].isnull())
-
-
-# By now you've probably noticed that this number keeps popping up. A handful of the entries are just bad, and should probably just be excluded from the model. But for now I will just clean/keep them.
-
-# In[ ]:
-
-
-df.loc[df.ind_actividad_cliente.isnull(),"ind_actividad_cliente"] = df["ind_actividad_cliente"].median()
+# Function to process Almon lags
+
+import numpy.matlib as ml
+ 
+def almonZmatrix(X, maxlag, maxdeg):
+    """
+    Creates the Z matrix corresponding to vector X.
+    """
+    n = len(X)
+    Z = ml.zeros((len(X)-maxlag, maxdeg+1))
+    for t in range(maxlag,  n):
+       #Solve for Z[t][0].
+       Z[t-maxlag,0] = sum([X[t-lag] for lag in range(maxlag+1)])
+       for j in range(1, maxdeg+1):
+             s = 0.0
+             for i in range(1, maxlag+1):       
+                s += (i)**j * X[t-i]
+             Z[t-maxlag,j] = s
+    return Z
 
 
 # In[ ]:
 
 
-df.nomprov.unique()
+# Prepare data for macro model
+y = df.price_doc.div(df.cpi).apply(np.log).loc[201108:201506]
+lncpi = df.cpi.apply(np.log)
+tblags = 5    # Number of lags used on PDL for Trade Balance
+mrlags = 5    # Number of lags used on PDL for Mortgage Rate
+cplags = 5    # Number of lags used on PDL for CPI
+ztb = almonZmatrix(df.balance_trade.loc[201103:201506].as_matrix(), tblags, 1)
+zmr = almonZmatrix(df.mortgage_rate.loc[201103:201506].as_matrix(), mrlags, 1)
+zcp = almonZmatrix(lncpi.loc[201103:201506].as_matrix(), cplags, 1)
+columns = ['tb0', 'tb1', 'mr0', 'mr1', 'cp0', 'cp1']
+z = pd.DataFrame( np.concatenate( (ztb, zmr, zcp), axis=1), y.index.values, columns )
+X = sm.add_constant( z )
 
+# Fit macro model
+eq = sm.OLS(y, X)
+fit = eq.fit()
 
-# There was an issue with the unicode character ñ in [A Coruña](https://en.wikipedia.org/wiki/A_Coruña). I'll manually fix it, but if anybody knows a better way to catch cases like this I would be very glad to hear it in the comments.
+# Predict with macro model
+test_cpi = df.cpi.loc[201507:201605]
+test_index = test_cpi.index
+ztb_test = almonZmatrix(df.balance_trade.loc[201502:201605].as_matrix(), tblags, 1)
+zmr_test = almonZmatrix(df.mortgage_rate.loc[201502:201605].as_matrix(), mrlags, 1)
+zcp_test = almonZmatrix(lncpi.loc[201502:201605].as_matrix(), cplags, 1)
+z_test = pd.DataFrame( np.concatenate( (ztb_test, zmr_test, zcp_test), axis=1), 
+                       test_index, columns )
+X_test = sm.add_constant( z_test )
+pred_lnrp = fit.predict( X_test )
+pred_p = np.exp(pred_lnrp) * test_cpi
 
-# In[ ]:
-
-
-df.loc[df.nomprov=="CORU\xc3\x91A, A","nomprov"] = "CORUNA, A"
-
-
-# There's some rows missing a city that I'll relabel
-
-# In[ ]:
-
-
-df.loc[df.nomprov.isnull(),"nomprov"] = "UNKNOWN"
-
-
-# Now for gross income, aka `renta`
-
-# In[ ]:
-
-
-df.renta.isnull().sum()
-
-
-# Here is a feature that is missing a lot of values. Rather than just filling them in with a median, it's probably more accurate to break it down region by region. To that end, let's take a look at the median income by region, and in the spirit of the competition let's color it like the Spanish flag.
-
-# In[ ]:
-
-
-#df.loc[df.renta.notnull(),:].groupby("nomprov").agg([{"Sum":sum},{"Mean":mean}])
-incomes = df.loc[df.renta.notnull(),:].groupby("nomprov").agg({"renta":{"MedianIncome":median}})
-incomes.sort_values(by=("renta","MedianIncome"),inplace=True)
-incomes.reset_index(inplace=True)
-incomes.nomprov = incomes.nomprov.astype("category", categories=[i for i in df.nomprov.unique()],ordered=False)
-incomes.head()
-
-
-# In[ ]:
-
-
-with sns.axes_style({
-        "axes.facecolor":   "#ffc400",
-        "axes.grid"     :    False,
-        "figure.facecolor": "#c60b1e"}):
-    h = sns.factorplot(data=incomes,
-                   x="nomprov",
-                   y=("renta","MedianIncome"),
-                   order=(i for i in incomes.nomprov),
-                   size=6,
-                   aspect=1.5,
-                   scale=1.0,
-                   color="#c60b1e",
-                   linestyles="None")
-plt.xticks(rotation=90)
-plt.tick_params(labelsize=16,labelcolor="#ffc400")#
-plt.ylabel("Median Income",size=32,color="#ffc400")
-plt.xlabel("City",size=32,color="#ffc400")
-plt.title("Income Distribution by City",size=40,color="#ffc400")
-plt.ylim(0,180000)
-plt.yticks(range(0,180000,40000))
-
-
-# There's a lot of variation, so I think assigning missing incomes by providence is a good idea. First group the data by city, and reduce to get the median. This intermediate data frame is joined by the original city names to expand the aggregated median incomes, ordered so that there is a 1-to-1 mapping between the rows, and finally the missing values are replaced.
-
-# In[ ]:
-
-
-grouped        = df.groupby("nomprov").agg({"renta":lambda x: x.median(skipna=True)}).reset_index()
-new_incomes    = pd.merge(df,grouped,how="inner",on="nomprov").loc[:, ["nomprov","renta_y"]]
-new_incomes    = new_incomes.rename(columns={"renta_y":"renta"}).sort_values("renta").sort_values("nomprov")
-df.sort_values("nomprov",inplace=True)
-df             = df.reset_index()
-new_incomes    = new_incomes.reset_index()
+# Merge with test cases and compute mean for macro prediction
+test["timestamp"] = pd.to_datetime(test["timestamp"])
+test["year"]  = test["timestamp"].dt.year
+test["month"] = test["timestamp"].dt.month
+test["yearmonth"] = 100*test.year + test.month
+test_ids = test[["yearmonth","id"]]
+monthprices = pd.DataFrame({"yearmonth":pred_p.index.values,"monthprice":pred_p.values})
+macro_mean = np.exp(test_ids.merge(monthprices, on="yearmonth").monthprice.apply(np.log).mean())
+macro_mean
 
 
 # In[ ]:
 
 
-df.loc[df.renta.isnull(),"renta"] = new_incomes.loc[df.renta.isnull(),"renta"].reset_index()
-df.loc[df.renta.isnull(),"renta"] = df.loc[df.renta.notnull(),"renta"].median()
-df.sort_values(by="fecha_dato",inplace=True)
+# Naive macro model assumes housing prices will simply follow CPI
+naive_pred_lnrp = y.mean()
+naive_pred_p = np.exp(naive_pred_lnrp) * test_cpi
+monthnaive = pd.DataFrame({"yearmonth":pred_p.index.values, "monthprice":naive_pred_p.values})
+macro_naive = np.exp(test_ids.merge(monthnaive, on="yearmonth").monthprice.apply(np.log).mean())
+macro_naive
 
-
-# The next columns with missing data I'll look at are features, which are just a boolean indicator as to whether or not that product was owned that month. Starting with `ind_nomina_ult1`..
 
 # In[ ]:
 
 
-df.ind_nomina_ult1.isnull().sum()
+# Combine naive and substantive macro models
+macro_mean = macro_naive * (macro_mean/macro_naive) ** macro_humility_factor
+macro_mean
 
 
-# I could try to fill in missing values for products by looking at previous months, but since it's such a small number of values for now I'll take the cheap way out.
-
-# In[ ]:
-
-
-df.loc[df.ind_nomina_ult1.isnull(), "ind_nomina_ult1"] = 0
-df.loc[df.ind_nom_pens_ult1.isnull(), "ind_nom_pens_ult1"] = 0
-
-
-# There's also a bunch of character columns that contain empty strings. In R, these are kept as empty strings instead of NA like in pandas. I originally worked through the data with missing values first in R, so if you are wondering why I skipped some NA columns here that's why. I'll take care of them now. For the most part, entries with NA will be converted to an unknown category.  
-# First I'll get only the columns with missing values. Then print the unique values to determine what I should fill in with.
+# ## Fit Jason's model and adjust results for macro mean
 
 # In[ ]:
 
 
-string_data = df.select_dtypes(include=["object"])
-missing_columns = [col for col in string_data if string_data[col].isnull().any()]
-for col in missing_columns:
-    print("Unique values for {0}:\n{1}\n".format(col,string_data[col].unique()))
-del string_data
+# Jason/Gunja
 
 
-# Okay, based on that and the definitions of each variable, I will fill the empty strings either with the most common value or create an unknown category based on what I think makes more sense.
+
+#load files
+train = pd.read_csv('../input/train.csv', parse_dates=['timestamp'])
+test = pd.read_csv('../input/test.csv', parse_dates=['timestamp'])
+macro = pd.read_csv('../input/macro.csv', parse_dates=['timestamp'])
+id_test = test.id
+
+#clean data
+bad_index = train[train.life_sq > train.full_sq].index
+train.ix[bad_index, "life_sq"] = np.NaN
+equal_index = [601,1896,2791]
+test.ix[equal_index, "life_sq"] = test.ix[equal_index, "full_sq"]
+bad_index = test[test.life_sq > test.full_sq].index
+test.ix[bad_index, "life_sq"] = np.NaN
+bad_index = train[train.life_sq < 5].index
+train.ix[bad_index, "life_sq"] = np.NaN
+bad_index = test[test.life_sq < 5].index
+test.ix[bad_index, "life_sq"] = np.NaN
+bad_index = train[train.full_sq < 5].index
+train.ix[bad_index, "full_sq"] = np.NaN
+bad_index = test[test.full_sq < 5].index
+test.ix[bad_index, "full_sq"] = np.NaN
+kitch_is_build_year = [13117]
+train.ix[kitch_is_build_year, "build_year"] = train.ix[kitch_is_build_year, "kitch_sq"]
+bad_index = train[train.kitch_sq >= train.life_sq].index
+train.ix[bad_index, "kitch_sq"] = np.NaN
+bad_index = test[test.kitch_sq >= test.life_sq].index
+test.ix[bad_index, "kitch_sq"] = np.NaN
+bad_index = train[(train.kitch_sq == 0).values + (train.kitch_sq == 1).values].index
+train.ix[bad_index, "kitch_sq"] = np.NaN
+bad_index = test[(test.kitch_sq == 0).values + (test.kitch_sq == 1).values].index
+test.ix[bad_index, "kitch_sq"] = np.NaN
+bad_index = train[(train.full_sq > 210) & (train.life_sq / train.full_sq < 0.3)].index
+train.ix[bad_index, "full_sq"] = np.NaN
+bad_index = test[(test.full_sq > 150) & (test.life_sq / test.full_sq < 0.3)].index
+test.ix[bad_index, "full_sq"] = np.NaN
+bad_index = train[train.life_sq > 300].index
+train.ix[bad_index, ["life_sq", "full_sq"]] = np.NaN
+bad_index = test[test.life_sq > 200].index
+test.ix[bad_index, ["life_sq", "full_sq"]] = np.NaN
+train.product_type.value_counts(normalize= True)
+test.product_type.value_counts(normalize= True)
+bad_index = train[train.build_year < 1500].index
+train.ix[bad_index, "build_year"] = np.NaN
+bad_index = test[test.build_year < 1500].index
+test.ix[bad_index, "build_year"] = np.NaN
+bad_index = train[train.num_room == 0].index 
+train.ix[bad_index, "num_room"] = np.NaN
+bad_index = test[test.num_room == 0].index 
+test.ix[bad_index, "num_room"] = np.NaN
+bad_index = [10076, 11621, 17764, 19390, 24007, 26713, 29172]
+train.ix[bad_index, "num_room"] = np.NaN
+bad_index = [3174, 7313]
+test.ix[bad_index, "num_room"] = np.NaN
+bad_index = train[(train.floor == 0).values * (train.max_floor == 0).values].index
+train.ix[bad_index, ["max_floor", "floor"]] = np.NaN
+bad_index = train[train.floor == 0].index
+train.ix[bad_index, "floor"] = np.NaN
+bad_index = train[train.max_floor == 0].index
+train.ix[bad_index, "max_floor"] = np.NaN
+bad_index = test[test.max_floor == 0].index
+test.ix[bad_index, "max_floor"] = np.NaN
+bad_index = train[train.floor > train.max_floor].index
+train.ix[bad_index, "max_floor"] = np.NaN
+bad_index = test[test.floor > test.max_floor].index
+test.ix[bad_index, "max_floor"] = np.NaN
+train.floor.describe(percentiles= [0.9999])
+bad_index = [23584]
+train.ix[bad_index, "floor"] = np.NaN
+train.material.value_counts()
+test.material.value_counts()
+train.state.value_counts()
+bad_index = train[train.state == 33].index
+train.ix[bad_index, "state"] = np.NaN
+test.state.value_counts()
+
+# brings error down a lot by removing extreme price per sqm
+train.loc[train.full_sq == 0, 'full_sq'] = 50
+train = train[train.price_doc/train.full_sq <= 600000]
+train = train[train.price_doc/train.full_sq >= 10000]
+
+# Add month-year
+month_year = (train.timestamp.dt.month + train.timestamp.dt.year * 100)
+month_year_cnt_map = month_year.value_counts().to_dict()
+train['month_year_cnt'] = month_year.map(month_year_cnt_map)
+
+month_year = (test.timestamp.dt.month + test.timestamp.dt.year * 100)
+month_year_cnt_map = month_year.value_counts().to_dict()
+test['month_year_cnt'] = month_year.map(month_year_cnt_map)
+
+# Add week-year count
+week_year = (train.timestamp.dt.weekofyear + train.timestamp.dt.year * 100)
+week_year_cnt_map = week_year.value_counts().to_dict()
+train['week_year_cnt'] = week_year.map(week_year_cnt_map)
+
+week_year = (test.timestamp.dt.weekofyear + test.timestamp.dt.year * 100)
+week_year_cnt_map = week_year.value_counts().to_dict()
+test['week_year_cnt'] = week_year.map(week_year_cnt_map)
+
+# Add month and day-of-week
+train['month'] = train.timestamp.dt.month
+train['dow'] = train.timestamp.dt.dayofweek
+
+test['month'] = test.timestamp.dt.month
+test['dow'] = test.timestamp.dt.dayofweek
+
+# Other feature engineering
+train['rel_floor'] = train['floor'] / train['max_floor'].astype(float)
+train['rel_kitch_sq'] = train['kitch_sq'] / train['full_sq'].astype(float)
+
+test['rel_floor'] = test['floor'] / test['max_floor'].astype(float)
+test['rel_kitch_sq'] = test['kitch_sq'] / test['full_sq'].astype(float)
+
+train.apartment_name=train.sub_area + train['metro_km_avto'].astype(str)
+test.apartment_name=test.sub_area + train['metro_km_avto'].astype(str)
+
+train['room_size'] = train['life_sq'] / train['num_room'].astype(float)
+test['room_size'] = test['life_sq'] / test['num_room'].astype(float)
+
+y_train = train["price_doc"]
+wts = 1 - .47*(y_train == 1e6)
+x_train = train.drop(["id", "timestamp", "price_doc"], axis=1)
+x_test = test.drop(["id", "timestamp"], axis=1)
+
+for c in x_train.columns:
+    if x_train[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_train[c].values)) 
+        x_train[c] = lbl.transform(list(x_train[c].values))
+        #x_train.drop(c,axis=1,inplace=True)
+        
+for c in x_test.columns:
+    if x_test[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_test[c].values)) 
+        x_test[c] = lbl.transform(list(x_test[c].values))
+        #x_test.drop(c,axis=1,inplace=True)  
+
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 5,
+    'subsample': 0.7,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(x_train, y_train, weight=wts)
+dtest = xgb.DMatrix(x_test)
+
+#cv_output = xgb.cv(xgb_params, dtrain, num_boost_round=1000, early_stopping_rounds=20,
+#    verbose_eval=50, show_stdv=False)
+#cv_output[['train-rmse-mean', 'test-rmse-mean']].plot()
+
+#num_boost_rounds = len(cv_output)
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=350)
+
+#fig, ax = plt.subplots(1, 1, figsize=(8, 13))
+#xgb.plot_importance(model, max_num_features=50, height=0.5, ax=ax)
+
+y_predict = model.predict(dtest)
+jason_model_raw_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+jason_model_raw_output.head()
+
 
 # In[ ]:
 
 
-df.loc[df.indfall.isnull(),"indfall"] = "N"
-df.loc[df.tiprel_1mes.isnull(),"tiprel_1mes"] = "A"
-df.tiprel_1mes = df.tiprel_1mes.astype("category")
+np.exp( jason_model_raw_output.price_doc.apply(np.log).mean() )
 
-# As suggested by @StephenSmith
-map_dict = { 1.0  : "1",
-            "1.0" : "1",
-            "1"   : "1",
-            "3.0" : "3",
-            "P"   : "P",
-            3.0   : "3",
-            2.0   : "2",
-            "3"   : "3",
-            "2.0" : "2",
-            "4.0" : "4",
-            "4"   : "4",
-            "2"   : "2"}
-
-df.indrel_1mes.fillna("P",inplace=True)
-df.indrel_1mes = df.indrel_1mes.apply(lambda x: map_dict.get(x,x))
-df.indrel_1mes = df.indrel_1mes.astype("category")
-
-
-unknown_cols = [col for col in missing_columns if col not in ["indfall","tiprel_1mes","indrel_1mes"]]
-for col in unknown_cols:
-    df.loc[df[col].isnull(),col] = "UNKNOWN"
-
-
-# Let's check back to see if we missed anything
 
 # In[ ]:
 
 
-df.isnull().any()
+# Adjust
+
+lnm = np.log(macro_mean)
+y_predict = shift_logmean_but_keep_scale( y_predict, lnm, micro_humility_factor )
+
+jason_model_adjusted_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+jason_model_adjusted_output.head() 
 
 
-# Convert the feature columns into integer values (you'll see why in a second), and we're done cleaning
-
-# In[ ]:
-
-
-feature_cols = df.iloc[:1,].filter(regex="ind_+.*ult.*").columns.values
-for col in feature_cols:
-    df[col] = df[col].astype(int)
-
-
-# Now for the main event. To study trends in customers adding or removing services, I will create a label for each product and month that indicates whether a customer added, dropped or maintained that service in that billing cycle. I will do this by assigning a numeric id to each unique time stamp, and then matching each entry with the one from the previous month. The difference in the indicator value for each product then gives the desired value.  
+# ## Fit Reynaldo's model and adjust results for macro mean
 
 # In[ ]:
 
 
-unique_months = pd.DataFrame(pd.Series(df.fecha_dato.unique()).sort_values()).reset_index(drop=True)
-unique_months["month_id"] = pd.Series(range(1,1+unique_months.size)) # start with month 1, not 0 to match what we already have
-unique_months["month_next_id"] = 1 + unique_months["month_id"]
-unique_months.rename(columns={0:"fecha_dato"},inplace=True)
-df = pd.merge(df,unique_months,on="fecha_dato")
+# Reynaldo
 
 
-# Now I'll build a function that will convert differences month to month into a meaningful label. Each month, a customer can either maintain their current status with a particular product, add it, or drop it.
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+id_test = test.id
+
+y_train = train["price_doc"]
+x_train = train.drop(["id", "timestamp", "price_doc"], axis=1)
+x_test = test.drop(["id", "timestamp"], axis=1)
+
+for c in x_train.columns:
+    if x_train[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_train[c].values)) 
+        x_train[c] = lbl.transform(list(x_train[c].values))
+        
+for c in x_test.columns:
+    if x_test[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_test[c].values)) 
+        x_test[c] = lbl.transform(list(x_test[c].values))
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 5,
+    'subsample': 0.7,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(x_train, y_train)
+dtest = xgb.DMatrix(x_test)
+
+num_boost_rounds = 384  # This was the CV output, as earlier version shows
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round= num_boost_rounds)
+
+y_predict = model.predict(dtest)
+reynaldo_model_raw_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+reynaldo_model_raw_output.head()
+
 
 # In[ ]:
 
 
-def status_change(x):
-    diffs = x.diff().fillna(0)# first occurrence will be considered Maintained, 
-    #which is a little lazy. A better way would be to check if 
-    #the earliest date was the same as the earliest we have in the dataset
-    #and consider those separately. Entries with earliest dates later than that have 
-    #joined and should be labeled as "Added"
-    label = ["Added" if i==1          else "Dropped" if i==-1          else "Maintained" for i in diffs]
-    return label
+np.exp( reynaldo_model_raw_output.price_doc.apply(np.log).mean() )
 
-
-# Now we can actually apply this function to each features using `groupby` followed by `transform` to broadcast the result back
 
 # In[ ]:
 
 
-# df.loc[:, feature_cols] = df..groupby("ncodpers").apply(status_change)
-df.loc[:, feature_cols] = df.loc[:, [i for i in feature_cols]+["ncodpers"]].groupby("ncodpers").transform(status_change)
+# Adjust
+
+lnm = np.log(macro_mean)
+y_predict = shift_logmean_but_keep_scale( y_predict, lnm, micro_humility_factor )
+
+reynaldo_model_adjusted_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+reynaldo_model_adjusted_output.head() 
 
 
-# I'm only interested in seeing what influences people adding or removing services, so I'll trim away any instances of "Maintained".
-
-# In[ ]:
-
-
-df = pd.melt(df, id_vars   = [col for col in df.columns if col not in feature_cols],
-            value_vars= [col for col in feature_cols])
-df = df.loc[df.value!="Maintained",:]
-df.shape
-
-
-# And we're done! I hope you found this useful, and if you want to checkout the rest of visualizations I made you can find them [here](https://www.kaggle.com/apryor6/santander-product-recommendation/detailed-cleaning-visualization).
+# ## Fit Bruno's model and adjust results for macro mean
 
 # In[ ]:
 
 
-# For thumbnail
-pylab.rcParams['figure.figsize'] = (6, 4)
-with sns.axes_style({
-        "axes.facecolor":   "#ffc400",
-        "axes.grid"     :    False,
-        "figure.facecolor": "#c60b1e"}):
-    h = sns.factorplot(data=incomes,
-                   x="nomprov",
-                   y=("renta","MedianIncome"),
-                   order=(i for i in incomes.nomprov),
-                   size=6,
-                   aspect=1.5,
-                   scale=0.75,
-                   color="#c60b1e",
-                   linestyles="None")
-plt.xticks(rotation=90)
-plt.tick_params(labelsize=12,labelcolor="#ffc400")#
-plt.ylabel("Median Income",size=32,color="#ffc400")
-plt.xlabel("City",size=32,color="#ffc400")
-plt.title("Income Distribution by City",size=40,color="#ffc400")
-plt.ylim(0,180000)
-plt.yticks(range(0,180000,40000))
+# Bruno with outlier dropped
+
+
+
+# Any results you write to the current directory are saved as output.
+df_train = pd.read_csv("../input/train.csv", parse_dates=['timestamp'])
+df_test = pd.read_csv("../input/test.csv", parse_dates=['timestamp'])
+df_macro = pd.read_csv("../input/macro.csv", parse_dates=['timestamp'])
+
+df_train.drop(df_train[df_train["life_sq"] > 7000].index, inplace=True)
+
+y_train = df_train['price_doc'].values
+id_test = df_test['id']
+
+df_train.drop(['id', 'price_doc'], axis=1, inplace=True)
+df_test.drop(['id'], axis=1, inplace=True)
+
+num_train = len(df_train)
+df_all = pd.concat([df_train, df_test])
+# Next line just adds a lot of NA columns (becuase "join" only works on indexes)
+# but somewhow it seems to affect the result
+df_all = df_all.join(df_macro, on='timestamp', rsuffix='_macro')
+print(df_all.shape)
+
+# Add month-year
+month_year = (df_all.timestamp.dt.month + df_all.timestamp.dt.year * 100)
+month_year_cnt_map = month_year.value_counts().to_dict()
+df_all['month_year_cnt'] = month_year.map(month_year_cnt_map)
+
+# Add week-year count
+week_year = (df_all.timestamp.dt.weekofyear + df_all.timestamp.dt.year * 100)
+week_year_cnt_map = week_year.value_counts().to_dict()
+df_all['week_year_cnt'] = week_year.map(week_year_cnt_map)
+
+# Add month and day-of-week
+df_all['month'] = df_all.timestamp.dt.month
+df_all['dow'] = df_all.timestamp.dt.dayofweek
+
+# Other feature engineering
+df_all['rel_floor'] = df_all['floor'] / df_all['max_floor'].astype(float)
+df_all['rel_kitch_sq'] = df_all['kitch_sq'] / df_all['full_sq'].astype(float)
+
+# Remove timestamp column (may overfit the model in train)
+df_all.drop(['timestamp', 'timestamp_macro'], axis=1, inplace=True)
+
+
+factorize = lambda t: pd.factorize(t[1])[0]
+
+df_obj = df_all.select_dtypes(include=['object'])
+
+X_all = np.c_[
+    df_all.select_dtypes(exclude=['object']).values,
+    np.array(list(map(factorize, df_obj.iteritems()))).T
+]
+print(X_all.shape)
+
+X_train = X_all[:num_train]
+X_test = X_all[num_train:]
+
+
+# Deal with categorical values
+df_numeric = df_all.select_dtypes(exclude=['object'])
+df_obj = df_all.select_dtypes(include=['object']).copy()
+
+for c in df_obj:
+    df_obj[c] = pd.factorize(df_obj[c])[0]
+
+df_values = pd.concat([df_numeric, df_obj], axis=1)
+
+
+# Convert to numpy values
+X_all = df_values.values
+print(X_all.shape)
+
+X_train = X_all[:num_train]
+X_test = X_all[num_train:]
+
+df_columns = df_values.columns
+
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 5,
+    'subsample': 0.7,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(X_train, y_train, feature_names=df_columns)
+dtest = xgb.DMatrix(X_test, feature_names=df_columns)
+
+
+num_boost_round = 489  # From Bruno's original CV, I think
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_round)
+
+y_predict = model.predict(dtest)
+bruno_model_raw_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+bruno_model_raw_output.head()
+
+
+# In[ ]:
+
+
+np.exp( bruno_model_raw_output.price_doc.apply(np.log).mean() )
+
+
+# In[ ]:
+
+
+# Adjust
+
+lnm = np.log(macro_mean)
+y_predict = shift_logmean_but_keep_scale( y_predict, lnm, micro_humility_factor )
+
+bruno_model_adjusted_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+bruno_model_adjusted_output.head() 
+
+
+# ## Merge the adjusted results
+
+# In[ ]:
+
+
+# Merge
+
+results = reynaldo_model_adjusted_output.merge( 
+             jason_model_adjusted_output.merge(
+                bruno_model_adjusted_output, on='id', suffixes=['_jason','_bruno'] ), on='id' )
+results["price_doc_reynaldo"] = results["price_doc"]
+results["price_doc"] = np.exp( np.log(results.price_doc_reynaldo)*reynaldo_weight +
+                               np.log(results.price_doc_jason)*jason_weight       +
+                               np.log(results.price_doc_bruno)*bruno_weight          )
+
+results.drop(["price_doc_reynaldo", "price_doc_bruno", "price_doc_jason"],axis=1,inplace=True)
+results.head()
+
+
+# In[ ]:
+
+
+results.to_csv('sub.csv', index=False)
 

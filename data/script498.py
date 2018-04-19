@@ -1,237 +1,569 @@
 
 # coding: utf-8
 
-# A Convolutional Neural Network for MNIST Classification. This solution got me a score of 0.98929 on the leaderboard.
+# # Porto Seguro’s Safe Driver Prediction
 # 
-# Note: this solution is loosely based on the official [tensorflow tutorial](https://www.tensorflow.org/tutorials/mnist/pros/).
+# 
+# <br><font color=blue>The aim of this compitation is to predict probability that a driver will intiate an auto insurance claim next year.A more accurate prediction will allow them to further tailor their prices, and hopefully make auto insurance coverage more accessible to more drivers. </font>
+# 
+# 
+# **Steps**
+# 
+# 1. [Read data set](#Read-data-set)
+# 2. [Explore data set](#Explore-data-set)
+# 3. [Co relation plot](#CORELATION-PLOT)
+# 4. [Missing value is data set](#Missing-value-is-data-set)
+# 5. [Convert variables into category type](#Convert-variables-into-category-type)
+# 6. [Univariate analysis](#Univariate-analysis)
+# 7. [Median and mean for categorical data](#Median-and-mean-for-categorical-data)
+# 8. [Determine outliers in dataset](#Determine-outliers-in-dataset)
+# 9. [One Hot Encoding](#One-Hot-Encoding)
+# 10. [Split data set](#Split-data-set)
+# 11. [Hyperparameter tuning](#Hyperparameter-tuning)
+# 12. [Logistic Regression model](#Logistic-Regression-model)
+# 13. [Model performance](#Model-performance)
+# 14. [Reciever Operating Charactaristics](#Reciever-Operating-Charactaristics)
+# 15. [Predict for unseen data set](#Predict-for-unseen-data-set)
 
-# ## Packages and Imports
+# # Import library
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
+#Import library
 import numpy as np
 import pandas as pd
-import tensorflow as tf
+import seaborn as sns
 import matplotlib.pyplot as plt
-from sklearn.model_selection import ShuffleSplit
-from sklearn.preprocessing import StandardScaler, LabelEncoder, OneHotEncoder
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import confusion_matrix, roc_auc_score ,roc_curve,auc
+from sklearn.model_selection import StratifiedKFold,GridSearchCV
+import missingno as mssno
+seed =45
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# ## Simulation Constants ##
-# 
-# Download notebook and use commented out values for better performance.
-
-# In[ ]:
-
-
-LABELS = 10 # Number of different types of labels (1-10)
-WIDTH = 28 # width / height of the image
-CHANNELS = 1 # Number of colors in the image (greyscale)
-
-VALID = 10000 # Validation data size
-
-STEPS = 3500 #20000   # Number of steps to run
-BATCH = 100 # Stochastic Gradient Descent batch size
-PATCH = 5 # Convolutional Kernel size
-DEPTH = 8 #32 # Convolutional Kernel depth size == Number of Convolutional Kernels
-HIDDEN = 100 #1024 # Number of hidden neurons in the fully connected layer
-
-LR = 0.001 # Learning rate
-
-
-# ## Import Data
-
-# prepare data by 
-# 
-# - applying 1-hot encoding: `1 = [1,0,0...0], 2 = [0,1,0...0] ...`
-# - reshaping into image shape: `(# images, # vertical height, # horizontal width, # colors)`
-# - splitting data into train and validation set.
+# # Read data set
 
 # In[ ]:
 
 
-data = pd.read_csv('../input/train.csv') # Read csv file in pandas dataframe
-labels = np.array(data.pop('label')) # Remove the labels as a numpy array from the dataframe
-labels = LabelEncoder().fit_transform(labels)[:, None]
-labels = OneHotEncoder().fit_transform(labels).todense()
-data = StandardScaler().fit_transform(np.float32(data.values)) # Convert the dataframe to a numpy array
-data = data.reshape(-1, WIDTH, WIDTH, CHANNELS) # Reshape the data into 42000 2d images
-train_data, valid_data = data[:-VALID], data[-VALID:]
-train_labels, valid_labels = labels[:-VALID], labels[-VALID:]
-
-print('train data shape = ' + str(train_data.shape) + ' = (TRAIN, WIDTH, WIDTH, CHANNELS)')
-print('labels shape = ' + str(labels.shape) + ' = (TRAIN, LABELS)')
+path = '../input/'
+#path = ''
+train = pd.read_csv(path+'train.csv',na_values=-1)
+test = pd.read_csv(path+'test.csv',na_values=-1)
+print('Number rows and columns:',train.shape)
+print('Number rows and columns:',test.shape)
 
 
-# ## Model
-# 
-# Let's now build a network with two convolutional layers, followed by one fully connected layer. Since this is computationally pretty expensive, we'll limit the depth and number of fully connected nodes for this online notebook.
-# 
-# We initialize the input data with placeholders
+# # Explore data set
 
 # In[ ]:
 
 
-tf_data = tf.placeholder(tf.float32, shape=(None, WIDTH, WIDTH, CHANNELS))
-tf_labels = tf.placeholder(tf.float32, shape=(None, LABELS))
+train.head(3).T
 
 
-# We choose a 4 layered network consisting of 2 convolutional layers with weights and biases `(w1, b1)` and `(w2,b2)`, followed by a fully connected hidden layer `(w3,b3)` with #`HIDDEN` hidden neurons and an output layer `(w4, b4)` with `10` output nodes (one-hot encoding).
-# 
-# We initialize the weights and biases such that the kernel has a patch size of `PATCH` and the depth of the second convolutional layer is twice the depth of the first convolutional layer `(DEPTH)`. For the rest, the fully connected hidden layer has `HIDDEN` hidden neurons.
+# # Target varaiable
 
 # In[ ]:
 
 
-w1 = tf.Variable(tf.truncated_normal([PATCH, PATCH, CHANNELS, DEPTH], stddev=0.1))
-b1 = tf.Variable(tf.zeros([DEPTH]))
-w2 = tf.Variable(tf.truncated_normal([PATCH, PATCH, DEPTH, 2*DEPTH], stddev=0.1))
-b2 = tf.Variable(tf.constant(1.0, shape=[2*DEPTH]))
-w3 = tf.Variable(tf.truncated_normal([WIDTH // 4 * WIDTH // 4 * 2*DEPTH, HIDDEN], stddev=0.1))
-b3 = tf.Variable(tf.constant(1.0, shape=[HIDDEN]))
-w4 = tf.Variable(tf.truncated_normal([HIDDEN, LABELS], stddev=0.1))
-b4 = tf.Variable(tf.constant(1.0, shape=[LABELS]))
+plt.figure(figsize=(10,3))
+sns.countplot(train['target'],palette='rainbow')
+plt.xlabel('Target')
 
-def logits(data):
-    # Convolutional layer 1
-    x = tf.nn.conv2d(data, w1, [1, 1, 1, 1], padding='SAME')
-    x = tf.nn.max_pool(x, [1, 2, 2, 1], [1, 2, 2, 1], padding='SAME')
-    x = tf.nn.relu(x + b1)
-    # Convolutional layer 2
-    x = tf.nn.conv2d(x, w2, [1, 1, 1, 1], padding='SAME')
-    x = tf.nn.max_pool(x, [1, 2, 2, 1], [1, 2, 2, 1], padding='SAME')
-    x = tf.nn.relu(x + b2)
-    # Fully connected layer
-    x = tf.reshape(x, (-1, WIDTH // 4 * WIDTH // 4 * 2*DEPTH))
-    x = tf.nn.relu(tf.matmul(x, w3) + b3)
-    return tf.matmul(x, w4) + b4
-
-# Prediction:
-tf_pred = tf.nn.softmax(logits(tf_data))
+train['target'].value_counts()
 
 
-# We use the categorical cross entropy loss for training the model.
-# 
-# As optimizer we could use a Gradient Descent optimizer [with or without decaying learning rate] or one of the more sophisticated (and easier to optimize) optimizers like `Adam` or `RMSProp`
+# The 'target' variable in imbalanced 
+
+# # CORELATION PLOT
 
 # In[ ]:
 
 
-tf_loss = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=logits(tf_data), 
-                                                                 labels=tf_labels))
-tf_acc = 100*tf.reduce_mean(tf.to_float(tf.equal(tf.argmax(tf_pred, 1), tf.argmax(tf_labels, 1))))
-
-#tf_opt = tf.train.GradientDescentOptimizer(LR)
-#tf_opt = tf.train.AdamOptimizer(LR)
-tf_opt = tf.train.RMSPropOptimizer(LR)
-tf_step = tf_opt.minimize(tf_loss)
+cor = train.corr()
+plt.figure(figsize=(16,10))
+sns.heatmap(cor,cmap='Set1')
 
 
-# ## Train
-
-# open the session
+# #  ps calc  *  value as 0 relation with remaining varialble
 
 # In[ ]:
 
 
-init = tf.global_variables_initializer()
-session = tf.Session()
-session.run(init)
+ps_cal = train.columns[train.columns.str.startswith('ps_calc')] 
+train = train.drop(ps_cal,axis =1)
+test = test.drop(ps_cal,axis=1)
+train.shape
 
 
-# Run the session (Run this cell again if the desired accuracy is not yet reached).
+# # Missing value is data set
 
-# In[ ]:
-
-
-ss = ShuffleSplit(n_splits=STEPS, train_size=BATCH)
-ss.get_n_splits(train_data, train_labels)
-history = [(0, np.nan, 10)] # Initial Error Measures
-for step, (idx, _) in enumerate(ss.split(train_data,train_labels), start=1):
-    fd = {tf_data:train_data[idx], tf_labels:train_labels[idx]}
-    session.run(tf_step, feed_dict=fd)
-    if step%500 == 0:
-        fd = {tf_data:valid_data, tf_labels:valid_labels}
-        valid_loss, valid_accuracy = session.run([tf_loss, tf_acc], feed_dict=fd)
-        history.append((step, valid_loss, valid_accuracy))
-        print('Step %i \t Valid. Acc. = %f'%(step, valid_accuracy), end='\n')
-
-
-# Visualize the training history:
+# """Values of -1 indicate that the feature was missing from the observation. 
+# The target columns signifies whether or not a claim was filed for that policy holder.""
 
 # In[ ]:
 
 
-steps, loss, acc = zip(*history)
-
-fig = plt.figure()
-plt.title('Validation Loss / Accuracy')
-ax_loss = fig.add_subplot(111)
-ax_acc = ax_loss.twinx()
-plt.xlabel('Training Steps')
-plt.xlim(0, max(steps))
-
-ax_loss.plot(steps, loss, '-o', color='C0')
-ax_loss.set_ylabel('Log Loss', color='C0');
-ax_loss.tick_params('y', colors='C0')
-ax_loss.set_ylim(0.01, 0.5)
-
-ax_acc.plot(steps, acc, '-o', color='C1')
-ax_acc.set_ylabel('Accuracy [%]', color='C1');
-ax_acc.tick_params('y', colors='C1')
-ax_acc.set_ylim(1,100)
-
-plt.show()
+k= pd.DataFrame()
+k['train']= train.isnull().sum()
+k['test'] = test.isnull().sum()
+fig,ax = plt.subplots(figsize=(16,5))
+k.plot(kind='bar',ax=ax)
 
 
-# ## Results
+# Missing value in test train data set are in same propotion and same column
 
 # In[ ]:
 
 
-test = pd.read_csv('../input/test.csv') # Read csv file in pandas dataframe
-test_data = StandardScaler().fit_transform(np.float32(test.values)) # Convert the dataframe to a numpy array
-test_data = test_data.reshape(-1, WIDTH, WIDTH, CHANNELS) # Reshape the data into 42000 2d images
+mssno.bar(train,color='y',figsize=(16,4),fontsize=12)
 
-
-# Make a prediction about the test labels
 
 # In[ ]:
 
 
-test_pred = session.run(tf_pred, feed_dict={tf_data:test_data})
-test_labels = np.argmax(test_pred, axis=1)
+mssno.bar(test,color='b',figsize=(16,4),fontsize=12)
 
-
-# Plot an example:
 
 # In[ ]:
 
 
-k = 0 # Try different image indices k
-print("Label Prediction: %i"%test_labels[k])
-fig = plt.figure(figsize=(2,2)); plt.axis('off')
-plt.imshow(test_data[k,:,:,0]); plt.show()
+mssno.matrix(train)
 
-
-# ## Submission
 
 # In[ ]:
 
 
-submission = pd.DataFrame(data={'ImageId':(np.arange(test_labels.shape[0])+1), 'Label':test_labels})
-submission.to_csv('submission.csv', index=False)
-submission.tail()
+def missing_value(df):
+    col = df.columns
+    for i in col:
+        if df[i].isnull().sum()>0:
+            df[i].fillna(df[i].mode()[0],inplace=True)
 
-
-# ## Close Session
-# 
-# (note: once the session is closed, the training cell cannot be run again...)
 
 # In[ ]:
 
 
-#session.close()
+missing_value(train)
+missing_value(test)
 
+
+# # Convert variables into category type
+
+# In[ ]:
+
+
+def basic_details(df):
+    b = pd.DataFrame()
+    #b['Missing value'] = df.isnull().sum()
+    b['N unique value'] = df.nunique()
+    b['dtype'] = df.dtypes
+    return b
+basic_details(train)
+
+
+# ###### The unique value of "ps_car_11_cat" is maximum in the data set is 104
+
+# In[ ]:
+
+
+def category_type(df):
+    col = df.columns
+    for i in col:
+        if df[i].nunique()<=104:
+            df[i] = df[i].astype('category')
+category_type(train)
+category_type(test)
+
+
+# # Univariate analysis
+
+# In[ ]:
+
+
+cat_col = [col for col in train.columns if '_cat' in col]
+print(cat_col)
+
+
+# In[ ]:
+
+
+fig ,ax = plt.subplots(1,2,figsize=(14,4))
+ax1,ax2, = ax.flatten()
+sns.countplot(train['ps_ind_02_cat'],palette='rainbow',ax=ax1)
+sns.countplot(train['ps_ind_04_cat'],palette='summer',ax=ax2)
+fig,ax = plt.subplots(figsize=(14,4))
+sns.countplot(train['ps_ind_05_cat'],palette='rainbow',ax=ax)
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(2,2,figsize=(14,8))
+ax1,ax2,ax3,ax4 = ax.flatten()
+sns.countplot(train['ps_car_01_cat'],palette='rainbow',ax=ax1)
+sns.countplot(train['ps_car_02_cat'],palette='summer',ax=ax2)
+sns.countplot(train['ps_car_03_cat'],palette='summer',ax=ax3)
+sns.countplot(train['ps_car_04_cat'],palette='rainbow',ax=ax4)
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(2,2,figsize = (14,7))
+ax1,ax2,ax3,ax4 = ax.flatten()
+sns.countplot(train['ps_car_05_cat'],palette='summer',ax=ax1)
+sns.countplot(train['ps_car_06_cat'],palette='rainbow',ax=ax2)
+sns.countplot(train['ps_car_07_cat'],palette='summer',ax=ax3)
+sns.countplot(train['ps_car_08_cat'],palette='rainbow',ax=ax4)
+
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(1,2,figsize=(14,6))
+ax1,ax2 = ax.flatten()
+sns.countplot(train['ps_car_09_cat'],palette='rainbow',ax=ax1)
+sns.countplot(train['ps_car_10_cat'],palette='gist_rainbow',ax=ax2)
+fig,ax = plt.subplots(figsize=(15,6))
+sns.countplot(train['ps_car_11_cat'],palette='rainbow',ax=ax)
+
+
+# In[ ]:
+
+
+bin_col = [col for col in train.columns if 'bin' in col]
+print(bin_col)
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(3,3,figsize=(15,14),sharex='all')
+ax1,ax2,ax3,ax4,ax5,ax6,ax7,ax8,ax9 = ax.flatten()
+sns.countplot(train['ps_ind_06_bin'],palette='rainbow',ax=ax1)
+sns.countplot(train['ps_ind_07_bin'],palette='summer',ax=ax2)
+sns.countplot(train['ps_ind_08_bin'],palette='gist_rainbow',ax=ax3)
+sns.countplot(train['ps_ind_09_bin'],palette='summer',ax=ax4)
+sns.countplot(train['ps_ind_10_bin'],palette='rainbow',ax=ax5)
+sns.countplot(train['ps_ind_11_bin'],palette='gist_rainbow',ax=ax6)
+sns.countplot(train['ps_ind_12_bin'],palette='coolwarm',ax=ax7)
+sns.countplot(train['ps_ind_13_bin'],palette='gist_rainbow',ax=ax8)
+sns.countplot(train['ps_ind_16_bin'],palette='rainbow',ax=ax9)
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(1,2,figsize=(14,6))
+ax1,ax2 = ax.flatten()
+sns.countplot(train['ps_ind_17_bin'],palette='coolwarm',ax=ax1)
+sns.countplot(train['ps_ind_18_bin'],palette='gist_rainbow',ax=ax2)
+
+
+# In[ ]:
+
+
+tot_cat_col = list(train.select_dtypes(include=['category']).columns)
+
+other_cat_col = [c for c in tot_cat_col if c not in cat_col+ bin_col]
+other_cat_col
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(2,2,figsize=(14,6))
+ax1,ax2,ax3,ax4 = ax.flatten()
+sns.countplot(data=train,x='ps_ind_01',palette='rainbow',ax=ax1)
+sns.countplot(data=train,x='ps_ind_03',palette='gist_rainbow',ax=ax2)
+sns.countplot(data=train,x='ps_ind_14',palette='gist_rainbow',ax=ax3)
+sns.countplot(data=train,x='ps_ind_15',palette='rainbow',ax=ax4)
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(2,2,figsize=(14,6))
+ax1,ax2,ax3,ax4 =ax.flatten()
+sns.countplot(data=train,x='ps_reg_01',palette='gist_rainbow',ax=ax1)
+sns.countplot(data=train,x='ps_reg_02',palette='rainbow',ax=ax2)
+sns.countplot(data=train,x='ps_car_11',palette='summer',ax=ax3)
+sns.countplot(data=train,x='ps_car_15',palette='gist_rainbow',ax=ax4)
+plt.xticks(rotation=90)
+
+
+# In[ ]:
+
+
+num_col = [c for c in train.columns if c not in tot_cat_col]
+num_col.remove('id')
+num_col
+
+
+# In[ ]:
+
+
+train['ps_reg_03'].describe()
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(2,2,figsize=(14,8))
+ax1,ax2,ax3,ax4 = ax.flatten()
+sns.distplot(train['ps_reg_03'],bins=100,color='red',ax=ax1)
+sns.boxplot(x ='ps_reg_03',y='target',data=train,ax=ax2)
+sns.violinplot(x ='ps_reg_03',y='target',data=train,ax=ax3)
+sns.pointplot(x= 'ps_reg_03',y='target',data=train,ax=ax4)
+
+
+# ps_reg_03 has outlier data points
+
+# In[ ]:
+
+
+train['ps_car_12'].describe()
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(2,2,figsize=(14,8))
+ax1,ax2,ax3,ax4 = ax.flatten()
+sns.distplot(train['ps_car_12'],bins=50,ax=ax1)
+sns.boxplot(x='ps_car_12',y='target',data=train,ax=ax2)
+sns.violinplot(x='ps_car_12',y='target',data=train,ax=ax3)
+sns.pointplot(x='ps_car_12',y='target',data=train,ax=ax4)
+
+
+# In[ ]:
+
+
+train['ps_car_13'].describe()
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(2,2,figsize=(14,8))
+ax1,ax2,ax3,ax4 = ax.flatten()
+sns.distplot(train['ps_car_13'],bins=120,ax=ax1)
+sns.boxplot(x='ps_car_13',y='target',data=train,ax=ax2)
+sns.violinplot(x='ps_car_13',y='target',data=train,ax=ax3)
+sns.pointplot(x='ps_car_13',y='target',data=train,ax=ax4)
+
+
+# In[ ]:
+
+
+train['ps_car_14'].describe()
+
+
+# In[ ]:
+
+
+fig,ax = plt.subplots(2,2,figsize=(14,8))
+ax1,ax2,ax3,ax4 = ax.flatten()
+sns.distplot(train['ps_car_14'],bins=120,ax=ax1)
+sns.boxplot(x='ps_car_14',y='target',data=train,ax=ax2)
+sns.violinplot(x='ps_car_14',y='target',data=train,ax=ax3)
+sns.pointplot(x='ps_car_14',y='target',data=train,ax=ax4)
+
+
+# ## Median and mean for categorical data
+
+# In[ ]:
+
+
+def transform_df(df):
+    df = pd.DataFrame(df)
+    dcol= [c for c in train.columns if train[c].nunique()>2]
+    dcol.remove('id')   
+    d_median = df[dcol].median(axis=0)
+    d_mean = df[dcol].mean(axis=0)
+    q1 = df[dcol].apply(np.float32).quantile(0.25)
+    q2 = df[dcol].apply(np.float32).quantile(0.5)
+    q3 = df[dcol].apply(np.float32).quantile(0.75)
+    
+    #Add mean and median column to data set having more then 2 categories
+    for c in dcol:
+        df[c+str('_median_range')] = (df[c].astype(np.float32).values > d_median[c]).astype(np.int8)
+        df[c+str('_mean_range')] = (df[c].astype(np.float32).values > d_mean[c]).astype(np.int8)
+        df[c+str('_q1')] = (df[c].astype(np.float32).values < q1[c]).astype(np.int8)
+        df[c+str('_q2')] = (df[c].astype(np.float32).values < q2[c]).astype(np.int8)
+        df[c+str('_q3')] = (df[c].astype(np.float32).values > q3[c]).astype(np.int8)
+    return df
+
+
+# In[ ]:
+
+
+train = transform_df(train)
+test = transform_df(test)
+
+
+# # Co relation plot
+
+# In[ ]:
+
+
+cor = train[num_col].corr()
+plt.figure(figsize=(10,4))
+sns.heatmap(cor,annot=True)
+plt.tight_layout()
+
+
+# # Determine outliers in dataset
+
+# In[ ]:
+
+
+def outlier(df,columns):
+    for i in columns:
+        quartile_1,quartile_3 = np.percentile(df[i],[25,75])
+        quartile_f,quartile_l = np.percentile(df[i],[1,99])
+        IQR = quartile_3-quartile_1
+        lower_bound = quartile_1 - (1.5*IQR)
+        upper_bound = quartile_3 + (1.5*IQR)
+        print(i,lower_bound,upper_bound,quartile_f,quartile_l)
+                
+        df[i].loc[df[i] < lower_bound] = quartile_f
+        df[i].loc[df[i] > upper_bound] = quartile_l
+        
+outlier(train,num_col)
+outlier(test,num_col) 
+
+
+# # One Hot Encoding
+
+# In[ ]:
+
+
+def OHE(df1,df2,column):
+    cat_col = column
+    #cat_col = df.select_dtypes(include =['category']).columns
+    len_df1 = df1.shape[0]
+    
+    df = pd.concat([df1,df2],ignore_index=True)
+    c2,c3 = [],{}
+    
+    print('Categorical feature',len(column))
+    for c in cat_col:
+        if df[c].nunique()>2 :
+            c2.append(c)
+            c3[c] = 'ohe_'+c
+    
+    df = pd.get_dummies(df, prefix=c3, columns=c2,drop_first=True)
+
+    df1 = df.loc[:len_df1-1]
+    df2 = df.loc[len_df1:]
+    print('Train',df1.shape)
+    print('Test',df2.shape)
+    return df1,df2
+
+
+# In[ ]:
+
+
+train1,test1 = OHE(train,test,tot_cat_col)
+
+
+# # Split data set
+
+# In[ ]:
+
+
+X = train1.drop(['target','id'],axis=1)
+y = train1['target'].astype('category')
+x_test = test1.drop(['target','id'],axis=1)
+del train1,test1
+
+
+# # Hyperparameter tuning 
+
+# In[ ]:
+
+
+#Grid search
+"""logreg = LogisticRegression(class_weight='balanced')
+param = {'C':[0.001,0.003,0.005,0.01,0.03,0.05,0.1,0.3,0.5,1]}
+clf = GridSearchCV(logreg,param,scoring='roc_auc',refit=True,cv=3)
+clf.fit(X,y)
+print('Best roc_auc: {:.4}, with best C: {}'.format(clf.best_score_, clf.best_params_['C'])) """
+
+
+# # Logistic Regression model
+# Logistic regression is used for modelling. The data set is split using Stratified Kfold. In each split model is created and predicted using that model. The final predicted value is average of all model. 
+
+# In[ ]:
+
+
+kf = StratifiedKFold(n_splits=5,random_state=seed,shuffle=True)
+pred_test_full=0
+cv_score=[]
+i=1
+for train_index,test_index in kf.split(X,y):    
+    print('\n{} of kfold {}'.format(i,kf.n_splits))
+    xtr,xvl = X.loc[train_index],X.loc[test_index]
+    ytr,yvl = y[train_index],y[test_index]
+    
+    lr = LogisticRegression(class_weight='balanced',C=0.003)
+    lr.fit(xtr, ytr)
+    pred_test = lr.predict_proba(xvl)[:,1]
+    score = roc_auc_score(yvl,pred_test)
+    print('roc_auc_score',score)
+    cv_score.append(score)
+    pred_test_full += lr.predict_proba(x_test)[:,1]
+    i+=1
+
+
+# # Model performance
+
+# In[ ]:
+
+
+print('Confusion matrix\n',confusion_matrix(yvl,lr.predict(xvl)))
+print('Cv',cv_score,'\nMean cv Score',np.mean(cv_score))
+
+
+# # Reciever Operating Charactaristics
+
+# In[ ]:
+
+
+proba = lr.predict_proba(xvl)[:,1]
+fpr,tpr, threshold = roc_curve(yvl,proba)
+auc_val = auc(fpr,tpr)
+
+plt.figure(figsize=(14,8))
+plt.title('Reciever Operating Charactaristics')
+plt.plot(fpr,tpr,'b',label = 'AUC = %0.2f' % auc_val)
+plt.legend(loc='lower right')
+plt.plot([0,1],[0,1],'r--')
+plt.ylabel('True positive rate')
+plt.xlabel('False positive rate')
+
+
+# # Predict for unseen data set
+
+# In[ ]:
+
+
+y_pred = pred_test_full/5
+submit = pd.DataFrame({'id':test['id'],'target':y_pred})
+#submit.to_csv('lr_porto.csv.gz',index=False,compression='gzip') 
+submit.to_csv('lr_porto.csv',index=False) 
+
+
+# In[ ]:
+
+
+submit.head()
+
+
+# # Thank you for visiting

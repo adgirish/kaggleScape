@@ -1,120 +1,154 @@
-import gc
-import os
-import operator
+"""
+This is an upgraded version of Ceshine's LGBM starter script, simply adding more
+average features and weekly average features on it.
+"""
+from datetime import date, timedelta
 
-from glob import glob
-
-import numpy as np
 import pandas as pd
-import xgboost as xgb
-import matplotlib.pyplot as plt
+import numpy as np
+from sklearn.metrics import mean_squared_error
+import lightgbm as lgb
 
-from pandas.core.categorical import Categorical
-from scipy.sparse import csr_matrix, hstack
+df_train = pd.read_csv(
+    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
+    dtype={'onpromotion': bool},
+    converters={'unit_sales': lambda u: np.log1p(
+        float(u)) if float(u) > 0 else 0},
+    parse_dates=["date"],
+    skiprows=range(1, 66458909)  # 2016-01-01
+)
 
-dtypes = {
-    'ip': 'uint32',
-    'app': 'uint16',
-    'device': 'uint16',
-    'os': 'uint16',
-    'channel': 'uint16',
-    'is_attributed': 'uint8'
-}
-to_read = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
-to_parse = ['click_time']
+df_test = pd.read_csv(
+    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
+    dtype={'onpromotion': bool},
+    parse_dates=["date"]  # , date_parser=parser
+).set_index(
+    ['store_nbr', 'item_nbr', 'date']
+)
 
-# Features used in training
-categorical_features = ['app', 'device', 'os', 'channel']
-numerical_features = ['clicks_by_ip']
+items = pd.read_csv(
+    "../input/items.csv",
+).set_index("item_nbr")
 
-train_size = 8000000
-
-def sparse_dummies(df, column):
-    """Returns sparse OHE matrix for the column of the dataframe"""
-    categories = Categorical(df[column])
-    column_names = np.array([f"{column}_{str(i)}" for i in range(len(categories.categories))])
-    N = len(categories)
-    row_numbers = np.arange(N, dtype=np.int)
-    ones = np.ones((N,))
-    return csr_matrix((ones, (row_numbers, categories.codes))), column_names
-
-df_train = pd.read_csv('../input/train.csv', nrows=10000000, usecols=to_read, dtype=dtypes, parse_dates=to_parse)
-
-# Example of numerical feature
-# warning: this is for the sake of example; the feature leaks: it doesn't take time into account, takes whole train dataset, doesn't cut off time; 
-clicks_by_ip = df_train.groupby(['ip']).size().rename('clicks_by_ip', inplace=True)
-df_train = df_train.join(clicks_by_ip, on='ip')
-del clicks_by_ip
-gc.collect()
-
-matrices = []
-all_column_names = []
-# creates a matrix per categorical feature
-for c in categorical_features:
-    matrix, column_names = sparse_dummies(df_train, c)
-    matrices.append(matrix)
-    all_column_names.append(column_names)
-
-# appends a matrix for numerical features (one column per feature)
-matrices.append(csr_matrix(df_train[numerical_features].values, dtype=float))
-all_column_names.append(df_train[numerical_features].columns.values)
-
-train_sparse = hstack(matrices, format="csr")
-feature_names = np.concatenate(all_column_names)
-del matrices, all_column_names
-
-X = train_sparse
-y = df_train['is_attributed']
-
+df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
 del df_train
-gc.collect()
 
-# Create binary training and validation files for XGBoost
-x1, y1 = X[:train_size], y.iloc[:train_size]
-dm1 = xgb.DMatrix(x1, y1, feature_names=feature_names)
-dm1.save_binary('train.bin')
-del dm1, x1, y1
-gc.collect()
+promo_2017_train = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
+        level=-1).fillna(False)
+promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
+promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
+promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
+promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
+promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
+del promo_2017_test, promo_2017_train
 
-x2, y2 = X[train_size:], y.iloc[train_size:]
-dm2 = xgb.DMatrix(x2, y2, feature_names=feature_names)
-dm2.save_binary('validate.bin')
-del dm2, x2, y2
-del X, y, train_sparse
-gc.collect()
+df_2017 = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
+        level=-1).fillna(0)
+df_2017.columns = df_2017.columns.get_level_values(1)
 
-# XGBoost parameters example
+items = items.reindex(df_2017.index.get_level_values(1))
+
+def get_timespan(df, dt, minus, periods, freq='D'):
+    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
+
+def prepare_dataset(t2017, is_train=True):
+    X = pd.DataFrame({
+        "day_1_2017": get_timespan(df_2017, t2017, 1, 1).values.ravel(),
+        "mean_3_2017": get_timespan(df_2017, t2017, 3, 3).mean(axis=1).values,
+        "mean_7_2017": get_timespan(df_2017, t2017, 7, 7).mean(axis=1).values,
+        "mean_14_2017": get_timespan(df_2017, t2017, 14, 14).mean(axis=1).values,
+        "mean_30_2017": get_timespan(df_2017, t2017, 30, 30).mean(axis=1).values,
+        "mean_60_2017": get_timespan(df_2017, t2017, 60, 60).mean(axis=1).values,
+        "mean_140_2017": get_timespan(df_2017, t2017, 140, 140).mean(axis=1).values,
+        "promo_14_2017": get_timespan(promo_2017, t2017, 14, 14).sum(axis=1).values,
+        "promo_60_2017": get_timespan(promo_2017, t2017, 60, 60).sum(axis=1).values,
+        "promo_140_2017": get_timespan(promo_2017, t2017, 140, 140).sum(axis=1).values
+    })
+    for i in range(7):
+        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 28-i, 4, freq='7D').mean(axis=1).values
+        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 140-i, 20, freq='7D').mean(axis=1).values
+    for i in range(16):
+        X["promo_{}".format(i)] = promo_2017[
+            t2017 + timedelta(days=i)].values.astype(np.uint8)
+    if is_train:
+        y = df_2017[
+            pd.date_range(t2017, periods=16)
+        ].values
+        return X, y
+    return X
+
+print("Preparing dataset...")
+t2017 = date(2017, 5, 31)
+X_l, y_l = [], []
+for i in range(6):
+    delta = timedelta(days=7 * i)
+    X_tmp, y_tmp = prepare_dataset(
+        t2017 + delta
+    )
+    X_l.append(X_tmp)
+    y_l.append(y_tmp)
+X_train = pd.concat(X_l, axis=0)
+y_train = np.concatenate(y_l, axis=0)
+del X_l, y_l
+X_val, y_val = prepare_dataset(date(2017, 7, 26))
+X_test = prepare_dataset(date(2017, 8, 16), is_train=False)
+
+print("Training and predicting models...")
 params = {
-    'eta': 0.3,
-    'tree_method': "hist",
-    'grow_policy': "lossguide",
-    'max_leaves': 1000,  
-    'max_depth': 0, 
-    'subsample': 0.9, 
-    'alpha':1,
-    'objective': 'binary:logistic', 
-    'scale_pos_weight':100,
-    'eval_metric': 'auc', 
-    'nthread':4,
-    'silent': 1
+    'num_leaves': 31,
+    'objective': 'regression',
+    'min_data_in_leaf': 200,
+    'learning_rate': 0.02,
+    'feature_fraction': 0.8,
+    'bagging_fraction': 0.7,
+    'bagging_freq': 1,
+    'metric': 'l2',
+    'num_threads': 4
 }
 
-# Pointers to binary files for training and validation
-# They won't be loaded into Python environment but passed directly to XGBoost
-dmtrain = xgb.DMatrix('train.bin', feature_names=feature_names)
-dmvalid = xgb.DMatrix('validate.bin', feature_names=feature_names)
+MAX_ROUNDS = 3000
+val_pred = []
+test_pred = []
+cate_vars = []
+for i in range(16):
+    print("=" * 50)
+    print("Step %d" % (i+1))
+    print("=" * 50)
+    dtrain = lgb.Dataset(
+        X_train, label=y_train[:, i],
+        categorical_feature=cate_vars,
+        weight=pd.concat([items["perishable"]] * 6) * 0.25 + 1
+    )
+    dval = lgb.Dataset(
+        X_val, label=y_val[:, i], reference=dtrain,
+        weight=items["perishable"] * 0.25 + 1,
+        categorical_feature=cate_vars)
+    bst = lgb.train(
+        params, dtrain, num_boost_round=MAX_ROUNDS,
+        valid_sets=[dtrain, dval], early_stopping_rounds=125, verbose_eval=500
+    )
+    print("\n".join(("%s: %.2f" % x) for x in sorted(
+        zip(X_train.columns, bst.feature_importance("gain")),
+        key=lambda x: x[1], reverse=True
+    )))
+    val_pred.append(bst.predict(
+        X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
+    test_pred.append(bst.predict(
+        X_test, num_iteration=bst.best_iteration or MAX_ROUNDS))
 
-# Training process
-watchlist = [(dmtrain, 'train'), (dmvalid, 'valid')]
-model = xgb.train(params, dmtrain, 50, watchlist, maximize=True, early_stopping_rounds=10, verbose_eval=1)
+print("Validation mse:", mean_squared_error(
+    y_val, np.array(val_pred).transpose()))
 
-# Feature importance as a DataFrame
-importance = sorted(model.get_fscore().items(), key=operator.itemgetter(1))
-df = pd.DataFrame(importance, columns=['feature', 'fscore'])
-df['fscore'] = df['fscore'] / df['fscore'].sum()
-print(df.sort_values('fscore', ascending=False).head(10))
+print("Making submission...")
+y_test = np.array(test_pred).transpose()
+df_preds = pd.DataFrame(
+    y_test, index=df_2017.index,
+    columns=pd.date_range("2017-08-16", periods=16)
+).stack().to_frame("unit_sales")
+df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
 
-# Feature importance as a plot
-fig, ax = plt.subplots(figsize=(10, 10))
-xgb.plot_importance(model, ax=ax, max_num_features=20)
-plt.savefig('importance.png', format="png")
+submission = df_test[["id"]].join(df_preds, how="left").fillna(0)
+submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 1000)
+submission.to_csv('lgb.csv', float_format='%.4f', index=None)

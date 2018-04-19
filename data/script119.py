@@ -1,178 +1,451 @@
 
 # coding: utf-8
 
-# # **Hey Kagglers, this is meant to be a fun little visualization tutorial using the [Seaborn](https://stanford.edu/~mwaskom/software/seaborn/index.html) library and [Alberto Barradas'](https://www.kaggle.com/abcsds) [Pokémon dataset](https://www.kaggle.com/abcsds/pokemon).**  
-# # Whether you're following along or just skimming through, thanks for checking it out!
-
-# ----------
-
-# # Notebook Prep
-
-# First, let's import the packages we'll be using in this kernel. 
+# #What kind of player will be admitted into the hall of fame in baseball?
+# 
+# ---  
+# **Created by: Rocha**  
+# **Date: April 2017**  
+#   
+# We can analyize the question from different perspectives. Such as:  
+# 1. player's biographic data analysis.  
+# 2. player's baseball skill analysis  
+# 3. player's salary analysis  
 
 # In[ ]:
 
 
+get_ipython().run_line_magic('matplotlib', 'inline')
+get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina'")
+import os
+from sklearn import preprocessing
+import numpy as np
 import pandas as pd
 import seaborn as sns
-import matplotlib.pyplot as plt
+from wordcloud import WordCloud
+from matplotlib import pyplot as plt
+pd.set_option("display.max_columns",50)
 
 
-# ----------
-
-# # Data Import
-
-# Now, let's [read](http://pandas.pydata.org/pandas-docs/stable/generated/pandas.read_csv.html) in the data with Pandas.  
-# If you're working in something other than a Kaggle notebook, be sure to change the file location.
+# ## hall of fame exploration
+# From the data, we can see that the create of the hall of fame is from **1939** year.  
 
 # In[ ]:
 
 
-pkmn = pd.read_csv('../input/Pokemon.csv')
+### read in data
+hall_of_fame = pd.read_csv("../input/hall_of_fame.csv")
+## to choose only the player 
+hall_of_fame = hall_of_fame[hall_of_fame.category == "Player"]
+print(hall_of_fame.info())
+hall_of_fame.head()
 
 
-# Using the [head](http://pandas.pydata.org/pandas-docs/stable/generated/pandas.DataFrame.head.html) method, let's take a peak at the data.
-
-# In[ ]:
-
-
-pkmn.head()
-
-
-# We've got a pretty simple format here! There's the Pokémon number, name, their type(s), their different stat values, and a convenient Total variable.
-
-# ## Update Aug 30 2016:  
-# I just realized that Generation and Legendary variables were added to the dataset.  
-# I'm going to add a step here to drop the variables so that the rest of the code works as it did originally.  
-# Apologies to anyone who forked the notebook and had trouble following along!
+# ### 1. Who voted the most player ? Whose vote has the power to HOF ?
+# *BBWAA* vote the most player into the hall of fame, then is voted by *Veterans*, the third is voted by *Run Off*.  
+# We see that the vote from the **Veterans** has the power to HOF. **Speical Election**,**Old Timers**,**Negro League** also have the great power. However, others vote don't see this phenomenen.
 
 # In[ ]:
 
 
-pkmn = pkmn.drop(['Generation', 'Legendary'],1)
+## calculate votedby data with inducted 
+voted_by = hall_of_fame.groupby(["votedby","inducted"]).size().unstack()
+norm_voted_by = pd.DataFrame(preprocessing.normalize(voted_by.fillna(0)),columns=voted_by.columns,index=voted_by.index)
+norm_voted_by["delta"] = norm_voted_by["Y"] - norm_voted_by["N"]
+
+##plot
+fig,axes_voted = plt.subplots(2,1,figsize=(12,16))
+colors = ["r","r","r","r","b","b","b","b"]
+voted_by[["N","Y"]].plot.barh(title="Whose vote is most powerful 1 ?",ax=axes_voted[0])
+norm_voted_by.delta.sort_values().plot.barh(title="Whose vote is most powerful 2 ?",                                            ax=axes_voted[1],color=colors)
 
 
-# ----------
-
-# # Plots with Seaborn
-
-# To start things off, let's just make a [scatterplot](https://stanford.edu/~mwaskom/software/seaborn/generated/seaborn.jointplot.html) based on two variables from the data set.  
-# I'll use HP and Attack in this example, but feel free to do something different!
-
-# In[ ]:
-
-
-sns.jointplot(x="HP", y="Attack", data=pkmn);
-
-
-# Nothing *too* informative here, but we can definitely see why the Seaborn library is so popular. With one short line of code, we get this really nice looking plot!
-
-# Now let's see if we can make something a little bit prettier. How about a distribution of all six stats? We could even group it further using Pokémon type!  
-# This might seem a little ambitious, but let's take it one step at a time.
-
-# For starters, let's see if we can make a basic [box and whisker plot](https://stanford.edu/~mwaskom/software/seaborn/generated/seaborn.boxplot.html) of a single variable.
+# ### 2. How many people enter into the Hall Of Fame each year?
+# Every year, the number of people chosen into the hall of fame is different. From the fig, we can see that:  
+# 1. Some year we don't choose the popular player because of some reason.  
+# 2. Some year we choose only a few people but some year we choose a lot. The **blue bar** shows the number of HOF, and the **red line** shows the HOF admit rate.
 
 # In[ ]:
 
 
-sns.boxplot(y="HP", data=pkmn);
-
-
-# Cool! Not too hard.  
-# Now let's see if we can get all of the stats in there.
-
-# As it turns out, if you don't specify an x or y argument, Seaborn will give you a plot for each numeric variable. Handy!
-
-# In[ ]:
-
-
-sns.boxplot(data=pkmn);
-
-
-# Since the # variable doesn't make sense here, let's drop it from the table.  
-# Total can be dropped as well, since we didn't originally want to include it and it's on a much larger scale.
-
-# In[ ]:
-
-
-pkmn = pkmn.drop(['Total', '#'],1)
+hall_of_fame[hall_of_fame.inducted == "Y"].groupby("yearid").size().describe()
 
 
 # In[ ]:
 
 
-sns.boxplot(data=pkmn);
+## calculate the year with inducted
+induct = hall_of_fame.groupby(["yearid","inducted"]).size().unstack().fillna(0)
+induct["inducted rate"] = induct["Y"]/(induct["Y"]+induct["N"])
+
+fig,axes_induct = plt.subplots(1,1,figsize=(16,10))
+ax1 = induct.plot(y="inducted rate",kind="line",style="ro-",secondary_y=True,use_index=False,ax=axes_induct)
+induct["Y"].plot(kind = "bar",title="number of people chosen into the HOF each year"                 ,ax=axes_induct,label="HOF",legend=True)
 
 
-# Alright, now all that's left is to include Pokémon type in this visualization.  
-# One way to do this would be switch the graph to a [swarmplot](https://stanford.edu/~mwaskom/software/seaborn/generated/seaborn.swarmplot.html) and color code the points by type.
-
-# Trying to use the swarmplot function with the "hue" argument is going to give us some errors if we don't transform our data a bit though. The Seaborn website provides an example using Pandas' [melt](http://pandas.pydata.org/pandas-docs/stable/generated/pandas.melt.html) function, so we'll give that a try!
-
-# In[ ]:
-
-
-pkmn = pd.melt(pkmn, id_vars=["Name", "Type 1", "Type 2"], var_name="Stat")
-
-
-# So now our plot looks like this:
+# ### 3. Participate the vote multi-times 
+# Some people have many times take part in the elected to the hall of fame.
+# A person even tried **20 times** in the ballot, that means 20 years. Most people only have **1** chance.
 
 # In[ ]:
 
 
-pkmn.head()
+hall_of_fame.groupby("player_id").size().describe()
 
-
-# The head method doesn't really do this transformation justice, but our dataset now has 4800 rows up from 800!  
-# So let's go ahead and run this plot function!
 
 # In[ ]:
 
 
-sns.swarmplot(x="Stat", y="value", data=pkmn, hue="Type 1");
+hall_of_fame.groupby("player_id").size().hist()
 
 
-# Oh geez. That's uh... something.  
-# I think we've got some cleaning up to do.
-
-# Using a few Seaborn and Matplotlib functions, we can adjust how our plot looks.  
-# On each line below, we will:   
-# - [Make the plot larger](http://matplotlib.org/api/figure_api.html#matplotlib.figure.Figure)  
-# - [Adjust the y-axis](http://matplotlib.org/api/pyplot_api.html#matplotlib.pyplot.ylim)  
-# - Organize the point distribution by type  and make the individual points larger  
-# - [Move the legend out of the way](http://matplotlib.org/users/legend_guide.html#legend-location)
+# ### 4. How many votes do we needed to be admitted to Hall Of Fame?
+# The votes needed to enter in the hall of fame is ever increasing. In another words, with the more people have interest in baseball, the player need more vote to enter into the hall of fame
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,10))
-plt.ylim(0, 275)
-sns.swarmplot(x="Stat", y="value", data=pkmn, hue="Type 1", split=True, size=7)
-plt.legend(bbox_to_anchor=(1, 1), loc=2, borderaxespad=0.);
+hall_of_fame[["yearid","needed"]].groupby("yearid").mean().fillna(0).plot.bar(figsize=(18,8),style = "o-",title="vote needed")
 
 
-# Alright! This is looking better!  
-# For our final touch, we'll change the background to white and create a custom color palette that corresponds to each Pokémon type.  
-# We'll use the Seaborn [color_palette](https://stanford.edu/~mwaskom/software/seaborn/generated/seaborn.color_palette.html) function and a [with](https://www.python.org/dev/peps/pep-0343/) statement to accomplish this.
+# ## Demographic Attribute
 
 # In[ ]:
 
 
-sns.set_style("whitegrid")
-with sns.color_palette([
-    "#8ED752", "#F95643", "#53AFFE", "#C3D221", "#BBBDAF",
-    "#AD5CA2", "#F8E64E", "#F0CA42", "#F9AEFE", "#A35449",
-    "#FB61B4", "#CDBD72", "#7673DA", "#66EBFF", "#8B76FF",
-    "#8E6856", "#C3C1D7", "#75A4F9"], n_colors=18, desat=.9):
-    plt.figure(figsize=(12,10))
-    plt.ylim(0, 275)
-    sns.swarmplot(x="Stat", y="value", data=pkmn, hue="Type 1", split=True, size=7)
-    plt.legend(bbox_to_anchor=(1, 1), loc=2, borderaxespad=0.);
+## read in player table
+player = pd.read_csv("../input/player.csv",parse_dates=["debut","final_game"])
+player["serviceYear"] = player["final_game"] - player["debut"]
+# player["serviceYear"] = player.serviceYear.astype('timedelta64[D]')
+
+## label the player whether they're enter into HOF
+player = player.join(hall_of_fame[hall_of_fame.inducted == "Y"][["player_id","inducted"]].set_index("player_id"),                     on="player_id")
+player.inducted.fillna("N",inplace=True)
+
+print(player.info())
+player.head()
 
 
-# Now things are looking pretty good!
+# ### 5. Which name do people call most ? 
+# #### Name WordCloud
+# First, let's take it easy. Have a look at the first name players' most used. We see *John*, *Bill*, *Mike*, *Jim*,etc.. Do you feel interesting? Perhaps in each job, there may be a popular name.
 
-# So that's the end of the tutorial for now, but feel free to keep going on your own.  
-# You can try using a smaller sample of Pokémon types, find a way to incorporate the Type 2 variable somehow, or make a different kind of plot entirely!  
-# If you find anything cool, let me know! I'd love to see what everyone else comes up with!  
-# Thanks again for reading!
+# In[ ]:
+
+
+wordcloud=WordCloud().generate_from_frequencies(player.name_first.value_counts().to_dict())
+plt.figure(figsize=(10,8))
+plt.imshow(wordcloud, interpolation="bilinear")
+plt.axis("off")
+plt.show()
+
+
+# ### 6.  Player data Description
+# We find something intersting. About **1010** people only appear once in league, there first appear is their last game. We also find a strange things, at **row 11509**, the player's service year is a minus. That's a little weird.  
+# Average people, the **mean** of the service year is about **4.5** year and the person's **longest service year** is **35**.
+
+# In[ ]:
+
+
+player.describe()
+
+
+# In[ ]:
+
+
+player[player["serviceYear"] < pd.Timedelta("1 days")].head()
+
+
+# ### 7. problem data finding 
+# When we do some data exploration, we always have some snoop.  
+# OK, you see we find some problem data.  
+# A player's finalGame time is earlier than the debut time, that's surprsing.
+
+# In[ ]:
+
+
+player[player["serviceYear"] < pd.Timedelta("0 days")]
+
+
+# ### 8. Who play the longest time ? 
+# #### Do you have some interesting in who play the longest time in the baseball career?
+# This one, Altrock Nicholas, serves about 30yrs, but he hasn't been admitted into the Hall Of Fame.
+
+# In[ ]:
+
+
+player.loc[player["serviceYear"].argmax()]
+
+
+# ### 9. Does there any relationship bewteen the year they play and be admitted into the Hall Of Fame?
+# We see that, the one enter into the hall of fame the youngest only just appear in one game, maybe there's some amazing reason behind it. We found that **1** people become the baseball hero used **less than 1 year**. Most of the player have their pass need average **17 years** fight. 
+
+# In[ ]:
+
+
+player[player.inducted == "Y"].serviceYear.astype('timedelta64[Y]').describe()
+
+
+# In[ ]:
+
+
+player[player.inducted == "Y"][player[player.inducted == "Y"].serviceYear.astype('timedelta64[Y]')<1]
+
+
+# In[ ]:
+
+
+sns.distplot(player.serviceYear.astype('timedelta64[Y]').dropna(),            kde_kws={"lw":3,"label":"Total People"})
+g = sns.distplot(player[player.inducted == "Y"].serviceYear.astype('timedelta64[Y]').dropna(),             kde_kws={"lw": 3, "label": "Hall Of Fame"})
+g.set_title("how many year takes player enter into the hall of fame ?")
+
+
+# ### 10. The Height and The Weight
+# From the fig, we can see that the **mean** of the height is about **70** inches and the **mean** of the weight is **186** pounds. They all follow pretty normal distribution.
+
+# In[ ]:
+
+
+fig,axes_w_h = plt.subplots(1,2,figsize=(18,6))
+sns.distplot(player["height"].dropna(),ax=axes_w_h[0],hist_kws={"label":"Player's height histplot"})
+axes_w_h[0].set_title("Player's height histplot")
+axes_w_h[0].legend()
+sns.distplot(player["weight"].dropna(),ax=axes_w_h[1],hist_kws={"label":"Player's weight histplot"})
+axes_w_h[1].set_title("Player's weight histplot")
+axes_w_h[1].legend()
+
+
+# We can really see some pattern here. The ones chosen for the hall of fame. Their height and weight are in the center of the players. Maybe that's much more close to public aesthetics. Maybe they are not the best player. That need further validate.
+
+# In[ ]:
+
+
+g = sns.FacetGrid(player, hue="inducted", size=7,aspect=1.5,palette=sns.color_palette(sns.color_palette("Paired")))
+g.map(plt.scatter, "height", "weight", s=50, edgecolor="white")
+plt.title("What's the player admitted into the hall of fame?")
+plt.legend()
+
+
+# # Batting 
+
+# In[ ]:
+
+
+batting = pd.read_csv("../input/batting.csv")
+print(batting.info())
+batting.head()
+
+
+# In[ ]:
+
+
+player_batting = batting.groupby("player_id").sum().iloc[:,2:].fillna(0)
+player_batting["ba"] = player_batting["h"].div(player_batting["ab"],fill_value=0)
+player_batting = player_batting.join(player[["player_id","inducted"]].set_index("player_id"))
+
+
+# ### 11. What about batting statics correlations?
+# From the pair plot, we can see some interesting pattern:
+# 1. the more **game** people play, the more **hit** they get.
+# 2. the more **game** people play, the more **double hit** they get.
+# 3. there's clearly positive relationship between **hit** and **double hit**.
+# 4. we don't clearly see relations in **triple hit** and **home run**.
+# 
+# Beautiful heatmap talks all.
+
+# In[ ]:
+
+
+g = sns.pairplot(player_batting,vars=["g","h","double","triple","hr"],hue="inducted")
+plt.title("batting statics pairplot")
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(14,10))
+g = sns.heatmap(player_batting.corr(),vmin=0,vmax=1,linewidths=.5,cmap="OrRd",annot=True)
+g.set_title("batting statistics correlation heatmap",fontdict={"fontsize":15})
+
+
+# ### 12. batting skill compare
+# From the boxplot, we can see almost all the statistics feature in batting, the player admitted in hall of fame is above than the ones not admitted. 
+
+# In[ ]:
+
+
+sns.factorplot(x="variable",y="value",hue="inducted",               data = pd.melt(player_batting[["ab","r","h","inducted"]],id_vars="inducted"),               kind="box",size=10,aspect=1.5,showfliers=False)
+plt.title("Compare boxplot 1")
+
+
+# In[ ]:
+
+
+sns.factorplot(x="variable",y="value",hue="inducted",data = pd.melt(player_batting.iloc[:,4:],id_vars="inducted")               ,kind="box",size=10,aspect=1.5,showfliers=False)
+plt.title("Compare boxplot 2")
+
+
+# ### batting average
+# **batting average** is an important score to evalue a player, we can see clear different between the player in Hall Of Fame and the ones are not
+
+# In[ ]:
+
+
+### batting average
+sns.distplot(player_batting.ba.dropna(),label= "Normal player")
+g = sns.distplot(player_batting[player_batting["inducted"] == "Y"].ba.dropna(),label= "Hall Of Fame")
+g.set_title("Batting Average distribution")
+plt.legend()
+
+
+# ## Salary  
+# 
+# ---  
+# From the input data, we see only less than 1/4 that the salary is not null to the player.
+
+# In[ ]:
+
+
+salary = pd.read_csv("../input/salary.csv")
+### join salary
+player = player.join(salary.groupby(["player_id"])[["player_id","salary"]].mean(),on="player_id")
+print(salary.info())
+salary.head()
+
+
+# In[ ]:
+
+
+salary.player_id.describe()
+
+
+# ### Salary time-series plot
+# We can see the salary boom with the time. The barplot show the relationship between the median salary of the year and the time. From the in increasing, this could mean two things:
+# - the bigger cake of the baseball game 
+# - inflation
+
+# In[ ]:
+
+
+g = salary.groupby(["year"]).salary.median().plot.bar(title="salary boom")
+g.set_ylabel("salary")
+
+
+# ### 14. Salary difference between the normal player and Hall Of Fame  
+# There's a clearly difference between the player admitted into the Hall Of Fame and the normal person.
+# However,there're really enough outliers in the one not in HOF. In other words, they have very high salary, but that's not enough to let them enter into the HOF. At last, we could conclude that having high salary will give the player higher possibility admitted into HOF.
+
+# In[ ]:
+
+
+player.salary.describe()
+
+
+# In[ ]:
+
+
+fig,axes_salary = plt.subplots(1,2,figsize=(20,8))
+sns.distplot(player[player["inducted"] == "N"].salary.dropna(),label= "Normal player",ax=axes_salary[0])
+sns.distplot(player[player["inducted"] == "Y"].salary.dropna(),label= "Hall Of Fame",ax=axes_salary[0])
+g = sns.boxplot(x="inducted",y="salary",data=player,ax=axes_salary[1])
+axes_salary[0].legend()
+
+
+
+# ## Awards
+# 
+# ---  
+# 
+# Only less than 1/10 player were awarded, let's check their relationship with the HOF.
+# 
+
+# In[ ]:
+
+
+### read in award data
+awards = pd.read_csv("../input/player_award.csv")
+### label player with inducted data
+awards = awards.join(player[["player_id","inducted"]].set_index("player_id"),on="player_id")
+award_count = awards.groupby("player_id").size()
+award_count.name = "award_count"
+### label the number of awards to payer table
+player = player.join(award_count,on="player_id")
+print(awards.info())
+awards.head()
+
+
+# In[ ]:
+
+
+awards.player_id.describe()
+
+
+# We see most people just be awarded **1-2** times, but there really one person is awarded for **47** times. That's really a legend.
+
+# In[ ]:
+
+
+awards[awards["player_id"] == "bondsba01"]
+
+
+# In[ ]:
+
+
+awards.groupby("player_id").size().describe()
+
+
+# In[ ]:
+
+
+player.award_count.plot.hist()
+
+
+# ### 15. Which Award is really the pass to HOF?
+# The following fig shows that *Triple Crown* and *TSN Guild MVP* are really big passes to HOF. *Baseball Magazine All-Star* takes the most part of award and is also a good pass to HOF. There're also some irrelvent awarded such as *Golden Glove*, *Silver Slugger*. Awarded these prizes are not passes to HOF.
+
+# In[ ]:
+
+
+awarded = awards.groupby(["award_id","inducted"]).size().unstack()
+awarded = awarded.fillna(0)
+awarded["delta"] = awarded["Y"] - awarded["N"]
+awarded["ratio"] = awarded["Y"]/awarded["N"]
+
+fig,axes_award = plt.subplots(2,1,figsize=(14,20))
+awarded.sort_values(by="delta",ascending=True)[["N","Y"]].plot(kind="barh",ax=axes_award[0]                                                               ,title="Pass of Awarded into HOF")
+awarded.ratio.sort_values().plot.barh(ax=axes_award[1],title = "Admited into HOF ratio compare")
+
+
+# ### 16. Have more awarded is a good signal to be admited into HOF?
+# The logic seems to be true that have more awarded maybe a good signal to be admitted into HOF. The boxplot shows that: player in HOF really have more awards than the players haven't. But there always be some exception, for example, the one have 47 awarded.
+
+# In[ ]:
+
+
+sns.boxplot(x="inducted",y="award_count",data=player)
+
+
+# # Conclusion and Future Work
+# 
+# ---
+# 
+# ## Conclusion
+# Finally, we come to our journey end, there still have a lot of things to mining, but i will stop here.  
+# 1. First we must learn what happening in Hall Of Fame, so we take an exploration in it. We found if we voted by somebody like **Veterans**, we will have a higher oppotunity to the HOF. Some year we really have a high rate of being admitted into HOF, the time is also a very important factor to HOF.
+# 2. We have a explortion in player's biographic data and we found to be a member HOF really all have around 10 years experience and their body infomation shouldn't not be an outlier, to cater our fans passion.  
+# 3. To be a HOF, we see the member of HOF have excellent skills to outperform other normal players. In the battlefield, skill talks.  
+# 4. A member of HOF may not take the highest salary, however, because they should have magic sleeves, their salary are surely above most people. But high salary does not qualify them to HOF.
+# 5. The one in the HOF may not have a lot awrards, but some award such as **Triple Crown** almost all admitted into HOF. In our imagnation, player hits many triple hit or homerun is truly a legend.  
+# 
+# ## Drawback declartion  
+# There should be some mistakes in this project such as:  
+# 1. dealing with the missing values, when there's NAN, i always use 0 to fill it.
+# 2. The variables could have correlation, so not all the conclusion are causation inference but correlation.  
+# 
+# ## Future Work 
+# Truly, the dataset is very huge, there're still a lot info we can mining, for example:  
+# 1. player's performance is a huge goldmine.  
+# 2. their team performance  
+# 
+# I will stop here. Thank for the people reading my work.
+# 

@@ -1,278 +1,167 @@
 
 # coding: utf-8
 
+# ## This notebook demos Python data visualizations on the Iris dataset
+# 
+# This Python 3 environment comes with many helpful analytics libraries installed. It is defined by the [kaggle/python docker image](https://github.com/kaggle/docker-python)
+# 
+# We'll use three libraries for this tutorial: [pandas](http://pandas.pydata.org/), [matplotlib](http://matplotlib.org/), and [seaborn](http://stanford.edu/~mwaskom/software/seaborn/).
+# 
+# Press "Fork" at the top-right of this screen to run this notebook yourself and build each of the examples.
+
 # In[1]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+# First, we'll import pandas, a data processing and CSV file I/O library
+import pandas as pd
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+# We'll also import seaborn, a Python graphing library
+import warnings # current version of seaborn generates a bunch of warnings that we'll ignore
+warnings.filterwarnings("ignore")
+import seaborn as sns
+import matplotlib.pyplot as plt
+sns.set(style="white", color_codes=True)
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+# Next, we'll load the Iris flower dataset, which is in the "../input/" directory
+iris = pd.read_csv("../input/Iris.csv") # the iris dataset is now a Pandas DataFrame
 
-import os
-from keras.layers import Dense,Input,LSTM,Bidirectional,Activation,Conv1D,GRU
-from keras.callbacks import Callback
-from keras.layers import Dropout,Embedding,GlobalMaxPooling1D, MaxPooling1D, Add, Flatten
-from keras.preprocessing import text, sequence
-from keras.layers import GlobalAveragePooling1D, GlobalMaxPooling1D, concatenate, SpatialDropout1D
-from keras import initializers, regularizers, constraints, optimizers, layers, callbacks
-from keras.callbacks import EarlyStopping,ModelCheckpoint
-from keras.models import Model
-from keras.optimizers import Adam
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
-from sklearn.metrics import roc_auc_score
-print(os.listdir("../input"))
+# Let's see what's in the iris data - Jupyter notebooks print the result of the last thing you do
+iris.head()
 
-# Any results you write to the current directory are saved as output.
+# Press shift+enter to execute this cell
 
 
 # In[2]:
 
 
-EMBEDDING_FILE = '../input/glove840b300dtxt/glove.840B.300d.txt'
-#train = pd.read_csv('../input/cleaned-toxic-comments/train_preprocessed.csv')
-train= pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
-#test = pd.read_csv('../input/cleaned-toxic-comments/test_preprocessed.csv')
-test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
+# Let's see how many examples we have of each species
+iris["Species"].value_counts()
 
 
 # In[3]:
 
 
-train["comment_text"].fillna("fillna")
-test["comment_text"].fillna("fillna")
-X_train = train["comment_text"].str.lower()
-y_train = train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]].values
-
-X_test = test["comment_text"].str.lower()
+# The first way we can plot things is using the .plot extension from Pandas dataframes
+# We'll use this to make a scatterplot of the Iris features.
+iris.plot(kind="scatter", x="SepalLengthCm", y="SepalWidthCm")
 
 
 # In[4]:
 
 
-max_features=100000
-maxlen=200
-embed_size=300
+# We can also use the seaborn library to make a similar plot
+# A seaborn jointplot shows bivariate scatterplots and univariate histograms in the same figure
+sns.jointplot(x="SepalLengthCm", y="SepalWidthCm", data=iris, size=5)
 
 
 # In[5]:
 
 
-class RocAucEvaluation(Callback):
-    def __init__(self, validation_data=(), interval=1):
-        super(Callback, self).__init__()
+# One piece of information missing in the plots above is what species each plant is
+# We'll use seaborn's FacetGrid to color the scatterplot by species
+sns.FacetGrid(iris, hue="Species", size=5)    .map(plt.scatter, "SepalLengthCm", "SepalWidthCm")    .add_legend()
 
-        self.interval = interval
-        self.X_val, self.y_val = validation_data
 
-    def on_epoch_end(self, epoch, logs={}):
-        if epoch % self.interval == 0:
-            y_pred = self.model.predict(self.X_val, verbose=0)
-            score = roc_auc_score(self.y_val, y_pred)
-            print("\n ROC-AUC - epoch: {:d} - score: {:.6f}".format(epoch+1, score))
+# In[6]:
+
+
+# We can look at an individual feature in Seaborn through a boxplot
+sns.boxplot(x="Species", y="PetalLengthCm", data=iris)
 
 
 # In[7]:
 
 
-tok=text.Tokenizer(num_words=max_features,lower=True)
-tok.fit_on_texts(list(X_train)+list(X_test))
-X_train=tok.texts_to_sequences(X_train)
-X_test=tok.texts_to_sequences(X_test)
-x_train=sequence.pad_sequences(X_train,maxlen=maxlen)
-x_test=sequence.pad_sequences(X_test,maxlen=maxlen)
+# One way we can extend this plot is adding a layer of individual points on top of
+# it through Seaborn's striplot
+# 
+# We'll use jitter=True so that all the points don't fall in single vertical lines
+# above the species
+#
+# Saving the resulting axes as ax each time causes the resulting plot to be shown
+# on top of the previous axes
+ax = sns.boxplot(x="Species", y="PetalLengthCm", data=iris)
+ax = sns.stripplot(x="Species", y="PetalLengthCm", data=iris, jitter=True, edgecolor="gray")
 
 
-# In[ ]:
+# In[8]:
 
 
-embeddings_index = {}
-with open(EMBEDDING_FILE,encoding='utf8') as f:
-    for line in f:
-        values = line.rstrip().rsplit(' ')
-        word = values[0]
-        coefs = np.asarray(values[1:], dtype='float32')
-        embeddings_index[word] = coefs
+# A violin plot combines the benefits of the previous two plots and simplifies them
+# Denser regions of the data are fatter, and sparser thiner in a violin plot
+sns.violinplot(x="Species", y="PetalLengthCm", data=iris, size=6)
 
 
-# In[ ]:
+# In[9]:
 
 
-word_index = tok.word_index
-#prepare embedding matrix
-num_words = min(max_features, len(word_index) + 1)
-embedding_matrix = np.zeros((num_words, embed_size))
-for word, i in word_index.items():
-    if i >= max_features:
-        continue
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None:
-        # words not found in embedding index will be all-zeros.
-        embedding_matrix[i] = embedding_vector
+# A final seaborn plot useful for looking at univariate relations is the kdeplot,
+# which creates and visualizes a kernel density estimate of the underlying feature
+sns.FacetGrid(iris, hue="Species", size=6)    .map(sns.kdeplot, "PetalLengthCm")    .add_legend()
 
 
-# In[ ]:
+# In[10]:
 
 
-from keras.layers import K, Activation
-from keras.engine import Layer
-from keras.layers import Dense, Input, Embedding, Dropout, Bidirectional, GRU, Flatten, SpatialDropout1D
-gru_len = 128
-Routings = 5
-Num_capsule = 10
-Dim_capsule = 16
-dropout_p = 0.25
-rate_drop_dense = 0.28
-
-def squash(x, axis=-1):
-    # s_squared_norm is really small
-    # s_squared_norm = K.sum(K.square(x), axis, keepdims=True) + K.epsilon()
-    # scale = K.sqrt(s_squared_norm)/ (0.5 + s_squared_norm)
-    # return scale * x
-    s_squared_norm = K.sum(K.square(x), axis, keepdims=True)
-    scale = K.sqrt(s_squared_norm + K.epsilon())
-    return x / scale
+# Another useful seaborn plot is the pairplot, which shows the bivariate relation
+# between each pair of features
+# 
+# From the pairplot, we'll see that the Iris-setosa species is separataed from the other
+# two across all feature combinations
+sns.pairplot(iris.drop("Id", axis=1), hue="Species", size=3)
 
 
-# A Capsule Implement with Pure Keras
-class Capsule(Layer):
-    def __init__(self, num_capsule, dim_capsule, routings=3, kernel_size=(9, 1), share_weights=True,
-                 activation='default', **kwargs):
-        super(Capsule, self).__init__(**kwargs)
-        self.num_capsule = num_capsule
-        self.dim_capsule = dim_capsule
-        self.routings = routings
-        self.kernel_size = kernel_size
-        self.share_weights = share_weights
-        if activation == 'default':
-            self.activation = squash
-        else:
-            self.activation = Activation(activation)
-
-    def build(self, input_shape):
-        super(Capsule, self).build(input_shape)
-        input_dim_capsule = input_shape[-1]
-        if self.share_weights:
-            self.W = self.add_weight(name='capsule_kernel',
-                                     shape=(1, input_dim_capsule,
-                                            self.num_capsule * self.dim_capsule),
-                                     # shape=self.kernel_size,
-                                     initializer='glorot_uniform',
-                                     trainable=True)
-        else:
-            input_num_capsule = input_shape[-2]
-            self.W = self.add_weight(name='capsule_kernel',
-                                     shape=(input_num_capsule,
-                                            input_dim_capsule,
-                                            self.num_capsule * self.dim_capsule),
-                                     initializer='glorot_uniform',
-                                     trainable=True)
-
-    def call(self, u_vecs):
-        if self.share_weights:
-            u_hat_vecs = K.conv1d(u_vecs, self.W)
-        else:
-            u_hat_vecs = K.local_conv1d(u_vecs, self.W, [1], [1])
-
-        batch_size = K.shape(u_vecs)[0]
-        input_num_capsule = K.shape(u_vecs)[1]
-        u_hat_vecs = K.reshape(u_hat_vecs, (batch_size, input_num_capsule,
-                                            self.num_capsule, self.dim_capsule))
-        u_hat_vecs = K.permute_dimensions(u_hat_vecs, (0, 2, 1, 3))
-        # final u_hat_vecs.shape = [None, num_capsule, input_num_capsule, dim_capsule]
-
-        b = K.zeros_like(u_hat_vecs[:, :, :, 0])  # shape = [None, num_capsule, input_num_capsule]
-        for i in range(self.routings):
-            b = K.permute_dimensions(b, (0, 2, 1))  # shape = [None, input_num_capsule, num_capsule]
-            c = K.softmax(b)
-            c = K.permute_dimensions(c, (0, 2, 1))
-            b = K.permute_dimensions(b, (0, 2, 1))
-            outputs = self.activation(K.batch_dot(c, u_hat_vecs, [2, 2]))
-            if i < self.routings - 1:
-                b = K.batch_dot(outputs, u_hat_vecs, [2, 3])
-
-        return outputs
-
-    def compute_output_shape(self, input_shape):
-        return (None, self.num_capsule, self.dim_capsule)
+# In[11]:
 
 
-def get_model():
-    input1 = Input(shape=(maxlen,))
-    embed_layer = Embedding(max_features,
-                            embed_size,
-                            input_length=maxlen,
-                            weights=[embedding_matrix],
-                            trainable=False)(input1)
-    embed_layer = SpatialDropout1D(rate_drop_dense)(embed_layer)
-
-    x = Bidirectional(
-        GRU(gru_len, activation='relu', dropout=dropout_p, recurrent_dropout=dropout_p, return_sequences=True))(
-        embed_layer)
-    capsule = Capsule(num_capsule=Num_capsule, dim_capsule=Dim_capsule, routings=Routings,
-                      share_weights=True)(x)
-    # output_capsule = Lambda(lambda x: K.sqrt(K.sum(K.square(x), 2)))(capsule)
-    capsule = Flatten()(capsule)
-    capsule = Dropout(dropout_p)(capsule)
-    output = Dense(6, activation='sigmoid')(capsule)
-    model = Model(inputs=input1, outputs=output)
-    model.compile(
-        loss='binary_crossentropy',
-        optimizer='adam',
-        metrics=['accuracy'])
-    model.summary()
-    return model
+# The diagonal elements in a pairplot show the histogram by default
+# We can update these elements to show other things, such as a kde
+sns.pairplot(iris.drop("Id", axis=1), hue="Species", size=3, diag_kind="kde")
 
 
-# In[ ]:
+# In[12]:
 
 
-model = get_model()
-
-batch_size = 256
-epochs = 3
-X_tra, X_val, y_tra, y_val = train_test_split(x_train, y_train, train_size=0.95, random_state=233)
-RocAuc = RocAucEvaluation(validation_data=(X_val, y_val), interval=1)
+# Now that we've covered seaborn, let's go back to some of the ones we can make with Pandas
+# We can quickly make a boxplot with Pandas on each feature split out by species
+iris.drop("Id", axis=1).boxplot(by="Species", figsize=(12, 6))
 
 
-# In[ ]:
+# In[13]:
 
 
-hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=1, validation_data=(X_val, y_val),
-                 callbacks=[RocAuc], verbose=1)
+# One cool more sophisticated technique pandas has available is called Andrews Curves
+# Andrews Curves involve using attributes of samples as coefficients for Fourier series
+# and then plotting these
+from pandas.tools.plotting import andrews_curves
+andrews_curves(iris.drop("Id", axis=1), "Species")
 
 
-# In[ ]:
+# In[14]:
 
 
-hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=1, validation_data=(X_val, y_val),
-                 callbacks=[RocAuc], verbose=1)
+# Another multivariate visualization technique pandas has is parallel_coordinates
+# Parallel coordinates plots each feature on a separate column & then draws lines
+# connecting the features for each data sample
+from pandas.tools.plotting import parallel_coordinates
+parallel_coordinates(iris.drop("Id", axis=1), "Species")
 
 
-# In[ ]:
+# In[15]:
 
 
-hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=1, validation_data=(X_val, y_val),
-                 callbacks=[RocAuc], verbose=1)
+# A final multivariate visualization technique pandas has is radviz
+# Which puts each feature as a point on a 2D plane, and then simulates
+# having each sample attached to those points through a spring weighted
+# by the relative value for that feature
+from pandas.tools.plotting import radviz
+radviz(iris.drop("Id", axis=1), "Species")
 
 
-# In[ ]:
-
-
-y_pred = model.predict(x_test, batch_size=1024, verbose=1)
-
-
-# In[ ]:
-
-
-submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
-submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_pred
-submission.to_csv('submission.csv', index=False)
-model.save_weights('best.hdf5')
-
+# # Wrapping Up
+# 
+# I hope you enjoyed this quick introduction to some of the quick, simple data visualizations you can create with pandas, seaborn, and matplotlib in Python!
+# 
+# I encourage you to run through these examples yourself, tweaking them and seeing what happens. From there, you can try applying these methods to a new dataset and incorprating them into your own workflow!
+# 
+# See [Kaggle Datasets](https://www.kaggle.com/datasets) for other datasets to try visualizing. The [World Food Facts data](https://www.kaggle.com/openfoodfacts/world-food-facts) is an especially rich one for visualization.

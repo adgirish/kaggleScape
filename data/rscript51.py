@@ -1,174 +1,186 @@
-# good day, my friends
-# in this kernel we try to continue development of our DL models
-# thanks for people who share their works. i hope together we can create smth interest
-
-# https://www.kaggle.com/baomengjiao/embedding-with-neural-network
-# https://www.kaggle.com/gpradk/keras-starter-nn-with-embeddings
-# https://www.kaggle.com/pranav84/lightgbm-fixing-unbalanced-data-auc-0-9787
-# https://www.kaggle.com/rteja1113/lightgbm-with-count-features
-# https://www.kaggle.com/knowledgegrappler/a-simple-nn-solution-with-keras-0-48611-pl
-# https://www.kaggle.com/isaienkov/rnn-with-keras-ridge-sgdr-0-43553
-# https://www.kaggle.com/valkling/mercari-rnn-2ridge-models-with-notes-0-42755/versions#base=2202774&new=2519287
-
-
-#======================================================================================
-# we continue our work started in previos kernel "Deep learning support.."
-# + we will try to find a ways which can help us increase specialisation of neural network on our task
-# + we will try to work with different architect decisions for neural networks
-# if you need a details about what we try to create follow the comments
-
-print ('Good luck')
-
+"""
+This is an upgraded version of Ceshine's LGBM starter script, simply adding more
+average features and weekly average features on it.
+"""
+from datetime import date, timedelta
+import calendar as ca
 import pandas as pd
 import numpy as np
-import warnings
-warnings.filterwarnings('ignore')
-import os
-os.environ['OMP_NUM_THREADS'] = '4'
-import gc
+from sklearn.metrics import mean_squared_error
+import lightgbm as lgb
+print('Loading Data')
+df_train = pd.read_csv(
+    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
+    dtype={'onpromotion': bool},
+    converters={'unit_sales': lambda u: np.log1p(
+        float(u)) if float(u) > 0 else 0},
+    parse_dates=["date"],
+    skiprows=range(1, 66458909)  # 2016-01-01
+)
+item_nbr_u = df_train[df_train.date>pd.datetime(2017,8,10)].item_nbr.unique()
 
-path = '../input/'
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        'click_id'      : 'uint32'
-        }
-print('load train....')
-# we save only day 9
-train_df = pd.read_csv(path+"train.csv", dtype=dtypes, skiprows = range(1, 131886954), usecols=['ip','app','device','os', 'channel', 'click_time', 'is_attributed'])
-print('load test....')
-test_df = pd.read_csv(path+"test.csv", dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'click_id'])
-len_train = len(train_df)
-train_df=train_df.append(test_df)
-del test_df; gc.collect()
+df_test = pd.read_csv(
+    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
+    dtype={'onpromotion': bool},
+    parse_dates=["date"]  # , date_parser=parser
+).set_index(
+    ['store_nbr', 'item_nbr', 'date']
+)
 
-print('hour, day, wday....')
-train_df['hour'] = pd.to_datetime(train_df.click_time).dt.hour.astype('uint8')
-train_df['day'] = pd.to_datetime(train_df.click_time).dt.day.astype('uint8')
-train_df['wday']  = pd.to_datetime(train_df.click_time).dt.dayofweek.astype('uint8')
-print('grouping by ip-day-hour combination....')
-gp = train_df[['ip','day','hour','channel']].groupby(by=['ip','day','hour'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'qty'})
-train_df = train_df.merge(gp, on=['ip','day','hour'], how='left')
-del gp; gc.collect()
-print('group by ip-app combination....')
-gp = train_df[['ip','app', 'channel']].groupby(by=['ip', 'app'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_app_count'})
-train_df = train_df.merge(gp, on=['ip','app'], how='left')
-del gp; gc.collect()
-print('group by ip-app-os combination....')
-gp = train_df[['ip','app', 'os', 'channel']].groupby(by=['ip', 'app', 'os'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_app_os_count'})
-train_df = train_df.merge(gp, on=['ip','app', 'os'], how='left')
-del gp; gc.collect()
-print("vars and data type....")
-train_df['qty'] = train_df['qty'].astype('uint16')
-train_df['ip_app_count'] = train_df['ip_app_count'].astype('uint16')
-train_df['ip_app_os_count'] = train_df['ip_app_os_count'].astype('uint16')
-print("label encoding....")
-from sklearn.preprocessing import LabelEncoder
-train_df[['app','device','os', 'channel', 'hour', 'day', 'wday']].apply(LabelEncoder().fit_transform)
-print ('final part of preparation....')
-test_df = train_df[len_train:]
-train_df = train_df[:len_train]
-y_train = train_df['is_attributed'].values
-train_df.drop(['click_id', 'click_time','ip','is_attributed'],1,inplace=True)
+items = pd.read_csv(
+    "../input/items.csv",
+).set_index("item_nbr")
 
-print ('neural network....')
-from keras.layers import Input, Embedding, Dense, Flatten, Dropout, concatenate
-from keras.layers import BatchNormalization, SpatialDropout1D, Conv1D
-from keras.callbacks import Callback
-from keras.models import Model
-from keras.optimizers import Adam
+df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
+del df_train
 
-max_app = np.max([train_df['app'].max(), test_df['app'].max()])+1
-max_ch = np.max([train_df['channel'].max(), test_df['channel'].max()])+1
-max_dev = np.max([train_df['device'].max(), test_df['device'].max()])+1
-max_os = np.max([train_df['os'].max(), test_df['os'].max()])+1
-max_h = np.max([train_df['hour'].max(), test_df['hour'].max()])+1
-max_d = np.max([train_df['day'].max(), test_df['day'].max()])+1
-max_wd = np.max([train_df['wday'].max(), test_df['wday'].max()])+1
-max_qty = np.max([train_df['qty'].max(), test_df['qty'].max()])+1
-max_c1 = np.max([train_df['ip_app_count'].max(), test_df['ip_app_count'].max()])+1
-max_c2 = np.max([train_df['ip_app_os_count'].max(), test_df['ip_app_os_count'].max()])+1
-def get_keras_data(dataset):
-    X = {
-        'app': np.array(dataset.app),
-        'ch': np.array(dataset.channel),
-        'dev': np.array(dataset.device),
-        'os': np.array(dataset.os),
-        'h': np.array(dataset.hour),
-        'd': np.array(dataset.day),
-        'wd': np.array(dataset.wday),
-        'qty': np.array(dataset.qty),
-        'c1': np.array(dataset.ip_app_count),
-        'c2': np.array(dataset.ip_app_os_count)
-    }
+
+
+promo_2017_train = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
+        level=-1).fillna(False)
+promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
+promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
+promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
+promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
+promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
+del promo_2017_test, promo_2017_train
+
+df_2017 = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
+        level=-1).fillna(0)
+df_2017.columns = df_2017.columns.get_level_values(1)
+
+    
+items = items.reindex(df_2017.index.get_level_values(1))
+
+def get_timespan(df, dt, minus, periods, freq='D'):
+    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
+
+def get_nearwd(date,b_date):
+    date_list = pd.date_range(date-timedelta(140),periods=21,freq='7D').date
+    result = date_list[date_list<=b_date][-1]
+    return result
+def prepare_dataset(t2017, is_train=True):
+    X = pd.DataFrame({
+        "promo_14_2017": get_timespan(promo_2017, t2017, 14, 14).sum(axis=1).values,
+        "promo_60_2017": get_timespan(promo_2017, t2017, 60, 60).sum(axis=1).values,
+        "promo_140_2017": get_timespan(promo_2017, t2017, 140, 140).sum(axis=1).values,
+        "unpromo_16aftsum_2017":(1-get_timespan(promo_2017, t2017+timedelta(16), 16, 16)).iloc[:,1:].sum(axis=1).values, 
+    })
+
+    for i in range(16):
+        X["promo_{}".format(i)] = promo_2017[
+            t2017 + timedelta(days=i)].values.astype(np.uint8)
+        for j in [14,60,140]:
+            X["aft_promo_{}{}".format(i,j)] = (promo_2017[
+                t2017 + timedelta(days=i)]-1).values.astype(np.uint8)
+            X["aft_promo_{}{}".format(i,j)] = X["aft_promo_{}{}".format(i,j)]\
+                                        *X['promo_{}_2017'.format(j)]
+        if i ==15:
+            X["bf_unpromo_{}".format(i)]=0
+        else:
+            X["bf_unpromo_{}".format(i)] = (1-get_timespan(
+                    promo_2017, t2017+timedelta(16), 16-i, 16-i)).iloc[:,1:].sum(
+                            axis=1).values / (15-i) * X['promo_{}'.format(i)]
+
+    for i in range(7):
+        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 28-i, 4, freq='7D').mean(axis=1).values
+        #X['mean_12_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 84-i, 12, freq='7D').mean(axis=1).values
+        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 140-i, 20, freq='7D').mean(axis=1).values        
+        
+        date = get_nearwd(t2017+timedelta(i),t2017)
+        ahead = (t2017-date).days
+        if ahead!=0:
+            X['ahead0_{}'.format(i)] = get_timespan(df_2017, date+timedelta(ahead), ahead, ahead).mean(axis=1).values
+            X['ahead7_{}'.format(i)] = get_timespan(df_2017, date+timedelta(ahead), ahead+7, ahead+7).mean(axis=1).values
+        X["day_1_2017_{}1".format(i)]= get_timespan(df_2017, date, 1, 1).values.ravel()
+        X["day_1_2017_{}2".format(i)]= get_timespan(df_2017, date-timedelta(7), 1, 1).values.ravel()
+        for m in [3,7,14,30,60,140]:
+            X["mean_{}_2017_{}1".format(m,i)]= get_timespan(df_2017, date,m, m).\
+                mean(axis=1).values
+            X["mean_{}_2017_{}2".format(m,i)]= get_timespan(df_2017, date-timedelta(7),m, m).\
+                mean(axis=1).values
+    if is_train:
+        y = df_2017[
+            pd.date_range(t2017, periods=16)
+        ].values
+        return X, y
     return X
-train_df = get_keras_data(train_df)
 
-emb_n = 50
-dense_n = 1000
-in_app = Input(shape=[1], name = 'app')
-emb_app = Embedding(max_app, emb_n)(in_app)
-in_ch = Input(shape=[1], name = 'ch')
-emb_ch = Embedding(max_ch, emb_n)(in_ch)
-in_dev = Input(shape=[1], name = 'dev')
-emb_dev = Embedding(max_dev, emb_n)(in_dev)
-in_os = Input(shape=[1], name = 'os')
-emb_os = Embedding(max_os, emb_n)(in_os)
-in_h = Input(shape=[1], name = 'h')
-emb_h = Embedding(max_h, emb_n)(in_h) 
-in_d = Input(shape=[1], name = 'd')
-emb_d = Embedding(max_d, emb_n)(in_d) 
-in_wd = Input(shape=[1], name = 'wd')
-emb_wd = Embedding(max_wd, emb_n)(in_wd) 
-in_qty = Input(shape=[1], name = 'qty')
-emb_qty = Embedding(max_qty, emb_n)(in_qty) 
-in_c1 = Input(shape=[1], name = 'c1')
-emb_c1 = Embedding(max_c1, emb_n)(in_c1) 
-in_c2 = Input(shape=[1], name = 'c2')
-emb_c2 = Embedding(max_c2, emb_n)(in_c2) 
-fe = concatenate([(emb_app), (emb_ch), (emb_dev), (emb_os), (emb_h), 
-                 (emb_d), (emb_wd), (emb_qty), (emb_c1), (emb_c2)])
-s_dout = SpatialDropout1D(0.2)(fe)
-fl1 = Flatten()(s_dout)
-conv = Conv1D(100, kernel_size=4, strides=1, padding='same')(s_dout)
-fl2 = Flatten()(conv)
-concat = concatenate([(fl1), (fl2)])
-x = Dropout(0.2)(Dense(dense_n,activation='relu')(concat))
-x = Dropout(0.2)(Dense(dense_n,activation='relu')(x))
-outp = Dense(1,activation='sigmoid')(x)
-model = Model(inputs=[in_app,in_ch,in_dev,in_os,in_h,in_d,in_wd,in_qty,in_c1,in_c2], outputs=outp)
+print("Preparing dataset...")
 
-batch_size = 50000
-epochs = 2
-exp_decay = lambda init, fin, steps: (init/fin)**(1/(steps-1)) - 1
-steps = int(len(list(train_df)[0]) / batch_size) * epochs
-lr_init, lr_fin = 0.002, 0.0002
-lr_decay = exp_decay(lr_init, lr_fin, steps)
-optimizer_adam = Adam(lr=0.002, decay=lr_decay)
-model.compile(loss='binary_crossentropy',optimizer=optimizer_adam,metrics=['accuracy'])
+t2017 = date(2017, 7, 5)
+X_l, y_l = [], []
+for i in range(4):
+    delta = timedelta(days=7 * i)
+    X_tmp, y_tmp = prepare_dataset(
+        t2017 + delta
+    )
+    X_l.append(X_tmp)
+    y_l.append(y_tmp)
+X_train = pd.concat(X_l, axis=0)
+y_train = np.concatenate(y_l, axis=0)
+del X_l, y_l
+X_val, y_val = prepare_dataset(date(2017, 7, 26))
+X_test = prepare_dataset(date(2017, 8, 16), is_train=False)
 
-model.summary()
+print("Training and predicting models...")
+params = {
+    'num_leaves': 31,
+    'objective': 'regression',
+    'min_data_in_leaf': 200,
+    'learning_rate': 0.07,
+    'feature_fraction': 0.8,
+    'bagging_fraction': 0.85,
+    'bagging_freq': 3,
+    'metric': 'l2_root',
+    'num_threads': 4
+}
 
-class_weight = {0:.01,1:.99} # magic
-model.fit(train_df, y_train, batch_size=batch_size, epochs=2, class_weight=class_weight, shuffle=True, verbose=2)
-del train_df, y_train; gc.collect()
-model.save_weights('imbalanced_data.h5')
+MAX_ROUNDS = 400
+val_pred = []
+test_pred = []
+cate_vars = []
+for i in range(16):
+    print("=" * 50)
+    print("Step %d" % (i+1))
+    print("=" * 50)
+    dtrain = lgb.Dataset(
+        X_train, label=y_train[:, i],
+        categorical_feature=cate_vars,
+        weight=pd.concat([items["perishable"]] * 4) * 0.25 + 1
+    )
+    dval = lgb.Dataset(
+        X_val, label=y_val[:, i], reference=dtrain,
+        weight=items["perishable"] * 0.25 + 1,
+        categorical_feature=cate_vars)
+    bst = lgb.train(
+        params, dtrain, num_boost_round=MAX_ROUNDS,
+        valid_sets=[dtrain, dval], early_stopping_rounds=50, verbose_eval=100
+    )
+    print("\n".join(("%s: %.2f" % x) for x in sorted(
+        zip(X_train.columns, bst.feature_importance("gain")),
+        key=lambda x: x[1], reverse=True
+    )))
+    val_pred.append(bst.predict(
+        X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
+    test_pred.append(bst.predict(
+        X_test, num_iteration=bst.best_iteration or MAX_ROUNDS))
 
-sub = pd.DataFrame()
-sub['click_id'] = test_df['click_id'].astype('int')
-test_df.drop(['click_id', 'click_time','ip','is_attributed'],1,inplace=True)
-test_df = get_keras_data(test_df)
+print("Validation mse:", mean_squared_error(
+    y_val, np.array(val_pred).transpose())**0.5)
 
-print("predicting....")
-sub['is_attributed'] = model.predict(test_df, batch_size=batch_size, verbose=2)
-del test_df; gc.collect()
-print("writing....")
-sub.to_csv('imbalanced_data.csv',index=False)
+print("Making submission...")
+y_test = np.array(test_pred).transpose()
+df_preds = pd.DataFrame(
+    y_test, index=df_2017.index,
+    columns=pd.date_range("2017-08-16", periods=16)
+).stack().to_frame("unit_sales")
+df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
 
-
-# write now i don't use validation set
-# since the data is imbalanced i can't understand how we can separate data the right way
+submission = df_test[["id"]].join(df_preds, how="left").fillna(0).reset_index()
+submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 10000)
+submission.loc[~submission.item_nbr.isin(item_nbr_u),'unit_sales']=0
+del item_nbr_u
+submission[['id','unit_sales']].to_csv('lgb.csv', float_format='%.4f', index=None)

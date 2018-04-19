@@ -1,77 +1,88 @@
-# -*- coding: utf-8 -*-
+"""
+Ridge Regression on TfIDF of text features and One-Hot-Encoded Categoricals
+"""
+
 import pandas as pd
-from datetime import timedelta
+import numpy as np
+import scipy
 
-dtypes = {'id':'uint32', 'item_nbr':'int32', 'store_nbr':'int8', 'unit_sales':'float32'}
+from sklearn.linear_model import Ridge, LogisticRegression
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.preprocessing import LabelBinarizer
 
-train = pd.read_csv('../input/train.csv', usecols=[1,2,3,4], dtype=dtypes, parse_dates=['date'],
-                    skiprows=range(1, 86672217) #Skip dates before 2016-08-01
-                    )
+import gc
 
-train.loc[(train.unit_sales<0),'unit_sales'] = 0 # eliminate negatives
-train['unit_sales'] =  train['unit_sales'].apply(pd.np.log1p) #logarithm conversion
-train['dow'] = train['date'].dt.dayofweek
+NUM_BRANDS = 2500
+NAME_MIN_DF = 10
+MAX_FEAT_DESCP = 50000
 
-#Days of Week Means
-#By tarobxl: https://www.kaggle.com/c/favorita-grocery-sales-forecasting/discussion/42948
-ma_dw = train[['item_nbr','store_nbr','dow','unit_sales']].groupby(
-        ['item_nbr','store_nbr','dow'])['unit_sales'].mean().to_frame('madw').reset_index()
-ma_wk = ma_dw[['item_nbr','store_nbr','madw']].groupby(
-        ['store_nbr', 'item_nbr'])['madw'].mean().to_frame('mawk').reset_index()
+print("Reading in Data")
 
-train.drop('dow',1,inplace=True)
+df_train = pd.read_csv('../input/train.tsv', sep='\t')
+df_test = pd.read_csv('../input/test.tsv', sep='\t')
 
-# creating records for all items, in all markets on all dates
-# for correct calculation of daily unit sales averages.
-u_dates = train.date.unique()
-u_stores = train.store_nbr.unique()
-u_items = train.item_nbr.unique()
-train.set_index(['date', 'store_nbr', 'item_nbr'], inplace=True)
-train = train.reindex(
-    pd.MultiIndex.from_product(
-        (u_dates, u_stores, u_items),
-        names=['date','store_nbr','item_nbr']
-    )
-).reset_index()
+df = pd.concat([df_train, df_test], 0)
+nrow_train = df_train.shape[0]
+y_train = np.log1p(df_train["price"])
 
-del u_dates, u_stores, u_items
+del df_train
+gc.collect()
 
-train.loc[:, 'unit_sales'].fillna(0, inplace=True) # fill NaNs
-lastdate = train.iloc[train.shape[0]-1].date
+print(df.memory_usage(deep = True))
 
-#Moving Averages
-ma_is = train[['item_nbr','store_nbr','unit_sales']].groupby(
-        ['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais')
+df["category_name"] = df["category_name"].fillna("Other").astype("category")
+df["brand_name"] = df["brand_name"].fillna("unknown")
 
-for i in [112,56,28,14,7,3,1]:
-    tmp = train[train.date>lastdate-timedelta(int(i))]
-    tmpg = tmp.groupby(['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais'+str(i))
-    ma_is = ma_is.join(tmpg, how='left')
+pop_brands = df["brand_name"].value_counts().index[:NUM_BRANDS]
+df.loc[~df["brand_name"].isin(pop_brands), "brand_name"] = "Other"
 
-del tmp,tmpg,train
+df["item_description"] = df["item_description"].fillna("None")
+df["item_condition_id"] = df["item_condition_id"].astype("category")
+df["brand_name"] = df["brand_name"].astype("category")
 
-ma_is['mais']=ma_is.median(axis=1)
-ma_is.reset_index(inplace=True)
-ma_is.drop(list(ma_is.columns.values)[3:],1,inplace=True)
+print(df.memory_usage(deep = True))
 
-#Load test
-test = pd.read_csv('../input/test.csv', dtype=dtypes, parse_dates=['date'])
-test['dow'] = test['date'].dt.dayofweek
-test = pd.merge(test, ma_is, how='left', on=['item_nbr','store_nbr'])
-test = pd.merge(test, ma_wk, how='left', on=['item_nbr','store_nbr'])
-test = pd.merge(test, ma_dw, how='left', on=['item_nbr','store_nbr','dow'])
+print("Encodings")
+count = CountVectorizer(min_df=NAME_MIN_DF)
+X_name = count.fit_transform(df["name"])
 
-del ma_is, ma_wk, ma_dw
+print("Category Encoders")
+unique_categories = pd.Series("/".join(df["category_name"].unique().astype("str")).split("/")).unique()
+count_category = CountVectorizer()
+X_category = count_category.fit_transform(df["category_name"])
 
-#Forecasting Test
-test['unit_sales'] = test.mais 
-pos_idx = test['mawk'] > 0
-test_pos = test.loc[pos_idx]
-test.loc[pos_idx, 'unit_sales'] = test_pos['mais'] * test_pos['madw'] / test_pos['mawk']
-test.loc[:, "unit_sales"].fillna(0, inplace=True)
-test['unit_sales'] = test['unit_sales'].apply(pd.np.expm1) # restoring unit values 
+print("Descp encoders")
+count_descp = TfidfVectorizer(max_features = MAX_FEAT_DESCP, 
+                              ngram_range = (1,3),
+                              stop_words = "english")
+X_descp = count_descp.fit_transform(df["item_description"])
 
-#50% more for promotion items
-test.loc[test['onpromotion'] == True, 'unit_sales'] *= 1.5
+print("Brand encoders")
+vect_brand = LabelBinarizer(sparse_output=True)
+X_brand = vect_brand.fit_transform(df["brand_name"])
 
-test[['id','unit_sales']].to_csv('ma8dwof.csv.gz', index=False, float_format='%.3f', compression='gzip')
+print("Dummy Encoders")
+X_dummies = scipy.sparse.csr_matrix(pd.get_dummies(df[[
+    "item_condition_id", "shipping"]], sparse = True).values)
+
+X = scipy.sparse.hstack((X_dummies, 
+                         X_descp,
+                         X_brand,
+                         X_category,
+                         X_name)).tocsr()
+
+print([X_dummies.shape, X_category.shape, 
+       X_name.shape, X_descp.shape, X_brand.shape])
+
+X_train = X[:nrow_train]
+model = Ridge(solver = "lsqr", fit_intercept=False)
+
+print("Fitting Model")
+model.fit(X_train, y_train)
+
+X_test = X[nrow_train:]
+preds = model.predict(X_test)
+
+df_test["price"] = np.expm1(preds)
+df_test[["test_id", "price"]].to_csv("submission_ridge.csv", index = False)

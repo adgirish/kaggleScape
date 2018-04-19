@@ -1,12 +1,34 @@
 
 # coding: utf-8
 
-# # Intro
-# Hello! This rather quick and dirty kernel shows how to get started on segmenting nuclei using a neural network in Keras. 
+# # What ?
+# Another implementation for IoU metric used in this competition.
 # 
-# The architecture used is the so-called [U-Net](https://arxiv.org/abs/1505.04597), which is very common for image segmentation problems such as this. I believe they also have a tendency to work quite well even on small datasets.
+# # Why ?
+# I've based my work on these great notebooks [Keras U-Net starter - LB 0.277](https://www.kaggle.com/keegil/keras-u-net-starter-lb-0-277) and [Example Metric Implementation](https://www.kaggle.com/wcukierski/example-metric-implementation). Event tought @keegil provides one implementation of the `mean_iou` metric, the value diverges from the example implementation from @wcukierski. So I start to work on a Keras compatible implementation for the @wcukierski metric.
 # 
-# Let's get started importing everything we need!
+# # Whow ?
+# Using `tf.py_func` we can use a python function inside Tensorflow environment.
+# 
+
+# In[ ]:
+
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
 
 # In[ ]:
 
@@ -59,9 +81,6 @@ train_ids = next(os.walk(TRAIN_PATH))[1]
 test_ids = next(os.walk(TEST_PATH))[1]
 
 
-# # Get the data
-# Let's first import all the images and associated masks. I downsample both the training and test images to keep things light and manageable, but we need to keep a record of the original sizes of the test images to upsample our predicted masks and create correct run-length encodings later on. There are definitely better ways to handle this, but it works fine for now!
-
 # In[ ]:
 
 
@@ -98,54 +117,84 @@ for n, id_ in tqdm(enumerate(test_ids), total=len(test_ids)):
 print('Done!')
 
 
-# Let's see if things look all right by drawing some random images and their associated masks.
-
 # In[ ]:
 
 
-# Check if training data looks all right
-ix = random.randint(0, len(train_ids))
-imshow(X_train[ix])
-plt.show()
-imshow(np.squeeze(Y_train[ix]))
-plt.show()
+def iou_metric(y_true_in, y_pred_in, print_table=False):
+    labels = label(y_true_in > 0.5)
+    y_pred = label(y_pred_in > 0.5)
+    
+    true_objects = len(np.unique(labels))
+    pred_objects = len(np.unique(y_pred))
 
+    intersection = np.histogram2d(labels.flatten(), y_pred.flatten(), bins=(true_objects, pred_objects))[0]
 
-# Seems good!
-# 
-# # Create our Keras metric
-# 
-# Now we try to define the *mean average precision at different intersection over union (IoU) thresholds* metric in Keras. TensorFlow has a mean IoU metric, but it doesn't have any native support for the mean over multiple thresholds, so I tried to implement this. **I'm by no means certain that this implementation is correct, though!** Any assistance in verifying this would be most welcome! 
-# 
-# *Update: This implementation is most definitely not correct due to the very large discrepancy between the results reported here and the LB results. It also seems to just increase over time no matter what when you train ... *
+    # Compute areas (needed for finding the union between all objects)
+    area_true = np.histogram(labels, bins = true_objects)[0]
+    area_pred = np.histogram(y_pred, bins = pred_objects)[0]
+    area_true = np.expand_dims(area_true, -1)
+    area_pred = np.expand_dims(area_pred, 0)
 
-# In[ ]:
+    # Compute union
+    union = area_true + area_pred - intersection
 
+    # Exclude background from the analysis
+    intersection = intersection[1:,1:]
+    union = union[1:,1:]
+    union[union == 0] = 1e-9
 
-# Define IoU metric
-def mean_iou(y_true, y_pred):
+    # Compute the intersection over union
+    iou = intersection / union
+
+    # Precision helper function
+    def precision_at(threshold, iou):
+        matches = iou > threshold
+        true_positives = np.sum(matches, axis=1) == 1   # Correct objects
+        false_positives = np.sum(matches, axis=0) == 0  # Missed objects
+        false_negatives = np.sum(matches, axis=1) == 0  # Extra objects
+        tp, fp, fn = np.sum(true_positives), np.sum(false_positives), np.sum(false_negatives)
+        return tp, fp, fn
+
+    # Loop over IoU thresholds
     prec = []
+    if print_table:
+        print("Thresh\tTP\tFP\tFN\tPrec.")
     for t in np.arange(0.5, 1.0, 0.05):
-        y_pred_ = tf.to_int32(y_pred > t)
-        score, up_opt = tf.metrics.mean_iou(y_true, y_pred_, 2)
-        K.get_session().run(tf.local_variables_initializer())
-        with tf.control_dependencies([up_opt]):
-            score = tf.identity(score)
-        prec.append(score)
-    return K.mean(K.stack(prec), axis=0)
+        tp, fp, fn = precision_at(t, iou)
+        if (tp + fp + fn) > 0:
+            p = tp / (tp + fp + fn)
+        else:
+            p = 0
+        if print_table:
+            print("{:1.3f}\t{}\t{}\t{}\t{:1.3f}".format(t, tp, fp, fn, p))
+        prec.append(p)
+    
+    if print_table:
+        print("AP\t-\t-\t-\t{:1.3f}".format(np.mean(prec)))
+    return np.mean(prec)
 
+def iou_metric_batch(y_true_in, y_pred_in):
+    batch_size = y_true_in.shape[0]
+    metric = []
+    for batch in range(batch_size):
+        value = iou_metric(y_true_in[batch], y_pred_in[batch])
+        metric.append(value)
+    return np.array(np.mean(metric), dtype=np.float32)
 
-# # Build and train our neural network
-# Next we build our U-Net model, loosely based on [U-Net: Convolutional Networks for Biomedical Image Segmentation](https://arxiv.org/pdf/1505.04597.pdf) and very similar to [this repo](https://github.com/jocicmarko/ultrasound-nerve-segmentation) from the Kaggle Ultrasound Nerve Segmentation competition.
-# 
-# ![](https://lmb.informatik.uni-freiburg.de/people/ronneber/u-net/u-net-architecture.png)
+def my_iou_metric(label, pred):
+    metric_value = tf.py_func(iou_metric_batch, [label, pred], tf.float32)
+    return metric_value
+
 
 # In[ ]:
 
+
+from keras import backend as K
+K.clear_session()
 
 # Build U-Net model
 inputs = Input((IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS))
-s = Lambda(lambda x: x / 255) (inputs)
+s = Lambda(lambda x: x ) (inputs)
 
 c1 = Conv2D(8, (3, 3), activation='relu', padding='same') (s)
 c1 = Conv2D(8, (3, 3), activation='relu', padding='same') (c1)
@@ -189,35 +238,20 @@ c9 = Conv2D(8, (3, 3), activation='relu', padding='same') (c9)
 outputs = Conv2D(1, (1, 1), activation='sigmoid') (c9)
 
 model = Model(inputs=[inputs], outputs=[outputs])
-model.compile(optimizer='adam', loss='binary_crossentropy', metrics=[mean_iou])
+model.compile(optimizer='rmsprop', loss='binary_crossentropy', metrics=[my_iou_metric])
 model.summary()
 
-
-# Next we fit the model on the training data, using a validation split of 0.1. We use a small batch size because we have so little data. I recommend using checkpointing and early stopping when training your model. I won't do it here to make things a bit more reproducible (although it's very likely that your results will be different anyway). I'll just train for 10 epochs, which takes around 10 minutes in the Kaggle kernel with the current parameters. 
-# 
-# *Update: Added early stopping and checkpointing and increased to 30 epochs.*
 
 # In[ ]:
 
 
-# Fit model
-earlystopper = EarlyStopping(patience=5, verbose=1)
-checkpointer = ModelCheckpoint('model-dsbowl2018-1.h5', verbose=1, save_best_only=True)
-results = model.fit(X_train, Y_train, validation_split=0.1, batch_size=8, epochs=30, 
-                    callbacks=[earlystopper, checkpointer])
+results = model.fit(X_train, Y_train, validation_split=0.1, batch_size=8, epochs=5)
 
-
-# All right, looks good! Loss seems to be a bit erratic, though. I'll leave it to you to improve the model architecture and parameters! 
-# 
-# # Make predictions
-# 
-# Let's make predictions both on the test set, the val set and the train set (as a sanity check). Remember to load the best saved model if you've used early stopping and checkpointing.
 
 # In[ ]:
 
 
 # Predict on train, val and test
-model = load_model('model-dsbowl2018-1.h5', custom_objects={'mean_iou': mean_iou})
 preds_train = model.predict(X_train[:int(X_train.shape[0]*0.9)], verbose=1)
 preds_val = model.predict(X_train[int(X_train.shape[0]*0.9):], verbose=1)
 preds_test = model.predict(X_test, verbose=1)
@@ -238,87 +272,22 @@ for i in range(len(preds_test)):
 # In[ ]:
 
 
-# Perform a sanity check on some random training samples
-ix = random.randint(0, len(preds_train_t))
+ix = 10
+plt.figure(figsize=(20,20))
+plt.subplot(131)
 imshow(X_train[ix])
-plt.show()
+plt.title("Image")
+plt.subplot(132)
 imshow(np.squeeze(Y_train[ix]))
-plt.show()
-imshow(np.squeeze(preds_train_t[ix]))
+plt.title("Mask")
+plt.subplot(133)
+imshow(np.squeeze(preds_train_t[ix] > 0.5))
+plt.title("Predictions")
 plt.show()
 
-
-# The model is at least able to fit to the training data! Certainly a lot of room for improvement even here, but a decent start. How about the validation data?
 
 # In[ ]:
 
 
-# Perform a sanity check on some random validation samples
-ix = random.randint(0, len(preds_val_t))
-imshow(X_train[int(X_train.shape[0]*0.9):][ix])
-plt.show()
-imshow(np.squeeze(Y_train[int(Y_train.shape[0]*0.9):][ix]))
-plt.show()
-imshow(np.squeeze(preds_val_t[ix]))
-plt.show()
+iou_metric(np.squeeze(Y_train[ix]), np.squeeze(preds_train_t[ix]), print_table=True)
 
-
-# Not too shabby! Definitely needs some more training and tweaking.
-# 
-# # Encode and submit our results
-# 
-# Now it's time to submit our results. I've stolen [this](https://www.kaggle.com/rakhlin/fast-run-length-encoding-python) excellent implementation of run-length encoding.
-
-# In[ ]:
-
-
-# Run-length encoding stolen from https://www.kaggle.com/rakhlin/fast-run-length-encoding-python
-def rle_encoding(x):
-    dots = np.where(x.T.flatten() == 1)[0]
-    run_lengths = []
-    prev = -2
-    for b in dots:
-        if (b>prev+1): run_lengths.extend((b + 1, 0))
-        run_lengths[-1] += 1
-        prev = b
-    return run_lengths
-
-def prob_to_rles(x, cutoff=0.5):
-    lab_img = label(x > cutoff)
-    for i in range(1, lab_img.max() + 1):
-        yield rle_encoding(lab_img == i)
-
-
-# Let's iterate over the test IDs and generate run-length encodings for each seperate mask identified by skimage ...
-
-# In[ ]:
-
-
-new_test_ids = []
-rles = []
-for n, id_ in enumerate(test_ids):
-    rle = list(prob_to_rles(preds_test_upsampled[n]))
-    rles.extend(rle)
-    new_test_ids.extend([id_] * len(rle))
-
-
-# ... and then finally create our submission!
-
-# In[ ]:
-
-
-# Create submission DataFrame
-sub = pd.DataFrame()
-sub['ImageId'] = new_test_ids
-sub['EncodedPixels'] = pd.Series(rles).apply(lambda x: ' '.join(str(y) for y in x))
-sub.to_csv('sub-dsbowl2018-1.csv', index=False)
-
-
-# This scored 0.233 on the LB for me. That was with version 2 of this notebook; be aware that the results from the neural network are extremely erratic and vary greatly from run to run (version 3 is significantly worse, for example). Version 7 scores 0.277!
-# 
-# You should easily be able to stabilize and improve the results just by changing a few parameters, tweaking the architecture a little bit and training longer with early stopping.
-# 
-# **Have fun!**
-# 
-# LB score history:
-# - Version 7: 0.277 LB

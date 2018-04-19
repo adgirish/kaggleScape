@@ -1,1889 +1,427 @@
 
 # coding: utf-8
 
-# # My 15th solution
+# # House price prediction using multiple regression analysis
 # 
-# Though my rank is not so hight, I would like to share my solution 
-# because I jumped 17 postions in finaly shakeup and I used BigQuery, which might be not familier in Kaggle well.
+# # Part 2: Regression Models
+# 
+# The following notebook presents a thought process of predicting a continuous variable through Machine Learning methods. More specifically, we want to predict house prices based on multiple features using regression analysis. 
+# 
+# As an example, we will use a dataset of house sales in King County, where Seattle is located.
+# 
+# In the [first][1] part of the analysis, we set up the context using map visualization, and highlighted the association between the variables in our dataset. 
+# 
+# This is, for example, a map of King County showing the average house price per zipcode. We can see the disparities between the different zipcodes. The location of the houses should play an important role in our regression model. 
+# 
+# ![price per zipcode][2]
+# 
+# In this second notebook we will apply multiple regression models. We will talk about model complexity and how we can select the best predictive model using a validation set or cross-validation techniques.
+# 
+# ## 1. Preparation
+# 
+# As in Part 1, Let's first load the libraries and the dataset
 # 
 # 
+#   [1]: https://www.kaggle.com/harlfoxem/d/harlfoxem/housesalesprediction/house-price-prediction-part-1/notebook
+#   [2]: https://harlfoxem.github.io/img/King_County_House_Prediction_files/price.png
 
-# # Why could I jump from 32nd to 15th?
-# 
-# I made my cv split whose ditribustion how many kind of items the customer bought is same. (I meand I made cv based on how many kind of items a customer bought.)
-# Then, my solution did not make difference between my cv score, public score, and private score.
-# 
-# I think my cv splitting strategy might work well.
-
-# # My features
-# 
-# I mainly made my features by using Google BigQuery.
-# 
-# (I will share the rest of my features later because the rest of my features are very complicated and made not much difference in improving my score.)
-
-# ### Making my datamart ( joinining all data into one table)
-# 
-# I used Python for joinining all data into one table. Of course, you can use BigQuey.
-
-# In[1]:
+# In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import pickle
-import re
-from IPython.core.display import display
-from tqdm import tqdm_notebook as tqdm
+import numpy as np # NumPy is the fundamental package for scientific computing
 
+import pandas as pd # Pandas is an easy-to-use data structures and data analysis tools
+pd.set_option('display.max_columns', None) # To display all columns
+
+import matplotlib.pyplot as plt # Matplotlib is a python 2D plotting library
 get_ipython().run_line_magic('matplotlib', 'inline')
-pd.options.mode.chained_assignment = None  # default='warn'
+# A magic command that tells matplotlib to render figures as static images in the Notebook.
 
+import seaborn as sns # Seaborn is a visualization library based on matplotlib (attractive statistical graphics).
+sns.set_style('whitegrid') # One of the five seaborn themes
+import warnings
+warnings.filterwarnings('ignore') # To ignore some of seaborn warning msg
 
-# In[2]:
+from scipy import stats
 
+from sklearn import linear_model # Scikit learn library that implements generalized linear models
+from sklearn import neighbors # provides functionality for unsupervised and supervised neighbors-based learning methods
+from sklearn.metrics import mean_squared_error # Mean squared error regression loss
+from sklearn import preprocessing # provides functions and classes to change raw feature vectors
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-
-# In[3]:
-
-
-order_products_train_df = pd.read_csv("../input/order_products__train.csv")
-order_products_prior_df = pd.read_csv("../input/order_products__prior.csv")
-orders_df = pd.read_csv("../input/orders.csv")
-products_df = pd.read_csv("../input/products.csv")
-aisles_df = pd.read_csv("../input/aisles.csv")
-departments_df = pd.read_csv("../input/departments.csv")
+from math import log
 
 
 # In[ ]:
 
 
-df_train = pd.merge(order_products_train_df, orders_df, how='left', on='order_id')
-df_train = pd.merge(df_train, products_df, how='left', on='product_id')
-df_train = pd.merge(df_train, aisles_df, how='left', on='aisle_id')
-df_train = pd.merge(df_train, departments_df, how='left', on='department_id')
-#df_train.to_csv('../input/df_train.csv', index=False) # if you want to use my feature, plz comment out.
-df_train.head()
+data = pd.read_csv("../input/kc_house_data.csv", parse_dates = ['date']) # load the data into a pandas dataframe
+data.head(2) # Show the first 2 lines
+
+
+# ### Data Cleaning
+# 
+# Let's reduce the dataset by dropping columns that won't be used during the analysis.
+
+# In[ ]:
+
+
+data.drop(['id', 'date'], axis = 1, inplace = True)
+
+
+# ### Data Transformation
+# 
+# Following the correlation analysis in Part 1, let's create some new variables in our dataset. 
+
+# In[ ]:
+
+
+data['basement_present'] = data['sqft_basement'].apply(lambda x: 1 if x > 0 else 0) # Indicate whether there is a basement or not
+data['renovated'] = data['yr_renovated'].apply(lambda x: 1 if x > 0 else 0) # 1 if the house has been renovated
+
+
+# ### Encode categorical variables using dummies
+# 
+# A Dummy variable is an artificial variable created to represent an attribute with two or more distinct categories/levels. In this example, we will analyse *bedrooms* and *bathrooms* as continuous and therefore will encode the following:
+# 
+# * floors
+# * view
+# * condition and
+# * grade
+
+# In[ ]:
+
+
+categorial_cols = ['floors', 'view', 'condition', 'grade']
+
+for cc in categorial_cols:
+    dummies = pd.get_dummies(data[cc], drop_first=False)
+    dummies = dummies.add_prefix("{}#".format(cc))
+    data.drop(cc, axis=1, inplace=True)
+    data = data.join(dummies)
+
+
+# We saw that zipcodes are also related to price. However, encoded all zipcodes will add 70 dummies variables. Instead, we will only encode the 6 most expensive zipcodes as shown in the map.
+
+# In[ ]:
+
+
+dummies_zipcodes = pd.get_dummies(data['zipcode'], drop_first=False)
+dummies_zipcodes.reset_index(inplace=True)
+dummies_zipcodes = dummies_zipcodes.add_prefix("{}#".format('zipcode'))
+dummies_zipcodes = dummies_zipcodes[['zipcode#98004','zipcode#98102','zipcode#98109','zipcode#98112','zipcode#98039','zipcode#98040']]
+data.drop('zipcode', axis=1, inplace=True)
+data = data.join(dummies_zipcodes)
+
+data.dtypes
+
+
+# ### Split the data
+# 
+# We will split the dataframe into training and testing data using a 80%/20% ratio
+
+# In[ ]:
+
+
+from sklearn.cross_validation import train_test_split
+train_data, test_data = train_test_split(data, train_size = 0.8, random_state = 10)
+
+
+# ## 2. Regression Models
+# 
+# In this section, we will train numerous regression models on the train data (e.g., simple linear regression, lasso, nearest neighbor) and evaluate their performance using Root Mean Squared Error (RMSE) on the test data.
+# 
+# ### 2.1 Simple Linear Regression
+# 
+# Let's first predict house prices using simple (one input) linear regression.
+
+# In[ ]:
+
+
+# A function that take one input of the dataset and return the RMSE (of the test data), and the intercept and coefficient
+def simple_linear_model(train, test, input_feature):
+    regr = linear_model.LinearRegression() # Create a linear regression object
+    regr.fit(train.as_matrix(columns = [input_feature]), train.as_matrix(columns = ['price'])) # Train the model
+    RMSE = mean_squared_error(test.as_matrix(columns = ['price']), 
+                              regr.predict(test.as_matrix(columns = [input_feature])))**0.5 # Calculate the RMSE on test data
+    return RMSE, regr.intercept_[0], regr.coef_[0][0]
+
+
+# Let's create a simple linear regression model using sqft_living as input and calculate the RMSE on the test data.
+
+# In[ ]:
+
+
+RMSE, w0, w1 = simple_linear_model(train_data, test_data, 'sqft_living')
+print ('RMSE for sqft_living is: %s ' %RMSE)
+print ('intercept is: %s' %w0)
+print ('coefficient is: %s' %w1)
+
+
+# Similarly, we can run the same test on all the features in the dataset and assess which one would be the best estimator of house price using just a single linear regression model.
+
+# In[ ]:
+
+
+input_list = data.columns.values.tolist() # list of column name
+input_list.remove('price')
+simple_linear_result = pd.DataFrame(columns = ['feature', 'RMSE', 'intercept', 'coefficient'])
+
+# loop that calculate the RMSE of the test data for each input 
+for p in input_list:
+    RMSE, w1, w0 = simple_linear_model(train_data, test_data, p)
+    simple_linear_result = simple_linear_result.append({'feature':p, 'RMSE':RMSE, 'intercept':w0, 'coefficient': w1}
+                                                       ,ignore_index=True)
+simple_linear_result.sort_values('RMSE').head(10) # display the 10 best estimators
+
+
+# When using simple linear regression, sqft_living provides the smallest test error estimate of house price for the dataset considered.
+# 
+# ### 2.2 Multiple Regression
+# 
+# Now let's try to predict *price* using multiple features. We can modify the simple linear regression function above to take multiple features as input.
+
+# In[ ]:
+
+
+# A function that take multiple features as input and return the RMSE (of the test data), and the  intercept and coefficients
+def multiple_regression_model(train, test, input_features):
+    regr = linear_model.LinearRegression() # Create a linear regression object
+    regr.fit(train.as_matrix(columns = input_features), train.as_matrix(columns = ['price'])) # Train the model
+    RMSE = mean_squared_error(test.as_matrix(columns = ['price']), 
+                              regr.predict(test.as_matrix(columns = input_features)))**0.5 # Calculate the RMSE on test data
+    return RMSE, regr.intercept_[0], regr.coef_ 
+
+
+# Let's try with a few examples:
+
+# In[ ]:
+
+
+print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
+                                                                             test_data, ['sqft_living','bathrooms','bedrooms']))
+print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
+                                                                             test_data, ['sqft_above','view#0','bathrooms']))
+print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
+                                                                             test_data, ['bathrooms','bedrooms']))
+print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
+                                                                             test_data, ['view#0','grade#12','bedrooms','sqft_basement']))
+print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
+                                                                             test_data, ['sqft_living','bathrooms','view#0']))
+
+
+# We can also try to fit a higher-order polynomial on the input. For example, we can try to fit a qudratic function on sqft_living
+
+# In[ ]:
+
+
+train_data['sqft_living_squared'] = train_data['sqft_living'].apply(lambda x: x**2) # create a new column in train_data
+test_data['sqft_living_squared'] = test_data['sqft_living'].apply(lambda x: x**2) # create a new column in test_data
+print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
+                                                                             test_data, ['sqft_living','sqft_living_squared']))
+
+
+# While we can get better performance than simple linear models, a few problems remain. 
+# 
+# * First, we don't know which feature to select. Obviously some combinations of features will yield smaller RMSE on the test set.
+# * Second, we don't know how many features to select. This is because the more features we incorporate in the train model, the more overfit we get on the train data, resulting in higher error on the test data.
+# 
+# One solution would be to test multiple features combinations (all?) and keep the solution with the smallest error value calculated on the test data. However, this is an overly optimistic approach, since the model complexity is selected to minimize the test error (error is biased). A more sophisticated approach is to use two sets for testing our models, a.k.a: a validation set and a test set. We select model complexity to minimize error on the validation set and approximate the generalization error based on the test set.
+# 
+# Going through all subsets of features combinations is most often computationally infeasible. For example, having 30 features yield more than 1 billion combinations. Another approach is to use a greedy technique like a forward stepwise algorithm where the best estimator feature is added to the set of already selected features at each iteration. For example, let's pretend that the best single estimator is sqft_living. In the 2nd step of the greedy algorithm, we test all the remaining features one by one in combinations with sqft_living (e.g., sqft_living and bedrooms, sqft_living and waterfront, etc) and select the best combination using training error. At the end, we select the model complexity (number of features) using the validation error and estimate the generalization error using the test set.
+# 
+# Let's try this method.
+
+# In[ ]:
+
+
+# we're first going to add more features into the dataset.
+
+# sqft_living cubed
+train_data['sqft_living_cubed'] = train_data['sqft_living'].apply(lambda x: x**3) 
+test_data['sqft_living_cubed'] = test_data['sqft_living'].apply(lambda x: x**3) 
+
+# bedrooms_squared: this feature will mostly affect houses with many bedrooms.
+train_data['bedrooms_squared'] = train_data['bedrooms'].apply(lambda x: x**2) 
+test_data['bedrooms_squared'] = test_data['bedrooms'].apply(lambda x: x**2)
+
+# bedrooms times bathrooms gives what's called an "interaction" feature. It is large when both of them are large.
+train_data['bed_bath_rooms'] = train_data['bedrooms']*train_data['bathrooms']
+test_data['bed_bath_rooms'] = test_data['bedrooms']*test_data['bathrooms']
+
+# Taking the log of squarefeet has the effect of bringing large values closer together and spreading out small values.
+train_data['log_sqft_living'] = train_data['sqft_living'].apply(lambda x: log(x))
+test_data['log_sqft_living'] = test_data['sqft_living'].apply(lambda x: log(x))
+
+train_data.shape
 
 
 # In[ ]:
 
 
-df_prior = pd.merge(order_products_prior_df, orders_df, how='left', on='order_id').head(10000) 
-# if you want to use my feature, plz remove the ".head(10000)".
-df_prior = pd.merge(df_prior, products_df, how='left', on='product_id')
-df_prior = pd.merge(df_prior, aisles_df, how='left', on='aisle_id')
-df_prior = pd.merge(df_prior, departments_df, how='left', on='department_id')
-#df_prior.to_csv('../input/df_prior.csv', index=False) # if you want to use my feature, plz comment out.
-df_prior.head()
+# split the train_data to include a validation set (train_data2 = 60%, validation_data = 20%, test_data = 20%)
+train_data_2, validation_data = train_test_split(train_data, train_size = 0.75, random_state = 50)
 
 
-# # Making User features
-# 
-# The both of **df_prior** and **df_train** are made from above scripts.  
-# Then, I import these data into BigQuery, and ran below queries.
+# In[ ]:
 
-# ```
-# # user_fund
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.user_fund" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   count(1) as user_item_cnt,
-#   EXACT_COUNT_DISTINCT(product_id) as user_prd_cnt,
-#   EXACT_COUNT_DISTINCT(department_id) as user_depart_cnt,
-#   EXACT_COUNT_DISTINCT(aisle_id) as user_aisle_cnt,
-#   EXACT_COUNT_DISTINCT(order_id) as user_order_cnt,
-#   EXACT_COUNT_DISTINCT(order_id) / count(1)  as user_order_rate,
-#   MAX(order_number) as max_order_number,
-#   AVG(days_since_prior_order) as avg_days_since_prior_order,
-#   MAX(days_since_prior_order) as max_days_since_prior_order,
-#   MIN(days_since_prior_order) as min_days_since_prior_order,
-#   MAX(order_hour_of_day) as max_order_hour_of_day,
-#   MIN(order_hour_of_day) as min_order_hour_of_day,
-#   AVG(order_hour_of_day) as avg_order_hour_of_day,
-#   AVG(reordered) as avg_reordered,
-#   SUM(reordered) as sum_reordered,
-#   AVG(order_dow) as avg_order_dow
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   user_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.user_freq" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   count(1) as order_cnt,
-#   AVG(days_since_prior_order) as avg_days_since_prior_order,
-#   MAX(days_since_prior_order) as max_days_since_prior_order,
-#   MIN(days_since_prior_order) as min_days_since_prior_order,
-# FROM
-#   [instacart.orders]
-# WHERE
-#   eval_set = 'prior'
-# GROUP BY
-#   user_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.user_dow" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   sum(CASE WHEN order_dow = 0  THEN 1 ELSE 0 END) AS  order_dow_0,
-#   sum(CASE WHEN order_dow = 1  THEN 1 ELSE 0 END) AS  order_dow_1,
-#   sum(CASE WHEN order_dow = 2  THEN 1 ELSE 0 END) AS  order_dow_2,
-#   sum(CASE WHEN order_dow = 3  THEN 1 ELSE 0 END) AS  order_dow_3,
-#   sum(CASE WHEN order_dow = 4  THEN 1 ELSE 0 END) AS  order_dow_4,
-#   sum(CASE WHEN order_dow = 5  THEN 1 ELSE 0 END) AS  order_dow_5,
-#   sum(CASE WHEN order_dow = 6  THEN 1 ELSE 0 END) AS  order_dow_6,
-# 
-#   avg(CASE WHEN order_dow = 0  THEN reordered ELSE null END) AS  reorder_dow_0,
-#   avg(CASE WHEN order_dow = 1  THEN reordered ELSE null END) AS  reorder_dow_1,
-#   avg(CASE WHEN order_dow = 2  THEN reordered ELSE null END) AS  reorder_dow_2,
-#   avg(CASE WHEN order_dow = 3  THEN reordered ELSE null END) AS  reorder_dow_3,
-#   avg(CASE WHEN order_dow = 4  THEN reordered ELSE null END) AS  reorder_dow_4,
-#   avg(CASE WHEN order_dow = 5  THEN reordered ELSE null END) AS  reorder_dow_5,
-#   avg(CASE WHEN order_dow = 6  THEN reordered ELSE null END) AS  reorder_dow_6
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   user_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.user_hour" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   sum(CASE WHEN order_hour_of_day = 0  THEN 1 ELSE 0 END) AS order_hour_of_day_0,
-#   sum(CASE WHEN order_hour_of_day = 1  THEN 1 ELSE 0 END) AS order_hour_of_day_1,
-#   sum(CASE WHEN order_hour_of_day = 2  THEN 1 ELSE 0 END) AS order_hour_of_day_2,
-#   sum(CASE WHEN order_hour_of_day = 3  THEN 1 ELSE 0 END) AS order_hour_of_day_3,
-#   sum(CASE WHEN order_hour_of_day = 4  THEN 1 ELSE 0 END) AS order_hour_of_day_4,
-#   sum(CASE WHEN order_hour_of_day = 5  THEN 1 ELSE 0 END) AS order_hour_of_day_5,
-#   sum(CASE WHEN order_hour_of_day = 6  THEN 1 ELSE 0 END) AS order_hour_of_day_6,
-#   sum(CASE WHEN order_hour_of_day = 7  THEN 1 ELSE 0 END) AS order_hour_of_day_7,
-#   sum(CASE WHEN order_hour_of_day = 8  THEN 1 ELSE 0 END) AS order_hour_of_day_8,
-#   sum(CASE WHEN order_hour_of_day = 9  THEN 1 ELSE 0 END) AS order_hour_of_day_9,
-#   sum(CASE WHEN order_hour_of_day = 10  THEN 1 ELSE 0 END) AS order_hour_of_day_10,
-#   sum(CASE WHEN order_hour_of_day = 11  THEN 1 ELSE 0 END) AS order_hour_of_day_11,
-#   sum(CASE WHEN order_hour_of_day = 12  THEN 1 ELSE 0 END) AS order_hour_of_day_12,
-#   sum(CASE WHEN order_hour_of_day = 13  THEN 1 ELSE 0 END) AS order_hour_of_day_13,
-#   sum(CASE WHEN order_hour_of_day = 14  THEN 1 ELSE 0 END) AS order_hour_of_day_14,
-#   sum(CASE WHEN order_hour_of_day = 15  THEN 1 ELSE 0 END) AS order_hour_of_day_15,
-#   sum(CASE WHEN order_hour_of_day = 16  THEN 1 ELSE 0 END) AS order_hour_of_day_16,
-#   sum(CASE WHEN order_hour_of_day = 17  THEN 1 ELSE 0 END) AS order_hour_of_day_17,
-#   sum(CASE WHEN order_hour_of_day = 18  THEN 1 ELSE 0 END) AS order_hour_of_day_18,
-#   sum(CASE WHEN order_hour_of_day = 19  THEN 1 ELSE 0 END) AS order_hour_of_day_19,
-#   sum(CASE WHEN order_hour_of_day = 20  THEN 1 ELSE 0 END) AS order_hour_of_day_20,
-#   sum(CASE WHEN order_hour_of_day = 21  THEN 1 ELSE 0 END) AS order_hour_of_day_21,
-#   sum(CASE WHEN order_hour_of_day = 22  THEN 1 ELSE 0 END) AS order_hour_of_day_22,
-#   sum(CASE WHEN order_hour_of_day = 23  THEN 1 ELSE 0 END) AS order_hour_of_day_23
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   user_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.user_depart" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   sum(CASE WHEN department_id = 1  THEN 1 ELSE 0 END) AS department_id_1,
-#   sum(CASE WHEN department_id = 2  THEN 1 ELSE 0 END) AS department_id_2,
-#   sum(CASE WHEN department_id = 3  THEN 1 ELSE 0 END) AS department_id_3,
-#   sum(CASE WHEN department_id = 4  THEN 1 ELSE 0 END) AS department_id_4,
-#   sum(CASE WHEN department_id = 5  THEN 1 ELSE 0 END) AS department_id_5,
-#   sum(CASE WHEN department_id = 6  THEN 1 ELSE 0 END) AS department_id_6,
-#   sum(CASE WHEN department_id = 7  THEN 1 ELSE 0 END) AS department_id_7,
-#   sum(CASE WHEN department_id = 8  THEN 1 ELSE 0 END) AS department_id_8,
-#   sum(CASE WHEN department_id = 9  THEN 1 ELSE 0 END) AS department_id_9,
-#   sum(CASE WHEN department_id = 10  THEN 1 ELSE 0 END) AS department_id_10,
-#   sum(CASE WHEN department_id = 11  THEN 1 ELSE 0 END) AS department_id_11,
-#   sum(CASE WHEN department_id = 12  THEN 1 ELSE 0 END) AS department_id_12,
-#   sum(CASE WHEN department_id = 13  THEN 1 ELSE 0 END) AS department_id_13,
-#   sum(CASE WHEN department_id = 14  THEN 1 ELSE 0 END) AS department_id_14,
-#   sum(CASE WHEN department_id = 15  THEN 1 ELSE 0 END) AS department_id_15,
-#   sum(CASE WHEN department_id = 16  THEN 1 ELSE 0 END) AS department_id_16,
-#   sum(CASE WHEN department_id = 17  THEN 1 ELSE 0 END) AS department_id_17,
-#   sum(CASE WHEN department_id = 18  THEN 1 ELSE 0 END) AS department_id_18,
-#   sum(CASE WHEN department_id = 19  THEN 1 ELSE 0 END) AS department_id_19,
-#   sum(CASE WHEN department_id = 20  THEN 1 ELSE 0 END) AS department_id_20,
-#   sum(CASE WHEN department_id = 21  THEN 1 ELSE 0 END) AS department_id_21
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   user_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.dmt_user" --flatten_results --replace "
-# SELECT
-#   *
-# FROM
-#   [instacart.user_fund] as u1
-# LEFT OUTER JOIN
-#   [instacart.user_dow] as u2
-# ON
-#   u1.user_id = u2.user_id
-# LEFT OUTER JOIN
-#   [instacart.user_hour] as u3
-# ON
-#   u1.user_id = u3.user_id
-# LEFT OUTER JOIN
-#   [instacart.user_depart] as u4
-# ON
-#   u1.user_id = u4.user_id
-# LEFT OUTER JOIN
-#   [instacart.user_freq] as u5
-# ON
-#   u1.user_id = u5.user_id
-# "
-# ```
 
-# # Making item features
+# A function that take multiple features as input and return the RMSE (of the train and validation data)
+def RMSE(train, validation, features, new_input):
+    features_list = list(features)
+    features_list.append(new_input)
+    regr = linear_model.LinearRegression() # Create a linear regression object
+    regr.fit(train.as_matrix(columns = features_list), train.as_matrix(columns = ['price'])) # Train the model
+    RMSE_train = mean_squared_error(train.as_matrix(columns = ['price']), 
+                              regr.predict(train.as_matrix(columns = features_list)))**0.5 # Calculate the RMSE on train data
+    RMSE_validation = mean_squared_error(validation.as_matrix(columns = ['price']), 
+                              regr.predict(validation.as_matrix(columns = features_list)))**0.5 # Calculate the RMSE on train data
+    return RMSE_train, RMSE_validation 
 
-# ```
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.item_fund" --flatten_results --replace "  
-# SELECT
-#   product_id,
-#   count(1) as item_user_cnt,
-#   EXACT_COUNT_DISTINCT( user_id) as item_usr_cnt,
-#   EXACT_COUNT_DISTINCT( department_id) as item_depart_cnt,
-#   EXACT_COUNT_DISTINCT( aisle_id) as item_aisle_cnt,
-#   EXACT_COUNT_DISTINCT( order_id) as item_order_cnt,
-#   EXACT_COUNT_DISTINCT( order_id) / count(1) as item_order_rate,
-#   AVG(days_since_prior_order) as avg_item_days_since_prior_order,
-#   MIN(days_since_prior_order) as min_item_days_since_prior_order,
-#   MAX(days_since_prior_order) as max_item_days_since_prior_order,
-#   MAX(order_hour_of_day) as max_order_hour_of_day,
-#   MIN(order_hour_of_day) as min_order_hour_of_day,
-#   AVG(order_hour_of_day) as avg_order_hour_of_day,
-#   AVG(reordered) as avg_item_reordered,
-#   SUM(reordered) as sum_item_reordered,
-#   AVG(order_dow) as avg_order_dow
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   product_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.item_dow" --flatten_results --replace "  
-# SELECT
-#   product_id,
-#   sum(CASE WHEN order_dow = 0  THEN 1 ELSE 0 END) AS  order_dow_0,
-#   sum(CASE WHEN order_dow = 1  THEN 1 ELSE 0 END) AS  order_dow_1,
-#   sum(CASE WHEN order_dow = 2  THEN 1 ELSE 0 END) AS  order_dow_2,
-#   sum(CASE WHEN order_dow = 3  THEN 1 ELSE 0 END) AS  order_dow_3,
-#   sum(CASE WHEN order_dow = 4  THEN 1 ELSE 0 END) AS  order_dow_4,
-#   sum(CASE WHEN order_dow = 5  THEN 1 ELSE 0 END) AS  order_dow_5,
-#   sum(CASE WHEN order_dow = 6  THEN 1 ELSE 0 END) AS  order_dow_6
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   product_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.item_hour" --flatten_results --replace "  
-# SELECT
-#   product_id,
-#   sum(CASE WHEN order_hour_of_day = 0  THEN 1 ELSE 0 END) AS order_hour_of_day_0,
-#   sum(CASE WHEN order_hour_of_day = 1  THEN 1 ELSE 0 END) AS order_hour_of_day_1,
-#   sum(CASE WHEN order_hour_of_day = 2  THEN 1 ELSE 0 END) AS order_hour_of_day_2,
-#   sum(CASE WHEN order_hour_of_day = 3  THEN 1 ELSE 0 END) AS order_hour_of_day_3,
-#   sum(CASE WHEN order_hour_of_day = 4  THEN 1 ELSE 0 END) AS order_hour_of_day_4,
-#   sum(CASE WHEN order_hour_of_day = 5  THEN 1 ELSE 0 END) AS order_hour_of_day_5,
-#   sum(CASE WHEN order_hour_of_day = 6  THEN 1 ELSE 0 END) AS order_hour_of_day_6,
-#   sum(CASE WHEN order_hour_of_day = 7  THEN 1 ELSE 0 END) AS order_hour_of_day_7,
-#   sum(CASE WHEN order_hour_of_day = 8  THEN 1 ELSE 0 END) AS order_hour_of_day_8,
-#   sum(CASE WHEN order_hour_of_day = 9  THEN 1 ELSE 0 END) AS order_hour_of_day_9,
-#   sum(CASE WHEN order_hour_of_day = 10  THEN 1 ELSE 0 END) AS order_hour_of_day_10,
-#   sum(CASE WHEN order_hour_of_day = 11  THEN 1 ELSE 0 END) AS order_hour_of_day_11,
-#   sum(CASE WHEN order_hour_of_day = 12  THEN 1 ELSE 0 END) AS order_hour_of_day_12,
-#   sum(CASE WHEN order_hour_of_day = 13  THEN 1 ELSE 0 END) AS order_hour_of_day_13,
-#   sum(CASE WHEN order_hour_of_day = 14  THEN 1 ELSE 0 END) AS order_hour_of_day_14,
-#   sum(CASE WHEN order_hour_of_day = 15  THEN 1 ELSE 0 END) AS order_hour_of_day_15,
-#   sum(CASE WHEN order_hour_of_day = 16  THEN 1 ELSE 0 END) AS order_hour_of_day_16,
-#   sum(CASE WHEN order_hour_of_day = 17  THEN 1 ELSE 0 END) AS order_hour_of_day_17,
-#   sum(CASE WHEN order_hour_of_day = 18  THEN 1 ELSE 0 END) AS order_hour_of_day_18,
-#   sum(CASE WHEN order_hour_of_day = 19  THEN 1 ELSE 0 END) AS order_hour_of_day_19,
-#   sum(CASE WHEN order_hour_of_day = 20  THEN 1 ELSE 0 END) AS order_hour_of_day_20,
-#   sum(CASE WHEN order_hour_of_day = 21  THEN 1 ELSE 0 END) AS order_hour_of_day_21,
-#   sum(CASE WHEN order_hour_of_day = 22  THEN 1 ELSE 0 END) AS order_hour_of_day_22,
-#   sum(CASE WHEN order_hour_of_day = 23  THEN 1 ELSE 0 END) AS order_hour_of_day_23
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   product_id
-# "
-# 
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.item_depart" --flatten_results --replace "  
-# SELECT
-#   product_id,
-#   sum(CASE WHEN department_id = 1  THEN 1 ELSE 0 END) AS department_id_1,
-#   sum(CASE WHEN department_id = 2  THEN 1 ELSE 0 END) AS department_id_2,
-#   sum(CASE WHEN department_id = 3  THEN 1 ELSE 0 END) AS department_id_3,
-#   sum(CASE WHEN department_id = 4  THEN 1 ELSE 0 END) AS department_id_4,
-#   sum(CASE WHEN department_id = 5  THEN 1 ELSE 0 END) AS department_id_5,
-#   sum(CASE WHEN department_id = 6  THEN 1 ELSE 0 END) AS department_id_6,
-#   sum(CASE WHEN department_id = 7  THEN 1 ELSE 0 END) AS department_id_7,
-#   sum(CASE WHEN department_id = 8  THEN 1 ELSE 0 END) AS department_id_8,
-#   sum(CASE WHEN department_id = 9  THEN 1 ELSE 0 END) AS department_id_9,
-#   sum(CASE WHEN department_id = 10  THEN 1 ELSE 0 END) AS department_id_10,
-#   sum(CASE WHEN department_id = 11  THEN 1 ELSE 0 END) AS department_id_11,
-#   sum(CASE WHEN department_id = 12  THEN 1 ELSE 0 END) AS department_id_12,
-#   sum(CASE WHEN department_id = 13  THEN 1 ELSE 0 END) AS department_id_13,
-#   sum(CASE WHEN department_id = 14  THEN 1 ELSE 0 END) AS department_id_14,
-#   sum(CASE WHEN department_id = 15  THEN 1 ELSE 0 END) AS department_id_15,
-#   sum(CASE WHEN department_id = 16  THEN 1 ELSE 0 END) AS department_id_16,
-#   sum(CASE WHEN department_id = 17  THEN 1 ELSE 0 END) AS department_id_17,
-#   sum(CASE WHEN department_id = 18  THEN 1 ELSE 0 END) AS department_id_18,
-#   sum(CASE WHEN department_id = 19  THEN 1 ELSE 0 END) AS department_id_19,
-#   sum(CASE WHEN department_id = 20  THEN 1 ELSE 0 END) AS department_id_20,
-#   sum(CASE WHEN department_id = 21  THEN 1 ELSE 0 END) AS department_id_21
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   product_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.dmt_item" --flatten_results --replace "  
-# SELECT
-#   *
-# FROM
-#   [instacart.item_fund] as i1
-# LEFT OUTER JOIN
-#   [instacart.item_dow] as i2
-# ON
-#   i1.product_id = i2.product_id
-# LEFT OUTER JOIN
-#   [instacart.item_hour] as i3
-# ON
-#   i1.product_id = i3.product_id
-# LEFT OUTER JOIN
-#   [instacart.item_depart] as i4
-# ON
-#   i1.product_id = i4.product_id
-# "
-# ```
 
-# # Making user and item features
-# 
-# These tables are my final datamart: 
-# * dmt_train_only_rebuy
-# * dmt_test_only_rebuy.
-# 
-# (But this is little old version, so I will update soon)
+# In[ ]:
 
-# ```
-# bq query --max_rows 1  --allow_large_results --destination_table "work.tmp1" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   order_id,
-#   eval_set,
-#   order_number,
-#   order_dow,
-#   order_hour_of_day,  
-#   days_since_prior_order,
-#   SUM(days_since_prior_order) OVER (PARTITION BY user_id ORDER BY order_number ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS cum_days
-# FROM
-#   [instacart.orders]
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.cum_orders" --flatten_results --replace "
-# SELECT
-#   a.user_id user_id,
-#   a.order_id order_id,
-#   a.eval_set eval_set,
-#   a.order_number order_number,
-#   a.days_since_prior_order days_since_prior_order,
-#   a.cum_days cum_days,
-#   a.order_dow,
-#   a.order_hour_of_day,  
-#   b.max_cum_days max_cum_days,
-#   b.max_cum_days - a.cum_days as last_buy
-# FROM
-#   [work.tmp1] as a
-# LEFT OUTER JOIN
-# (
-# SELECT
-#   user_id, max(cum_days) as max_cum_days
-# FROM
-#   [work.tmp1]
-# GROUP BY
-#   user_id
-# ) as b
-# ON
-#   a.user_id = b.user_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.only_rebuy" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id
-# FROM
-#   [instacart.df_prior] as a
-# GROUP BY
-#   user_id, product_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.only_rebuy_train" --flatten_results --replace "
-# SELECT
-#   r.user_id as user_id,
-#   r.product_id as product_id,
-#   o.order_id as order_id,
-#   o.order_number as order_number,
-#   o.order_dow as order_dow,
-#   o.order_hour_of_day as order_hour_of_day,
-#   o.days_since_prior_order as days_since_prior_order,
-#   c.cum_days as cum_days
-# FROM
-#   [instacart.only_rebuy] as r
-# INNER JOIN
-#   (SELECT * FROM [instacart.orders] WHERE eval_set='train') as o
-# ON
-#   r.user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as c
-# ON
-#   c.order_id = o.order_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.only_rebuy_test" --flatten_results --replace "
-# SELECT
-#   r.user_id as user_id,
-#   r.product_id as product_id,
-#   o.order_id as order_id,
-#   o.order_number as order_number,
-#   o.order_dow as order_dow,
-#   o.order_hour_of_day as order_hour_of_day,
-#   o.days_since_prior_order as days_since_prior_order,
-#   c.cum_days as cum_days
-# FROM
-#   [instacart.only_rebuy] as r
-# INNER JOIN
-#   (SELECT * FROM [instacart.orders] WHERE eval_set='test') as o
-# ON
-#   r.user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as c
-# ON
-#   c.order_id = o.order_id
-# "
-# 
-# ###
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.last_buy" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   a.max_order_number as max_order_number,
-#   a.max_reordered as max_reordered,
-#   a.avg_reordered as avg_reordered,
-#   o.order_id,
-#   c.cum_days as cum_days,
-#   c.last_buy as last_buy,
-#   o.order_number,
-#   o.order_dow,
-#   o.order_hour_of_day,
-#   o.days_since_prior_order,
-#   o.order_number - c.order_number as order_number_diff,
-#   o.days_since_prior_order - c.days_since_prior_order
-# FROM
-#   (
-#   SELECT
-#     user_id,
-#     product_id,
-#     max(reordered) as max_reordered,
-#     avg(reordered) as avg_reordered,
-#     MAX(order_number) as max_order_number
-#   FROM
-#     [instacart.df_prior]
-#   GROUP BY
-#     user_id,
-#     product_id
-#   ) as a
-# LEFT OUTER JOIN
-#   [instacart.orders] as o
-# ON
-#   a.user_id = o.user_id AND
-#   a.max_order_number = o.order_number
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as c
-# ON
-#   c.order_id = o.order_id
-# "
-# 
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.last_buy_aisle" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.aisle_id as aisle_id,
-#   a.max_order_number as max_order_number,
-#   a.max_reordered as max_reordered,
-#   a.avg_reordered as avg_reordered,
-#   o.order_id,
-#   c.cum_days as cum_days,
-#   c.last_buy as last_buy,
-#   o.order_number,
-#   o.order_dow,
-#   o.order_hour_of_day,
-#   o.days_since_prior_order,
-#   o.order_number - c.order_number as order_number_diff,
-#   o.days_since_prior_order - c.days_since_prior_order
-# FROM
-#   (
-#   SELECT
-#     user_id,
-#     aisle_id,
-#     max(reordered) as max_reordered,
-#     avg(reordered) as avg_reordered,
-#     MAX(order_number) as max_order_number
-#   FROM
-#     [instacart.df_prior]
-#   GROUP BY
-#     user_id,
-#     aisle_id
-#   ) as a
-# LEFT OUTER JOIN
-#   [instacart.orders] as o
-# ON
-#   a.user_id = o.user_id AND
-#   a.max_order_number = o.order_number
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as c
-# ON
-#   c.order_id = o.order_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.last_buy_depart" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.department_id as department_id,
-#   a.max_order_number as max_order_number,
-#   a.max_reordered as max_reordered,
-#   a.avg_reordered as avg_reordered,
-#   o.order_id,
-#   c.cum_days as cum_days,
-#   c.last_buy as last_buy,
-#   o.order_number,
-#   o.order_dow,
-#   o.order_hour_of_day,
-#   o.days_since_prior_order,
-#   o.order_number - c.order_number as order_number_diff,
-#   o.days_since_prior_order - c.days_since_prior_order
-# FROM
-#   (
-#   SELECT
-#     user_id,
-#     department_id,
-#     max(reordered) as max_reordered,
-#     avg(reordered) as avg_reordered,
-#     MAX(order_number) as max_order_number
-#   FROM
-#     [instacart.df_prior]
-#   GROUP BY
-#     user_id,
-#     department_id
-#   ) as a
-# LEFT OUTER JOIN
-#   [instacart.orders] as o
-# ON
-#   a.user_id = o.user_id AND
-#   a.max_order_number = o.order_number
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as c
-# ON
-#   c.order_id = o.order_id
-# "
-# 
-# ###
-# 
-# 
-# ###
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.last_buy_2" --flatten_results --replace "
-# SELECT 
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   a.max_order_number as max_order_number,
-#   a.max_reordered as max_reordered,
-#   a.avg_reordered as avg_reordered,
-#   o.order_id,
-#   c.cum_days as cum_days,
-#   c.last_buy as last_buy,
-#   o.order_number,
-#   o.order_dow,
-#   o.order_hour_of_day,
-#   o.days_since_prior_order,
-#   o.order_number - c.order_number as order_number_diff,
-#   o.days_since_prior_order - c.days_since_prior_order
-# FROM
-#   (
-#   SELECT
-#     user_id,
-#     product_id,
-#     max(reordered) as max_reordered,
-#     avg(reordered) as avg_reordered,
-#     MAX(order_number) - 1 as max_order_number
-#   FROM
-#     [instacart.df_prior]
-#   GROUP BY
-#     user_id,
-#     product_id
-#   ) as a
-# LEFT OUTER JOIN
-#   [instacart.orders] as o
-# ON
-#   a.user_id = o.user_id AND
-#   a.max_order_number = o.order_number
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as c
-# ON
-#   c.order_id = o.order_id
-# "
-# 
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.last_buy_aisle_2" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.aisle_id as aisle_id,
-#   a.max_order_number as max_order_number,
-#   a.max_reordered as max_reordered,
-#   a.avg_reordered as avg_reordered,
-#   o.order_id,
-#   c.cum_days as cum_days,
-#   c.last_buy as last_buy,
-#   o.order_number,
-#   o.order_dow,
-#   o.order_hour_of_day,
-#   o.days_since_prior_order,
-#   o.order_number - c.order_number as order_number_diff,
-#   o.days_since_prior_order - c.days_since_prior_order
-# FROM
-#   (
-#   SELECT
-#     user_id,
-#     aisle_id,
-#     max(reordered) as max_reordered,
-#     avg(reordered) as avg_reordered,
-#     MAX(order_number) - 1 as max_order_number
-#   FROM
-#     [instacart.df_prior]
-#   GROUP BY
-#     user_id,
-#     aisle_id
-#   ) as a
-# LEFT OUTER JOIN
-#   [instacart.orders] as o
-# ON
-#   a.user_id = o.user_id AND
-#   a.max_order_number = o.order_number
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as c
-# ON
-#   c.order_id = o.order_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.last_buy_depart_2" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.department_id as department_id,
-#   a.max_order_number as max_order_number,
-#   a.max_reordered as max_reordered,
-#   a.avg_reordered as avg_reordered,
-#   o.order_id,
-#   c.cum_days as cum_days,
-#   c.last_buy as last_buy,
-#   o.order_number,
-#   o.order_dow,
-#   o.order_hour_of_day,
-#   o.days_since_prior_order,
-#   o.order_number - c.order_number as order_number_diff,
-#   o.days_since_prior_order - c.days_since_prior_order
-# FROM
-#   (
-#   SELECT
-#     user_id,
-#     department_id,
-#     max(reordered) as max_reordered,
-#     avg(reordered) as avg_reordered,
-#     MAX(order_number) - 1 as max_order_number
-#   FROM
-#     [instacart.df_prior]
-#   GROUP BY
-#     user_id,
-#     department_id
-#   ) as a
-# LEFT OUTER JOIN
-#   [instacart.orders] as o
-# ON
-#   a.user_id = o.user_id AND
-#   a.max_order_number = o.order_number
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as c
-# ON
-#   c.order_id = o.order_id
-# "
-# 
-# ###
-# 
-# 
-# 
-# 
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.dmt_user_item_30" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   count(1) cnt_user_item,
-#   EXACT_COUNT_DISTINCT(a.order_id) cnt_user_order,
-#   avg(a.order_hour_of_day) avg_order_hour_of_day,
-#   min(a.order_hour_of_day) min_order_hour_of_day,
-#   max(a.order_hour_of_day) max_order_hour_of_day,
-#   max(a.reordered) max_reordered,
-#   sum(a.reordered) sum_reordered,
-#   avg(a.reordered) avg_reordered,
-#   AVG(a.order_dow) as avg_order_dow,
-#   MIN(a.order_dow) as min_order_dow,
-#   MAX(a.order_dow) as max_order_dow,
-#   AVG(a.days_since_prior_order) as avg_days_since_prior_order,
-#   MAX(a.days_since_prior_order) as max_days_since_prior_order,
-#   MIN(a.days_since_prior_order) as min_days_since_prior_order,
-#   sum(CASE WHEN a.order_dow = 0  THEN 1 ELSE 0 END) AS  order_dow_0,
-#   sum(CASE WHEN a.order_dow = 1  THEN 1 ELSE 0 END) AS  order_dow_1,
-#   sum(CASE WHEN a.order_dow = 2  THEN 1 ELSE 0 END) AS  order_dow_2,
-#   sum(CASE WHEN a.order_dow = 3  THEN 1 ELSE 0 END) AS  order_dow_3,
-#   sum(CASE WHEN a.order_dow = 4  THEN 1 ELSE 0 END) AS  order_dow_4,
-#   sum(CASE WHEN a.order_dow = 5  THEN 1 ELSE 0 END) AS  order_dow_5,
-#   sum(CASE WHEN a.order_dow = 6  THEN 1 ELSE 0 END) AS  order_dow_6,
-#   avg(CASE WHEN a.order_dow = 0  THEN a.reordered ELSE null END) AS  reorder_dow_0,
-#   avg(CASE WHEN a.order_dow = 1  THEN a.reordered ELSE null END) AS  reorder_dow_1,
-#   avg(CASE WHEN a.order_dow = 2  THEN a.reordered ELSE null END) AS  reorder_dow_2,
-#   avg(CASE WHEN a.order_dow = 3  THEN a.reordered ELSE null END) AS  reorder_dow_3,
-#   avg(CASE WHEN a.order_dow = 4  THEN a.reordered ELSE null END) AS  reorder_dow_4,
-#   avg(CASE WHEN a.order_dow = 5  THEN a.reordered ELSE null END) AS  reorder_dow_5,
-#   avg(CASE WHEN a.order_dow = 6  THEN a.reordered ELSE null END) AS  reorder_dow_6
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# GROUP BY
-#   user_id, product_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.dmt_user_aisle_30" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.aisle_id as aisle_id,
-#   count(1) cnt_user_aisle,
-#   EXACT_COUNT_DISTINCT(a.order_id) cnt_aisle_order,
-#   EXACT_COUNT_DISTINCT(a.product_id) cnt_product_order,
-#   avg(a.order_hour_of_day) avg_order_hour_of_day,
-#   min(a.order_hour_of_day) min_order_hour_of_day,
-#   max(a.order_hour_of_day) max_order_hour_of_day,
-#   AVG(a.days_since_prior_order) as avg_days_since_prior_order,
-#   MAX(a.days_since_prior_order) as max_days_since_prior_order,
-#   MIN(a.days_since_prior_order) as min_days_since_prior_order,
-#   AVG(order_dow) as avg_order_dow,
-#   MAX(order_dow) as max_order_dow,
-#   MIN(order_dow) as min_order_dow,
-#   max(reordered) max_reordered,
-#   sum(reordered) sum_reordered,
-#   avg(reordered) avg_reordered
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# GROUP BY
-#   user_id, aisle_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.dmt_user_depart_30" --flatten_results --replace "
-# SELECT
-#   a.user_id user_id,
-#   a.department_id department_id,
-#   count(1) cnt_user_depart,
-#   EXACT_COUNT_DISTINCT(a.order_id) cnt_depart_order,
-#   EXACT_COUNT_DISTINCT(a.product_id) cnt_product_order,
-#   EXACT_COUNT_DISTINCT(a.aisle_id) cnt_aisle_order,
-#   avg(a.order_hour_of_day) avg_order_hour_of_day,
-#   min(a.order_hour_of_day) min_order_hour_of_day,
-#   max(a.order_hour_of_day) max_order_hour_of_day,
-#   AVG(a.days_since_prior_order) as avg_days_since_prior_order,
-#   MAX(a.days_since_prior_order) as max_days_since_prior_order,
-#   MIN(a.days_since_prior_order) as min_days_since_prior_order,
-#   AVG(order_dow) as avg_order_dow,
-#   MAX(order_dow) as max_order_dow,
-#   MIN(order_dow) as min_order_dow,
-#   max(reordered) max_reordered,
-#   sum(reordered) sum_reordered,
-#   avg(reordered) avg_reordered
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# GROUP BY
-#   user_id, department_id
-# "
-# ###
-# 
-# 
-# ###
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.dmt_user_item" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   product_id,
-#   count(1) cnt_user_item,
-#   EXACT_COUNT_DISTINCT(order_id) cnt_user_order,
-#   avg(order_hour_of_day) avg_order_hour_of_day,
-#   min(order_hour_of_day) min_order_hour_of_day,
-#   max(order_hour_of_day) max_order_hour_of_day,
-#   max(reordered) max_reordered,
-#   sum(reordered) sum_reordered,
-#   avg(reordered) avg_reordered,
-#   AVG(days_since_prior_order) as avg_days_since_prior_order,
-#   MAX(days_since_prior_order) as max_days_since_prior_order,
-#   MIN(days_since_prior_order) as min_days_since_prior_order,
-#   AVG(order_dow) as avg_order_dow,
-#   MAX(order_dow) as max_order_dow,
-#   MIN(order_dow) as min_order_dow,
-#   sum(CASE WHEN order_dow = 0  THEN 1 ELSE 0 END) AS  order_dow_0,
-#   sum(CASE WHEN order_dow = 1  THEN 1 ELSE 0 END) AS  order_dow_1,
-#   sum(CASE WHEN order_dow = 2  THEN 1 ELSE 0 END) AS  order_dow_2,
-#   sum(CASE WHEN order_dow = 3  THEN 1 ELSE 0 END) AS  order_dow_3,
-#   sum(CASE WHEN order_dow = 4  THEN 1 ELSE 0 END) AS  order_dow_4,
-#   sum(CASE WHEN order_dow = 5  THEN 1 ELSE 0 END) AS  order_dow_5,
-#   sum(CASE WHEN order_dow = 6  THEN 1 ELSE 0 END) AS  order_dow_6,
-#   avg(CASE WHEN order_dow = 0  THEN reordered ELSE null END) AS  reorder_dow_0,
-#   avg(CASE WHEN order_dow = 1  THEN reordered ELSE null END) AS  reorder_dow_1,
-#   avg(CASE WHEN order_dow = 2  THEN reordered ELSE null END) AS  reorder_dow_2,
-#   avg(CASE WHEN order_dow = 3  THEN reordered ELSE null END) AS  reorder_dow_3,
-#   avg(CASE WHEN order_dow = 4  THEN reordered ELSE null END) AS  reorder_dow_4,
-#   avg(CASE WHEN order_dow = 5  THEN reordered ELSE null END) AS  reorder_dow_5,
-#   avg(CASE WHEN order_dow = 6  THEN reordered ELSE null END) AS  reorder_dow_6
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   user_id, product_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.dmt_user_aisle" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   aisle_id,
-#   count(1) cnt_user_aisle,
-#   EXACT_COUNT_DISTINCT(order_id) cnt_aisle_order,
-#   EXACT_COUNT_DISTINCT(product_id) cnt_product_order,
-#   avg(order_hour_of_day) avg_order_hour_of_day,
-#   min(order_hour_of_day) min_order_hour_of_day,
-#   max(order_hour_of_day) max_order_hour_of_day,
-#   AVG(days_since_prior_order) as avg_days_since_prior_order,
-#   MAX(days_since_prior_order) as max_days_since_prior_order,
-#   MIN(days_since_prior_order) as min_days_since_prior_order,
-#   AVG(order_dow) as avg_order_dow,
-#   MAX(order_dow) as max_order_dow,
-#   MIN(order_dow) as min_order_dow,
-#   max(reordered) max_reordered,
-#   sum(reordered) sum_reordered,
-#   avg(reordered) avg_reordered
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   user_id, aisle_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.dmt_user_depart" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   department_id,
-#   count(1) cnt_user_depart,
-#   EXACT_COUNT_DISTINCT(order_id) cnt_depart_order,
-#   EXACT_COUNT_DISTINCT(product_id) cnt_product_order,
-#   EXACT_COUNT_DISTINCT(aisle_id) cnt_aisle_order,
-#   avg(order_hour_of_day) avg_order_hour_of_day,
-#   min(order_hour_of_day) min_order_hour_of_day,
-#   max(order_hour_of_day) max_order_hour_of_day,
-#   AVG(days_since_prior_order) as avg_days_since_prior_order,
-#   MAX(days_since_prior_order) as max_days_since_prior_order,
-#   MIN(days_since_prior_order) as min_days_since_prior_order,
-#   AVG(order_dow) as avg_order_dow,
-#   MAX(order_dow) as max_order_dow,
-#   MIN(order_dow) as min_order_dow,
-#   max(reordered) max_reordered,
-#   sum(reordered) sum_reordered,
-#   avg(reordered) avg_reordered
-# FROM
-#   [instacart.df_prior]
-# GROUP BY
-#   user_id, department_id
-# "
-# 
-# bq query --max_rows 1  --allow_large_results --destination_table "instacart.user_cart_30" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   count(1) as cnt_order_num,
-#   avg(cnt_order) as cnt_cart_num,
-#   avg(cnt_item) as avg_cnt_item,
-#   avg(cnt_aisle) as avg_cnt_aisle,
-#   avg(cnt_depart) as avg_cnt_depart,
-#   avg(sum_reordered) as avg_sum_reordered,
-#   sum(sum_reordered) as sum_reordered,
-#   avg(avg_reordered) as avg_reordered,
-#   avg(order_dow) as order_dow,
-#   avg(order_hour_of_day) as order_hour_of_day,
-#   avg(days_since_prior_order) as days_since_prior_order
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.order_id as order_id,
-#   count(1) cnt_order,
-#   EXACT_COUNT_DISTINCT(a.product_id) cnt_item,
-#   EXACT_COUNT_DISTINCT(a.aisle_id) cnt_aisle,
-#   EXACT_COUNT_DISTINCT(a.department_id) cnt_depart,
-#   sum(a.reordered) sum_reordered,
-#   avg(a.reordered) avg_reordered,
-#   avg(a.order_dow) as order_dow,
-#   avg(a.order_hour_of_day) as order_hour_of_day,
-#   avg(a.days_since_prior_order) as days_since_prior_order
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# GROUP BY
-#   user_id, order_id
-# )
-# GROUP BY
-#   user_id
-# "
-# 
-# ###
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_user_item_30" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   product_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs  
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.product_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# ) as s
-# GROUP BY
-#   user_id, product_id
-# "
-# 
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_user_item" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   product_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs  
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.product_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# ) as s
-# GROUP BY
-#   user_id, product_id
-# "
-# ###
-# 
-# ###
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_user_aisle_30" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   aisle_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs  
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.aisle_id as aisle_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.aisle_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# ) as s
-# GROUP BY
-#   user_id, aisle_id
-# "
-# 
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_user_aisle" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   aisle_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(51, QUANTILES(diffs - last_buy, 101)) is not NULL THEN NTH(51, QUANTILES(diffs - last_buy, 101)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs  
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.aisle_id as aisle_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.aisle_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# ) as s
-# GROUP BY
-#   user_id, aisle_id
-# "
-# ###
-# 
-# ###
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_user_depart_30" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   department_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs  
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.department_id as department_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.department_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# ) as s
-# GROUP BY
-#   user_id, department_id
-# "
-# 
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_user_depart" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   department_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs  
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.department_id as department_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.department_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# ) as s
-# GROUP BY
-#   user_id, department_id
-# "
-# ###
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_user_30" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs  
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.product_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# ) as s
-# GROUP BY
-#   user_id
-# "
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_user" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs  
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.product_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# ) as s
-# GROUP BY
-#   user_id
-# "
-# 
-# ###
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_item_30" --flatten_results --replace "
-# SELECT
-#   product_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs  
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.product_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# ) as s
-# GROUP BY
-#   product_id
-# "
-# 
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_item" --flatten_results --replace "
-# SELECT
-#   product_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs  
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.product_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# ) as s
-# GROUP BY
-#   product_id
-# "
-# ######
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_aisle_30" --flatten_results --replace "
-# SELECT
-#   aisle_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.aisle_id as aisle_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.aisle_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# ) as s
-# GROUP BY
-#   aisle_id
-# "
-# 
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_depart_30" --flatten_results --replace "
-# SELECT
-#   department_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.department_id as department_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.department_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30
-# ) as s
-# GROUP BY
-#    department_id
-# "
-# 
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.diff_user_item_reordered_30" --flatten_results --replace "
-# SELECT
-#   user_id,
-#   product_id,
-#   CASE WHEN STDDEV(diffs - last_buy) is not NULL THEN STDDEV(diffs - last_buy) ELSE -1 END as std_diffs,
-#   CASE WHEN NTH(501, QUANTILES(diffs - last_buy, 1001)) is not NULL THEN NTH(501, QUANTILES(diffs - last_buy, 1001)) ELSE -1 END as med_diffs,
-#   CASE WHEN avg(diffs - last_buy) is not NULL THEN avg(diffs - last_buy) ELSE -1 END as avg_diffs,
-#   CASE WHEN min(diffs - last_buy) is not NULL THEN min(diffs - last_buy) ELSE -1 END as min_diffs,
-#   CASE WHEN max(diffs - last_buy) is not NULL THEN max(diffs - last_buy) ELSE -1 END as max_diffs
-# FROM
-# (
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   LAG(b.last_buy, 1) OVER (PARTITION BY a.user_id, a.product_id ORDER BY a.order_number) as diffs,
-#   b.last_buy as last_buy
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# WHERE
-#   b.last_buy <= 30 and reordered = 1
-# ) as s
-# GROUP BY
-#   user_id, product_id
-# "
-# 
-# ###
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.user_item_recent_reordered" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.product_id as product_id,
-#   AVG(CASE WHEN b.last_buy <=7 THEN reordered ELSE 0 END) as ui_under7,
-#   AVG(CASE WHEN b.last_buy > 7 AND b.last_buy <= 14 THEN reordered ELSE 0 END) as ui_under14,
-#   AVG(CASE WHEN b.last_buy > 14 AND b.last_buy <= 21 THEN reordered ELSE 0 END) as ui_under21,
-#   AVG(CASE WHEN b.last_buy > 21 AND b.last_buy <= 28 THEN reordered ELSE 0 END) as ui_under28,
-#   AVG(CASE WHEN b.last_buy > 28 THEN reordered ELSE 0 END) as ui_over28
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# GROUP BY
-#   user_id, product_id
-# "
-# ####
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.user_aisle_recent_reordered" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.aisle_id as aisle_id,
-#   AVG(CASE WHEN b.last_buy <=7 THEN reordered ELSE 0 END) as ui_under7,
-#   AVG(CASE WHEN b.last_buy > 7 AND b.last_buy <= 14 THEN reordered ELSE 0 END) as ui_under14,
-#   AVG(CASE WHEN b.last_buy > 14 AND b.last_buy <= 21 THEN reordered ELSE 0 END) as ui_under21,
-#   AVG(CASE WHEN b.last_buy > 21 AND b.last_buy <= 28 THEN reordered ELSE 0 END) as ui_under28,
-#   AVG(CASE WHEN b.last_buy > 28 THEN reordered ELSE 0 END) as ui_over28
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# GROUP BY
-#   user_id, aisle_id
-# "
-# 
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.user_depart_recent_reordered" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   a.department_id as department_id,
-#   AVG(CASE WHEN b.last_buy <=7 THEN reordered ELSE 0 END) as ui_under7,
-#   AVG(CASE WHEN b.last_buy > 7 AND b.last_buy <= 14 THEN reordered ELSE 0 END) as ui_under14,
-#   AVG(CASE WHEN b.last_buy > 14 AND b.last_buy <= 21 THEN reordered ELSE 0 END) as ui_under21,
-#   AVG(CASE WHEN b.last_buy > 21 AND b.last_buy <= 28 THEN reordered ELSE 0 END) as ui_under28,
-#   AVG(CASE WHEN b.last_buy > 28 THEN reordered ELSE 0 END) as ui_over28
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# GROUP BY
-#   user_id, department_id
-# "
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.aisle_recent_reordered" --flatten_results --replace "
-# SELECT
-#   a.aisle_id as aisle_id,
-#   AVG(CASE WHEN b.last_buy <=7 THEN reordered ELSE 0 END) as ui_under7,
-#   AVG(CASE WHEN b.last_buy > 7 AND b.last_buy <= 14 THEN reordered ELSE 0 END) as ui_under14,
-#   AVG(CASE WHEN b.last_buy > 14 AND b.last_buy <= 21 THEN reordered ELSE 0 END) as ui_under21,
-#   AVG(CASE WHEN b.last_buy > 21 AND b.last_buy <= 28 THEN reordered ELSE 0 END) as ui_under28,
-#   AVG(CASE WHEN b.last_buy > 28 THEN reordered ELSE 0 END) as ui_over28
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# GROUP BY
-#   aisle_id
-# "
-# 
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.depart_recent_reordered" --flatten_results --replace "
-# SELECT
-#   a.department_id as department_id,
-#   AVG(CASE WHEN b.last_buy <=7 THEN reordered ELSE 0 END) as ui_under7,
-#   AVG(CASE WHEN b.last_buy > 7 AND b.last_buy <= 14 THEN reordered ELSE 0 END) as ui_under14,
-#   AVG(CASE WHEN b.last_buy > 14 AND b.last_buy <= 21 THEN reordered ELSE 0 END) as ui_under21,
-#   AVG(CASE WHEN b.last_buy > 21 AND b.last_buy <= 28 THEN reordered ELSE 0 END) as ui_under28,
-#   AVG(CASE WHEN b.last_buy > 28 THEN reordered ELSE 0 END) as ui_over28
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# GROUP BY
-#   department_id
-# "
-# 
-# 
-# 
-# ####
-# 
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.item_recent_reordered" --flatten_results --replace "
-# SELECT
-#   a.product_id as product_id,
-#   AVG(CASE WHEN b.last_buy <=7 THEN reordered ELSE 0 END) as i_under7,
-#   AVG(CASE WHEN b.last_buy > 7 AND b.last_buy <= 14 THEN reordered ELSE 0 END) as i_under14,
-#   AVG(CASE WHEN b.last_buy > 14 AND b.last_buy <= 21 THEN reordered ELSE 0 END) as i_under21,
-#   AVG(CASE WHEN b.last_buy > 21 AND b.last_buy <= 28 THEN reordered ELSE 0 END) as i_under28,
-#   AVG(CASE WHEN b.last_buy > 28 THEN reordered ELSE 0 END) as i_over28
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# GROUP BY
-#   product_id
-# "
-# 
-# bq query --max_rows 20  --allow_large_results --destination_table "instacart.user_recent_reordered" --flatten_results --replace "
-# SELECT
-#   a.user_id as user_id,
-#   AVG(CASE WHEN b.last_buy <=7 THEN reordered ELSE 0 END) as u_under7,
-#   AVG(CASE WHEN b.last_buy > 7 AND b.last_buy <= 14 THEN reordered ELSE 0 END) as u_under14,
-#   AVG(CASE WHEN b.last_buy > 14 AND b.last_buy <= 21 THEN reordered ELSE 0 END) as u_under21,
-#   AVG(CASE WHEN b.last_buy > 21 AND b.last_buy <= 28 THEN reordered ELSE 0 END) as u_under28,
-#   AVG(CASE WHEN b.last_buy > 28 THEN reordered ELSE 0 END) as u_over28
-# FROM
-#   [instacart.df_prior] as a
-# LEFT OUTER JOIN
-#   [instacart.cum_orders] as b
-# ON
-#   a.order_id = b.order_id
-# GROUP BY
-#   user_id
-# "
-# 
-# 
-# bq query --max_rows 1  --maximum_billing_tier 3 --allow_large_results --destination_table "instacart.dmt_train_only_rebuy" --flatten_results --replace "
-# SELECT
-#   CASE WHEN tr.reordered is not null THEN tr.reordered ELSE 0 END as target,
-#   o.user_id,
-#   p.aisle_id,
-#   p.department_id,
-#   o.product_id,
-#   o.order_id,
-#   o.order_number,
-#   o.order_dow,
-#   o.order_hour_of_day,
-#   o.days_since_prior_order,
-#   o.cum_days,
-#   du.*,
-#   dui3.*,
-#   dd.*,
-#   du3.*,
-#   da3.*,
-#   dd3.*,
-#   udd.*,
-#   udd3.*,
-#   di.*,
-#   di3.*,
-#   ddi3.*,
-#   ddd3.*,
-#   dai3.*,
-#   dddi3.*,
-#   u.*,
-#   u2.*,
-#   uc.*,
-#   i.*,
-#   i2.*,
-#   l.*,
-#   la.*,
-#   ld.*,
-#   l2.*,
-#   la2.*,
-#   ld2.*,
-#   ui.*,
-#   ua.*,
-#   ud.*,
-#   ui3.*,
-#   ua3.*,
-#   ud3.*,
-#   rui.*,
-#   ru.*,
-#   ri.*
-# FROM
-#   [instacart.only_rebuy_train] as o
-# LEFT OUTER JOIN
-#   [instacart.products] as p
-# ON
-#   o.product_id = p.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_item] as du
-# ON
-#   du.user_id = o.user_id AND  o.product_id = du.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_item_reordered_30] as dui3
-# ON
-#   dui3.user_id = o.user_id AND  o.product_id = dui3.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_aisle_reordered_30] as dai3
-# ON
-#   dai3.user_id = o.user_id AND p.aisle_id = dai3.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_depart_reordered_30] as dddi3
-# ON
-#   dddi3.user_id = o.user_id AND  p.department_id = dddi3.department_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_depart] as dd
-# ON
-#   dd.user_id = o.user_id AND  p.product_id = dd.department_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_item_30] as du3
-# ON
-#   du3.user_id = o.user_id AND  o.product_id = du3.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_aisle_30] as da3
-# ON
-#   da3.user_id = o.user_id AND  p.aisle_id = da3.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_depart_30] as dd3
-# ON
-#   dd3.user_id = o.user_id AND  p.product_id = dd3.department_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user] as udd
-# ON
-#   udd.user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_30] as udd3
-# ON
-#   udd3.user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.diff_item] as di
-# ON
-#   di.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_item_30] as di3
-# ON
-#   di3.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_aisle_30] as ddi3
-# ON
-#   ddi3.aisle_id = p.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.diff_depart_30] as ddd3
-# ON
-#   ddd3.department_id = p.department_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user] as u
-# ON
-#   u.u1_user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user2_30] as u2
-# ON
-#   u2.u1_user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.user_cart_30] as uc
-# ON
-#   uc.user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_item] as i
-# ON
-#   i.i1_product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_item2_30] as i2
-# ON
-#   i2.i1_product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy] as l
-# ON
-#   l.user_id = o.user_id AND l.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy_aisle] as la
-# ON
-#   la.user_id = o.user_id AND la.aisle_id = p.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy_depart] as ld
-# ON
-#   ld.user_id = o.user_id AND ld.department_id = p.department_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy_2] as l2
-# ON
-#   l2.user_id = o.user_id AND l2.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy_aisle_2] as la2
-# ON
-#   la2.user_id = o.user_id AND la2.aisle_id = p.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy_depart_2] as ld2
-# ON
-#   ld2.user_id = o.user_id AND ld2.department_id = p.department_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_item] as ui
-# ON
-#   ui.user_id = o.user_id AND ui.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_aisle] as ua
-# ON
-#   ua.user_id = o.user_id AND ua.aisle_id = p.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_depart] as ud
-# ON
-#   ud.user_id = o.user_id AND ud.department_id = p.department_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_item_30] as ui3
-# ON
-#   ui3.user_id = o.user_id AND ui3.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_aisle_30] as ua3
-# ON
-#   ua3.user_id = o.user_id AND ua3.aisle_id = p.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_depart_30] as ud3
-# ON
-#   ud3.user_id = o.user_id AND ud3.department_id = p.department_id
-# LEFT OUTER JOIN
-#   [instacart.user_item_recent_reordered] as rui
-# ON
-#   rui.user_id = o.user_id AND rui.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.user_recent_reordered] as ru
-# ON
-#   ru.user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.item_recent_reordered] as ri
-# ON
-#   ri.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.df_train] as tr
-# ON
-#   tr.user_id = o.user_id AND tr.product_id = o.product_id AND tr.order_id = o.order_id
-# "
-# 
-# 
-# 
-# bq query --maximum_billing_tier 2 --max_rows 1  --allow_large_results --destination_table "instacart.dmt_test_only_rebuy" --flatten_results --replace "
-# SELECT
-#   o.user_id,
-#   p.aisle_id,
-#   p.department_id,
-#   o.product_id,
-#   o.order_id,
-#   o.order_number,
-#   o.order_dow,
-#   o.order_hour_of_day,
-#   o.days_since_prior_order,
-#   o.cum_days,
-#   du.*,
-#   dui3.*,
-#   dd.*,
-#   du3.*,
-#   da3.*,
-#   dd3.*,
-#   udd.*,
-#   udd3.*,
-#   di.*,
-#   di3.*,
-#   ddi3.*,
-#   ddd3.*,
-#   dai3.*,
-#   dddi3.*,
-#   u.*,
-#   u2.*,
-#   uc.*,
-#   i.*,
-#   i2.*,
-#   l.*,
-#   la.*,
-#   ld.*,
-#   l2.*,
-#   la2.*,
-#   ld2.*,
-#   ui.*,
-#   ua.*,
-#   ud.*,
-#   ui3.*,
-#   ua3.*,
-#   ud3.*,
-#   rui.*,
-#   ru.*,
-#   ri.*
-# FROM
-#   [instacart.only_rebuy_test] as o
-# LEFT OUTER JOIN
-#   [instacart.products] as p
-# ON
-#   o.product_id = p.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_item] as du
-# ON
-#   du.user_id = o.user_id AND  o.product_id = du.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_item_reordered_30] as dui3
-# ON
-#   dui3.user_id = o.user_id AND  o.product_id = dui3.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_aisle_reordered_30] as dai3
-# ON
-#   dai3.user_id = o.user_id AND p.aisle_id = dai3.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_depart_reordered_30] as dddi3
-# ON
-#   dddi3.user_id = o.user_id AND  p.department_id = dddi3.department_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_depart] as dd
-# ON
-#   dd.user_id = o.user_id AND  p.product_id = dd.department_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_item_30] as du3
-# ON
-#   du3.user_id = o.user_id AND  o.product_id = du3.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_aisle_30] as da3
-# ON
-#   da3.user_id = o.user_id AND  p.aisle_id = da3.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_depart_30] as dd3
-# ON
-#   dd3.user_id = o.user_id AND  p.product_id = dd3.department_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user] as udd
-# ON
-#   udd.user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.diff_user_30] as udd3
-# ON
-#   udd3.user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.diff_item] as di
-# ON
-#   di.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_item_30] as di3
-# ON
-#   di3.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.diff_aisle_30] as ddi3
-# ON
-#   ddi3.aisle_id = p.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.diff_depart_30] as ddd3
-# ON
-#   ddd3.department_id = p.department_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user] as u
-# ON
-#   u.u1_user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user2_30] as u2
-# ON
-#   u2.u1_user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.user_cart_30] as uc
-# ON
-#   uc.user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_item] as i
-# ON
-#   i.i1_product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_item2_30] as i2
-# ON
-#   i2.i1_product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy] as l
-# ON
-#   l.user_id = o.user_id AND l.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy_aisle] as la
-# ON
-#   la.user_id = o.user_id AND la.aisle_id = p.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy_depart] as ld
-# ON
-#   ld.user_id = o.user_id AND ld.department_id = p.department_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy_2] as l2
-# ON
-#   l2.user_id = o.user_id AND l2.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy_aisle_2] as la2
-# ON
-#   la2.user_id = o.user_id AND la2.aisle_id = p.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.last_buy_depart_2] as ld2
-# ON
-#   ld2.user_id = o.user_id AND ld2.department_id = p.department_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_item] as ui
-# ON
-#   ui.user_id = o.user_id AND ui.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_aisle] as ua
-# ON
-#   ua.user_id = o.user_id AND ua.aisle_id = p.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_depart] as ud
-# ON
-#   ud.user_id = o.user_id AND ud.department_id = p.department_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_item_30] as ui3
-# ON
-#   ui3.user_id = o.user_id AND ui3.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_aisle_30] as ua3
-# ON
-#   ua3.user_id = o.user_id AND ua3.aisle_id = p.aisle_id
-# LEFT OUTER JOIN
-#   [instacart.dmt_user_depart_30] as ud3
-# ON
-#   ud3.user_id = o.user_id AND ud3.department_id = p.department_id
-# LEFT OUTER JOIN
-#   [instacart.df_train] as tr
-# ON
-#   tr.user_id = o.user_id AND tr.product_id = o.product_id AND tr.order_id = o.order_id
-# LEFT OUTER JOIN
-#   [instacart.user_item_recent_reordered] as rui
-# ON
-#   rui.user_id = o.user_id AND rui.product_id = o.product_id
-# LEFT OUTER JOIN
-#   [instacart.user_recent_reordered] as ru
-# ON
-#   ru.user_id = o.user_id
-# LEFT OUTER JOIN
-#   [instacart.item_recent_reordered] as ri
-# ON
-#   ri.product_id = o.product_id
-# "
-# 
-# gsutil -m rm -r gs://kaggle-instacart-takami/data/
-# 
-# bq extract --compression GZIP instacart.dmt_train_only_rebuy gs://kaggle-instacart-takami/data/dmt_train_only_rebuy/data*.csv.gz
-# bq extract --compression GZIP instacart.dmt_test_only_rebuy gs://kaggle-instacart-takami/data/dmt_test_only_rebuy/data*.csv.gz
-# 
-# rm -rf ../data/
-# gsutil -m cp -r gs://kaggle-instacart-takami/data/ ../
-# 
-# ```
+
+input_list = train_data_2.columns.values.tolist() # list of column name
+input_list.remove('price')
+
+# list of features included in the regression model and the calculated train and validation errors (RMSE)
+regression_greedy_algorithm = pd.DataFrame(columns = ['feature', 'train_error', 'validation_error'])  
+i = 0
+temp_list = []
+
+# a while loop going through all the features in the dataframe
+while i < len(train_data_2.columns)-1:
+    
+    # a temporary dataframe to select the best feature at each iteration
+    temp = pd.DataFrame(columns = ['feature', 'train_error', 'validation_error'])
+    
+    # a for loop to test all the remaining features
+    for p in input_list:
+        RMSE_train, RMSE_validation = RMSE(train_data_2, validation_data, temp_list, p)
+        temp = temp.append({'feature':p, 'train_error':RMSE_train, 'validation_error':RMSE_validation}, ignore_index=True)
+        
+    temp = temp.sort_values('train_error') # select the best feature using train error
+    best = temp.iloc[0,0]
+    temp_list.append(best)
+    regression_greedy_algorithm = regression_greedy_algorithm.append({'feature': best, 
+                                                  'train_error': temp.iloc[0,1], 'validation_error': temp.iloc[0,2]}, 
+                                                 ignore_index=True) # add the feature to the dataframe
+    input_list.remove(best) # remove the best feature from the list of available features
+    i += 1
+regression_greedy_algorithm
+
+
+# We can see that the validation error is minimum when we reach 25 features in the model (condition#4). We stop the selection here even if the training error keeps getting smaller (overfitting).
+# 
+# Let's now calculate an estimation of the generalization error using test_data
+
+# In[ ]:
+
+
+greedy_algo_features_list = regression_greedy_algorithm['feature'].tolist()[:24] # select the first 30 features
+test_error, _, _ = multiple_regression_model(train_data_2, test_data, greedy_algo_features_list)
+print ('test error (RMSE) is: %s' %test_error)
+
+
+# The test error is getting smaller.
+# 
+# * Note 1: We could have used k-fold cross validation instead of a validation set.
+# * Note 2: Other greedy algorithms exist (e.g., backward stepwise, combining forward and backward steps)
+# 
+# Now, instead of searching over a discrete set of solutions using greedy algorithms, we can use another technique called regularization. We start with all possible features in the model and shrink the coefficients (weights). Two main regularization techniques exist, Ridge regression (a.k.a L2 regularization) and Lasso regression (a.k.a L1 regularization).
+# 
+# ### 2.3 Ridge Regression
+# 
+# Ridge regression aims to avoid overfitting by adding a cost to the Residual Sum of Squares (RSS) term of standard least squares that depends on the 2-norm of the coefficients.  The result is penalizing fits with large coefficients.  The strength of this penalty, and thus the fit vs. model complexity, is controlled by a parameter alpha (here called "L2_penalty").
+# 
+# Let's test two models using alpha equal 1 and 10.
+
+# In[ ]:
+
+
+input_feature = train_data.columns.values.tolist() # list of column name
+input_feature.remove('price')
+
+for i in [1,10]:
+    ridge = linear_model.Ridge(alpha = i, normalize = True) # initialize the model
+    ridge.fit(train_data.as_matrix(columns = input_feature), train_data.as_matrix(columns = ['price'])) # fit the train data
+    print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
+                              ridge.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
+
+
+# Now the question is, how do we pick alpha to minimize the error?
+# 
+# Alpha is a measure of model complexity. So, as before, we could use a validation set to select it. However, that approach has a major disadvantage: it leaves fewer observations available for training. A better approach to overcome this issue is to use a cross-validation technique. It uses all of the training set in a smart way. k-fold cross-validation for example involves dividing the training set into k segments of roughly equal size. Similar to the validation set method, we measure the validation error with one of the segments designated as the validation set. The major difference is that we repeat the process k times. We then compute the average of the k validation errors, and use it as an estimate of the generalization error. We then select the alpha value that generate the smallest validation error. The best approximation occurs for validation sets of size 1, where k is equal to the number of observations. It is called leave-one-out cross validation. It is however computationally intensive.
+# 
+# In this example we'll use a ridge regression with an implemented cross-validation method from the scikit learn library. By default, it performs Generalized Cross-Validation, which is a form of efficient Leave-One-Out cross-validation.
+
+# In[ ]:
+
+
+ridgeCV = linear_model.RidgeCV(alphas = np.linspace(1.0e-10,1,num = 100), normalize = True, store_cv_values = True) # initialize the model
+ridgeCV.fit(train_data.as_matrix(columns = input_feature), train_data.as_matrix(columns = ['price'])) # fit the train data
+print ('best alpha is: %s' %ridgeCV.alpha_) # get the best alpha
+print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
+                              ridgeCV.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
+
+
+# Using every features in the dataset and a ridge regression model with an efficient  LOO cross-validation method yield a test error of 171567.
+# 
+# ### 2.4 Lasso Regression
+# 
+# Lasso regression jointly shrinks coefficients to avoid overfitting, and implicitly performs feature selection by setting some coefficients exactly to 0 for sufficiently large penalty strength alpha (here called "L1_penalty"). In particular, lasso takes the RSS term of standard least squares and adds a 1-norm cost of the coefficients.
+# 
+# Let 's train multiple models using different alpha values and asses the test error.
+
+# In[ ]:
+
+
+for i in [0.01,0.1,1,250,500,1000]:
+    lasso = linear_model.Lasso(alpha = i, normalize = True) # initialize the model
+    lasso.fit(train_data.as_matrix(columns = input_feature), train_data.as_matrix(columns = ['price'])) # fit the train data
+    print (lasso.sparse_coef_.getnnz) # number of non zero weights
+    print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
+                              lasso.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
+
+
+# As alpha increases, the number of features included in the model decrease. As in Ridge regression, we also can use cross-validation methods that select the best alpha to provide the best predictive accuracy. However, this technique tends to favor less sparse solutions and smaller alpha than optimal choice for feature selection.
+
+# In[ ]:
+
+
+lassoCV = linear_model.LassoCV(normalize = True) # initialize the model (alphas are set automatically)
+lassoCV.fit(train_data.as_matrix(columns = input_feature), np.ravel(train_data.as_matrix(columns = ['price']))) # fit the train data
+print ('best alpha is: %s' %lassoCV.alpha_) # get the best alpha
+print ('number of non zero weigths is: %s' %np.count_nonzero(lassoCV.coef_)) # number of non zero weights
+print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
+                              lassoCV.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
+
+
+# 39 features remain in the model, yielding a test error of 171369.
+# 
+# ### 2.5 k-Nearest Neighbors (NN) Regression
+# 
+# To finish, let's talk about another regression model, k-NN regression. The k-NN algorithm is used for estimating continuous variables. One such algorithm uses a weighted average of the k nearest neighbors, weighted by the inverse of their distance. It is the nonparamtric equivalent of ordinary least square regression.
+
+# In[ ]:
+
+
+# normalize the data
+train_X = train_data.as_matrix(columns = input_feature)
+scaler = preprocessing.StandardScaler().fit(train_X)
+train_X_scaled = scaler.transform(train_X)
+test_X = test_data.as_matrix(columns = [input_feature])
+test_X_scaled = scaler.transform(test_X)
+
+knn = neighbors.KNeighborsRegressor(n_neighbors=10, weights='distance') # initialize the model
+knn.fit(train_X_scaled, train_data.as_matrix(columns = ['price'])) # fit the train data
+print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
+                              knn.predict(test_X_scaled))**0.5) # predict price and test error
+
+
+# Similarly, the number of neighbor k is related to the complexity of the regression model. We can optimize the model accuracy by running cross-validation on the number of k-neighbors to include. 
+# 
+# ## Conclusion
+# 
+# In this notebook I tried to give on overview of regression methods using a dataset of house sales. Obviously, many other methods exit for regression (e.g., Elastic Net, kernel regression, Bayesian regression). Model selection should be based on your data and application.

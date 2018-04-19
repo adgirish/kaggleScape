@@ -1,247 +1,243 @@
 
 # coding: utf-8
 
-# # Data Exploration Starter
-# ## Data Exploration Titanic: Machine Learning from Disaster
-# ## Sergei Neviadomski
-
-# First thing I want to mention is that this notebook is intended to provide first glance on data and variables. You won't find here any analysis of features interrelation or feature engineering. I intentionally provide only charts that show feature related information (distribution, bar plots and etc) and feature - label relationship.
+# # How far is China ahead of India ?
+# - It is well known that China and India are [re-emerging][1] as top economies in the world, but China is much ahead of India by most measures.
+# - So how long would it take for India to catch up with China?
 # 
-# I appreciate any constructive criticism and hope my notebook will help you understand data little bit more.
+# Here we explore some key world development indicators to answer the question.
 # 
-# Please upvote if you think my notebook deserves it.
-# 
-# Thanks.
-# 
-# P.S. I think the best way to use my notebook is to quickly read through it and then come back as soon as you need additional information related to any feature.
+#   [1]: http://www.economist.com/node/16834943
 
 # In[ ]:
 
 
-### Necessary libraries
-import pandas as pd
+get_ipython().run_line_magic('matplotlib', 'inline')
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
+import re
+plt.style.use('ggplot')
 
-### Seaborn style
-sns.set_style("whitegrid")
+
+# ### Choosing Key Indicators
+# - Key topics for comparison are chosen using the [method discussed earlier][1] and then key indicators are hand-picked from those topics.
+# 
+#   [1]: https://www.kaggle.com/kmravikumar/d/worldbank/world-development-indicators/choosing-topics-to-explore
+
+# In[ ]:
+
+
+# read in file as data frame
+df = pd.read_csv('../input/Indicators.csv')
+
+# Create list of unique indicators, indicator codes
+Indicator_array =  df[['IndicatorName','IndicatorCode']].drop_duplicates().values
 
 
 # In[ ]:
 
 
-### Let's import our data
-train_data = pd.read_csv('../input/train.csv',index_col='PassengerId')
-### and test if everything OK
-train_data.head()
+modified_indicators = []
+unique_indicator_codes = []
+for ele in Indicator_array:
+    indicator = ele[0]
+    indicator_code = ele[1].strip()
+    if indicator_code not in unique_indicator_codes:
+        # delete , ( ) from the IndicatorNames
+        new_indicator = re.sub('[,()]',"",indicator).lower()
+        # replace - with "to" and make all words into lower case
+        new_indicator = re.sub('-'," to ",new_indicator).lower()
+        modified_indicators.append([new_indicator,indicator_code])
+        unique_indicator_codes.append(indicator_code)
+
+Indicators = pd.DataFrame(modified_indicators,columns=['IndicatorName','IndicatorCode'])
+Indicators = Indicators.drop_duplicates()
+print(Indicators.shape)
 
 
 # In[ ]:
 
 
-### ... check for NAs in sense Pandas understands them
-train_data.isnull().sum()
+
+key_word_dict = {}
+key_word_dict['Demography'] = ['population','birth','death','fertility','mortality','expectancy']
+key_word_dict['Food'] = ['food','grain','nutrition','calories']
+key_word_dict['Trade'] = ['trade','import','export','good','shipping','shipment']
+key_word_dict['Health'] = ['health','desease','hospital','mortality','doctor']
+key_word_dict['Economy'] = ['income','gdp','gni','deficit','budget','market','stock','bond','infrastructure']
+key_word_dict['Energy'] = ['fuel','energy','power','emission','electric','electricity']
+key_word_dict['Education'] = ['education','literacy']
+key_word_dict['Employment'] =['employed','employment','umemployed','unemployment']
+key_word_dict['Rural'] = ['rural','village']
+key_word_dict['Urban'] = ['urban','city']
 
 
 # In[ ]:
 
 
-### Now let's prepare lists of numeric and categorical columns
-# Numeric Features
-numeric_features = ['Age', 'Fare']
-# Categorical Features
-ordinal_features = ['Pclass', 'SibSp', 'Parch']
-nominal_features = ['Sex', 'Embarked']
+feature = 'Education'
+for indicator_ele in Indicators.values:
+    for ele in key_word_dict[feature]:
+        word_list = indicator_ele[0].split()
+        if ele in word_list or ele+'s' in word_list:
+            # Uncomment this line to print the indicators explicitely
+            #print(indicator_ele)
+            break
+
+
+# #### Important Features 
+
+# In[ ]:
+
+
+# Main indicators to compare contries
+chosen_indicators = ['NE.TRD.GNFS.ZS',                       'SI.POV.2DAY', 'SE.SEC.ENRL', 'SE.ADT.1524.LT.ZS',                      'SI.DST.10TH.10', 'SE.ADT.LITR.ZS', 'SP.DYN.LE00.IN',                      'NY.GDP.PCAP.PP.KD','SP.URB.TOTL.IN.ZS', 'SH.DTH.IMRT',                      'NE.EXP.GNFS.KD', 'NE.IMP.GNFS.KD' ]
+
+# Subset of data with the required features alone
+df_subset = df[df['IndicatorCode'].isin(chosen_indicators)]
+
+# Chose only India and China for Analysis
+df_India = df_subset[df['CountryName']=="India"]
+df_China = df_subset[df['CountryName']=="China"]
 
 
 # In[ ]:
 
 
-### Adding new column with beautiful target names
-train_data['target_name'] = train_data['Survived'].map({0: 'Not Survived', 1: 'Survived'})
+# PLotting function for comparing development indicators
+def plot_indicator(indicator,delta=10):
+    ds_India = df_India[['IndicatorName','Year','Value']][df_India['IndicatorCode']==indicator]
+    try:
+        title = ds_India['IndicatorName'].iloc[0]
+    except:
+        title = "None"
 
-
-# ### Target Exploration
-
-# In[ ]:
-
-
-### Target variable exploration
-sns.countplot(train_data.target_name);
-plt.xlabel('Survived?');
-plt.ylabel('Number of occurrences');
-plt.show()
-
-
-# ### Corralation between features (variables)
-
-# In[ ]:
-
-
-### Corralation matrix heatmap
-# Getting correlation matrix
-cor_matrix = train_data[numeric_features + ordinal_features].corr().round(2)
-# Plotting heatmap 
-fig = plt.figure(figsize=(12,12));
-sns.heatmap(cor_matrix, annot=True, center=0, cmap = sns.diverging_palette(250, 10, as_cmap=True), ax=plt.subplot(111));
-plt.show()
-
-
-# ### Numeric Features Exploration
-
-# In[ ]:
-
-
-### Plotting Numeric Features
-# Looping through and Plotting Numeric features
-for column in numeric_features:    
-    # Figure initiation
-    fig = plt.figure(figsize=(18,12))
+    xindia = ds_India['Year'].values
+    yindia = ds_India['Value'].values
+    ds_China = df_China[['IndicatorName','Year','Value']][df_China['IndicatorCode']==indicator]
+    xchina = ds_China['Year'].values
+    ychina = ds_China['Value'].values
     
-    ### Distribution plot
-    sns.distplot(train_data[column].dropna(), ax=plt.subplot(221));
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Density', fontsize=14);
-    # Adding Super Title (One for a whole figure)
-    plt.suptitle('Plots for '+column, fontsize=18);
+    plt.figure(figsize=(14,4))
     
-    ### Distribution per Survived / Not Survived Value
-    # Not Survived hist
-    sns.distplot(train_data.loc[train_data.Survived==0, column].dropna(),
-                 color='red', label='Not Survived', ax=plt.subplot(222));
-    # Survived hist
-    sns.distplot(train_data.loc[train_data.Survived==1, column].dropna(),
-                 color='blue', label='Survived', ax=plt.subplot(222));
-    # Adding Legend
-    plt.legend(loc='best')
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Density per Survived / Not Survived Value', fontsize=14);
-    
-    ### Average Column value per Survived / Not Survived Value
-    sns.barplot(x="target_name", y=column, data=train_data, ax=plt.subplot(223));
-    # X-axis Label
-    plt.xlabel('Survived or Not Survived?', fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Average ' + column, fontsize=14);
-    
-    ### Boxplot of Column per Survived / Not Survived Value
-    sns.boxplot(x="target_name", y=column, data=train_data, ax=plt.subplot(224));
-    # X-axis Label
-    plt.xlabel('Survived or Not Survived?', fontsize=14);
-    # Y-axis Label
-    plt.ylabel(column, fontsize=14);
-    # Printing Chart
-    plt.show()
+    plt.subplot(121)
+    plt.plot(xindia,yindia,label='India')
+    plt.plot(xchina,ychina,label='China')
+    plt.title(title)
+    plt.legend(loc=2)
+
+    plt.subplot(122)
+    plt.plot(xindia,yindia,label='India')
+    plt.plot(xchina+delta,ychina,label='China')
+    plt.title(title + "\n Chinese Data Shifted by " +str(delta)+" Years")
+    plt.legend(loc=2)
 
 
-# ### Categorical (Ordinal) Features Exploration
+# # KEY FEATURES
+# Now let us explore the key features one-by-one.
+# 
+# ## 1) Trade as a percentage of GDP
+# - Note that by shifting the Chinese data by 10 years to the right it aligns well with the Indian data suggesting that India lags behind China by at least 10 years in terms of trade.
 
 # In[ ]:
 
 
-### Plotting Categorical Features
-# Looping through and Plotting Categorical features
-for column in ordinal_features:
-    # Figure initiation
-    fig = plt.figure(figsize=(18,18))
-
-    ### Average Column value per Survived / Not Survived Value
-    sns.barplot(x="target_name", y=column, data=train_data, ax=plt.subplot(321));
-    # X-axis Label
-    plt.xlabel('Survived or Not Survived?', fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Average ' + column, fontsize=14);
-    # Adding Super Title (One for a whole figure)
-    plt.suptitle('Plots for '+column, fontsize=18);
-
-    ### Boxplot of Column per Survived / Not Survived Value
-    sns.boxplot(x="target_name", y=column, data=train_data, ax=plt.subplot(322));
-    # X-axis Label
-    plt.xlabel('Survived or Not Survived?', fontsize=14);
-    # Y-axis Label
-    plt.ylabel(column, fontsize=14);
-
-    ### Number of occurrences per categoty - target pair
-    ax = sns.countplot(x=column, hue="target_name", data=train_data, ax = plt.subplot(312));
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Number of occurrences', fontsize=14);
-    # Setting Legend location 
-    plt.legend(loc=1);
-
-    ### Adding percents over bars
-    # Getting heights of our bars
-    height = [p.get_height() if p.get_height()==p.get_height() else 0 for p in ax.patches]
-    # Counting number of bar groups 
-    ncol = int(len(height)/2)
-    # Counting total height of groups
-    total = [height[i] + height[i + ncol] for i in range(ncol)] * 2
-    # Looping through bars
-    for i, p in enumerate(ax.patches):    
-        # Adding percentages   
-        ax.text(p.get_x()+p.get_width()/2, height[i]*1.01 + 10,
-                '{:1.0%}'.format(height[i]/total[i]), ha="center", size=14) 
-
-    ### Survived percentage for every value of feature
-    sns.pointplot(x=column, y='Survived', data=train_data, ax = plt.subplot(313));
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Survived Percentage', fontsize=14);
-    # Printing Chart
-    plt.show()
+plot_indicator(chosen_indicators[0],delta=10)
 
 
-# ### Categorical (Nominal) Features Exploration
+# ## 2) Import and Export of goods and services
+# More specifically, we can look at total exports and imports.
+# - India lags behind China by 10 years 
 
 # In[ ]:
 
 
-### Plotting Categorical Features
-# Looping through and Plotting Categorical features
-for column in nominal_features:
-    # Figure initiation
-    fig = plt.figure(figsize=(18,12))
-    
-    ### Number of occurrences per categoty - target pair
-    ax = sns.countplot(x=column, hue="target_name", data=train_data, ax = plt.subplot(211));
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Number of occurrences', fontsize=14);
-    # Adding Super Title (One for a whole figure)
-    plt.suptitle('Plots for '+column, fontsize=18);
-    # Setting Legend location 
-    plt.legend(loc=1);
-    
-    ### Adding percents over bars
-    # Getting heights of our bars
-    height = [p.get_height() for p in ax.patches]
-    # Counting number of bar groups 
-    ncol = int(len(height)/2)
-    # Counting total height of groups
-    total = [height[i] + height[i + ncol] for i in range(ncol)] * 2
-    # Looping through bars
-    for i, p in enumerate(ax.patches):    
-        # Adding percentages
-        ax.text(p.get_x()+p.get_width()/2, height[i]*1.01 + 10,
-                '{:1.0%}'.format(height[i]/total[i]), ha="center", size=14) 
-
-    
-    ### Survived percentage for every value of feature
-    sns.pointplot(x=column, y='Survived', data=train_data, ax = plt.subplot(212));
-    # X-axis Label
-    plt.xlabel(column, fontsize=14);
-    # Y-axis Label
-    plt.ylabel('Survived Percentage', fontsize=14);
-    # Printing Chart
-    plt.show()
+plot_indicator(chosen_indicators[10],delta=10)
 
 
-# ### Please upvote if my notebook helped you in any way :)
+# In[ ]:
+
+
+plot_indicator(chosen_indicators[11],delta=10)
+
+
+# ## 3) GDP per capita (adjusted by purchasing power parity)
+# - Here also India lags behind China by ~9 years.
+
+# In[ ]:
+
+
+plot_indicator(chosen_indicators[7],delta=9)
+
+
+# ## 4) Poverty Alleviation 
+# - China has managed to get a much steeper drop in poverty compared to India.
+# - It still appears that China has a head start of 10 years ahead of India.
+
+# In[ ]:
+
+
+plot_indicator(chosen_indicators[1],delta=10)
+
+
+# ## 5) Life Expectancy
+# - There was steep rise in life expectancy in China during the 1960's.
+# - Both countries have shown a significant increase over a past 5 decades.
+# - In terms of life expectancy, China leads India by ~ 25 years
+# 
+
+# In[ ]:
+
+
+plot_indicator(chosen_indicators[6],delta=25)
+
+
+# ## 6) Urban Population growth
+# - China leads India by ~ 15 years
+# 
+
+# In[ ]:
+
+
+plot_indicator(chosen_indicators[8],delta=15)
+
+
+# ## 6) Infant Mortality - as a measure of health care
+# - Both countries show a significant decrease in infant mortality.
+# - Surprisingly, there has been an increase in Chinese infant mortality rate during the 1980's - Might be something interesting to explore here!
+# - China leads India by ~ 20 years in infant mortality rate.
+# 
+
+# In[ ]:
+
+
+plot_indicator(chosen_indicators[9],delta=20)
+
+
+# ## 7) Adult Literacy Rate
+# - Although the rate of increase seems to be the same for both countries, China has always had a 25 year advantage over India.
+
+# In[ ]:
+
+
+plot_indicator(chosen_indicators[5],delta=25)
+
+
+# ## 8) Finally, how are the rich 10% doing in each country?
+# - This may not be the best economic measure, but gives some insights
+# - China has managed to create a lot more rich people faster, but due to the recent recessions India seems to have caught up with China.
+
+# In[ ]:
+
+
+plot_indicator(chosen_indicators[4],delta=10)
+
+
+# # CONCLUSION
+# - By most economic measures like GDP, trade, and poverty alleviation China seems to be ahead of India by 10 years. 
+# - It is interesting to note that China undertook economic reforms in 1978 and India in 1990, exactly 12 years apart, suggesting that this might be the most significant reason for India to lag behind China by around 10 years in many economic growth measures.
+# - Even though the political model adopted in China and India are not the same, the growth rates and trend in most indicators are similar for both countries. This prompts us to ask the question does politics even matter ? 
+# - By some measures of education (literacy) and health care (infant mortality rate), India lags behind China by 20 - 25 years.
+# 
+# 

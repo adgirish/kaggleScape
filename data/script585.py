@@ -1,161 +1,263 @@
 
 # coding: utf-8
 
-# # Introduction
+# # Starting kit for PyTorch Deep Learning
 # 
-# In this kernel I aim to outline a common flaw in data augmentation/validation that I see in primarily the keras kernels for this competition. The essence of the problem is that the train/validation split is done after a one-time deterministic data augmentation is applied to grow the size of the dataset. Probably we should just be stochastically augmenting for every batch, but if we insist on augmenting data in this way, then we should do the train/validation split before augmenting. Otherwise, we will have training examples where an augmented version of the same example is in the validation set.
+# Welcome to this tutorial to get started on PyTorch for this competition.
+# PyTorch is a promising port of Facebook's Torch to Python.
 # 
-# Example kernels:
-# - https://www.kaggle.com/a45632/keras-starter-4l-added-performance-graph
-# - https://www.kaggle.com/cbryant/keras-cnn-statoil-iceberg-lb-0-1995-now-0-1516
-# - https://www.kaggle.com/vincento/keras-starter-4l-0-1694-lb-icebergchallenge
-# - https://www.kaggle.com/henokanh/cnn-batchnormalization-0-1646
-# - https://www.kaggle.com/hcc1995/keras-cnn-model
-# - https://www.kaggle.com/fvzaur/iceberg-ship-classification-with-cnn-on-keras
+# It's only 3 months old but has an already promising feature set.
+# Unfortunately it's very very raw, and I had a lot of troubles to get started with very basic things:
+# - data loading
+# - building a basic CNN
+# - training
+# 
+# Hopefully this will help you getting started using PyTorch on this dataset.
+
+# ## Importing libraries
+# Please note that we do not import numpy but PyTorch wrapper for Numpy
 
 # In[ ]:
 
 
-# Let's get the imports out of the way
 import pandas as pd
-import numpy as np
-import cv2
-np.random.seed(1234) 
-from keras.models import Sequential
-from keras.layers import Dense, Flatten
-from keras.layers import Conv2D, MaxPooling2D
-import matplotlib.pyplot as plt
+from torch import np # Torch wrapper for Numpy
 
-df_train = pd.read_json('../input/train.json')
+import os
+from PIL import Image
 
-def get_scaled_imgs(df):
-    imgs = []
-    
-    for i, row in df.iterrows():
-        #make 75x75 image
-        band_1 = np.array(row['band_1']).reshape(75, 75)
-        band_2 = np.array(row['band_2']).reshape(75, 75)
-        band_3 = band_1 + band_2 # plus since log(x*y) = log(x) + log(y)
-        
-        # Rescale
-        a = (band_1 - band_1.mean()) / (band_1.max() - band_1.min())
-        b = (band_2 - band_2.mean()) / (band_2.max() - band_2.min())
-        c = (band_3 - band_3.mean()) / (band_3.max() - band_3.min())
+import torch
+from torch.utils.data.dataset import Dataset
+from torch.utils.data import DataLoader
+from torchvision import transforms
+from torch import nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.autograd import Variable
 
-        imgs.append(np.dstack((a, b, c)))
-
-    return np.array(imgs)
+from sklearn.preprocessing import MultiLabelBinarizer
 
 
-# This is a common function that you see in the kernels. It takes in a set of 3-channel images and outputs a larger array of: the original images, then their vetical flips, then their horizontal flips. I'm not really a fan of this way of augmenting data, but that's not the point of the kernel. Assuming that you were going to do this...
+# ## Setting up global variables
 
 # In[ ]:
 
 
-def get_more_images(imgs):
-    
-    more_images = []
-    vert_flip_imgs = []
-    hori_flip_imgs = []
-      
-    for i in range(0,imgs.shape[0]):
-        a=imgs[i,:,:,0]
-        b=imgs[i,:,:,1]
-        c=imgs[i,:,:,2]
-        
-        av=cv2.flip(a,1)
-        ah=cv2.flip(a,0)
-        bv=cv2.flip(b,1)
-        bh=cv2.flip(b,0)
-        cv=cv2.flip(c,1)
-        ch=cv2.flip(c,0)
-        
-        vert_flip_imgs.append(np.dstack((av, bv, cv)))
-        hori_flip_imgs.append(np.dstack((ah, bh, ch)))
-      
-    v = np.array(vert_flip_imgs)
-    h = np.array(hori_flip_imgs)
-       
-    more_images = np.concatenate((imgs,v,h))
-    
-    return more_images
+IMG_PATH = '../input/train-jpg/'
+IMG_EXT = '.jpg'
+TRAIN_DATA = '../input/train_v2.csv'
 
 
-# Let's use a relatively straightforward model to prove this concept.
-
-# In[ ]:
-
-
-def get_model():
-    model=Sequential()
-    model.add(Conv2D(32, kernel_size=(3, 3),activation='relu', input_shape=(75, 75, 3)))
-    model.add(MaxPooling2D(pool_size=(3, 3), strides=(2, 2)))
-    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu' ))
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    model.add(Conv2D(256, kernel_size=(3, 3), activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    model.add(Flatten())
-    model.add(Dense(256, activation='relu'))
-    model.add(Dense(128, activation='relu'))
-    model.add(Dense(1, activation="sigmoid"))
-    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])   
-    return model
-
-
-# # Typical Kernal Validation
+# ## Loading the data - first part - DataSet
 # 
-# Below we will use the get_more_images function as you see in a typical kernel and vadliate using the `validadtion_split` argument in Keras `model.fit()`
-
-# In[ ]:
-
-
-Xtrain = get_scaled_imgs(df_train)
-Ytrain = np.array(df_train['is_iceberg'])
-
-Xtr_more = get_more_images(Xtrain) 
-Ytr_more = np.concatenate((Ytrain,Ytrain,Ytrain))
-
-model = get_model()
-history_1 = model.fit(Xtr_more, Ytr_more, batch_size=32, epochs=10, verbose=1, validation_split=0.25)
-
-
-# # Better Validation
+# This is probably the most obscure part of PyTorch. Most examples use well known datasets (MNIST ...) and have a custom loader or forces you to have a specific folder structure similar to this:
 # 
-# Here I demonstrate what I believe to be a better way of doing validation. First we split our data, and then we use augmentation to increase the size. Maybe we wouldn't even augment the validation set, but we may as well for comparison purposes.
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-X_train, X_valid, y_train, y_valid = train_test_split(Xtrain, Ytrain, test_size=0.25)
-
-X_train_more = get_more_images(X_train)
-y_train_more = np.concatenate([y_train, y_train, y_train])
-X_valid_more = get_more_images(X_valid)
-y_valid_more = np.concatenate([y_valid, y_valid, y_valid])
-
-model = get_model()
-history_2 = model.fit(X_train_more, y_train_more, batch_size=32, epochs=10, verbose=1,
-                     validation_data=(X_valid_more, y_valid_more))
-
-
-# # Comparison
+# * data
+#     * train
+#           * dogs
+#           * cats
+#      * validation
+#           * dogs
+#           * cats
+#      * test
+#           * test
 # 
-# You can see right away by sudying the `val_loss` for epoch 10 that these two situations give us different results. Let's just plot them to be sure.
+# Data loading in PyTorch is in 2 parts
+# 
+# First the data must be wrapped in a __Dataset__ class with a getitem method that from an index return X_train[index] and y_train[index] and a length method. A Dataset is basically a data storage.
+# 
+# The following solution loads the image name from a CSV and file path + extension and can be adapted easily for most Kaggle challenges. You won't have to write your own ;).
+# 
+# The code will:
+# 
+# - Check that all images in CSV exist in the folder
+# - Use ScikitLearn MultiLabelBinarizer to OneHotEncode the labels, mlb.inverse_transform(predictions) can be used to get back the textual labels from the predictions
+# - Apply PIL transformations to the images. See [here](http://pytorch.org/docs/torchvision/transforms.html) for the supported list.
+# - Use ToTensor() to convert from an image with color scale 0-255 to a Tensor with color scale 0-1.
+# 
+# Note: We use PIL instead of OpenCV because it's Torch default image loader and is compatible with `ToTensor()` method. An fast loader called accimage is currently in development and was published 3 days ago [here](https://github.com/pytorch/accimage).
+# 
+# Note 2: This only provides a mapping to the data, **the data is not loaded in memory at this point**. The next part will show you how to load only what is needed for the batch in memory. This is a huge advantage compared to kernels that must load all images at once.
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,8))
-plt.plot(history_1.history['val_loss'], label='bad validation')
-plt.plot(history_2.history['val_loss'], label='good validation')
-plt.title('Validation Loss by Epch')
-plt.xlabel('Epoch')
-plt.ylabel('Validation Loss')
-plt.legend()
-plt.show()
+class KaggleAmazonDataset(Dataset):
+    """Dataset wrapping images and target labels for Kaggle - Planet Amazon from Space competition.
+
+    Arguments:
+        A CSV file path
+        Path to image folder
+        Extension of images
+        PIL transforms
+    """
+
+    def __init__(self, csv_path, img_path, img_ext, transform=None):
+    
+        tmp_df = pd.read_csv(csv_path)
+        assert tmp_df['image_name'].apply(lambda x: os.path.isfile(img_path + x + img_ext)).all(), "Some images referenced in the CSV file were not found"
+        
+        self.mlb = MultiLabelBinarizer()
+        self.img_path = img_path
+        self.img_ext = img_ext
+        self.transform = transform
+
+        self.X_train = tmp_df['image_name']
+        self.y_train = self.mlb.fit_transform(tmp_df['tags'].str.split()).astype(np.float32)
+
+    def __getitem__(self, index):
+        img = Image.open(self.img_path + self.X_train[index] + self.img_ext)
+        img = img.convert('RGB')
+        if self.transform is not None:
+            img = self.transform(img)
+        
+        label = torch.from_numpy(self.y_train[index])
+        return img, label
+
+    def __len__(self):
+        return len(self.X_train.index)
 
 
-# I think you can see that the "bad validation" is dramatically underestimating the true validatdion loss.
+# In[ ]:
+
+
+transformations = transforms.Compose([transforms.Scale(32),transforms.ToTensor()])
+
+dset_train = KaggleAmazonDataset(TRAIN_DATA,IMG_PATH,IMG_EXT,transformations)
+
+
+# ## Loading the data - second part - DataLoader
+# 
+# As was said, loading the data is in 2 parts, we provided PyTorch with a data storage, and we have to tell it how to load it. This is done with __DataLoader__
+# 
+# The DataLoader defines how you retrieve the images + labels from the dataset. You can tell it to:
+# 
+# * Set the batch size.
+# * Shuffle and sample the data randomly, hence implementing __train_test_split__ (check SubsetRandomSampler [here](http://pytorch.org/docs/data.html?highlight=sampler))
+# * Improve performance by loading data via  separate thread `num_worker` and using `pin_memory` for CUDA. Documentation [here](http://pytorch.org/docs/notes/cuda.html?highlight=dataloader).
+
+# In[ ]:
+
+
+train_loader = DataLoader(dset_train,
+                          batch_size=256,
+                          shuffle=True,
+                          num_workers=4 # 1 for CUDA
+                         # pin_memory=True # CUDA only
+                         )
+
+
+# ## Creating your Neural Network
+# 
+# This is tricky, you need  to compute yourself the in_channels and out_channels of your filters hence the 2304 input for the Dense layer. The first input 3 corresponds to the number of channels of your image, the 17 output corresponds to the number of target labels.
+
+# In[ ]:
+
+
+class Net(nn.Module):
+    def __init__(self):
+        super(Net, self).__init__()
+        self.conv1 = nn.Conv2d(3, 32, kernel_size=3)
+        self.conv2 = nn.Conv2d(32, 64, kernel_size=3)
+        self.conv2_drop = nn.Dropout2d()
+        self.fc1 = nn.Linear(2304, 256)
+        self.fc2 = nn.Linear(256, 17)
+
+    def forward(self, x):
+        x = F.relu(F.max_pool2d(self.conv1(x), 2))
+        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
+        x = x.view(x.size(0), -1) # Flatten layer
+        x = F.relu(self.fc1(x))
+        x = F.dropout(x, training=self.training)
+        x = self.fc2(x)
+        return F.sigmoid(x)
+
+model = Net() # On CPU
+# model = Net().cuda() # On GPU
+
+
+# ## Defining your training function
+
+# In[ ]:
+
+
+optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
+
+
+# In[ ]:
+
+
+def train(epoch):
+    model.train()
+    for batch_idx, (data, target) in enumerate(train_loader):
+        # data, target = data.cuda(async=True), target.cuda(async=True) # On GPU
+        data, target = Variable(data), Variable(target)
+        optimizer.zero_grad()
+        output = model(data)
+        loss = F.binary_cross_entropy(output, target)
+        loss.backward()
+        optimizer.step()
+        if batch_idx % 10 == 0:
+            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
+                epoch, batch_idx * len(data), len(train_loader.dataset),
+                100. * batch_idx / len(train_loader), loss.data[0]))
+
+
+# ## Training your model
+
+# In[ ]:
+
+
+for epoch in range(1, 2):
+    train(epoch)
+
+
+# # Thank you for your attention
+# 
+# Hopefully that will help you get started. I still have a lot to figure out in PyTorch like:
+# 
+# * Implementing the train / validation split
+# * Figure out data augmentation (and not just random transformations or images)
+# * Implementing early stopping
+# * Automating computation of intermediate layers
+# * Improving the display of each epochs
+# 
+# If you liked the kernel don't forget to vote and don't hesitate to comment.
+
+# ## Full code
+# 
+# I have published my full code of the competition in my [GitHub](https://github.com/mratsim/Amazon_Forest_Computer_Vision). (Note: I only worked on it in the first 2 weeks, so it probably lacks the latest findings)
+# 
+# You will find:
+#   - [A script that output the mean and stddev of your image if you want to train from scratch](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/compute-mean-std.py#L28)
+# 
+#   - [Using weighted loss function](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/main_pytorch.py#L61)
+# 
+#   - [Logging your experiment](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/main_pytorch.py#L89)
+# 
+#   - [Composing data augmentations](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/main_pytorch.py#L103), also [here](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p_data_augmentation.py#L181).
+# Note use [Pillow-SIMD](https://python-pillow.org/pillow-perf/) instead of PIL/Pillow. It is even faster than OpenCV
+# 
+#   - [Loading from a CSV that contains image path - 61 lines yeah](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p2_dataload.py#L23)
+# 
+#   - [Equivalent in Keras - 216 lines ugh](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/k_dataloader.py). Note: so much lines were needed because by default in Keras you either have the data augmentation with ImageDataGenerator or lazy loading of images with "flow_from_directory" and there is no flow_from_csv
+# 
+#   - [Model finetuning with custom PyCaffe weights](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p_neuro.py#L139)
+# 
+#   - Train_test_split, [PyTorch version](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p_model_selection.py#L4) and [Keras version](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/k_model_selection.py#L4)
+# 
+# - [Weighted sampling training so that the model view rare cases more often](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/main_pytorch.py#L131-L140)
+# 
+#  - [Custom Sampler creation, example for the balanced sampler](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p_sampler.py)
+# 
+#  - [Saving snapshots each epoch](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/main_pytorch.py#L171)
+# 
+#  - [Loading the best snapshot for prediction](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/pytorch_predict_only.py#L83)
+# 
+#  - [Failed word embeddings experiments](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/Embedding-RNN-Autoencoder.ipynb) to [combine image and text data](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/Dual_Feed_Image_Label.ipynb)
+# 
+#  - [Combined weighted loss function (softmax for unique weather tags, BCE for multilabel tags)](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p2_loss.py#L36)
+# 
+#  - [Selecting the best F2-threshold](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p2_metrics.py#L38) via stochastic search at the end of each epoch to [maximize validation score](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/526128239a6abcbb32fbf5b34ed8cc7a3cd87c4e/src/p2_validation.py#L49). This is then saved along model parameter.
+# 
+#   - [CNN-RNN combination (work in progress)](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p3_neuroRNN.py#L10)

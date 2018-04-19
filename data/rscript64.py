@@ -1,64 +1,37 @@
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from sklearn.metrics import roc_auc_score
+import pandas as pd
+import numpy as np
 from sklearn.linear_model import LogisticRegression
-from collections import defaultdict
+from sklearn.grid_search import GridSearchCV
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import StandardScaler
 
-usecols = ['ncodpers', 'ind_ahor_fin_ult1', 'ind_aval_fin_ult1', 'ind_cco_fin_ult1',
-       'ind_cder_fin_ult1', 'ind_cno_fin_ult1', 'ind_ctju_fin_ult1',
-       'ind_ctma_fin_ult1', 'ind_ctop_fin_ult1', 'ind_ctpp_fin_ult1',
-       'ind_deco_fin_ult1', 'ind_deme_fin_ult1', 'ind_dela_fin_ult1',
-       'ind_ecue_fin_ult1', 'ind_fond_fin_ult1', 'ind_hip_fin_ult1',
-       'ind_plan_fin_ult1', 'ind_pres_fin_ult1', 'ind_reca_fin_ult1',
-       'ind_tjcr_fin_ult1', 'ind_valo_fin_ult1', 'ind_viv_fin_ult1',
-       'ind_nomina_ult1', 'ind_nom_pens_ult1', 'ind_recibo_ult1']
-       
-df_train = pd.read_csv('../input/train.csv', usecols=usecols)
-sample = pd.read_csv('../input/sample_submission.csv')
 
-df_train = df_train.drop_duplicates(['ncodpers'], keep='last')
+np.random.seed(42)
 
-df_train.fillna(0, inplace=True)
+train = pd.read_csv('../input/train.csv')
+x_train = train.drop(['id', 'species'], axis=1).values
+le = LabelEncoder().fit(train['species'])
+y_train = le.transform(train['species'])
 
-models = {}
-model_preds = {}
-id_preds = defaultdict(list)
-ids = df_train['ncodpers'].values
-for c in df_train.columns:
-    if c != 'ncodpers':
-        print(c)
-        y_train = df_train[c]
-        x_train = df_train.drop([c, 'ncodpers'], 1)
-        
-        clf = LogisticRegression()
-        clf.fit(x_train, y_train)
-        p_train = clf.predict_proba(x_train)[:,1]
-        
-        models[c] = clf
-        model_preds[c] = p_train
-        for id, p in zip(ids, p_train):
-            id_preds[id].append(p)
-            
-        print(roc_auc_score(y_train, p_train))
-        
-already_active = {}
-for row in df_train.values:
-    row = list(row)
-    id = row.pop(0)
-    active = [c[0] for c in zip(df_train.columns[1:], row) if c[1] > 0]
-    already_active[id] = active
-    
-train_preds = {}
-for id, p in id_preds.items():
-    # Here be dragons
-    preds = [i[0] for i in sorted([i for i in zip(df_train.columns[1:], p) if i[0] not in already_active[id]], key=lambda i:i [1], reverse=True)[:7]]
-    train_preds[id] = preds
-    
-test_preds = []
-for row in sample.values:
-    id = row[0]
-    p = train_preds[id]
-    test_preds.append(' '.join(p))
+scaler = StandardScaler().fit(x_train)
+x_train = scaler.transform(x_train)
 
-sample['added_products'] = test_preds
-sample.to_csv('collab_sub.csv', index=False)
+params = {'C':[100, 1000], 'tol': [0.001, 0.0001]}
+log_reg = LogisticRegression(solver='lbfgs', multi_class='multinomial')
+clf = GridSearchCV(log_reg, params, scoring='log_loss', refit='True', n_jobs=-1, cv=5)
+clf.fit(x_train, y_train)
+
+print("best params: " + str(clf.best_params_))
+for params, mean_score, scores in clf.grid_scores_:
+  print("%0.3f (+/-%0.03f) for %r" % (mean_score, scores.std(), params))
+  print(scores)
+
+test = pd.read_csv('../input/test.csv')
+test_ids = test.pop('id')
+x_test = test.values
+x_test = scaler.transform(x_test)
+
+y_test = clf.predict_proba(x_test)
+
+submission = pd.DataFrame(y_test, index=test_ids, columns=le.classes_)
+submission.to_csv('submission_log_reg.csv')

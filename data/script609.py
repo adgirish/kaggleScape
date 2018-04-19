@@ -1,316 +1,722 @@
 
 # coding: utf-8
 
-# A simple exploration notebook to get some insights about the data.
-# 
-# **Please check the output tab for animation**
-# 
-# **Objective:**
-# 
-# In this competition, The Nature Conservancy asks you to help them detect which species of fish appears on a fishing boat, based on images captured from boat cameras of various angles.  
-# 
-# Your goal is to predict the likelihood of fish species in each picture.
-# 
-# As mentioned in the data page, there are eight target categories available in the dataset.
-# 
-#  1. Albacore tuna
-#  2. Bigeye tuna
-#  3. Yellowfin tuna
-#  4. Mahi Mahi
-#  5. Opah
-#  6. Sharks
-#  7. Other (meaning that there are fish present but not in the above categories)
-#  8. No Fish (meaning that no fish is in the picture)
-# 
-# **Important points to note:**
-# 
-#  1. Pre-trained models and external data are allowed in the competition, but need to be posted on this [official forum thread][1]
-#  2. The competition comprises of two stages. Test data for second stage will be released in the last week.   
-# 
-# First let us see the number of image files present for each of the species
-# 
-# 
-#   [1]: https://www.kaggle.com/c/the-nature-conservancy-fisheries-monitoring/forums/t/25428/official-pre-trained-model-and-data-thread/144487#post144487
+# # <h1><center> Predictive Analysis - Web Traffic Time Series Forecasting | Kaggle
 
-# In[ ]:
+# The goal of this notebook is not to do the best model for each Time series. It is just a comparison of few models when you have one Time Series. The presentation present a different approaches to forecast a Time Series. 
+# 
+# The plan of the notebook is:
+# 
+#     I. Importation & Data Cleaning
+#     II. Aggregation & Visualisation
+#     III. Machine Learning Approach
+#     IV Basic Model Approach
+#     V. ARIMA approach (Autoregressive Integrated Moving Average)
+#     VI. (FB) Prophet Approach 
+#     VII. Keras Starter
+#     VIII. Comparaison & Conclusion
+# 
+
+# #  <h1><center> I. Importation & Data Cleaning
+
+# In this first part we will choose the Time Series to work in the others parts. The idea is to find a Time Serie who could be interesting to work with. So in the data we can find 145K Time Series. We will Find a good Time Series to introduce four approaches! So the first step is to import few libraries and the data. The four approaches are Basic Approach / ML Approach / GAM Approach / ARIMA Approach.
+
+# In[2]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import pandas as pd
+import numpy as np
+import warnings
+import scipy
+from datetime import timedelta
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from scipy.misc import imread
+# Forceasting with decompasable model
+from pylab import rcParams
+import statsmodels.api as sm
+from statsmodels.tsa.stattools import adfuller
+
+# For marchine Learning Approach
+from statsmodels.tsa.tsatools import lagmat
+from sklearn.linear_model import LinearRegression, RidgeCV
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import r2_score
+
+# Visualisation
 import matplotlib.pyplot as plt
 import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
 
-from subprocess import check_output
-print(check_output(["ls", "../input/train/"]).decode("utf8"))
+plt.style.use('fivethirtyeight')
+
+warnings.filterwarnings('ignore')
 
 
-# So there are 8 folders present inside the train folder, one for each species.
+# In[4]:
+
+
+# Load the data
+train = pd.read_csv("../input/train_1.csv")
+
+
+# In[5]:
+
+
+train_flattened = pd.melt(train[list(train.columns[-50:])+['Page']], id_vars='Page', var_name='date', value_name='Visits')
+train_flattened['date'] = train_flattened['date'].astype('datetime64[ns]')
+train_flattened['weekend'] = ((train_flattened.date.dt.dayofweek) // 5 == 1).astype(float)
+
+
+# In[6]:
+
+
+# Median by page
+df_median = pd.DataFrame(train_flattened.groupby(['Page'])['Visits'].median())
+df_median.columns = ['median']
+
+# Average by page
+df_mean = pd.DataFrame(train_flattened.groupby(['Page'])['Visits'].mean())
+df_mean.columns = ['mean']
+
+# Merging data
+train_flattened = train_flattened.set_index('Page').join(df_mean).join(df_median)
+
+
+# In[7]:
+
+
+train_flattened.reset_index(drop=False,inplace=True)
+
+
+# In[8]:
+
+
+train_flattened['weekday'] = train_flattened['date'].apply(lambda x: x.weekday())
+
+
+# In[9]:
+
+
+# Feature engineering with the date
+train_flattened['year']=train_flattened.date.dt.year 
+train_flattened['month']=train_flattened.date.dt.month 
+train_flattened['day']=train_flattened.date.dt.day
+
+
+# In[10]:
+
+
+train_flattened.head()
+
+
+# This part allowed us to prepare our data. We had created new features that we use in the next steps. Days, Months, Years are interesting to forecast with a Machine Learning Approach or to do an analysis. 
+# If you have another idea to improve this first part: Fork this notebook and improve it or share your idea in the comments.
+
+# # <h1><center>II. Aggregation & Visualisation
+
+# In[11]:
+
+
+plt.figure(figsize=(50, 8))
+mean_group = train_flattened[['Page','date','Visits']].groupby(['date'])['Visits'].mean()
+plt.plot(mean_group)
+plt.title('Time Series - Average')
+plt.show()
+
+
+# In[12]:
+
+
+plt.figure(figsize=(50, 8))
+median_group = train_flattened[['Page','date','Visits']].groupby(['date'])['Visits'].median()
+plt.plot(median_group, color = 'r')
+plt.title('Time Series - median')
+plt.show()
+
+
+# In[13]:
+
+
+plt.figure(figsize=(50, 8))
+std_group = train_flattened[['Page','date','Visits']].groupby(['date'])['Visits'].std()
+plt.plot(std_group, color = 'g')
+plt.title('Time Series - std')
+plt.show()
+
+
+# In[14]:
+
+
+# For the next graphics
+train_flattened['month_num'] = train_flattened['month']
+train_flattened['month'].replace('11','11 - November',inplace=True)
+train_flattened['month'].replace('12','12 - December',inplace=True)
+
+train_flattened['weekday_num'] = train_flattened['weekday']
+train_flattened['weekday'].replace(0,'01 - Monday',inplace=True)
+train_flattened['weekday'].replace(1,'02 - Tuesday',inplace=True)
+train_flattened['weekday'].replace(2,'03 - Wednesday',inplace=True)
+train_flattened['weekday'].replace(3,'04 - Thursday',inplace=True)
+train_flattened['weekday'].replace(4,'05 - Friday',inplace=True)
+train_flattened['weekday'].replace(5,'06 - Saturday',inplace=True)
+train_flattened['weekday'].replace(6,'07 - Sunday',inplace=True)
+
+
+# In[15]:
+
+
+train_group = train_flattened.groupby(["month", "weekday"])['Visits'].mean().reset_index()
+train_group = train_group.pivot('weekday','month','Visits')
+train_group.sort_index(inplace=True)
+
+
+# In[16]:
+
+
+sns.set(font_scale=3.5) 
+
+# Draw a heatmap with the numeric values in each cell
+f, ax = plt.subplots(figsize=(50, 30))
+sns.heatmap(train_group, annot=False, ax=ax, fmt="d", linewidths=2)
+plt.title('Web Traffic Months cross Weekdays')
+plt.show()
+
+
+# This heatmap show us in average the web traffic by weekdays cross the months. In our data we can see there are less activity in Friday and Saturday for December and November. And the biggest traffic is on the period Monday - Wednesday. It is possible to do Statistics Test to check if our intuition is ok. But You have a lot of works ! 
+
+# In[17]:
+
+
+train_day = train_flattened.groupby(["month", "day"])['Visits'].mean().reset_index()
+train_day = train_day.pivot('day','month','Visits')
+train_day.sort_index(inplace=True)
+train_day.dropna(inplace=True)
+
+
+# In[18]:
+
+
+# Draw a heatmap with the numeric values in each cell
+f, ax = plt.subplots(figsize=(50, 30))
+sns.heatmap(train_day, annot=False, ax=ax, fmt="d", linewidths=2)
+plt.title('Web Traffic Months cross days')
+plt.show()
+
+
+# With this graph it is possible to see they are two periods with a bigger activity than the rest. The two periods are 25-29 December and 13-14 November. And we can see one period with little activity 15-17 December. They are maybe few outliers during these two periods. You must to investigate more. (coming soon...)
+
+# #  <h1><center> III. ML Approach
 # 
-# Now let us check the number of files present in each of these sub folders. 
 
-# In[ ]:
+# The first approach introduces is the Machine Learnin Approach. We will use just a AdaBoostRegressor but you can try with other models if you want to find the best model. I tried with a linear model as like Ridge but ADA model is better. I will be interesting to check if GB or XGB can bit ADA. It is possible to do a Neural Network approach too. But this approach will be done if the kagglers want more !!
+
+# In[19]:
 
 
-sub_folders = check_output(["ls", "../input/train/"]).decode("utf8").strip().split('\n')
-count_dict = {}
-for sub_folder in sub_folders:
-    num_of_files = len(check_output(["ls", "../input/train/"+sub_folder]).decode("utf8").strip().split('\n'))
-    print("Number of files for the species",sub_folder,":",num_of_files)
-    count_dict[sub_folder] = num_of_files
+times_series_means =  pd.DataFrame(mean_group).reset_index(drop=False)
+times_series_means['weekday'] = times_series_means['date'].apply(lambda x: x.weekday())
+times_series_means['Date_str'] = times_series_means['date'].apply(lambda x: str(x))
+times_series_means[['year','month','day']] = pd.DataFrame(times_series_means['Date_str'].str.split('-',2).tolist(), columns = ['year','month','day'])
+date_staging = pd.DataFrame(times_series_means['day'].str.split(' ',2).tolist(), columns = ['day','other'])
+times_series_means['day'] = date_staging['day']*1
+times_series_means.drop('Date_str',axis = 1, inplace =True)
+times_series_means.head()
+
+
+# The first step for the ML approach is to create the feature that we will predict. In our example we don't predict the number of visits but the difference between two days. The tips to create few features is to take the difference between two days and to do a lag. Here we will take a lag of "diff" seven times. If you have a weekly pattern it is an interesting choice. Here we have few data (2 months so 30 values) and it is a contraint. I done some test and the number 7 is a good choice (weekly pattern?).  
+
+# In[20]:
+
+
+times_series_means.reset_index(drop=True,inplace=True)
+
+def lag_func(data,lag):
+    lag = lag
+    X = lagmat(data["diff"], lag)
+    lagged = data.copy()
+    for c in range(1,lag+1):
+        lagged["lag%d" % c] = X[:, c-1]
+    return lagged
+
+def diff_creation(data):
+    data["diff"] = np.nan
+    data.ix[1:, "diff"] = (data.iloc[1:, 1].as_matrix() - data.iloc[:len(data)-1, 1].as_matrix())
+    return data
+
+df_count = diff_creation(times_series_means)
+
+# Creation of 7 features with "diff"
+lag = 7
+lagged = lag_func(df_count,lag)
+last_date = lagged['date'].max()
+
+
+# In[21]:
+
+
+lagged.head()
+
+
+# In[34]:
+
+
+# Train Test split
+def train_test(data_lag):
+    xc = ["lag%d" % i for i in range(1,lag+1)] + ['weekday'] + ['day']
+    split = 0.70
+    xt = data_lag[(lag+1):][xc]
+    yt = data_lag[(lag+1):]["diff"]
+    isplit = int(len(xt) * split)
+    x_train, y_train, x_test, y_test = xt[:isplit], yt[:isplit], xt[isplit:], yt[isplit:]
+    return x_train, y_train, x_test, y_test, xt, yt
+
+x_train, y_train, x_test, y_test, xt, yt = train_test(lagged)
+
+
+# In[35]:
+
+
+# Linear Model
+from sklearn.ensemble import ExtraTreesRegressor,GradientBoostingRegressor, BaggingRegressor, AdaBoostRegressor
+from sklearn.metrics import mean_absolute_error, r2_score
+
+def modelisation(x_tr, y_tr, x_ts, y_ts, xt, yt, model0, model1):
+    # Modelisation with all product
+    model0.fit(x_tr, y_tr)
+
+    prediction = model0.predict(x_ts)
+    r2 = r2_score(y_ts.as_matrix(), model0.predict(x_ts))
+    mae = mean_absolute_error(y_ts.as_matrix(), model0.predict(x_ts))
+    print ("-----------------------------------------------")
+    print ("mae with 70% of the data to train:", mae)
+    print ("-----------------------------------------------")
+
+    # Model with all data
+    model1.fit(xt, yt) 
     
-plt.figure(figsize=(12,4))
-sns.barplot(list(count_dict.keys()), list(count_dict.values()), alpha=0.8)
-plt.xlabel('Fish Species', fontsize=12)
-plt.ylabel('Number of Images', fontsize=12)
+    return model1, prediction, model0
+
+model0 =  AdaBoostRegressor(n_estimators = 5000, random_state = 42, learning_rate=0.01)
+model1 =  AdaBoostRegressor(n_estimators = 5000, random_state = 42, learning_rate=0.01)
+
+clr, prediction, clr0  = modelisation(x_train, y_train, x_test, y_test, xt, yt, model0, model1)
+
+
+# In[36]:
+
+
+# Performance 1
+plt.style.use('ggplot')
+plt.figure(figsize=(50, 12))
+line_up, = plt.plot(prediction,label='Prediction')
+line_down, = plt.plot(np.array(y_test),label='Reality')
+plt.ylabel('Series')
+plt.legend(handles=[line_up, line_down])
+plt.title('Performance of predictions - Benchmark Predictions vs Reality')
 plt.show()
+
+
+# In[37]:
+
+
+# Prediction
+def pred_df(data,number_of_days):
+    data_pred = pd.DataFrame(pd.Series(data["date"][data.shape[0]-1] + timedelta(days=1)),columns = ["date"])
+    for i in range(number_of_days):
+        inter = pd.DataFrame(pd.Series(data["date"][data.shape[0]-1] + timedelta(days=i+2)),columns = ["date"])
+        data_pred = pd.concat([data_pred,inter]).reset_index(drop=True)
+    return data_pred
+
+data_to_pred = pred_df(df_count,30)
+
+
+# In[38]:
+
+
+def initialisation(data_lag, data_pred, model, xtrain, ytrain, number_of_days):
+    # Initialisation
+    model.fit(xtrain, ytrain)
     
-    
-
-
-# So the number of files for species ALB (Albacore tuna) is much higher than other species. 
-# 
-# Let us look at the number of files present in the test folder.
-
-# In[ ]:
-
-
-num_test_files = len(check_output(["ls", "../input/test_stg1/"]).decode("utf8").strip().split('\n'))
-print("Number of test files present :", num_test_files)
-
-
-# **Image Size:**
-# 
-# Now let us look at the image size of each of the files and see what different sizes are available.
-
-# In[ ]:
-
-
-train_path = "../input/train/"
-sub_folders = check_output(["ls", train_path]).decode("utf8").strip().split('\n')
-different_file_sizes = {}
-for sub_folder in sub_folders:
-    file_names = check_output(["ls", train_path+sub_folder]).decode("utf8").strip().split('\n')
-    for file_name in file_names:
-        im_array = imread(train_path+sub_folder+"/"+file_name)
-        size = "_".join(map(str,list(im_array.shape)))
-        different_file_sizes[size] = different_file_sizes.get(size,0) + 1
-
-plt.figure(figsize=(12,4))
-sns.barplot(list(different_file_sizes.keys()), list(different_file_sizes.values()), alpha=0.8)
-plt.xlabel('Image size', fontsize=12)
-plt.ylabel('Number of Images', fontsize=12)
-plt.title("Image size present in train dataset")
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# So 720_1280_3 is the most common image size available in the train data and 10 different sizes are available. 
-# 
-# 720_1244_3 is the smallest size of the available images in train set and 974_1732_3 is the largest one.
-# 
-# Now let us look at the distribution in test dataset as well.
-
-# In[ ]:
-
-
-test_path = "../input/test_stg1/"
-file_names = check_output(["ls", test_path]).decode("utf8").strip().split('\n')
-different_file_sizes = {}
-for file_name in file_names:
-        size = "_".join(map(str,list(imread(test_path+file_name).shape)))
-        different_file_sizes[size] = different_file_sizes.get(size,0) + 1
-
-plt.figure(figsize=(12,4))
-sns.barplot(list(different_file_sizes.keys()), list(different_file_sizes.values()), alpha=0.8)
-plt.xlabel('File size', fontsize=12)
-plt.ylabel('Number of Images', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.title("Image size present in test dataset")
-plt.show()
-
-
-# Test set also has a very similar distribution.
-# 
-# **Animation:**
-# 
-# Let us try to have some animation on the available images.  Not able to embed the video in the notebook.
-# 
-# **Please check the output tab for the animation**
-
-# In[ ]:
-
-
-
-import random
-"""
-import matplotlib.animation as animation
-from matplotlib import animation, rc
-from IPython.display import HTML
-
-random.seed(12345)
-train_path = "../input/train/"
-sub_folders = check_output(["ls", train_path]).decode("utf8").strip().split('\n')
-different_file_sizes = {}
-all_files = []
-for sub_folder in sub_folders:
-    file_names = check_output(["ls", train_path+sub_folder]).decode("utf8").strip().split('\n')
-    selected_files = random.sample(file_names, 10)
-    for file_name in selected_files:
-        all_files.append([sub_folder,file_name])
-
-fig = plt.figure()
-sns.set_style("whitegrid", {'axes.grid' : False})
-img_file = "".join([train_path, sub_folder, "/", file_name])
-im = plt.imshow(imread(img_file), vmin=0, vmax=255)
-
-def updatefig(ind):
-    sub_folder = all_files[ind][0]
-    file_name = all_files[ind][1]
-    img_file = "".join([train_path, sub_folder, "/", file_name])
-    im.set_array(imread(img_file))
-    plt.title("Species : "+sub_folder, fontsize=15)
-    return im,
-
-ani = animation.FuncAnimation(fig, updatefig, frames=len(all_files))
-ani.save('lb.gif', fps=1, writer='imagemagick')
-#rc('animation', html='html5')
-#HTML(ani.to_html5_video())
-plt.show()
-"""
-
-
-# **Basic CNN Model using Keras:**
-# 
-# Now let us try to build a CNN model on the dataset. Due to the memory constraints of the kernels, let us take only (500,500,3) array from top left corner of each image and then try to classify based on that portion.
-# 
-# Kindly note that running it offline with the full image will give much better results.
-
-# In[ ]:
-
-
-
-import random
-from subprocess import check_output
-from scipy.misc import imread
-import numpy as np
-np.random.seed(2016)
-from keras.datasets import mnist
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Activation, Flatten
-from keras.layers import Convolution2D, MaxPooling2D
-from keras.utils import np_utils
-from keras import backend as K
-
-batch_size = 1
-nb_classes = 8
-nb_epoch = 1
-
-img_rows, img_cols, img_rgb = 500, 500, 3
-nb_filters = 4
-pool_size = (2, 2)
-kernel_size = (3, 3)
-input_shape = (img_rows, img_cols, 3)
-
-species_map_dict = {
-'ALB':0,
-'BET':1,
-'DOL':2,
-'LAG':3,
-'NoF':4,
-'OTHER':5,
-'SHARK':6,
-'YFT':7
-}
-
-def batch_generator_train(sample_size):
-	train_path = "../input/train/"
-	all_files = []
-	y_values = []
-	sub_folders = check_output(["ls", train_path]).decode("utf8").strip().split('\n')
-	for sub_folder in sub_folders:
-		file_names = check_output(["ls", train_path+sub_folder]).decode("utf8").strip().split('\n')
-		for file_name in file_names:
-			all_files.append([sub_folder, '/', file_name])
-			y_values.append(species_map_dict[sub_folder])
-	number_of_images = range(len(all_files))
-
-	counter = 0
-	while True:
-		image_index = random.choice(number_of_images)
-		file_name = "".join([train_path] + all_files[image_index])
-		print(file_name)
-		y = [0]*8
-		y[y_values[image_index]] = 1
-		y = np.array(y).reshape(1,8)
-		
-		im_array = imread(file_name)
-		X = np.zeros([1, img_rows, img_cols, img_rgb])
-		#X[:im_array.shape[0], :im_array.shape[1], 3] = im_array.copy().astype('float32')
-		X[0, :, :, :] = im_array[:500,:500,:].astype('float32')
-		X /= 255.
+    for i in range(number_of_days-1):
+        lag1 = data_lag.tail(1)["diff"].values[0]
+        lag2 = data_lag.tail(1)["lag1"].values[0]
+        lag3 = data_lag.tail(1)["lag2"].values[0]
+        lag4 = data_lag.tail(1)["lag3"].values[0]
+        lag5 = data_lag.tail(1)["lag4"].values[0]
+        lag6 = data_lag.tail(1)["lag5"].values[0]
+        lag7 = data_lag.tail(1)["lag6"].values[0]
+        lag8 = data_lag.tail(1)["lag7"].values[0]
         
-		print(X.shape)
-		yield X,y
-		
-		counter += 1
-		#if counter == sample_size:
-		#	break
+        data_pred['weekday'] = data_pred['date'].apply(lambda x:x.weekday())
+        weekday = data_pred['weekday'][0]
+        
+        row = pd.Series([lag1,lag2,lag3,lag4,lag5,lag6,lag7,lag8,weekday]
+                        ,['lag1', 'lag2', 'lag3','lag4','lag5','lag6','lag7','lag8','weekday'])
+        to_predict = pd.DataFrame(columns = ['lag1', 'lag2', 'lag3','lag4','lag5','lag6','lag7','lag8','weekday'])
+        prediction = pd.DataFrame(columns = ['diff'])
+        to_predict = to_predict.append([row])
+        prediction = pd.DataFrame(model.predict(to_predict),columns = ['diff'])
 
-def batch_generator_test(all_files):
-	for file_name in all_files:
-		file_name = test_path + file_name
-		
-		im_array = imread(file_name)
-		X = np.zeros([1, img_rows, img_cols, img_rgb])
-		X[0,:, :, :] = im_array[:500,:500,:].astype('float32')
-		X /= 255.
+        # Loop
+        if i == 0:
+            last_predict = data_lag["Visits"][data_lag.shape[0]-1] + prediction.values[0][0]
 
-		yield X
+        if i > 0 :
+            last_predict = data_lag["Visits"][data_lag.shape[0]-1] + prediction.values[0][0]
+        
+        data_lag = pd.concat([data_lag,prediction.join(data_pred["date"]).join(to_predict)]).reset_index(drop=True)
+        data_lag["Visits"][data_lag.shape[0]-1] = last_predict
+        
+        # test
+        data_pred = data_pred[data_pred["date"]>data_pred["date"][0]].reset_index(drop=True)
+        
+    return data_lag
 
-
-def keras_cnn_model():
-	model = Sequential()
-	model.add(Convolution2D(nb_filters, kernel_size[0], kernel_size[1],
-                        border_mode='valid',
-                        input_shape=input_shape))
-	model.add(Activation('relu'))
-	model.add(Convolution2D(nb_filters, kernel_size[0], kernel_size[1]))
-	model.add(Activation('relu'))
-	model.add(MaxPooling2D(pool_size=pool_size))
-	model.add(Dropout(0.25))	
-	model.add(Flatten())
-	model.add(Dense(128))
-	model.add(Activation('relu'))
-	model.add(Dropout(0.5))
-	model.add(Dense(nb_classes))
-	model.add(Activation('softmax'))
-	model.compile(loss='categorical_crossentropy', optimizer='adadelta')
-	return model
-
-model = keras_cnn_model()
-fit= model.fit_generator(
-	generator = batch_generator_train(100),
-	nb_epoch = 1,
-	samples_per_epoch = 100
-)
-
-test_path = "../input/test_stg1/"
-all_files = []
-file_names = check_output(["ls", test_path]).decode("utf8").strip().split('\n')
-for file_name in file_names:
-	all_files.append(file_name)
-#preds = model.predict_generator(generator=batch_generator_test(all_files), val_samples=len(all_files))
-
-#out_df = pd.DataFrame(preds)
-#out_df.columns = ['ALB', 'BET', 'DOL', 'LAG', 'NoF', 'OTHER', 'SHARK', 'YFT']
-#out_df['image'] = all_files
-#out_df.to_csv("sample_sub_keras.csv", index=False)
+model_fin = AdaBoostRegressor(n_estimators = 5000, random_state = 42, learning_rate=0.01)
 
 
-# More to come.!
+# In[39]:
+
+
+lagged = initialisation(lagged, data_to_pred, model_fin, xt, yt, 30)
+
+
+# In[40]:
+
+
+lagged[lagged['diff']<0]
+lagged.ix[(lagged.Visits < 0), 'Visits'] = 0
+
+
+# In[41]:
+
+
+df_lagged = lagged[['Visits','date']]
+df_train = df_lagged[df_lagged['date'] <= last_date]
+df_pred = df_lagged[df_lagged['date'] >= last_date]
+plt.style.use('ggplot')
+plt.figure(figsize=(30, 5))
+plt.plot(df_train.date,df_train.Visits)
+plt.plot(df_pred.date,df_pred.Visits,color='b')
+plt.title('Training time series in red, Prediction on 30 days in blue -- ML Approach')
+plt.show()
+    
+
+
+# Finshed for the first approach ! The ML method requires a lot of work ! You need to create the features, the data to collect the prediction, optimisation etc... This method done a good results when there are a weekly pattern identified or a monthly pattern but we need more data.  
+
+# #  <h1><center> IV. Basic Approach
+
+# For this model We will use a simple model with the average of the activity by weekdays. In general rules the simplest things give good results !
+
+# In[42]:
+
+
+lagged_basic = lagged[['date','Visits','weekday']]
+lagged_basic_tr   = lagged_basic[lagged_basic['date'] < last_date]
+lagged_basic_pred = lagged_basic[lagged_basic['date'] >= last_date]
+lagged_basic_pred.drop('Visits',inplace=True,axis=1)
+
+
+# In[43]:
+
+
+prediction_by_days = pd.DataFrame(lagged_basic.groupby(['weekday'])['Visits'].mean())
+prediction_by_days.reset_index(drop=False,inplace=True)
+prediction_by_days
+
+
+# In[44]:
+
+
+basic_pred = pd.merge(lagged_basic_pred,prediction_by_days,on='weekday')
+basic_approach = pd.concat([lagged_basic_tr,basic_pred])
+
+
+# In[45]:
+
+
+plot_basic = np.array(basic_approach[basic_approach['date'] > last_date].sort_values(by='date').Visits)
+
+
+# In[46]:
+
+
+plt.figure(figsize=(30, 5))
+plt.plot(plot_basic)
+plt.title('Display the predictions with the Basic model')
+plt.show()
+
+
+# In[47]:
+
+
+df_lagged = basic_approach[['Visits','date']].sort_values(by='date')
+df_train = df_lagged[df_lagged['date'] <= last_date]
+df_pred = df_lagged[df_lagged['date'] >= last_date]
+plt.style.use('ggplot')
+plt.figure(figsize=(30, 5))
+plt.plot(df_train.date,df_train.Visits)
+plt.plot(df_pred.date,df_pred.Visits,color='b')
+plt.title('Training time series in red, Prediction on 30 days in blue -- ML Approach')
+plt.show()
+    
+
+
+# No optimisation ! No choice between linear, Bagging, boosting or others ! Just with an average by week days and we have a result ! Fast and easily !
+
+# #  <h1><center>V. ARIMA
+
+# This part is inspired by: https://www.analyticsvidhya.com/blog/2016/02/time-series-forecasting-codes-python/
+# Very goodjob with the ARIMA models ! It is more simple when we have directly a stationary Time series. It is not our case...
+# 
+# We will use the Dickey-Fuller Test. More informations here: https://en.wikipedia.org/wiki/Dickey%E2%80%93Fuller_test
+
+# In[48]:
+
+
+# Show Rolling mean, Rolling Std and Test for the stationnarity
+df_date_index = times_series_means[['date','Visits']].set_index('date')
+
+def test_stationarity(timeseries):
+    plt.figure(figsize=(50, 8))
+    #Determing rolling statistics
+    rolmean = pd.rolling_mean(timeseries, window=7)
+    rolstd = pd.rolling_std(timeseries, window=7)
+
+    #Plot rolling statistics:
+    orig = plt.plot(timeseries, color='blue',label='Original')
+    mean = plt.plot(rolmean, color='red', label='Rolling Mean')
+    std = plt.plot(rolstd, color='black', label = 'Rolling Std')
+    plt.legend(loc='best')
+    plt.title('Rolling Mean & Standard Deviation')
+    plt.show(block=False)
+    
+    #Perform Dickey-Fuller test:
+    print('Results of Dickey-Fuller Test:')
+    dftest = sm.tsa.adfuller(timeseries['Visits'], autolag='AIC')
+    dfoutput = pd.Series(dftest[0:4], index=['Test Statistic','p-value','#Lags Used','Number of Observations Used'])
+    for key,value in dftest[4].items():
+        dfoutput['Critical Value (%s)'%key] = value
+    print(dfoutput)
+    
+test_stationarity(df_date_index)   
+
+
+# Our Time Series is stationary ! it is a good news ! We can to apply the ARIMA Model without transformations.
+
+# Good job ! We have a Time Series Stationary ! We can apply our ARIMA Model !!!
+
+# In[49]:
+
+
+# Naive decomposition of our Time Series as explained above
+decomposition = sm.tsa.seasonal_decompose(df_date_index, model='multiplicative',freq = 7)
+
+trend = decomposition.trend
+seasonal = decomposition.seasonal
+residual = decomposition.resid
+rcParams['figure.figsize'] = 30, 20
+
+plt.subplot(411)
+plt.title('Obesered = Trend + Seasonality + Residuals')
+plt.plot(df_date_index, label='Observed')
+plt.legend(loc='best')
+plt.subplot(412)
+plt.plot(trend, label='Trend')
+plt.legend(loc='best')
+plt.subplot(413)
+plt.plot(seasonal,label='Seasonality')
+plt.legend(loc='best')
+plt.subplot(414)
+plt.plot(residual, label='Residuals')
+plt.legend(loc='best')
+plt.tight_layout()
+plt.show()
+
+
+# We expose the naive decomposition of our time series (More sophisticated methods should be preferred). They are several ways to decompose a time series but in our example we take a simple decomposition on three parts.
+# The additive model is Y[t] = T[t] + S[t] + e[t]
+# The multiplicative model is Y[t] = T[t] x S[t] x e[t]
+# with:
+# 
+#  1. T[t]: Trend 
+#  2. S[t]: Seasonality 
+#  3. e[t]: Residual
+# 
+# An additive model is linear where changes over time are consistently made by the same amount. A linear trend is a straight line. A linear seasonality has the same frequency (width of cycles) and amplitude (height of cycles).
+# A multiplicative model is nonlinear, such as quadratic or exponential. Changes increase or decrease over time. A nonlinear trend is a curved line.A non-linear seasonality has an increasing or decreasing frequency and/or amplitude over time.
+# In ou example we can see it is not a linear model. So it is the reason why we use a multiplicative model.
+
+# In[ ]:
+
+
+#from statsmodels.tsa.arima_model import ARIMA
+
+#model = ARIMA(df_date_index, order=(7, 1, 0))  
+#results_AR = model.fit(disp=-1)  
+#plt.plot(df_date_index, color = 'blue')
+#plt.plot(results_AR.fittedvalues, color='red')
+#plt.show()
+
+
+# In[ ]:
+
+
+#forecast = results_AR.forecast(steps = 30)[0]
+#plt.figure(figsize=(30, 5))
+#plt.plot(pd.DataFrame(np.exp(forecast)))
+#plt.title('Display the predictions with the ARIMA model')
+#plt.show()
+
+
+# In[ ]:
+
+
+# DataFrame to collect the predictions
+#df_prediction_arima = df_date_index.copy()
+
+#list_date = []
+#for i in range(31):
+#    if i >0:
+#        list_date.append(last_date  + pd.to_timedelta(i, unit='D'))
+    
+#predictions_arima = pd.DataFrame(list_date,columns = ['Date'])
+#predictions_arima['Visits'] = 0
+#predictions_arima.set_index('Date',inplace=True)
+#predictions_arima['Visits'] = np.exp(forecast)
+
+#df_prediction_arima = df_prediction_arima.append(predictions_arima)
+#df_prediction_arima.reset_index(drop=False,inplace=True)
+
+
+# In[ ]:
+
+
+#df_arima = df_prediction_arima[['Visits','index']]
+#df_train = df_arima[df_arima['index'] <= last_date]
+#df_pred = df_arima[df_prediction_arima['index'] >= last_date]
+#plt.style.use('ggplot')
+#plt.figure(figsize=(30, 5))
+#plt.plot(df_train.index,df_train.Visits)
+#plt.plot(df_pred.index,df_pred.Visits,color='b')
+#plt.title('Training time series in red, Prediction on 30 days in blue -- ARIMA Model')
+#plt.show()
+
+
+# IN PROGRESS....
+
+# #  <h1><center>VI. Prophet
+
+# Prophet is a forecasting tool availaible in python and R. This tool was created by Facebook. More information on the library here: https://research.fb.com/prophet-forecasting-at-scale/
+# 
+# Compared to the two methods this one will be faster. We can forecast a time series with few lines. In our case we will do a forecast and a display the trend of activity on the period and for a week.
+# 
+
+# In[60]:
+
+
+from fbprophet import Prophet
+sns.set(font_scale=1) 
+df_date_index = times_series_means[['date','Visits']]
+df_date_index = df_date_index.set_index('date')
+df_prophet = df_date_index.copy()
+df_prophet.reset_index(drop=False,inplace=True)
+df_prophet.columns = ['ds','y']
+
+m = Prophet()
+m.fit(df_prophet)
+future = m.make_future_dataframe(periods=30,freq='D')
+forecast = m.predict(future)
+fig = m.plot(forecast)
+
+
+# In[51]:
+
+
+m.plot_components(forecast);
+
+
+# #  <h1><center>VI. Keras Starter
+
+# In this part we will use Keras without optimisation to forecast. It is just a very simple code to begin with Keras and a Time Series. For our example we will try just with one layer and 8 Neurons.
+
+# In[52]:
+
+
+df_dl = times_series_means[['date','Visits']]
+
+train_size = int(len(df_dl) * 0.80)
+test_size = len(df_dl) - train_size
+train, test = df_dl.iloc[0:train_size,:], df_dl.iloc[train_size:len(df_dl),:]
+print(len(train), len(test))
+
+
+# In[53]:
+
+
+look_back = 1
+
+def create_dataset(dataset, look_back):
+    dataX = []
+    dataY = []
+    for i in range(len(dataset)-look_back-1):
+        a = dataset.iloc[i:(i+look_back), 1].values[0]
+        b = dataset.iloc[i+look_back, 1]
+        dataX.append(a)
+        dataY.append(b)
+    return np.array(dataX), np.array(dataY)
+
+trainX, trainY = create_dataset(train, look_back)
+
+
+# In[54]:
+
+
+from keras.models import Sequential
+from keras.layers import Dense
+
+trainX, trainY = create_dataset(train, look_back)
+testX, testY = create_dataset(test, look_back)
+
+model = Sequential()
+model.add(Dense(8, input_dim=look_back, activation='relu'))
+model.add(Dense(1))
+model.compile(loss='mean_absolute_error', optimizer='adam')
+model.fit(trainX, trainY, epochs=150, batch_size=2, verbose=0)
+
+
+# In[32]:
+
+
+trainScore = model.evaluate(trainX, trainY, verbose=0)
+print('Train Score: %.2f MSE (%.2f MAE)' % (trainScore, trainScore))
+testScore = model.evaluate(testX, testY, verbose=0)
+print('Test Score: %.2f MSE (%.2f MAE)' % (testScore, testScore))
+
+
+# In[55]:
+
+
+trainPredict = model.predict(trainX)
+testPredict = model.predict(testX)
+ 
+# shift train predictions for plotting
+trainPredictPlot = np.empty_like(df_dl)
+trainPredictPlot[:, :] = np.nan
+trainPredictPlot[look_back:len(trainPredict)+look_back, :] = trainPredict
+ 
+# shift test predictions for plotting
+testPredictPlot = np.empty_like(df_dl)
+testPredictPlot[:, :] = np.nan
+testPredictPlot[len(trainPredict)+(look_back*2)+1:len(df_dl)-1, :] = testPredict
+ 
+# plot baseline and predictions
+plt.plot(np.array(df_dl.Visits))
+plt.plot(trainPredictPlot)
+plt.plot(testPredictPlot)
+plt.title('Predicition with Keras')
+plt.show()
+
+
+#  # <h1><center>VII. Comparison & Conclusion
+
+# In Progress...

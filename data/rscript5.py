@@ -1,59 +1,79 @@
-import kagglegym
+#
+# This script is inspired by this discussion:
+# https://www.kaggle.com/c/zillow-prize-1/discussion/33710
+#
+
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import ExtraTreesRegressor
-from sklearn.linear_model import LinearRegression
+import xgboost as xgb
+from sklearn.preprocessing import LabelEncoder
 
-env = kagglegym.make()
-o = env.reset()
-o.train = o.train[:1000]
-excl = [env.ID_COL_NAME, env.SAMPLE_COL_NAME, env.TARGET_COL_NAME, env.TIME_COL_NAME]
-col = [c for c in o.train.columns if c not in excl]
+properties = pd.read_csv('../input/properties_2016.csv')
+train = pd.read_csv("../input/train_2016_v2.csv")
+for c in properties.columns:
+    properties[c]=properties[c].fillna(-1)
+    if properties[c].dtype == 'object':
+        lbl = LabelEncoder()
+        lbl.fit(list(properties[c].values))
+        properties[c] = lbl.transform(list(properties[c].values))
 
-train = pd.read_hdf('../input/train.h5')
-train = train[col]
-d_mean= train.median(axis=0)
+train_df = train.merge(properties, how='left', on='parcelid')
+x_train = train_df.drop(['parcelid', 'logerror','transactiondate'], axis=1)
+x_test = properties.drop(['parcelid'], axis=1)
+# shape        
+print('Shape train: {}\nShape test: {}'.format(x_train.shape, x_test.shape))
 
-train = o.train[col]
-n = train.isnull().sum(axis=1)
-for c in train.columns:
-    train[c + '_nan_'] = pd.isnull(train[c])
-    d_mean[c + '_nan_'] = 0
-train = train.fillna(d_mean)
-train['znull'] = n
-n = []
+# drop out ouliers
+train_df=train_df[ train_df.logerror > -0.4 ]
+train_df=train_df[ train_df.logerror < 0.42 ]
+x_train=train_df.drop(['parcelid', 'logerror','transactiondate'], axis=1)
+y_train = train_df["logerror"].values.astype(np.float32)
+y_mean = np.mean(y_train)
 
-rfr = ExtraTreesRegressor(n_estimators=100, max_depth=4, n_jobs=-1, random_state=17, verbose=0)
-model1 = rfr.fit(train, o.train['y'])
-train = []
+print('After removing outliers:')     
+print('Shape train: {}\nShape test: {}'.format(x_train.shape, x_test.shape))
 
-#https://www.kaggle.com/bguberfain/two-sigma-financial-modeling/univariate-model-with-clip/run/482189
-low_y_cut = -0.075
-high_y_cut = 0.075
-y_is_above_cut = (o.train.y > high_y_cut)
-y_is_below_cut = (o.train.y < low_y_cut)
-y_is_within_cut = (~y_is_above_cut & ~y_is_below_cut)
-model2 = LinearRegression(n_jobs=-1)
-model2.fit(np.array(o.train[col].fillna(d_mean).loc[y_is_within_cut, 'technical_20'].values).reshape(-1,1), o.train.loc[y_is_within_cut, 'y'])
 
-#https://www.kaggle.com/ymcdull/two-sigma-financial-modeling/ridge-lb-0-0100659
-ymean_dict = dict(o.train.groupby(["id"])["y"].median())
+# xgboost params
+xgb_params = {
+    'eta': 0.033,
+    'max_depth': 6,
+    'subsample': 0.80,
+    'objective': 'reg:linear',
+    'eval_metric': 'mae',
+    'base_score': y_mean,
+    'silent': 1
+}
 
-while True:
-    test = o.features[col]
-    n = test.isnull().sum(axis=1)
-    for c in test.columns:
-        test[c + '_nan_'] = pd.isnull(test[c])
-    test = test.fillna(d_mean)
-    test['znull'] = n
-    pred = o.target
-    test2 = np.array(o.features[col].fillna(d_mean)['technical_20'].values).reshape(-1,1)
-    pred['y'] = (model1.predict(test).clip(low_y_cut, high_y_cut) * 0.65) + (model2.predict(test2).clip(low_y_cut, high_y_cut) * 0.35)
-    pred['y'] = pred.apply(lambda r: 0.95 * r['y'] + 0.05 * ymean_dict[r['id']] if r['id'] in ymean_dict else r['y'], axis = 1)
-    pred['y'] = [float(format(x, '.6f')) for x in pred['y']]
-    o, reward, done, info = env.step(pred)
-    if done:
-        print("el fin ...", info["public_score"])
-        break
-    if o.features.timestamp[0] % 100 == 0:
-        print(reward)
+dtrain = xgb.DMatrix(x_train, y_train)
+dtest = xgb.DMatrix(x_test)
+
+# cross-validation
+cv_result = xgb.cv(xgb_params, 
+                   dtrain, 
+                   nfold=5,
+                   num_boost_round=500,
+                   early_stopping_rounds=5,
+                   verbose_eval=10, 
+                   show_stdv=False
+                  )
+num_boost_rounds = len(cv_result)
+print(num_boost_rounds)
+# train model
+model = xgb.train(dict(xgb_params, silent=1), dtrain, num_boost_round=num_boost_rounds)
+pred = model.predict(dtest)
+y_pred=[]
+
+for i,predict in enumerate(pred):
+    y_pred.append(str(round(predict,4)))
+y_pred=np.array(y_pred)
+
+output = pd.DataFrame({'ParcelId': properties['parcelid'].astype(np.int32),
+        '201610': y_pred, '201611': y_pred, '201612': y_pred,
+        '201710': y_pred, '201711': y_pred, '201712': y_pred})
+# set col 'ParceID' to first col
+cols = output.columns.tolist()
+cols = cols[-1:] + cols[:-1]
+output = output[cols]
+from datetime import datetime
+output.to_csv('sub{}.csv'.format(datetime.now().strftime('%Y%m%d_%H%M%S')), index=False)

@@ -1,427 +1,280 @@
 
 # coding: utf-8
 
-# There are several things we will be doing here. Be warned:
+# # Introduction
 # 
-# ![TL;DR](https://m.popkey.co/3c4432/1Z7Mx.gif)
+# In this kernel, I will perform my first exploration analysis on a dataset containing texts.
 # 
-# 
-# First, we will do some feature engineering on "categorical" variables (note that I am legally obligated to put that word in quotation marks since, on the surface, they are all numerical variables). I will advertise [__MLBox__](https://github.com/AxeldeRomblay/MLBox) as it will help us with feature engineering. This seems like an excellent ML package, and even though I would not want a single ML package doing everything while I'm just watching, it is undeniable that there are lots of useful tools in it. The one we will use is its [__categorical encoder__](http://mlbox.readthedocs.io/en/latest/features.html#categorical-features). Originally, I wrote this script with [__entity embedding__](https://arxiv.org/abs/1604.06737) as my strategy of choice. We all know what happens with best laid plans ...
-# 
-# 
-# ![Best laid plans](https://i.imgur.com/f8sAmnn.gif)
+# **Note: ** Feedbacks are more than welcome !
 # 
 # 
-# On my GTX 1080 the entity embedding learning took 3 minutes, while on Kaggle it was going for solid  52 minutes during peak hours. So I went with [__random projection__](https://en.wikipedia.org/wiki/Random_projection) instead for the sake of time, but I do encourage you to uncomment the line below that calls entity embedding and give it a try locally.
-# 
-# Next, we will use these new features as an input for [__XGBoost upsampling__](https://www.kaggle.com/ogrellier/xgb-classifier-upsampling-lb-0-283). That script is very fast so it stands a chance of finishing several runs in an hour, and I like the idea as well. I have left all of the original comments from that script intact, which also give credit to other Kagglers from whom @[olivier](https://www.kaggle.com/ogrellier) has borrowed.
-# 
-# Please read the comment section in that script and @olivier's though on a variety of topics, including the potential for overfitting. Though we are not using his target encoding method here, the same disclaimer applies.
-# 
-# The idea is to do several quick Bayesian optimization runs with relatively high learing rate (0.1) in order to find the best parameters. Once we have the parameters, proper XGBoost training and prediction are done for higher number of iterations and with lower learning rate (0.02). You can explore other Bayesian optimization ideas [__here__](https://www.kaggle.com/tilii7/bayesian-optimization-of-xgboost-parameters).
+# # Category analysis
 
 # In[ ]:
 
 
-# coding: utf-8
-# The next line is needed for python 2.7 ; probably not for python 3
-from __future__ import print_function
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import numpy as np
-import pandas as pd
-import gc
-import warnings
-from bayes_opt import BayesianOptimization
-from sklearn.model_selection import StratifiedKFold
-from sklearn.metrics import log_loss, matthews_corrcoef, roc_auc_score
-import xgboost as xgb
-from xgboost import XGBClassifier
-import gc
-from numba import jit
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import MinMaxScaler
-import time
-from datetime import datetime
-from mlbox.encoding import Categorical_encoder as CE
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-@jit
-def eval_gini(y_true, y_prob):
-    """
-    Original author CPMP : https://www.kaggle.com/cpmpml
-    In kernel : https://www.kaggle.com/cpmpml/extremely-fast-gini-computation
-    """
-    y_true = np.asarray(y_true)
-    y_true = y_true[np.argsort(y_prob)]
-    ntrue = 0
-    gini = 0
-    delta = 0
-    n = len(y_true)
-    for i in range(n-1, -1, -1):
-        y_i = y_true[i]
-        ntrue += y_i
-        gini += y_i * delta
-        delta += 1 - y_i
-    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
-    return gini
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-def gini_xgb(preds, dtrain):
-    labels = dtrain.get_label()
-    gini_score = eval_gini(labels, preds)
-    return [('gini', gini_score)]
+# Visualization
+import seaborn as sns
+from matplotlib import pyplot as plt
 
-def add_noise(series, noise_level):
-    return series * (1 + noise_level * np.random.randn(len(series)))
+import matplotlib.pyplot as plt
+from matplotlib_venn import venn2
+from matplotlib_venn import venn3
 
-def timer(start_time=None):
-    if not start_time:
-        start_time = datetime.now()
-        return start_time
-    elif start_time:
-        thour, temp_sec = divmod(
-            (datetime.now() - start_time).total_seconds(), 3600)
-        tmin, tsec = divmod(temp_sec, 60)
-        print('\n Time taken: %i hours %i minutes and %s seconds.' % (thour, tmin, round(tsec, 2)))
+from wordcloud import WordCloud
 
-def scale_data(X, scaler=None):
-    if not scaler:
-        scaler = MinMaxScaler(feature_range=(-1, 1))
-        scaler.fit(X)
-    X = scaler.transform(X)
-    return X, scaler
+from collections import Counter
+import re
+import string
+from nltk.corpus import stopwords
+stop = stopwords.words('english')
 
 
-# Here we define cross-validation variables that are used for parameter search. Each parameter has its own line, so it is easy to comment something out if you wish. Keep in mind that in such a case you must comment out the matching lines in optimization and explore sections below. I commented out *max_delta_step, subsample and colsample_bytree* and assigned them fixed values. This was done after noticing interesting patterns for alpha, lambda and scale_pos_weight in [__this script__](https://www.kaggle.com/aharless/xgboost-cv-lb-284). So I included them in optimization even though I believe that the above-mentioned script is over-fitting. Feel free to uncomment the lines and optimize 9 instead of 6 variables, but keep in mind that you will need much larger number of initial and optimization points to do that properly.
-# 
-# Note that the learning rate ("eta") is set to 0.1 below. That is done so we can learn the parameters quickly (without going over 200 XGBoost iterations on average). __Here is a tip: change n_estimators below from 200 to 300-400 and see if that gives a better score during optimization -- it will take longer, though.__
+sns.set(style="white", context="talk")
+
 
 # In[ ]:
 
 
-# Comment out any parameter you don't want to test
-def XGB_CV(
-          max_depth,
-          gamma,
-          min_child_weight,
-#          max_delta_step,
-#          subsample,
-#          colsample_bytree
-          scale_pos_weight,
-          reg_alpha,
-          reg_lambda
-         ):
-
-    global GINIbest
-
-    n_splits = 5
-    n_estimators = 200
-    folds = StratifiedKFold(n_splits=n_splits, random_state=1001)
-    xgb_evals = np.zeros((n_estimators, n_splits))
-    oof = np.empty(len(trn_df))
-    sub_preds = np.zeros(len(sub_df))
-    increase = True
-    np.random.seed(0)
-
-    for fold_, (trn_idx, val_idx) in enumerate(folds.split(target, target)):
-        trn_dat, trn_tgt = trn_df.iloc[trn_idx], target.iloc[trn_idx]
-        val_dat, val_tgt = trn_df.iloc[val_idx], target.iloc[val_idx]
-
-#
-# Define all XGboost parameters
-#
-        clf = XGBClassifier(n_estimators=n_estimators,
-                            max_depth=int(max_depth),
-                            objective="binary:logistic",
-                            learning_rate=0.1,
-#                            subsample=max(min(subsample, 1), 0),
-#                            colsample_bytree=max(min(colsample_bytree, 1), 0),
-#                            max_delta_step=int(max_delta_step),
-                            max_delta_step=1,
-                            subsample=0.8,
-                            colsample_bytree=0.8,
-                            gamma=gamma,
-                            reg_alpha=reg_alpha,
-                            reg_lambda=reg_lambda,
-                            scale_pos_weight=scale_pos_weight,
-                            min_child_weight=min_child_weight,
-                            nthread=4)
-
-        # Upsample during cross validation to avoid having the same samples
-        # in both train and validation sets
-        # Validation set is not up-sampled to monitor overfitting
-        if increase:
-            # Get positive examples
-            pos = pd.Series(trn_tgt == 1)
-            # Add positive examples
-            trn_dat = pd.concat([trn_dat, trn_dat.loc[pos]], axis=0)
-            trn_tgt = pd.concat([trn_tgt, trn_tgt.loc[pos]], axis=0)
-            # Shuffle data
-            idx = np.arange(len(trn_dat))
-            np.random.shuffle(idx)
-            trn_dat = trn_dat.iloc[idx]
-            trn_tgt = trn_tgt.iloc[idx]
-
-        clf.fit(trn_dat, trn_tgt,
-                eval_set=[(trn_dat, trn_tgt), (val_dat, val_tgt)],
-                eval_metric=gini_xgb,
-                early_stopping_rounds=None,
-                verbose=False)
-
-        # Find best round for validation set
-        xgb_evals[:, fold_] = clf.evals_result_["validation_1"]["gini"]
-        # Xgboost provides best round starting from 0 so it has to be incremented
-        best_round = np.argsort(xgb_evals[:, fold_])[::-1][0]
-
-    # Compute mean score and std
-    mean_eval = np.mean(xgb_evals, axis=1)
-    std_eval = np.std(xgb_evals, axis=1)
-    best_round = np.argsort(mean_eval)[::-1][0]
-
-    print(' Stopped after %d iterations with val-gini = %.6f +- %.6f' % ( best_round, mean_eval[best_round], std_eval[best_round]) )
-    if ( mean_eval[best_round] > GINIbest ):
-        GINIbest = mean_eval[best_round]
-
-    return mean_eval[best_round]
+df_train = pd.read_csv('../input/train.csv')
 
 
-# I explained above why I went with random projection over entity embedding, but I encourage you to give the latter a try. I suggest you save the files with learned embeddings, so next time you just open them and skip the learning part.
-# 
-# We are dropping all __ps_calc__ variables.
+
+COLUMNS = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+
+
+
+# Adding 'none' columns if there is no '1' in COLUMNS
+df_train['none'] = (df_train[COLUMNS].max(axis=1) == 0).astype(int)
+COLUMNS.append('none')
+CATEGORIES = COLUMNS.copy()
+
+print(df_train.shape)
+print(df_train.columns.values)
+
 
 # In[ ]:
 
 
-GINIbest = -1.
+df_distribution = df_train[COLUMNS].sum()                            .to_frame()                            .rename(columns={0: 'count'})                            .sort_values('count')
 
-#ce = CE(strategy='random_projection', verbose=True)
-ce = CE(strategy='entity_embedding', verbose=True)
+df_distribution.drop('none').plot.pie(y='count',
+                                      title='Label distribution over comments (without "none" category)',
+                                      figsize=(5, 5))\
+                            .legend(loc='center left', bbox_to_anchor=(1.3, 0.5))
 
-start_time = timer(None)
-
-train_loader = pd.read_csv('../input/train.csv', dtype={'target': np.int8, 'id': np.int32})
-train = train_loader.drop(['target', 'id'], axis=1)
-print('\n Shape of raw train data:', train.shape)
-col_to_drop = train.columns[train.columns.str.startswith('ps_calc_')]
-train.drop(col_to_drop, axis=1, inplace=True)
-target = train_loader['target']
-train_ids = train_loader['id'].values
-
-test_loader = pd.read_csv('../input/test.csv', dtype={'id': np.int32})
-test = test_loader.drop(['id'], axis=1)
-print(' Shape of raw test data:', test.shape)
-test.drop(col_to_drop, axis=1, inplace=True)
-test_ids = test_loader['id'].values
-
-#n_train = train.shape[0]
-#train_test = pd.concat((train, test)).reset_index(drop=True)
-col_to_embed = train.columns[train.columns.str.endswith('_cat')].astype(str).tolist()
-embed_train = train[col_to_embed].astype(np.str)
-embed_test = test[col_to_embed].astype(np.str)
-train.drop(col_to_embed, axis=1, inplace=True)
-test.drop(col_to_embed, axis=1, inplace=True)
-
-print('\n Learning random projections - this will take less time than entity embedding ...')
-#print('\n Learning entity embedding - this will take a while ...')
-ce.fit(embed_train, target)
-embed_enc_train = ce.transform(embed_train)
-embed_enc_test = ce.transform(embed_test)
-trn_df = pd.concat((train, embed_enc_train), axis=1)
-sub_df = pd.concat((test, embed_enc_test), axis=1)
-print('\n Shape of processed train data:', trn_df.shape)
-print(' Shape of processed test data:', sub_df.shape)
-
-timer(start_time)
-
-
-# Several things are worth noting here. First, the effective range of max_depth is 2-6. Since in that range the overfitting is less likely, I was brave enough to top *gamma* and *min_child_weight* at 5. All of this is done for the sake of time. However, a proper way would be to allow max_depth to be 8 (or even 10), in which case *gamma* and *min_child_weight* should be topping at 10 or so.
-# 
-# *If you decide to uncomment the remaining three parameters here, the same must be done above in XGB_CV section.*
-
-# We are doing a little trick here. Since it is highly unlikely that 5-6 parameter search runs would be able to identify anything remotely close to optimal parameters, I am giving us a head-start by providing two parameter combinations that are known to give good scores.
-# 
-# Note that these are specifically for random projection encoding. If you go with entity embedding, you'll want to delete this section and uncomment the whole paragraph underneath it.
-
-# In[1]:
-
-
-XGB_BO = BayesianOptimization(XGB_CV, {
-                                     'max_depth': (2, 6.99),
-                                     'gamma': (0.1, 5),
-                                     'min_child_weight': (0, 5),
-                                     'scale_pos_weight': (1, 5),
-                                     'reg_alpha': (0, 10),
-                                     'reg_lambda': (1, 10),
-#                                     'max_delta_step': (0, 5),
-#                                     'subsample': (0.4, 1.0),
-#                                     'colsample_bytree' :(0.4, 1.0)
-                                    })
-
-#XGB_BO.explore({
-#              'max_depth':            [4, 4],
-#              'gamma':                [0.1511, 2.7823],
-#              'min_child_weight':     [2.4073, 2.6086],
-#              'scale_pos_weight':     [2.2281, 2.4993],
-#              'reg_alpha':            [8.0702, 6.9874],
-#              'reg_lambda':           [2.0126, 3.9598],
-#              'max_delta_step':       [1, 1],
-#              'subsample':            [0.8, 0.8],
-#              'colsample_bytree':     [0.8, 0.8],
-#              })
-
-# If you go with entitiy embedding, these are good starting points
-#XGB_BO.explore({
-#              'max_depth':            [4, 4],
-#              'gamma':                [2.8098, 2.1727],
-#              'min_child_weight':     [4.1592, 4.8113],
-#              'scale_pos_weight':     [2.4450, 1.7195],
-#              'reg_alpha':            [2.8601, 7.6995],
-#              'reg_lambda':           [6.5563, 2.6879],
-#              })
-
-
-# We are doing only one random guess of parameters, which makes a total of 3 when combined with two exploratory groups above. Afterwards, only 2 optimization runs are done.
-# 
-# A total number of random points (from **.explore** section + init_points) should be at least 10-15. I would consider 20 if you decide to include more than 6 parameters. n_iter should be in 30+ range to do proper parameter optimization.
 
 # In[ ]:
 
 
-print('-'*126)
-
-start_time = timer(None)
-with warnings.catch_warnings():
-    warnings.filterwarnings('ignore')
-    XGB_BO.maximize(init_points=1, n_iter=2, acq='ei', xi=0.0)
-timer(start_time)
+df_distribution.sort_values('count', ascending=False)
 
 
-# Here we print the summary and create a CSV file with grid results.
+# The three major labels are :
+# 1. toxic
+# 2. obscene
+# 3. insult
+# 
+# Let's take a look at the number of comment for each label combination.
+# 
+# Here we are looking for combinations that are frequent. Which would indicate a correlation between categories
 
 # In[ ]:
 
 
-print('-'*126)
-print('\n Final Results')
-print(' Maximum XGBOOST value: %f' % XGB_BO.res['max']['max_val'])
-print(' Best XGBOOST parameters: ', XGB_BO.res['max']['max_params'])
-grid_file = 'Bayes-gini-5fold-XGB-target-enc-run-04-v1-grid.csv'
-print(' Saving grid search parameters to %s' % grid_file)
-XGB_BO.points_to_csv(grid_file)
+df_comb = df_train.groupby(COLUMNS)                    .size()                    .sort_values(ascending=False)                    .reset_index()                    .rename(columns={0: 'count'})
+df_comb.head(n=10)
 
 
-# Finally, we do the last XGBoost upsampling, but this time with larger **n_estimators** and smaller **learning_rate**. You should do 1000 for n_estimators even if you don't touch the learning rate. If you lower the learning rate further, definitely increase n_estimators to 1500-2000.
+# We can see several things : 
+# 1. As expected, the 'none' label is clearly ahead with 86061 comments
+# 2. 'toxic', which is the first 'real' label, is coming in all combination from rank 1 to 6
+# 3. In this 6 rows, 'obscene' comes 4 times   
+# 4. The number of comments for each combination drops exponentially
+# 
+# Let's check the correlation matrix :
+# 
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(9, 6))
+f.suptitle('Correlation matrix for categories')
+sns.heatmap(df_train[COLUMNS].corr(), annot=True, linewidths=.5, ax=ax)
+
+
+# The correlation matrix shows interesting things : 
+# 
+# 1. 'toxic' is clearly correlated with 'obscene' and 'insult' (0.68 and 0.65)
+# 2. 'toxic' and 'severe_toxic' are only got a 0.31 correlation factor
+# 3. 'insult' and 'obscene' have a correlation factor of 0.74
+# 
+# 
+# From my point of view, there are several combinations that are worth digging into :
+# 
+# 1. 'toxic' <-> 'severe_toxic'. The semantic of these two categories seems to show some kind of graduation between them
+# 2. 'toxic' <-> 'insult' and 'toxic' <-> 'obscene'
+# 3. 'insult' <-> 'obscene'
 
 # In[ ]:
 
 
 
-max_depth = int(XGB_BO.res['max']['max_params']['max_depth'])
-gamma = XGB_BO.res['max']['max_params']['gamma']
-min_child_weight = XGB_BO.res['max']['max_params']['min_child_weight']
-#max_delta_step = int(XGB_BO.res['max']['max_params']['max_delta_step'])
-#subsample = XGB_BO.res['max']['max_params']['subsample']
-#colsample_bytree = XGB_BO.res['max']['max_params']['colsample_bytree']
-scale_pos_weight = XGB_BO.res['max']['max_params']['scale_pos_weight']
-reg_alpha = XGB_BO.res['max']['max_params']['reg_alpha']
-reg_lambda = XGB_BO.res['max']['max_params']['reg_lambda']
+t = df_train[(df_train['toxic'] == 1) & (df_train['insult'] == 0) & (df_train['obscene'] == 0)].shape[0]
+i = df_train[(df_train['toxic'] == 0) & (df_train['insult'] == 1) & (df_train['obscene'] == 0)].shape[0]
+o = df_train[(df_train['toxic'] == 0) & (df_train['insult'] == 0) & (df_train['obscene'] == 1)].shape[0]
 
-start_time = timer(None)
-print('\n Making final prediction - this will take a while ...')
-n_splits = 5
-n_estimators = 800
-folds = StratifiedKFold(n_splits=n_splits, random_state=1001)
-imp_df = np.zeros((len(trn_df.columns), n_splits))
-xgb_evals = np.zeros((n_estimators, n_splits))
-oof = np.empty(len(trn_df))
-sub_preds = np.zeros(len(sub_df))
-increase = True
-np.random.seed(0)
+t_i = df_train[(df_train['toxic'] == 1) & (df_train['insult'] == 1) & (df_train['obscene'] == 0)].shape[0]
+t_o = df_train[(df_train['toxic'] == 1) & (df_train['insult'] == 0) & (df_train['obscene'] == 1)].shape[0]
+i_o = df_train[(df_train['toxic'] == 0) & (df_train['insult'] == 1) & (df_train['obscene'] == 1)].shape[0]
 
-for fold_, (trn_idx, val_idx) in enumerate(folds.split(target, target)):
-    trn_dat, trn_tgt = trn_df.iloc[trn_idx], target.iloc[trn_idx]
-    val_dat, val_tgt = trn_df.iloc[val_idx], target.iloc[val_idx]
+t_i_o = df_train[(df_train['toxic'] == 1) & (df_train['insult'] == 1) & (df_train['obscene'] == 1)].shape[0]
 
-    clf = XGBClassifier(n_estimators=n_estimators,
-                        max_depth=max_depth,
-                        objective="binary:logistic",
-                        learning_rate=0.02,
-#                        subsample=subsample,
-#                        colsample_bytree=colsample_bytree,
-#                        max_delta_step=max_delta_step,
-                        subsample=0.8,
-                        colsample_bytree=0.8,
-                        max_delta_step=1,
-                        gamma=gamma,
-                        min_child_weight=min_child_weight,
-                        reg_alpha=reg_alpha,
-                        reg_lambda=reg_lambda,
-                        scale_pos_weight=scale_pos_weight,
-                        nthread=4)
-    # Upsample during cross validation to avoid having the same samples
-    # in both train and validation sets
-    # Validation set is not up-sampled to monitor overfitting
-    if increase:
-        # Get positive examples
-        pos = pd.Series(trn_tgt == 1)
-        # Add positive examples
-        trn_dat = pd.concat([trn_dat, trn_dat.loc[pos]], axis=0)
-        trn_tgt = pd.concat([trn_tgt, trn_tgt.loc[pos]], axis=0)
-        # Shuffle data
-        idx = np.arange(len(trn_dat))
-        np.random.shuffle(idx)
-        trn_dat = trn_dat.iloc[idx]
-        trn_tgt = trn_tgt.iloc[idx]
 
-    clf.fit(trn_dat, trn_tgt,
-            eval_set=[(trn_dat, trn_tgt), (val_dat, val_tgt)],
-            eval_metric=gini_xgb,
-            early_stopping_rounds=None,
-            verbose=False)
+# Make the diagram
+plt.figure(figsize=(8, 8))
+plt.title("Venn diagram for 'toxic', 'insult' and 'obscene'")
+venn3(subsets = (t, i, t_i, o, t_o, i_o, t_i_o), 
+      set_labels=('toxic', 'insult', 'obscene'))
+plt.show()
 
-    # Keep feature importances
-    imp_df[:, fold_] = clf.feature_importances_
 
-    # Find best round for validation set
-    xgb_evals[:, fold_] = clf.evals_result_["validation_1"]["gini"]
-    # Xgboost provides best round starting from 0 so it has to be incremented
-    best_round = np.argsort(xgb_evals[:, fold_])[::-1][0]
+# This venn diagram demonstrates the correlations found in the previous visualization. 
+# 
+# 1. There is only a small part of 'insult' and 'obscene' that are not also labelled 'toxic'.
+# 2. 3610 comments are labelled with all 3 categories.
+# 
+# **Note: ** The library used for the Venn diagram does not have a venn4 object, that's why I couldn't display 'severe_toxic' with them.
+# 
+# Let's take a look at the Venn diagram between 'toxic' and 'severe_toxic'.
 
-    # Predict OOF and submission probas with the best round
-    oof[val_idx] = clf.predict_proba(val_dat, ntree_limit=best_round)[:, 1]
-    # Update submission
-    sub_preds += clf.predict_proba(sub_df, ntree_limit=best_round)[:, 1] / n_splits
+# In[ ]:
 
-    # Display results
-    print("Fold %2d : %.6f @%4d / best score is %.6f @%4d"
-          % (fold_ + 1,
-             eval_gini(val_tgt, oof[val_idx]),
-             n_estimators,
-             xgb_evals[best_round, fold_],
-             best_round))
 
-print("Full OOF score : %.6f" % eval_gini(target, oof))
 
-# Compute mean score and std
-mean_eval = np.mean(xgb_evals, axis=1)
-std_eval = np.std(xgb_evals, axis=1)
-best_round = np.argsort(mean_eval)[::-1][0]
+t = df_train[(df_train['toxic'] == 1) & (df_train['severe_toxic'] == 0)].shape[0]
+s = df_train[(df_train['toxic'] == 0) & (df_train['severe_toxic'] == 1)].shape[0]
 
-print("Best mean score : %.6f + %.6f @%4d"
-      % (mean_eval[best_round], std_eval[best_round], best_round))
+t_s = df_train[(df_train['toxic'] == 1) & (df_train['severe_toxic'] == 1)].shape[0]
 
-best_gini = round(mean_eval[best_round], 6)
-importances = sorted([(trn_df.columns[i], imp) for i, imp in enumerate(imp_df.mean(axis=1))],
-                     key=lambda x: x[1])
 
-for f, imp in importances[::-1]:
-    print("%-34s : %10.4f" % (f, imp))
+# Make the diagram
+plt.figure(figsize=(8, 8))
+plt.title("Venn diagram for 'toxic' and 'severe_toxic'")
+venn2(subsets = (t, s, t_s), 
+      set_labels=('toxic', 'severe_toxic'))
+plt.show()
 
-timer(start_time)
 
-final_df = pd.DataFrame(test_ids, columns=['id'])
-final_df['target'] = sub_preds
+# 1. The 'severe_toxic' category is completely contained in 'toxic' which goes in favor of the semantic link between the two category names. 
+# 2. The 0.31 correlation factor is explained by the fact that 'severe_toxic' representes a small percentage (11.67%) of 'toxic'. 
+# 
+# Before diving into words, let's analyze the comment structure :
+# 
+# 1. Total length
+#     * It could indicate the writer implication (either in a good way or 'bad' one)
+# 2. Total number of carriage returns
+#     * It could indicate some kind of structure in the comment
 
-now = datetime.now()
-sub_file = 'submission_5fold-xgb-upsampling-target-enc-01_' + str(best_gini) + '_' + str(now.strftime('%Y-%m-%d-%H-%M')) + '.csv'
-print('\n Writing submission: %s' % sub_file)
-final_df.to_csv(sub_file, index=False, float_format="%.9f")
+# In[ ]:
 
+
+df_train['total_length'] = df_train['comment_text'].str.len()
+df_train['new_line'] = df_train['comment_text'].str.count('\n'* 1)
+df_train['new_small_space'] = df_train['comment_text'].str.count('\n'* 2)
+df_train['new_medium_space'] = df_train['comment_text'].str.count('\n'* 3)
+df_train['new_big_space'] = df_train['comment_text'].str.count('\n'* 4)
+
+df_train['new_big_space'] = df_train['comment_text'].str.count('\n'* 4)
+df_train['uppercase_words'] = df_train['comment_text'].apply(lambda l: sum(map(str.isupper, list(l))))
+df_train['question_mark'] = df_train['comment_text'].str.count('\?')
+df_train['exclamation_mark'] = df_train['comment_text'].str.count('!')
+
+FEATURES = ['total_length', 
+            'new_line', 
+            'new_small_space', 
+            'new_medium_space', 
+            'new_big_space', 
+            'uppercase_words',
+            'question_mark',
+            'exclamation_mark']
+COLUMNS += FEATURES
+
+
+# In[ ]:
+
+
+f, ax = plt.subplots(figsize=(20, 20))
+f.suptitle('Correlation matrix for categories and features')
+sns.heatmap(df_train[COLUMNS].corr(), annot=True, linewidths=.5, ax=ax)
+
+
+# **Note: ** small, medium and big space features are inclusive, meaning that all 'big_space' are medium and small ones (same for medium_space)
+# 
+# 1. The new correlation matrix with the added features does not show any strong correlations. 
+# 2. One thing worth noting is that 'uppercase_words' (which could be assimilated to 'yelling') is slightly more correlated.
+# 3. 'uppercase_words' are correlated with 'exclamation_mark' up to 0.13 which could mean that people express the urge to add as many '!' as possible when they are 'yelling' ;)
+# 
+# 
+# There is nothing else that comes in mind that I could explore. Please feel free to suggest any idea in comments below.
+# 
+# # Word analysis
+# 
+# 
+# 
+
+# In[ ]:
+
+
+word_counter = {}
+
+
+def clean_text(text):
+    text = re.sub('[{}]'.format(string.punctuation), ' ', text.lower())
+    return ' '.join([word for word in text.split() if word not in (stop)])
+
+for categ in CATEGORIES:
+    d = Counter()
+    df_train[df_train[categ] == 1]['comment_text'].apply(lambda t: d.update(clean_text(t).split()))
+    word_counter[categ] = pd.DataFrame.from_dict(d, orient='index')                                        .rename(columns={0: 'count'})                                        .sort_values('count', ascending=False)
+
+
+# In[ ]:
+
+
+for w in word_counter:
+    wc = word_counter[w]
+
+    wordcloud = WordCloud(
+          background_color='black',
+          max_words=200,
+          max_font_size=100, 
+          random_state=4561
+         ).generate_from_frequencies(wc.to_dict()['count'])
+
+    fig = plt.figure(figsize=(12, 8))
+    plt.title(w)
+    plt.imshow(wordcloud)
+    plt.axis('off')
+
+    plt.show()
+
+
+# The vocabulary used in all categories is quite similar (expect for 'none' of course). Frequencies are varying a bit across (for example 'fuck' and 'suck'.
+# 
+# 
+# 
+# # Conclusion
+# 
+# In this kernel, we've found out that the categories we need to predict are overlapping each over. In the basic exploration of words contained in the comments, we can say that the vocabulary is quite similar across all categories except for the 'none' one. While this might be enough to detect unwanted comments, it is clearly not enough to categorised them. 
+# 
+# 

@@ -1,1 +1,7 @@
-import pandas as pd; pd.read_csv("../input/key_2.csv",converters={'Page':lambda p:p[:-11]}, index_col='Page').join(pd.read_csv("../input/train_2.csv", usecols=[0]+list(range(755,803)), index_col='Page').median(axis=1,skipna=True).to_frame(name='Visits'), how='left').fillna(0).to_csv('sub.csv', float_format='%.0f', index=False)
+import math
+
+#A function to calculate Root Mean Squared Logarithmic Error (RMSLE)
+def rmsle(y, y_pred):
+	assert len(y) == len(y_pred)
+	terms_to_sum = [(math.log(y_pred[i] + 1) - math.log(y[i] + 1)) ** 2.0 for i,pred in enumerate(y_pred)]
+	return (sum(terms_to_sum) * (1.0/len(y))) ** 0.5

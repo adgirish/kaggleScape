@@ -1,110 +1,367 @@
 
 # coding: utf-8
 
-# # Summary functions and maps reference
-# 
-# This is the reference component to the "Summary functions and maps" section of the Advanced Pandas tutorial. For the workbook, [click here](https://www.kaggle.com/residentmario/summary-functions-and-maps-workbook).
-# 
-# This section overlaps with the comprehensive [Essential Basic Functionality](https://pandas.pydata.org/pandas-docs/stable/basics.html) section of the official `pandas` documentation.
+# Goal of this notebook to test several classifiers on the data set with different features 
+
+# And beforehand i want to thank Jose Portilla for his magnificent "Python for Data Science and Machine Learning" course on Udemy , which helped me to dive into ML =)
+
+# ### Let's begin
+
+# First of all neccesary imports
 
 # In[ ]:
 
 
-import pandas as pd
-pd.set_option('max_rows', 5)
 import numpy as np
-reviews = pd.read_csv("../input/winemag-data-130k-v2.csv", index_col=0)
-reviews.head()
+import pandas as pd
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import seaborn as sns
+import string
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from nltk.stem import SnowballStemmer
+from nltk.corpus import stopwords
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# ## Summary functions
+# Let's read the data from csv file
+
+# In[ ]:
+
+
+sms = pd.read_csv('../input/spam.csv', encoding='latin-1')
+sms.head()
+
+
+# Now drop "unnamed" columns and rename v1 and v2 to "label" and "message"
+
+# In[ ]:
+
+
+sms = sms.drop(['Unnamed: 2','Unnamed: 3','Unnamed: 4'],axis=1)
+sms = sms.rename(columns = {'v1':'label','v2':'message'})
+
+
+# Let's look into our data
+
+# In[ ]:
+
+
+sms.groupby('label').describe()
+
+
+# Intresting that "Sorry, I'll call later" appears only 30 times here =)
+
+# Now let's create new feature "message length" and plot it to see if it's of any interest
+
+# In[ ]:
+
+
+sms['length'] = sms['message'].apply(len)
+sms.head()
+
+
+# In[ ]:
+
+
+mpl.rcParams['patch.force_edgecolor'] = True
+plt.style.use('seaborn-bright')
+sms.hist(column='length', by='label', bins=50,figsize=(11,5))
+
+
+# Looks like the lengthy is the message, more likely it is a spam. Let's not forget this
+
+# ### Text processing and vectorizing our meddages
+
+# Let's create new data frame. We'll need a copy later on
+
+# In[ ]:
+
+
+text_feat = sms['message'].copy()
+
+
+# Now define our tex precessing function. It will remove any punctuation and stopwords aswell.
+
+# In[ ]:
+
+
+def text_process(text):
+    
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    text = [word for word in text.split() if word.lower() not in stopwords.words('english')]
+    
+    return " ".join(text)
+
+
+# In[ ]:
+
+
+text_feat = text_feat.apply(text_process)
+
+
+# In[ ]:
+
+
+vectorizer = TfidfVectorizer("english")
+
+
+# In[ ]:
+
+
+features = vectorizer.fit_transform(text_feat)
+
+
+# ###  Classifiers and predictions
+
+# First of all let's split our features to test and train set
+
+# In[ ]:
+
+
+features_train, features_test, labels_train, labels_test = train_test_split(features, sms['label'], test_size=0.3, random_state=111)
+
+
+# Now let's import bunch of classifiers, initialize them and make a dictionary to itereate through
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.ensemble import BaggingClassifier
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.metrics import accuracy_score
+
+
+# In[ ]:
+
+
+svc = SVC(kernel='sigmoid', gamma=1.0)
+knc = KNeighborsClassifier(n_neighbors=49)
+mnb = MultinomialNB(alpha=0.2)
+dtc = DecisionTreeClassifier(min_samples_split=7, random_state=111)
+lrc = LogisticRegression(solver='liblinear', penalty='l1')
+rfc = RandomForestClassifier(n_estimators=31, random_state=111)
+abc = AdaBoostClassifier(n_estimators=62, random_state=111)
+bc = BaggingClassifier(n_estimators=9, random_state=111)
+etc = ExtraTreesClassifier(n_estimators=9, random_state=111)
+
+
+# Parametres are based on notebook:
+# [Spam detection Classifiers hyperparameter tuning][1]
 # 
-# `pandas` provides many simple "summary functions" (not an official name) which restructure the data in some useful way. For example, consider the `describe` method:
-
-# In[ ]:
-
-
-reviews.points.describe()
-
-
-# This method generates a high-level summary of the attributes of the given column. It is type-aware, meaning that its output changes based on the `dtype` of the input. The output above only makes sense for numerical data; for string data here's what we get:
-
-# In[ ]:
-
-
-reviews.taster_name.describe()
-
-
-# If you want to get some particular simple summary statistic about a column in a `DataFrame` or a `Series`, there is usually a handful `pandas` function that makes it happen. For example, to see the mean of the points allotted (e.g. how well an averagely rated wine does), we can use the `mean` function:
-
-# In[ ]:
-
-
-reviews.points.mean()
-
-
-# To see a list of unique values we can use the `unique` function:
-
-# In[ ]:
-
-
-reviews.taster_name.unique()
-
-
-# To see a list of unique values _and_ how often they occur in the dataset, we can use the `value_counts` method:
-
-# In[ ]:
-
-
-reviews.taster_name.value_counts()
-
-
-# ## Maps
 # 
-# A "map" is a term, borrowed from mathematics, for a function that takes one set of values and "maps" them to another set of values. In data science we often have a need for creating new representations from existing data, or for transforming data from the format it is in now to the format that we want it to be in later. Maps are what handle this work, making them extremely important for getting your work done!
-# 
-# There are two mapping functions that you will use often. The `Series` `map` is the first, and slightly simpler one. For example, suppose that we wanted to remean the scores the wines recieved to 0. We can do this as follows:
+#   [1]: https://www.kaggle.com/muzzzdy/d/uciml/sms-spam-collection-dataset/spam-detection-classifiers-hyperparameter-tuning/
 
 # In[ ]:
 
 
-review_points_mean = reviews.points.mean()
-reviews.points.map(lambda p: p - review_points_mean)
+clfs = {'SVC' : svc,'KN' : knc, 'NB': mnb, 'DT': dtc, 'LR': lrc, 'RF': rfc, 'AdaBoost': abc, 'BgC': bc, 'ETC': etc}
 
 
-# `map` takes every value in the column it is being called on and converts it some new value using a function you provide it.
-# 
-# `map` takes a `Series` as input. The `DataFrame` `apply` function can be used to do the same thing _across_ columns, on the level of the entire dataset. Thus `apply` takes a `DataFrame` as input.
+# Let's make functions to fit our classifiers and make predictions
 
 # In[ ]:
 
 
-def remean_points(srs):
-    srs.points = srs.points - review_points_mean
-    return srs
+def train_classifier(clf, feature_train, labels_train):    
+    clf.fit(feature_train, labels_train)
 
-reviews.apply(remean_points, axis='columns')
-
-
-# `pandas` provides many common mapping operations as built-ins. For example, here's a faster way of remeaning our points column:
 
 # In[ ]:
 
 
-review_points_mean = reviews.points.mean()
-reviews.points - review_points_mean
+def predict_labels(clf, features):
+    return (clf.predict(features))
 
 
-# In this code we are performing an operation between a lot of values on the left-hand side (everything in the `Series`) and a single value on the right-hand side (the mean value). `pandas` looks at this expression and figures out that we must mean to subtract that mean value from every value in the dataset.
-# 
-# `pandas` will also understand what to do if we perform these operations between `Series` of equal length. For example, an easy way of combining country and region information in the dataset would be to do the following:
+# Now iterate through classifiers and save the results
 
 # In[ ]:
 
 
-reviews.country + " - " + reviews.region_1
+pred_scores = []
+for k,v in clfs.items():
+    train_classifier(v, features_train, labels_train)
+    pred = predict_labels(v,features_test)
+    pred_scores.append((k, [accuracy_score(labels_test,pred)]))
 
 
-# These operators are faster than the `map` or `apply` because they uses speed ups built into `pandas`. All of the standard Python operators (`>`, `<`, `==`, and so on) work in this manner.
-# 
-# However, they are not as flexible as `map` or `apply`, which can do more advanced things, like applying conditional logic, which cannot be done with addition and subtraction alone.
+# In[ ]:
+
+
+df = pd.DataFrame.from_items(pred_scores,orient='index', columns=['Score'])
+df
+
+
+# In[ ]:
+
+
+df.plot(kind='bar', ylim=(0.9,1.0), figsize=(11,6), align='center', colormap="Accent")
+plt.xticks(np.arange(9), df.index)
+plt.ylabel('Accuracy Score')
+plt.title('Distribution by Classifier')
+plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+
+
+# Looks like ensemble classifiers are not doing as good as expected.
+
+# ### Stemmer
+
+# It is said that stemming short messages does no goot or even harm predictions. Let's try this out.
+
+# Define our stemmer function
+
+# In[ ]:
+
+
+def stemmer (text):
+    text = text.split()
+    words = ""
+    for i in text:
+            stemmer = SnowballStemmer("english")
+            words += (stemmer.stem(i))+" "
+    return words
+
+
+# Stem, split, fit - repeat... Predict!
+
+# In[ ]:
+
+
+text_feat = text_feat.apply(stemmer)
+
+
+# In[ ]:
+
+
+features = vectorizer.fit_transform(text_feat)
+
+
+# In[ ]:
+
+
+features_train, features_test, labels_train, labels_test = train_test_split(features, sms['label'], test_size=0.3, random_state=111)
+
+
+# In[ ]:
+
+
+pred_scores = []
+for k,v in clfs.items():
+    train_classifier(v, features_train, labels_train)
+    pred = predict_labels(v,features_test)
+    pred_scores.append((k, [accuracy_score(labels_test,pred)]))
+
+
+# In[ ]:
+
+
+df2 = pd.DataFrame.from_items(pred_scores,orient='index', columns=['Score2'])
+df = pd.concat([df,df2],axis=1)
+df
+
+
+# In[ ]:
+
+
+df.plot(kind='bar', ylim=(0.85,1.0), figsize=(11,6), align='center', colormap="Accent")
+plt.xticks(np.arange(9), df.index)
+plt.ylabel('Accuracy Score')
+plt.title('Distribution by Classifier')
+plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+
+
+# Looks like mostly the same . Ensemble classifiers doing a little bit better, NB still got the lead.
+
+# ### What have we forgotten? Message length!
+
+# Let's append our message length feature to the matrix we fit into our classifiers
+
+# In[ ]:
+
+
+lf = sms['length'].as_matrix()
+newfeat = np.hstack((features.todense(),lf[:, None]))
+
+
+# In[ ]:
+
+
+features_train, features_test, labels_train, labels_test = train_test_split(newfeat, sms['label'], test_size=0.3, random_state=111)
+
+
+# In[ ]:
+
+
+pred_scores = []
+for k,v in clfs.items():
+    train_classifier(v, features_train, labels_train)
+    pred = predict_labels(v,features_test)
+    pred_scores.append((k, [accuracy_score(labels_test,pred)]))
+
+
+# In[ ]:
+
+
+df3 = pd.DataFrame.from_items(pred_scores,orient='index', columns=['Score3'])
+df = pd.concat([df,df3],axis=1)
+df
+
+
+# In[ ]:
+
+
+df.plot(kind='bar', ylim=(0.85,1.0), figsize=(11,6), align='center', colormap="Accent")
+plt.xticks(np.arange(9), df.index)
+plt.ylabel('Accuracy Score')
+plt.title('Distribution by Classifier')
+plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
+
+
+# This time everyone are doing a little bit worse, except for LinearRegression and RandomForest. But the winner is still MultinominalNaiveBayes.
+
+# ### Voting classifier
+
+# We are using ensemble algorithms here, but what about ensemble of ensembles? Will it beat NB?
+
+# In[ ]:
+
+
+from sklearn.ensemble import VotingClassifier
+
+
+# In[ ]:
+
+
+eclf = VotingClassifier(estimators=[('BgC', bc), ('ETC', etc), ('RF', rfc), ('Ada', abc)], voting='soft')
+
+
+# In[ ]:
+
+
+eclf.fit(features_train,labels_train)
+
+
+# In[ ]:
+
+
+pred = eclf.predict(features_test)
+
+
+# In[ ]:
+
+
+print(accuracy_score(labels_test,pred))
+
+
+# Better but nope.
+
+# ### Final verdict - well tuned NaiveBayes is your friend in spam detection.

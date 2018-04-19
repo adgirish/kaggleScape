@@ -1,163 +1,263 @@
 
 # coding: utf-8
 
+# This an idea on how to use lat lon data to create a new variable. At first I wanted to use NYC's districts polygon map to derive a district appartenance for each listing_id but that would have been using external data. So instead of this I figured I could just derive natural district from the lat long data using a little clustering. 
+
 # In[ ]:
 
 
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
 import numpy as np # linear algebra
-np.random.seed(666)
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from sklearn.model_selection import train_test_split
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
 from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
 
-
-# In[ ]:
-
-
-#Load data
-train = pd.read_json("../input/train.json")
-test = pd.read_json("../input/test.json")
-train.inc_angle = train.inc_angle.replace('na', 0)
-train.inc_angle = train.inc_angle.astype(float).fillna(0.0)
-print("done!")
+# Any results you write to the current directory are saved as output.
 
 
 # In[ ]:
 
 
-# Train data
-x_band1 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in train["band_1"]])
-x_band2 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in train["band_2"]])
-X_train = np.concatenate([x_band1[:, :, :, np.newaxis]
-                          , x_band2[:, :, :, np.newaxis]
-                         , ((x_band1+x_band1)/2)[:, :, :, np.newaxis]], axis=-1)
-X_angle_train = np.array(train.inc_angle)
-y_train = np.array(train["is_iceberg"])
-
-# Test data
-x_band1 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in test["band_1"]])
-x_band2 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in test["band_2"]])
-X_test = np.concatenate([x_band1[:, :, :, np.newaxis]
-                          , x_band2[:, :, :, np.newaxis]
-                         , ((x_band1+x_band1)/2)[:, :, :, np.newaxis]], axis=-1)
-X_angle_test = np.array(test.inc_angle)
-
-
-X_train, X_valid, X_angle_train, X_angle_valid, y_train, y_valid = train_test_split(X_train
-                    , X_angle_train, y_train, random_state=123, train_size=0.75)
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+pd.options.mode.chained_assignment = None  # default='warn'
 
 
 # In[ ]:
 
 
-X_train.shape
+train=pd.read_json("../input/train.json")
+test=pd.read_json("../input/test.json")
+train["Source"]='train'
+test["Source"]='test'
+data=pd.concat([train, test]) 
 
 
 # In[ ]:
 
 
-from matplotlib import pyplot
-from keras.preprocessing.image import ImageDataGenerator
-from keras.models import Sequential
-from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten
-from keras.layers import GlobalMaxPooling2D
-from keras.layers.normalization import BatchNormalization
-from keras.layers.merge import Concatenate
-from keras.models import Model
-from keras.optimizers import Adam
-from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
+plt.scatter(data["longitude"], data["latitude"], s=5)
+plt.title("Geographical positions of the listings")
+plt.show()
 
-def get_callbacks(filepath, patience=2):
-    es = EarlyStopping('val_loss', patience=patience, mode="min")
-    msave = ModelCheckpoint(filepath, save_best_only=True)
-    return [es, msave]
+
+# ## Geographic plotting ##
+
+# Clearly, it seems that some of the data is missing (0,0): unless there are some people are looking for an appartment right in the guinea gulf.  Let's remove them so we can have a better view of the data. 
+
+# In[ ]:
+
+
+plt.scatter(data.loc[data["longitude"]<-60,"longitude"], data.loc[data["latitude"]>20,"latitude"], s=5)
+plt.title("Geographical positions of the listings")
+plt.show()
+
+
+# There are a few flats all around the US but most of the cloud is around NYC
+# So lets zoom in on NYC 
+
+# In[ ]:
+
+
+plt.scatter(data.loc[(data["longitude"]<-73.75)&(data["longitude"]>-74.05)&(data["latitude"]>40.4)&(data["latitude"]<40.9),"longitude"],
+                      data.loc[(data["latitude"]>40.4)&(data["latitude"]<40.9)&(data["longitude"]<-73.75)&(data["longitude"]>-74.05),"latitude"], s=5)
+plt.title("Geographical positions of the listings")
+plt.show()
+
+
+# At this level there are enough points to see some known features: we see the shape of manhattan with a hole for central park for example. 
+
+# ## Clustering NYC data ##
+
+# In[ ]:
+
+
+
+
+#I use Birch because of how fast it is. 
+from sklearn.cluster import Birch
+def cluster_latlon(n_clusters, data):  
+    #split the data between "around NYC" and "other locations" basically our first two clusters 
+    data_c=data[(data.longitude>-74.05)&(data.longitude<-73.75)&(data.latitude>40.4)&(data.latitude<40.9)]
+    data_e=data[~(data.longitude>-74.05)&(data.longitude<-73.75)&(data.latitude>40.4)&(data.latitude<40.9)]
+    #put it in matrix form
+    coords=data_c.as_matrix(columns=['latitude', "longitude"])
     
-def get_model():
-    bn_model = 0
-    p_activation = "elu"
-    input_1 = Input(shape=(75, 75, 3), name="X_1")
-    input_2 = Input(shape=[1], name="angle")
-    
-    img_1 = Conv2D(16, kernel_size = (3,3), activation=p_activation) ((BatchNormalization(momentum=bn_model))(input_1))
-    img_1 = Conv2D(16, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = MaxPooling2D((2,2)) (img_1)
-    img_1 = Dropout(0.2)(img_1)
-    img_1 = Conv2D(32, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = Conv2D(32, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = MaxPooling2D((2,2)) (img_1)
-    img_1 = Dropout(0.2)(img_1)
-    img_1 = Conv2D(64, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = Conv2D(64, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = MaxPooling2D((2,2)) (img_1)
-    img_1 = Dropout(0.2)(img_1)
-    img_1 = Conv2D(128, kernel_size = (3,3), activation=p_activation) (img_1)
-    img_1 = MaxPooling2D((2,2)) (img_1)
-    img_1 = Dropout(0.2)(img_1)
-    img_1 = GlobalMaxPooling2D() (img_1)
-    
-    
-    img_2 = Conv2D(128, kernel_size = (3,3), activation=p_activation) ((BatchNormalization(momentum=bn_model))(input_1))
-    img_2 = MaxPooling2D((2,2)) (img_2)
-    img_2 = Dropout(0.2)(img_2)
-    img_2 = GlobalMaxPooling2D() (img_2)
-    
-    img_concat =  (Concatenate()([img_1, img_2, BatchNormalization(momentum=bn_model)(input_2)]))
-    
-    dense_ayer = Dropout(0.5) (BatchNormalization(momentum=bn_model) ( Dense(256, activation=p_activation)(img_concat) ))
-    dense_ayer = Dropout(0.5) (BatchNormalization(momentum=bn_model) ( Dense(64, activation=p_activation)(dense_ayer) ))
-    output = Dense(1, activation="sigmoid")(dense_ayer)
-    
-    model = Model([input_1,input_2],  output)
-    optimizer = Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
-    model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
-    return model
-model = get_model()
-model.summary()
+    brc = Birch(branching_factor=100, n_clusters=n_clusters, threshold=0.01,compute_labels=True)
+
+    brc.fit(coords)
+    clusters=brc.predict(coords)
+    data_c["cluster_"+str(n_clusters)]=clusters
+    data_e["cluster_"+str(n_clusters)]=-1 #assign cluster label -1 for the non NYC listings 
+    data=pd.concat([data_c,data_e])
+    plt.scatter(data_c["longitude"], data_c["latitude"], c=data_c["cluster_"+str(n_clusters)], s=10, linewidth=0.1)
+    plt.title(str(n_clusters)+" Neighbourhoods from clustering")
+    plt.show()
+    return data 
+
+
+# The ideal algorithm for this would be DBSCAN as shown in here http://geoffboeing.com/2014/08/clustering-to-reduce-spatial-data-set-size/ however it is too heavy to run on this kernel because I believe it has to compute a matrix of distance between each points. The advantage of DBSCAN is that it would leave the "extremum" point out of the clusters while Birch here is creating clusters of very low density for those 
+
+# ## Naive variables##
+
+# In[ ]:
+
+
+data["created"]=pd.to_datetime(data["created"])
+data["created_month"]=data["created"].dt.month
+data["created_day"]=data["created"].dt.day
+data["created_hour"]=data["created"].dt.hour
 
 
 # In[ ]:
 
 
-file_path = ".model_weights.hdf5"
-callbacks = get_callbacks(filepath=file_path, patience=5)
-
-model = get_model()
-model.fit([X_train, X_angle_train], y_train, epochs=25
-          , validation_data=([X_valid, X_angle_valid], y_valid)
-         , batch_size=32
-         , callbacks=callbacks)
+data["num_photos"]=data["photos"].apply(len)
+data["num_features"]=data["features"].apply(len)
+data["num_description_words"] = data["description"].apply(lambda x: len(x.split(" ")))
 
 
 # In[ ]:
 
 
-model.load_weights(filepath=file_path)
-
-print("Train evaluate:")
-print(model.evaluate([X_train, X_angle_train], y_train, verbose=1, batch_size=200))
-print("####################")
-print("watch list evaluate:")
-print(model.evaluate([X_valid, X_angle_valid], y_valid, verbose=1, batch_size=200))
+features_to_use_1  = ["bathrooms", "bedrooms", "price", 
+                                                     
+                    "num_photos", "num_features", "num_description_words",                    
+                    "created_month", "created_day", "created_hour"
+                   ]
 
 
 # In[ ]:
 
 
-prediction = model.predict([X_test, X_angle_test], verbose=1, batch_size=200)
+def test_train(data, features):
+    train=data[data["Source"]=="train"]
+    test=data[data["Source"]=="test"]
+    target_num_map={"high":0, "medium":1, "low":2}
+    y=np.array(train["interest_level"].apply(lambda x: target_num_map[x]))
+    from sklearn.model_selection import train_test_split
+    X_train, X_val,y_train, y_val =train_test_split( train[features], y, test_size=0.33, random_state=42)
+    return (X_train, X_val,y_train, y_val )
 
 
 # In[ ]:
 
 
-submission = pd.DataFrame({'id': test["id"], 'is_iceberg': prediction.reshape((prediction.shape[0]))})
-submission.head(10)
+X_train, X_val,y_train, y_val=test_train(data, features_to_use_1)
 
 
 # In[ ]:
 
 
-submission.to_csv("./submission.csv", index=False)
+from sklearn.metrics import log_loss
+from sklearn.ensemble import RandomForestClassifier as RFC
+
+def prediction(X_train,y_train, X_val, y_val):
+    clf=RFC(n_estimators=1000, random_state=42)
+    clf.fit(X_train, y_train)
 
 
-# Any comment will be welcome! ;)
+    y_val_pred = clf.predict_proba(X_val)
+    return(log_loss(y_val, y_val_pred))
+
+
+# In[ ]:
+
+
+prediction(X_train,y_train, X_val, y_val)
+
+
+# ## Adding the cluster variable ##
+
+# In[ ]:
+
+
+from sklearn.metrics import log_loss
+
+def compute_logloss(n_cluster,data):
+    data_cluster=cluster_latlon(n_cluster,data)
+      
+    features = ["bathrooms", "bedrooms", "price", 
+                                                        
+                    "num_photos", "num_features", "num_description_words",                    
+                    "created_month", "created_day", "created_hour", "cluster_"+str(n_cluster)
+                   ]
+    
+    X_train, X_val,y_train, y_val = test_train(data_cluster, features)
+
+    return(prediction(X_train,y_train, X_val, y_val))
+
+
+# In[ ]:
+
+
+compute_logloss(3, data)
+
+
+# A tiny bit better but lets check with more clusters
+
+# In[ ]:
+
+
+log_loss_cls={}
+for n in range(4,15):
+    log_loss_cls[n]=compute_logloss(n, data)
+    
+n_c = sorted(log_loss_cls.items()) 
+x, y = zip(*n_c) 
+plt.plot(x, y)
+plt.title("log_loss for different numbers of clusters")
+plt.show()
+
+
+# In[ ]:
+
+
+log_loss_cls
+
+
+# It seems that the more clusters, the better the log_loss becomes. A the extreme of this each point is his own cluster and we are back to the lat ,lon original data. 
+# On the renthop website there is a feature calle Price Comparison that shows the difference between the price of the listing and the median of its neighborhood. Lets create this feature from our new neighborhoods and the price and see if it brings any improvement to the log loss 
+
+# In[ ]:
+
+
+data=cluster_latlon(100, data)
+
+clusters_price_map=dict(data.groupby(by="cluster_100")["price"].median())
+data["price_comparison"]=data['price']-data["cluster_100"].map(clusters_price_map)
+
+
+# In[ ]:
+
+
+
+features_2 = ["bathrooms", "bedrooms", "price", "latitude", 'longitude',
+             "num_photos", "num_features", "num_description_words",                    
+                    "created_month", "created_day", "created_hour"
+                   ]
+X_train, X_val,y_train, y_val=test_train(data, features_2)
+
+prediction(X_train,y_train, X_val, y_val)
+
+
+# In[ ]:
+
+
+features_price_comp = ["bathrooms", "bedrooms", "price", "latitude", 'longitude',
+             "num_photos", "num_features", "num_description_words",                    
+                    "created_month", "created_day", "created_hour", "price_comparison"
+                   ]
+X_train, X_val,y_train, y_val=test_train(data, features_price_comp)
+
+prediction(X_train,y_train, X_val, y_val)
+
+
+# SO it seems that there might be a little value to cross theses newly created neighborhoods with the price to create a variable that adds information and improves (a tiny bit) the log loss score. ¯\\_(ツ)_/¯

@@ -1,231 +1,425 @@
 
 # coding: utf-8
 
-# #Intro
-# First of all thanks to Kjetil Åmdal-Sævik for providing excellent code for data preparation.
-# Being a novice python programmer, my code may not be that much efficient but it may serve as a starting point for using TensorFlow.
+# # Data reading
 
 # In[1]:
 
 
-import os
-import sys
-import numpy as np
-import tensorflow as tf
-import random
-import math
-import warnings
+get_ipython().run_line_magic('matplotlib', 'inline')
+from matplotlib import pyplot as plt
 import pandas as pd
-import cv2
-import matplotlib.pyplot as plt
-
-from tqdm import tqdm
-from itertools import chain
-from skimage.io import imread, imshow, imread_collection, concatenate_images
-from skimage.transform import resize
-from skimage.morphology import label
-
-warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
-seed = 42
-random.seed = seed
-np.random.seed = seed
+import numpy as np
+import seaborn as sns
+from nltk.tokenize import wordpunct_tokenize
+from nltk.stem.snowball import EnglishStemmer
+from nltk.stem import WordNetLemmatizer
+from functools import lru_cache
+from tqdm import tqdm as tqdm
+from sklearn.metrics import log_loss
+from sklearn.model_selection import StratifiedKFold
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import Pipeline
+from scipy import sparse
 
 
 # In[2]:
 
 
-# Set some parameters
-IMG_WIDTH = 128
-IMG_HEIGHT = 128
-IMG_CHANNELS = 3
-TRAIN_PATH = '../input/stage1_train/'
-TEST_PATH = '../input/stage1_test/'
-
-warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
-seed = 42
-random.seed = seed
-np.random.seed = seed
-
-
-# In[3]:
-
-
-# Get train and test IDs
-train_ids = next(os.walk(TRAIN_PATH))[1]
-test_ids = next(os.walk(TEST_PATH))[1]
+train = pd.read_csv('../input/train.csv')
+train.head()
 
 
 # In[4]:
 
 
-# Get and resize train images and masks
-images = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
-labels = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH, 1), dtype=np.bool)
-print('Getting and resizing train images and masks ... ')
-sys.stdout.flush()
-for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
-    path = TRAIN_PATH + id_
-    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
-    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
-    images[n] = img
-    mask = np.zeros((IMG_HEIGHT, IMG_WIDTH, 1), dtype=np.bool)
-    for mask_file in next(os.walk(path + '/masks/'))[2]:
-        mask_ = imread(path + '/masks/' + mask_file)
-        mask_ = np.expand_dims(resize(mask_, (IMG_HEIGHT, IMG_WIDTH), mode='constant', 
-                                      preserve_range=True), axis=-1)
-        mask = np.maximum(mask, mask_)
-    labels[n] = mask
-
-X_train = images
-Y_train = labels
-
-# Get and resize test images
-X_test = np.zeros((len(test_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
-sizes_test = []
-print('Getting and resizing test images ... ')
-sys.stdout.flush()
-for n, id_ in tqdm(enumerate(test_ids), total=len(test_ids)):
-    path = TEST_PATH + id_
-    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
-    sizes_test.append([img.shape[0], img.shape[1]])
-    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
-    X_test[n] = img
-
-print('Done!')
+train['comment_text'] = train['comment_text'].fillna('nan')
 
 
 # In[5]:
 
 
-def shuffle():
-    global images, labels
-    p = np.random.permutation(len(X_train))
-    images = X_train[p]
-    labels = Y_train[p]
+test = pd.read_csv('../input/test.csv')
+test.head()
 
 
 # In[6]:
 
 
-def next_batch(batch_s, iters):
-    if(iters == 0):
-        shuffle()
-    count = batch_s * iters
-    return images[count:(count + batch_s)], labels[count:(count + batch_s)]
+test['comment_text'] = test['comment_text'].fillna('nan')
 
 
 # In[7]:
 
 
-def deconv2d(input_tensor, filter_size, output_size, out_channels, in_channels, name, strides = [1, 1, 1, 1]):
-    dyn_input_shape = tf.shape(input_tensor)
-    batch_size = dyn_input_shape[0]
-    out_shape = tf.stack([batch_size, output_size, output_size, out_channels])
-    filter_shape = [filter_size, filter_size, out_channels, in_channels]
-    w = tf.get_variable(name=name, shape=filter_shape)
-    h1 = tf.nn.conv2d_transpose(input_tensor, w, out_shape, strides, padding='SAME')
-    return h1
+submission = pd.read_csv('../input/sample_submission.csv')
+submission.head()
 
+
+# # Basic analysis
+# We have multilabel classification task. So let's check proportion of each label:
 
 # In[8]:
 
 
-def conv2d(input_tensor, depth, kernel, name, strides=(1, 1), padding="SAME"):
-    return tf.layers.conv2d(input_tensor, filters=depth, kernel_size=kernel, strides=strides, padding=padding, activation=tf.nn.relu, name=name)
+for label in ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']:
+    print(label, (train[label] == 1.0).sum() / len(train))
 
+
+# and correlation between target variables (maybe we'l could build some kind of hierarchy classification or something like it).
 
 # In[9]:
 
 
-X = tf.placeholder(tf.float32, [None, 128, 128, 3])
-Y_ = tf.placeholder(tf.float32, [None, 128, 128, 1])
-lr = tf.placeholder(tf.float32)
+train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']].corr()
 
+
+# # Text postprocessing
+# 
+# I'll try models with:
+# - text as is
+# - stemmed text
+# - lemmatized text
 
 # In[10]:
 
 
-net = conv2d(X, 32, 1, "Y0") #128
+stemmer = EnglishStemmer()
 
-net = conv2d(net, 64, 3, "Y2", strides=(2, 2)) #64
-
-net = conv2d(net, 128, 3, "Y3", strides=(2, 2)) #32
-
-
-net = deconv2d(net, 1, 32, 128, 128, "Y2_deconv") # 32
-net = tf.nn.relu(net)
-
-net = deconv2d(net, 2, 64, 64, 128, "Y1_deconv", strides=[1, 2, 2, 1]) # 64
-net = tf.nn.relu(net)
-
-net = deconv2d(net, 2, 128, 32, 64, "Y0_deconv", strides=[1, 2, 2, 1]) # 128
-net = tf.nn.relu(net)
-
-logits = deconv2d(net, 1, 128, 1, 32, "logits_deconv") # 128
-
-loss = tf.losses.sigmoid_cross_entropy(Y_, logits)
-optimizer = tf.train.AdamOptimizer(lr).minimize(loss)
+@lru_cache(30000)
+def stem_word(text):
+    return stemmer.stem(text)
 
 
-# In[ ]:
+lemmatizer = WordNetLemmatizer()
+
+@lru_cache(30000)
+def lemmatize_word(text):
+    return lemmatizer.lemmatize(text)
 
 
-# init
-init = tf.global_variables_initializer()
-sess = tf.Session()
-sess.run(init)
-
-batch_count = 0
-display_count = 1
-for i in range(10000):
-    # training on batches of 10 images with 10 mask images
-    if(batch_count > 67):
-        batch_count = 0    
-
-    batch_X, batch_Y = next_batch(10, batch_count)
-
-    batch_count += 1
-
-    feed_dict = {X: batch_X, Y_: batch_Y, lr: 0.0005}
-    loss_value, _ = sess.run([loss, optimizer], feed_dict=feed_dict)
-
-    if(i % 500 == 0):
-        print(str(display_count) + " training loss:", str(loss_value))
-        display_count +=1
-        
-print("Done!")
+def reduce_text(conversion, text):
+    return " ".join(map(conversion, wordpunct_tokenize(text.lower())))
 
 
-# **Test on the data that is not seen by the network during training:**
-
-# In[ ]:
-
-
-ix = 3 #random.randint(0, 64) #len(X_test) - 1 = 64
-test_image = X_test[ix].astype(float)
-imshow(test_image)
-plt.show()
+def reduce_texts(conversion, texts):
+    return [reduce_text(conversion, str(text))
+            for text in tqdm(texts)]
 
 
-# In[ ]:
+# In[11]:
 
 
-def sigmoid(x):
-    return 1 / (1 + math.exp(-x))
+train['comment_text_stemmed'] = reduce_texts(stem_word, train['comment_text'])
+test['comment_text_stemmed'] = reduce_texts(stem_word, test['comment_text'])
+train['comment_text_lemmatized'] = reduce_texts(lemmatize_word, train['comment_text'])
+test['comment_text_lemmatized'] = reduce_texts(lemmatize_word, test['comment_text'])
 
 
-# In[ ]:
+# In[14]:
 
 
-#print(ix)
-test_image = np.reshape(test_image, [-1, 128 , 128, 3])
-test_data = {X:test_image}
+train.head()
 
-test_mask = sess.run([logits],feed_dict=test_data)
-test_mask = np.reshape(np.squeeze(test_mask), [IMG_WIDTH , IMG_WIDTH, 1])
-for i in range(IMG_WIDTH):
-    for j in range(IMG_HEIGHT):
-            test_mask[i][j] = int(sigmoid(test_mask[i][j])*255)
-imshow(test_mask.squeeze().astype(np.uint8))
-plt.show()
+
+# In[15]:
+
+
+test.head()
+
+
+# # Validation
+# 
+# Our metric is collumn-average of collumn log_loss values. So let's define custom metric based on binary log loss and define cross-validation function:
+
+# In[16]:
+
+
+def metric(y_true, y_pred):
+    assert y_true.shape == y_pred.shape
+    columns = y_true.shape[1]
+    column_losses = []
+    for i in range(0, columns):
+        column_losses.append(log_loss(y_true[:, i], y_pred[:, i]))
+    return np.array(column_losses).mean()
+
+
+# ## Cross-validation
+# 
+# I don't found quickly a way to stratified split for multilabel case.
+# 
+# So I used next way for stratified splitting:
+# 
+# - define ordered list of all possible label combinations. E.g.
+# 
+#     - 0 = ["toxic"=0, "severe_toxic"=0, "obscene"=0, "threat"=0, "insult"=0, "identity_hate"=0]
+#     - 1 = ["toxic"=0, "severe_toxic"=0, "obscene"=0, "threat"=0, "insult"=1, "identity_hate"=0]
+#     - 2 = ["toxic"=0, "severe_toxic"=0, "obscene"=0, "threat"=0, "insult"=1, "identity_hate"=1]
+# 
+# - for each row replace label combination with combination index 
+# - use StratifiedKFold on this
+# - train and test model by train/test indices from StratifiedKFold
+# 
+# Basic idea is next:
+# - we can present label combination as class for multiclass classification - at least for some cases
+# - we can stratified split by combination indices
+#     - so in each split distribution of combination indices will be similar to full set
+#     - so source label distribution also will be similar
+#     
+# But I don't sure that all my assumpions are fully correct - at least, for common case.
+
+# In[17]:
+
+
+def cv(model, X, y, label2binary, n_splits=3):
+    def split(X, y):
+        return StratifiedKFold(n_splits=n_splits).split(X, y)
+    
+    def convert_y(y):
+        new_y = np.zeros([len(y)])
+        for i, val in enumerate(label2binary):
+            idx = (y == val).max(axis=1)
+            new_y[idx] = i
+        return new_y
+    
+    X = np.array(X)
+    y = np.array(y)
+    scores = []
+    for train, test in tqdm(split(X, convert_y(y)), total=n_splits):
+        fitted_model = model(X[train], y[train])
+        scores.append(metric(y[test], fitted_model(X[test])))
+    return np.array(scores)
+
+
+# Let's define possible label combinations:
+
+# In[18]:
+
+
+label2binary = np.array([
+    [0, 0, 0, 0, 0, 0],
+    [0, 0, 0, 0, 0, 1],
+    [0, 0, 0, 0, 1, 0],
+    [0, 0, 0, 0, 1, 1],
+    [0, 0, 0, 1, 0, 0],
+    [0, 0, 0, 1, 0, 1],
+    [0, 0, 0, 1, 1, 0],
+    [0, 0, 0, 1, 1, 1],
+    [0, 0, 1, 0, 0, 0],
+    [0, 0, 1, 0, 0, 1],
+    [0, 0, 1, 0, 1, 0],
+    [0, 0, 1, 0, 1, 1],
+    [0, 0, 1, 1, 0, 0],
+    [0, 0, 1, 1, 0, 1],
+    [0, 0, 1, 1, 1, 0],
+    [0, 0, 1, 1, 1, 1],
+    [0, 1, 0, 0, 0, 0],
+    [0, 1, 0, 0, 0, 1],
+    [0, 1, 0, 0, 1, 0],
+    [0, 1, 0, 0, 1, 1],
+    [0, 1, 0, 1, 0, 0],
+    [0, 1, 0, 1, 0, 1],
+    [0, 1, 0, 1, 1, 0],
+    [0, 1, 0, 1, 1, 1],
+    [0, 1, 1, 0, 0, 0],
+    [0, 1, 1, 0, 0, 1],
+    [0, 1, 1, 0, 1, 0],
+    [0, 1, 1, 0, 1, 1],
+    [0, 1, 1, 1, 0, 0],
+    [0, 1, 1, 1, 0, 1],
+    [0, 1, 1, 1, 1, 0],
+    [0, 1, 1, 1, 1, 1],
+    [1, 0, 0, 0, 0, 0],
+    [1, 0, 0, 0, 0, 1],
+    [1, 0, 0, 0, 1, 0],
+    [1, 0, 0, 0, 1, 1],
+    [1, 0, 0, 1, 0, 0],
+    [1, 0, 0, 1, 0, 1],
+    [1, 0, 0, 1, 1, 0],
+    [1, 0, 0, 1, 1, 1],
+    [1, 0, 1, 0, 0, 0],
+    [1, 0, 1, 0, 0, 1],
+    [1, 0, 1, 0, 1, 0],
+    [1, 0, 1, 0, 1, 1],
+    [1, 0, 1, 1, 0, 0],
+    [1, 0, 1, 1, 0, 1],
+    [1, 0, 1, 1, 1, 0],
+    [1, 0, 1, 1, 1, 1],
+    [1, 1, 0, 0, 0, 0],
+    [1, 1, 0, 0, 0, 1],
+    [1, 1, 0, 0, 1, 0],
+    [1, 1, 0, 0, 1, 1],
+    [1, 1, 0, 1, 0, 0],
+    [1, 1, 0, 1, 0, 1],
+    [1, 1, 0, 1, 1, 0],
+    [1, 1, 0, 1, 1, 1],
+    [1, 1, 1, 0, 0, 0],
+    [1, 1, 1, 0, 0, 1],
+    [1, 1, 1, 0, 1, 0],
+    [1, 1, 1, 0, 1, 1],
+    [1, 1, 1, 1, 0, 0],
+    [1, 1, 1, 1, 0, 1],
+    [1, 1, 1, 1, 1, 0],
+    [1, 1, 1, 1, 1, 1],
+])
+
+
+# # Dummy model
+# 
+# Let's build dummy model that always return 0.5 and compare score on cross-validation with test-set public leatherboard "All 0.5s Benchmark" (score - 0.693)
+
+# In[19]:
+
+
+def dummy_model(X, y):
+    def _predict(X):
+        return np.ones([X.shape[0], 6]) * 0.5
+    
+    return _predict
+
+cv(dummy_model,
+   train['comment_text'],
+   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
+   label2binary)
+
+
+# seems like we built metric correctly, so let's go to baseline building
+# 
+# # Baseline (binary logistic regression over word-based tf-idf)
+# 
+# Let's build model that:
+# - compute tf-idf for given train texts
+# - train 6 logistic regressions (one for each label)
+# - compute tf-idf on test texts
+# - compute probability of "1" class for all 6 regressions
+
+# In[20]:
+
+
+def regression_baseline(X, y):
+    tfidf = TfidfVectorizer()
+    X_tfidf = tfidf.fit_transform(X)
+    columns = y.shape[1]
+    regressions = [
+        LogisticRegression().fit(X_tfidf, y[:, i])
+        for i in range(columns)
+    ]
+    
+    def _predict(X):
+        X_tfidf = tfidf.transform(X)
+        predictions = np.zeros([len(X), columns])
+        for i, regression in enumerate(regressions):
+            regression_prediction = regression.predict_proba(X_tfidf)
+            predictions[:, i] = regression_prediction[:, regression.classes_ == 1][:, 0]
+        return predictions
+    
+    return _predict
+
+
+# Now let's check model on source texts/stemmed texts/lemmatized texts
+
+# In[21]:
+
+
+cv(regression_baseline,
+   train['comment_text'],
+   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
+   label2binary)
+
+
+# In[22]:
+
+
+cv(regression_baseline,
+   train['comment_text_stemmed'],
+   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
+   label2binary)
+
+
+# In[23]:
+
+
+cv(regression_baseline,
+   train['comment_text_lemmatized'],
+   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
+   label2binary)
+
+
+# As you can see - this baseline gives best score on stemmed texts.
+# Anyway - let's  try to add character-level features:
+# 
+# # Regressions over tfidf over words and character n-grams
+# 
+# Let's build model that:
+# - compute tfidf of words of stemmed texts
+# - compute tfidf of character n-grams from source text
+# - train/predict regressions on computed tfidf-s.
+
+# In[25]:
+
+
+def regression_wordchars(X, y):
+    tfidf_word = TfidfVectorizer()
+    X_tfidf_word = tfidf_word.fit_transform(X[:, 1])
+    tfidf_char = TfidfVectorizer(analyzer='char', ngram_range=(1, 3), lowercase=False)
+    X_tfidf_char = tfidf_char.fit_transform(X[:, 0])
+    X_tfidf = sparse.hstack([X_tfidf_word, X_tfidf_char])
+    
+    columns = y.shape[1]
+    regressions = [
+        LogisticRegression().fit(X_tfidf, y[:, i])
+        for i in range(columns)
+    ]
+    
+    def _predict(X):
+        X_tfidf_word = tfidf_word.transform(X[:, 1])
+        X_tfidf_char = tfidf_char.transform(X[:, 0])
+        X_tfidf = sparse.hstack([X_tfidf_word, X_tfidf_char])
+        predictions = np.zeros([len(X), columns])
+        for i, regression in enumerate(regressions):
+            regression_prediction = regression.predict_proba(X_tfidf)
+            predictions[:, i] = regression_prediction[:, regression.classes_ == 1][:, 0]
+        return predictions
+    
+    return _predict
+
+
+# In[26]:
+
+
+cv(regression_wordchars,
+   train[['comment_text', 'comment_text_stemmed']],
+   train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']],
+   label2binary)
+
+
+# # Prediction
+# 
+# Let's use our best model - regression over word&chars tfidf to build submission:
+
+# In[27]:
+
+
+get_ipython().run_cell_magic('time', '', "model = regression_wordchars(np.array(train[['comment_text', 'comment_text_stemmed']]),\n                             np.array(train[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']]))")
+
+
+# In[28]:
+
+
+get_ipython().run_cell_magic('time', '', "prediction = model(np.array(test[['comment_text', 'comment_text_stemmed']]))")
+
+
+# In[30]:
+
+
+for i, label in enumerate(['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']):
+    submission[label] = prediction[:, i]
+submission.head()
+
+
+# In[29]:
+
+
+submission.to_csv('output.csv', index=None)
 

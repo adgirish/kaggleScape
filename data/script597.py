@@ -1,196 +1,198 @@
 
 # coding: utf-8
 
+# # Local Validation for Instacart Market Basket Analysis
+# 
+# **Problems for creating local scorings**
+# 
+# This is a multiclass and multilabel prediction challenge.
+# 
+# The multiple labels that need to be predicted and which have a varying number of occurences for each row (the sample only shows the same ID per row but real predictions should have "None" or anywhere from 1 to about 80 IDs per row) make the typical scoring-implementations from SKlearn or similar packaged harder to use. 
+# 
+# These Packages don't (as far as I know) provide a way to score these multi-label predictions.
+# 
+# In order to calculate a F1 score (which is used by Kaggle to score your prediction) on a local test-set, we need to create our own way of scoring predictions locally to be able to do more testing.
+# 
+# **No Cross-Validation**
+# 
+# The competition asks you to predict the product orders for the next order of clients. The prior data is organized in a "continous" way and later orders depend on previous ones. Unlike other classifacation problems you shouldn't split the orders in a typical 5-fold-Cross-Validation because it doesn't helpt to predict earlier orders using data from later orders.
+# 
+# Fortunately, Instacart has already provided us with the last orders for some client in the "order_products_train.csv" file. The naming of the files could be a bit better in my opinion as you dont just train your model on this file but also/only on the priors file.
+# 
+# You can use the train-data as your local test set if you format it in a different way.
+
 # In[ ]:
 
 
 import numpy as np
 import pandas as pd
-import random
-
-# Random pets column
-pet_list = ["cat", "hamster", "alligator", "snake"]
-pet = [random.choice(pet_list) for i in range(1,15)]
-
-# Random weight of animal column
-weight = [random.choice(range(5,15)) for i in range(1,15)]
-
-# Random length of animals column
-length = [random.choice(range(1,10)) for i in range(1,15)]
-
-# random age of the animals column
-age = [random.choice(range(1,15)) for i in range(1,15)]
-
-# Put everyhting into a dataframe
-df = pd.DataFrame()
-df["animal"] = pet
-df["age"] = age
-df["weight"] = weight
-df["length"] = length
-
-# make a groupby object
-animal_groups = df.groupby("animal")
+pd.set_option("display.max_colwidth", 200) # use this to display more content for each column
 
 
+# In[ ]:
+
+
+train_df = pd.read_csv("../input/order_products__train.csv")
+
+
+# ## Formatting the training-data
 # 
-# # Groupby 
+# As noted above, you should use the later orders for validating your model. With the following code you can convert the training-order-data or any other subset into a submission-like format. 
+
+# In[ ]:
+
+
+# we will use 5 orders with different amounts of products bought for demonstration
+train_5 = train_df.loc[train_df["order_id"].isin([199872, 427287, 569586, 894112, 1890016])]
+
+train_5.head(10)
+
+
+# In[ ]:
+
+
+# concatenate all product-ids into a single string
+# thanks to https://www.kaggle.com/eoakley/start-here-simple-submission
+
+def products_concat(series):
+    out = ''
+    for product in series:
+        if product > 0:
+            out = out + str(int(product)) + ' '
+    
+    if out != '':
+        return out.rstrip()
+    else:
+        return 'None'
+
+
+# In[ ]:
+
+
+# this creates a DataFrame in the same format as your (local) prediction. 
+train_5 = pd.DataFrame(train_5.groupby('order_id')["product_id"].apply(products_concat)).reset_index()
+train_5
+
+
+# These product IDs now need to be compared to your predicted IDs for these order_ids
+
+# ## F1-Score, Precision and Recall
+# 
+# After you have created a prediction on your test set (check other Kernels for script-ideas), we need to calculate the F1-score for each row and the total dataset. For more information on the F1-score, check [Wikipedia](https://en.wikipedia.org/wiki/F1_score) or [this article](http://machinelearningmastery.com/classification-accuracy-is-not-enough-more-performance-measures-you-can-use/).
+# 
+# For this we need to get the [precision and recall](https://en.wikipedia.org/wiki/Precision_and_recall) for each row. These can be a bit confusing though at first.
+# 
+# - precision (also called positive predictive value) is the fraction of relevant instances among the retrieved instances
+# - recall (also known as sensitivity) is the fraction of relevant instances that have been retrieved over total relevant instances
+# 
+# The F1-Score combines these two and gives a good score if you predict the right instances and the right amount of instances. 
+# 
+# **Example**
+# 
+# Let's say a customer actually bought 10 products (IDs are 0-9). Our model predicts 5 products (IDs 7, 8, 9, 10, 11) out of which 3 are correct (IDs 7, 8, 9) and 2 are incorrect.
+# 
+# - precision is 3/5
+# - recall is 3/10
+# 
+# Instead of just rating your prediction on how many correct products you got, the F1-Score is penalizing predictions with too many false positives. Suppose we had 100 products in the whole inventory and we predicted that each customer bought all 100 of them, we would predict all the actually bought products but all the additional false positives would keep the score down.
+
+# ### Comparing local test-data and prediction-data
+# 
+# For the ease of demonstration, lets create two DataFrames with easy to use product_ids. Incorrect predictions either have missing IDs or letters for products that were not bought.
+
+# In[ ]:
+
+
+df_real = pd.DataFrame({"order_id": [10, 11, 12, 13, 14, 15, 16],
+                        "product_id": ["0", "0 1", "0 1 2 3",  "0 1 2 3", "0 1 2 3 4 5", 
+                                       "0 1 2 3 4 5 6 7", "0 1 2 3 4 5 6 7 8 9"]},
+                       index=np.arange(7))
+
+df_pred = pd.DataFrame({"order_id": [10, 11, 12, 13, 14, 15, 16], 
+                        "product_id": ["0", "0 X", "0 1 2 Y", "0 1 2 3 4 5", "0 1 2 3", 
+                                       "0 1 2 3 4 5 6 7 8 9 X", "0 1 2 3 4 5 6 7 8"]},
+                       index=np.arange(7))
+
+df_real_preds = pd.merge(df_real, df_pred, on="order_id", suffixes=("_real", "_pred"))
+df_real_preds
+
+
+# In[ ]:
+
+
+def score_order_predictions(df_real, df_pred, return_df=True, show_wrong_IDs=True):
+    '''
+    Print out the total weighted precision, recall and F1-Score for the given true and predicted orders.
+    
+    return_df:  if set to True, a new DataFrame with added columns for precision, recall and F1-Score will be returned.
+    
+    show_wrong_IDs: if set to True, two columns with the IDs that the prediction missed and incorrectly predicted will be added. Needs return_df to be True.
+    '''
+    df_combined = pd.merge(df_real, df_pred, on="order_id", suffixes=("_real", "_pred"))
+    
+    df_combined["real_array"] = df_combined["product_id_real"].apply(lambda x: x.split())
+    df_combined["pred_array"] = df_combined["product_id_pred"].apply(lambda x: x.split())
+    
+    df_combined["num_real"] = df_combined["product_id_real"].apply(lambda x: len(x.split()))
+    df_combined["num_pred"] = df_combined["product_id_pred"].apply(lambda x: len(x.split()))
+
+    df_combined["num_pred_correct"] = np.nan
+    for i in df_combined.index:
+        df_combined.loc[i, "num_pred_correct"] = len([e for e in df_combined.loc[i,"real_array"]
+                                                      if e    in df_combined.loc[i,"pred_array"]])
+    if show_wrong_IDs==True:
+        df_combined["IDs_missing"] = np.empty((len(df_combined), 0)).tolist()
+        for i in df_combined.index:
+            missing = np.in1d(df_combined.loc[i, "real_array"], df_combined.loc[i,"pred_array"], invert=True)
+            missing_values = np.array(df_combined.loc[i, "real_array"])[missing]
+            df_combined.set_value(i, "IDs_missing", missing_values)
+ 
+        df_combined["IDs_not_ordered"] = np.empty((len(df_combined), 0)).tolist()
+        for i in df_combined.index:
+            not_ordered = np.in1d(df_combined.loc[i, "pred_array"], df_combined.loc[i,"real_array"], invert=True)
+            not_ordered_values = np.array(df_combined.loc[i, "pred_array"])[not_ordered]
+            df_combined.set_value(i, "IDs_not_ordered", not_ordered_values)
+
+    df_combined["precision"] = np.round(df_combined["num_pred_correct"] / df_combined["num_pred"], 4)
+    df_combined["recall"]    = np.round(df_combined["num_pred_correct"] / df_combined["num_real"], 4)
+    df_combined["F1-Score"]  = np.round(2*( (df_combined["precision"]*df_combined["recall"]) / 
+                                           (df_combined["precision"]+df_combined["recall"]) ), 4)
+    
+    recall_total =    df_combined["num_pred_correct"].sum() / df_combined["num_real"].sum()
+    precision_total = df_combined["num_pred_correct"].sum() / df_combined["num_pred"].sum()
+    F1_total =  2* ( (precision_total * recall_total) / (precision_total + recall_total) )      
+    
+    print("F1-Score: ", round(F1_total, 4))
+    print("recall:   ", round(recall_total, 4))
+    print("precision:", round(precision_total, 4))
+    
+    df_combined.drop(["real_array", "pred_array", "num_real", "num_pred", "num_pred_correct"], axis=1, inplace=True)
+    
+    # reorder columns so that the scoring-columns appear first and
+    # all other on the right of them (bad readability with many IDs)
+    df_combined = pd.concat([df_combined.loc[:, "order_id"], 
+                             df_combined.iloc[:, -3:],
+                             df_combined.iloc[:, 1:-3]], 
+                            axis=1)
+    if return_df==True:
+        return df_combined
+    else: 
+        return None
+
+
+# In[ ]:
+
+
+df_scores = score_order_predictions(df_real, df_pred, return_df=True, show_wrong_IDs=True)
+df_scores
+
+
+# With this function you can split your orders-data and evaluate your predictions for a variety of different scenarios (predict only for weekends, for specific times of the day, for customers with less/more than 5 orders, for customers with rare or promotional products, etc).
+# 
+# Use the new columns in the resulting DataFrame to see if your predictions contain too many or too few IDs, if you have weak spots for specific cases (you can pass more DataFrames with more columns, e.g. the DayOfWeek, to the function) or if you keep missing/adding specific IDs. 
+# 
 # ---
-# *This tutorial roughly picks up from the <a href="https://www.kaggle.com/crawford/python-merge-tutorial/">Python Merge Tutorial</a> but also works as a stand alone Groupby tutorial. If you come from a background in SQL and are familiar with GROUP BY,  you can scroll through this to see some examples of the syntax. *
-# <br><br>
+
+# I have found a number of different ways to calculate the F1-Score. Scikit-Learn has a [few ways](http://scikit-learn.org/stable/modules/generated/sklearn.metrics.f1_score.html) to weight the classes. If you think another calculation would be more fitting to this challenge, please let me know.
 # 
-# Groupby is a pretty simple concept. You create a grouping of categories and apply a function to the categories. It's a simple concept but it's an extremely valuable technique that's widely used in data science. The value of groupby really comes from it's ability to aggregate data efficiently, both in performance and the amount code it takes. In real data science projects, you'll be dealing with large amounts of data and trying things over and over, so efficiency really becomes an important consideration. 
-# <br><br>
-# 
-# # Understanding Groupby
-# Here's a super simple dataframe to illustrate some examples. We'll be grouping the data by the "animal" column where there are four categories of animals: 
-# - alligators
-# - cats
-# - snakes
-# - hamsters
-
-# In[ ]:
-
-
-df
-
-
-# So one question we could ask about the animal data might be, "What's the average weight of all the snakes, cats, hamsters, and alligators?" To find the average weight of each category of animal, we'll group the animals by animal type and then apply the mean function. We could apply other functions too. We could apply "sum" to add up all the weights, "min" to find the lowest, "max" to get the highest, or "count" just to get a count of each animal type. 
-# <br><br>
-# 
-# This is a short list of some aggregation functions that I find handy but it's definitely not a complete list of possible operations.
-# <br>
-# 
-# <table>
-# <tr>
-#     <td><b>Summary statistics</b></td>
-#     <td><b>Numpy operations</b></td>
-#     <td><b>More complex operations</b></td>
-# </tr>
-# <tr>
-#     <td>mean</td>
-#     <td>np.mean</td>
-#     <td>.agg()</td>
-# </tr>
-# <tr>
-#     <td>median</td>
-#     <td>np.min</td>
-#     <td>agg(["mean", "median"])</td>
-# </tr>
-# <tr>
-#     <td>min</td>
-#     <td>np.max</td>
-#     <td>agg(custom_function())</td>
-# </tr>
-# <tr>
-#     <td>max</td>
-#     <td>np.sum</td>
-# </tr>
-# <tr>
-#     <td>sum</td>
-#     <td>np.product</td>
-# </tr>
-# <tr>
-#     <td>describe</td>
-# </tr>
-# <tr>
-#     <td>count or size</td>
-# </tr>
-# </table>
-# 
-# <br><br>
-# 
-# These two lines of code group the animals then apply the mean function to the weight column.
-# ```python
-# # Group by animal category
-# animal_groups = df.groupby("animal")
-# # Apply mean function to wieght column
-# animal_groups['weight'].mean()
-# ```
-# <br><br>
-# 
-# Here's what happens when you run that code:
-# 
-# 
-# ### 1. Group the unique values from the animal column 
-# <img src="https://imgur.com/DRl1wil.jpg" width=400 alt="group stuff">
-# <br><br>
-# 
-# ### 2. Now there's a bucket for each group
-# <img src="https://imgur.com/Q9fHw1O.jpg" width=250 alt="make buckets">
-# <br><br>
-# 
-# ### 3. Toss the other data into the buckets 
-# <img src="https://imgur.com/A29SKAY.jpg" width=500 alt="add data">
-# <br><br>
-# 
-# ### 4. Apply a function on the weight column of each bucket
-# <img src="https://imgur.com/xZnMuPZ.jpg" width=700 alt="calculate something">
-
-# 
-# 
-# ### Here is the code again:
-# ```python
-# # Group by category
-# animal_groups = df.groupby("animal")
-# 
-# # Apply the "mean" function to the weight column
-# animal_groups['weight'].mean()
-# 
-# # Or apply the "max" function to the age column
-# animal_groups['age'].max()
-# ```
-# <br><br>
-# 
-# 
-# 
-
-# # Example
-# ---
-# 
-# This is the same dataset used in the <a href="https://www.kaggle.com/crawford/python-merge-tutorial/">Python Merge Tutorial</a>. In that tutorial we merged restaurant ratings with restaurant parking lot info. There are four possible classes of parking: `None, Public, Valet, and Yes`. We can group the restaurants by the type of parking available then get the average rating for restaurants in each parking category. Basically, we want to know if restaurants with parking lots have higher service_ratings.  
-# 
-# Here are the steps:
-# - Merge two dataframes together (Restaurant ratings merged with restaurant parking lot info)
-# - Create groups based on the types of parking available at the restaurants 
-# - Calculate the average ratings for each group of parking
-
-# In[ ]:
-
-
-# Load restaurant ratings and parking lot info
-ratings = pd.read_csv("../input/rating_final.csv")
-parking = pd.read_csv("../input/chefmozparking.csv")
-
-# Merge the dataframes
-df = pd.merge(left=ratings, right=parking, on="placeID", how="left")
-
-# Show the merged data
-df.head()
-
-
-# In[ ]:
-
-
-# Group by the parking_lot column
-parking_group = df.groupby("parking_lot")
-
-# Calculate the mean ratings
-parking_group["service_rating"].mean()
-
-
-# Those ratings seem low... But we don't know what scale the ratings are on. If we calculate the summary statistics (mean, std, min, max, etc) we can see the scope of ratings. A common way to calculate quick summary statistics on groupby objects is to apply the "describe" function. 
-
-# In[ ]:
-
-
-parking_group['service_rating'].describe()
-
-
-# With all of the summary statistics in front of us we can see that the lowest rating for all parking categories is 0 and the highest is 2. I would guess that users were asked to rate restaurants with 1-3 stars which equate to 0, 1, or 2 in the data. So do restaurants with valet parking have higher service_ratings?  
-# <br><br>
-
-# # Conclusion
-# 
-# 
-# You've now seen how to efficiently group categorical data and apply aggregate functions like "mean", "sum" and "describe". Fork this kernel and try out some different aggregate functions. Mean, median, prod, sum, std, and var are a few examples. If you're feeling confident, try implementing merge and groupby on a datset by yourself.
-# <br><br>
+# **What other ideas do you have for validating predictions locally?**

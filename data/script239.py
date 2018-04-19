@@ -1,554 +1,577 @@
 
 # coding: utf-8
 
-# <H1>Overview</H1>
-# 
-# The Passenger Screening Algorithm Challenge asks the data science community to assist with improving threat detection at US airports while minimizing false positives to avoid long lines and delays. (Can I get an amen!).  This notebook is a follow up to my first effort for this contest called [Exploratory Data Analysis and Example Generation](https://www.kaggle.com/jbfarrar/exploratory-data-analysis-and-example-generation) (I'll call it EDA from now on).  As I mentioned in the EDA notebook, the HD-AIT system files supplied in this contest range from 10MB to approximately 2GB per subject.  In the instructions, the organizers suggest that one may even be able to win the contest with one of the smaller image suites. In that notebook, in addition to a review of the data and its vagueries, I supplied some basic building blocks for a preprocessing pipeline.
-# 
-# In this notebook, I continue the series with a full preprocessing pipeline using the building blocks from before as well as a first pass through a CNN based on the Alexnet using Tensorflow.  Clearly, no one is going to win the contest with this method, but I thought it would be helpful to everyone working on this to have an end to end working pipeline.  I hope you find it useful, and if you do, I hope you'll give me an up vote!
-# 
-# As previously noted, I'm not an expert on these systems or the related scans.  If you see something I've misunderstood or you think I've made an error, let me know and I'll correct it.  TSA has made it harder for people to get into this contest by disallowing even masked images to be protrayed on Kaggle, so you'll have to put these scripts in your own environment to take them around the track.  In any event, I am convinced that data science can improve the predictive veracity of these scans.  I'll get off the soap box now and move on.
-# 
-# To begin I collect all of the imports used in the notebook at the top.  It makes it easier when you're converting to a preprocessing script.  Make sure to take note of the last import, tsahelper. You will need to install tsahelper and uncomment this line in order for this pipeline to work. The tsahelper package is made from the EDA and is now available as a pip install (no warranties!). 
-# 
+# # Amazon Reviews Unlocked Mobile Phones
 
 # In[ ]:
 
 
-# import libraries
-from __future__ import print_function
-from __future__ import division
-
-import numpy as np 
+import smtplib
+from matplotlib import style
+import seaborn as sns
+sns.set(style='ticks', palette='RdBu')
 import pandas as pd
-import os
+import numpy as np
+import time
+import datetime 
+get_ipython().run_line_magic('matplotlib', 'inline')
+import matplotlib.pyplot as plt
+from subprocess import check_output
+pd.options.display.max_colwidth = 1000
+from time import gmtime, strftime
+Time_now = strftime("%Y-%m-%d %H:%M:%S", gmtime())
+import timeit
+start = timeit.default_timer()
+pd.options.display.max_rows = 100
+from wordcloud import WordCloud
+import sqlite3
+import nltk
+import string
+from nltk.corpus import stopwords
 import re
-
-import tensorflow as tf
-import tflearn
-from tflearn.layers.conv import conv_2d, max_pool_2d
-from tflearn.layers.core import input_data, dropout, fully_connected
-from tflearn.layers.estimator import regression
-from tflearn.layers.normalization import local_response_normalization
-
+from bs4 import BeautifulSoup
+from nltk.stem.porter import PorterStemmer
+english_stemmer=nltk.stem.SnowballStemmer('english')
+from sklearn.feature_selection.univariate_selection import SelectKBest, chi2, f_classif
+from sklearn.model_selection import train_test_split
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import SGDClassifier, SGDRegressor
+from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import accuracy_score, classification_report, confusion_matrix
 import random
-from timeit import default_timer as timer
-
-#import tsahelper as tsa
-
-
-# Here I collect the constants all in one place.  Once you are running training routinely, you'll want it to be easy to try different parameters. One tricky thing about the preprocessing approach employed here, is determining when a mini batch is complete.  There are 182 views of the threat zones per subject (more on the terminology and approach for this covered in detail in the [EDA](https://www.kaggle.com/jbfarrar/exploratory-data-analysis-and-example-generation)), so the batch counts depend on this fact to know when we have a complete minibatch.  Note also that FILE_LIST, TRAIN_FILE_LIST, and TEST_FILE_LIST are empty until after preprocessing.  More on that below.
-
-# In[ ]:
-
-
-#---------------------------------------------------------------------------------------
-# Constants
-#
-# INPUT_FOLDER:                 The folder that contains the source data
-#
-# PREPROCESSED_DATA_FOLDER:     The folder that contains preprocessed .npy files 
-# 
-# STAGE1_LABELS:                The CSV file containing the labels by subject
-#
-# THREAT_ZONE:                  Threat Zone to train on (actual number not 0 based)
-#
-# BATCH_SIZE:                   Number of Subjects per batch
-#
-# EXAMPLES_PER_SUBJECT          Number of examples generated per subject
-#
-# FILE_LIST:                    A list of the preprocessed .npy files to batch
-# 
-# TRAIN_TEST_SPLIT_RATIO:       Ratio to split the FILE_LIST between train and test
-#
-# TRAIN_SET_FILE_LIST:          The list of .npy files to be used for training
-#
-# TEST_SET_FILE_LIST:           The list of .npy files to be used for testing
-#
-# IMAGE_DIM:                    The height and width of the images in pixels
-#
-# LEARNING_RATE                 Learning rate for the neural network
-#
-# N_TRAIN_STEPS                 The number of train steps (epochs) to run
-#
-# TRAIN_PATH                    Place to store the tensorboard logs
-#
-# MODEL_PATH                    Path where model files are stored
-#
-# MODEL_NAME                    Name of the model files
-#
-#----------------------------------------------------------------------------------------
-INPUT_FOLDER = 'tsa_datasets/stage1/aps'
-PREPROCESSED_DATA_FOLDER = 'tsa_datasets/preprocessed/'
-STAGE1_LABELS = 'tsa_datasets/stage1_labels.csv'
-THREAT_ZONE = 1
-BATCH_SIZE = 16
-EXAMPLES_PER_SUBJECT = 182
-
-FILE_LIST = []
-TRAIN_TEST_SPLIT_RATIO = 0.2
-TRAIN_SET_FILE_LIST = []
-TEST_SET_FILE_LIST = []
-
-IMAGE_DIM = 250
-LEARNING_RATE = 1e-3
-N_TRAIN_STEPS = 1
-TRAIN_PATH = 'tsa_logs/train/'
-MODEL_PATH = 'tsa_logs/model/'
-MODEL_NAME = ('tsa-{}-lr-{}-{}-{}-tz-{}'.format('alexnet-v0.1', LEARNING_RATE, IMAGE_DIM, 
-                                                IMAGE_DIM, THREAT_ZONE )) 
+import itertools
+import sys
+import os
+import argparse
+from sklearn.pipeline import Pipeline
+from scipy.sparse import csr_matrix
+from sklearn.feature_extraction.text import CountVectorizer
+import six
+from abc import ABCMeta
+from scipy import sparse
+from scipy.sparse import issparse
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.utils import check_X_y, check_array
+from sklearn.utils.extmath import safe_sparse_dot
+from sklearn.preprocessing import normalize, binarize, LabelBinarizer
+from sklearn.svm import LinearSVC
+from sklearn.decomposition import PCA
+from sklearn.model_selection import cross_val_score
+from sklearn.feature_selection import RFECV, SelectKBest
+from sklearn.ensemble import RandomForestClassifier 
+from sklearn.ensemble import AdaBoostClassifier
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.tree import DecisionTreeClassifier,ExtraTreeClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB, BernoulliNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.linear_model import SGDClassifier
+from sklearn.preprocessing import LabelEncoder
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.calibration import CalibratedClassifierCV
+from sklearn.model_selection import GridSearchCV
+from sklearn.model_selection import StratifiedKFold
+from sklearn.feature_selection import SelectFromModel
+from sklearn import svm
+from scipy.stats import skew
+from scipy.stats.stats import pearsonr
+from sklearn.linear_model import Ridge, RidgeCV, ElasticNet, LassoCV, LassoLarsCV
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.linear_model import LinearRegression, Lasso
+from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, ExtraTreesClassifier
+from sklearn.tree import DecisionTreeClassifier, ExtraTreeClassifier
 
 
-# <H3>The Preprocessor</H3>
-# 
-# Throughout this notebook, passengers who are being scanned for contraband are referred to as "subjects".  The preprocessor begins with 3 different ways you can choose to read in a list of subjects.  If you are training on the full data set, OPTION 1 (see the comments) is your best bet.  If you want to preprocess all subjects for whom you have data, then OPTION 2 is your best choice, and if you are running in a sample or low volume notebook environment, then you can just give a short list of subject IDs for whom you have data loaded using OPTION 3.
-# 
-# My approach in this notebook is to isolate each individual threat zone from every visible angle and then make features out of each individual threat zone from each angle that a given threat zone is visible. This allows us to train on each threat zone individually from every view in a 2D format.  (This is covered in some detail in the [EDA](https://www.kaggle.com/jbfarrar/exploratory-data-analysis-and-example-generation)).
-# 
-# The preprocessor loops through the data one subject at a time, transforms the images, isolates threat zones, and uses a set of vertices to crop each image to 250x250.  Images are saved in minibatches by threat zone, so that they can be read into the trainer.
-# 
-# Note that the trainer depends upon the threat zone number being present in the minibatch file name.  (Not my favorite approach, but it was fastest and easiest given what I was doing).  If you have a better idea, pass it along!
+# # Read the data
 
 # In[ ]:
 
 
-#---------------------------------------------------------------------------------------
-# preprocess_tsa_data(): preprocesses the tsa datasets
-#
-# parameters:      none
-#
-# returns:         none
-#---------------------------------------------------------------------------------------
-
-def preprocess_tsa_data():
-    
-    # OPTION 1: get a list of all subjects for which there are labels
-    #df = pd.read_csv(STAGE1_LABELS)
-    #df['Subject'], df['Zone'] = df['Id'].str.split('_',1).str
-    #SUBJECT_LIST = df['Subject'].unique()
-
-    # OPTION 2: get a list of all subjects for whom there is data
-    #SUBJECT_LIST = [os.path.splitext(subject)[0] for subject in os.listdir(INPUT_FOLDER)]
-    
-    # OPTION 3: get a list of subjects for small bore test purposes
-    SUBJECT_LIST = ['00360f79fd6e02781457eda48f85da90','0043db5e8c819bffc15261b1f1ac5e42',
-                    '0050492f92e22eed3474ae3a6fc907fa','006ec59fa59dd80a64c85347eef810c7',
-                    '0097503ee9fa0606559c56458b281a08','011516ab0eca7cad7f5257672ddde70e']
-    
-    # intialize tracking and saving items
-    batch_num = 1
-    threat_zone_examples = []
-    start_time = timer()
-    
-    for subject in SUBJECT_LIST:
-
-        # read in the images
-        print('--------------------------------------------------------------')
-        print('t+> {:5.3f} |Reading images for subject #: {}'.format(timer()-start_time, 
-                                                                     subject))
-        print('--------------------------------------------------------------')
-        images = tsa.read_data(INPUT_FOLDER + '/' + subject + '.aps')
-
-        # transpose so that the slice is the first dimension shape(16, 620, 512)
-        images = images.transpose()
-
-        # for each threat zone, loop through each image, mask off the zone and then crop it
-        for tz_num, threat_zone_x_crop_dims in enumerate(zip(tsa.zone_slice_list, 
-                                                             tsa.zone_crop_list)):
-
-            threat_zone = threat_zone_x_crop_dims[0]
-            crop_dims = threat_zone_x_crop_dims[1]
-
-            # get label
-            label = np.array(tsa.get_subject_zone_label(tz_num, 
-                             tsa.get_subject_labels(STAGE1_LABELS, subject)))
-
-            for img_num, img in enumerate(images):
-
-                print('Threat Zone:Image -> {}:{}'.format(tz_num, img_num))
-                print('Threat Zone Label -> {}'.format(label))
-                
-                if threat_zone[img_num] is not None:
-
-                    # correct the orientation of the image
-                    print('-> reorienting base image') 
-                    base_img = np.flipud(img)
-                    print('-> shape {}|mean={}'.format(base_img.shape, 
-                                                       base_img.mean()))
-
-                    # convert to grayscale
-                    print('-> converting to grayscale')
-                    rescaled_img = tsa.convert_to_grayscale(base_img)
-                    print('-> shape {}|mean={}'.format(rescaled_img.shape, 
-                                                       rescaled_img.mean()))
-
-                    # spread the spectrum to improve contrast
-                    print('-> spreading spectrum')
-                    high_contrast_img = tsa.spread_spectrum(rescaled_img)
-                    print('-> shape {}|mean={}'.format(high_contrast_img.shape,
-                                                       high_contrast_img.mean()))
-
-                    # get the masked image
-                    print('-> masking image')
-                    masked_img = tsa.roi(high_contrast_img, threat_zone[img_num])
-                    print('-> shape {}|mean={}'.format(masked_img.shape, 
-                                                       masked_img.mean()))
-
-                    # crop the image
-                    print('-> cropping image')
-                    cropped_img = tsa.crop(masked_img, crop_dims[img_num])
-                    print('-> shape {}|mean={}'.format(cropped_img.shape, 
-                                                       cropped_img.mean()))
-
-                    # normalize the image
-                    print('-> normalizing image')
-                    normalized_img = tsa.normalize(cropped_img)
-                    print('-> shape {}|mean={}'.format(normalized_img.shape, 
-                                                       normalized_img.mean()))
-
-                    # zero center the image
-                    print('-> zero centering')
-                    zero_centered_img = tsa.zero_center(normalized_img)
-                    print('-> shape {}|mean={}'.format(zero_centered_img.shape, 
-                                                       zero_centered_img.mean()))
-
-                    # append the features and labels to this threat zone's example array
-                    print ('-> appending example to threat zone {}'.format(tz_num))
-                    threat_zone_examples.append([[tz_num], zero_centered_img, label])
-                    print ('-> shape {:d}:{:d}:{:d}:{:d}:{:d}:{:d}'.format(
-                                                         len(threat_zone_examples),
-                                                         len(threat_zone_examples[0]),
-                                                         len(threat_zone_examples[0][0]),
-                                                         len(threat_zone_examples[0][1][0]),
-                                                         len(threat_zone_examples[0][1][1]),
-                                                         len(threat_zone_examples[0][2])))
-                else:
-                    print('-> No view of tz:{} in img:{}. Skipping to next...'.format( 
-                                tz_num, img_num))
-                print('------------------------------------------------')
-
-        # each subject gets EXAMPLES_PER_SUBJECT number of examples (182 to be exact, 
-        # so this section just writes out the the data once there is a full minibatch 
-        # complete.
-        if ((len(threat_zone_examples) % (BATCH_SIZE * EXAMPLES_PER_SUBJECT)) == 0):
-            for tz_num, tz in enumerate(tsa.zone_slice_list):
-
-                tz_examples_to_save = []
-
-                # write out the batch and reset
-                print(' -> writing: ' + PREPROCESSED_DATA_FOLDER + 
-                                        'preprocessed_TSA_scans-tz{}-{}-{}-b{}.npy'.format( 
-                                        tz_num+1,
-                                        len(threat_zone_examples[0][1][0]),
-                                        len(threat_zone_examples[0][1][1]), 
-                                        batch_num))
-
-                # get this tz's examples
-                tz_examples = [example for example in threat_zone_examples if example[0] == 
-                               [tz_num]]
-
-                # drop unused columns
-                tz_examples_to_save.append([[features_label[1], features_label[2]] 
-                                            for features_label in tz_examples])
-
-                # save batch.  Note that the trainer looks for tz{} where {} is a 
-                # tz_num 1 based in the minibatch file to select which batches to 
-                # use for training a given threat zone
-                np.save(PREPROCESSED_DATA_FOLDER + 
-                        'preprocessed_TSA_scans-tz{}-{}-{}-b{}.npy'.format(tz_num+1, 
-                                                         len(threat_zone_examples[0][1][0]),
-                                                         len(threat_zone_examples[0][1][1]), 
-                                                         batch_num), 
-                                                         tz_examples_to_save)
-                del tz_examples_to_save
-
-            #reset for next batch 
-            del threat_zone_examples
-            threat_zone_examples = []
-            batch_num += 1
-    
-    # we may run out of subjects before we finish a batch, so we write out 
-    # the last batch stub
-    if (len(threat_zone_examples) > 0):
-        for tz_num, tz in enumerate(tsa.zone_slice_list):
-
-            tz_examples_to_save = []
-
-            # write out the batch and reset
-            print(' -> writing: ' + PREPROCESSED_DATA_FOLDER 
-                    + 'preprocessed_TSA_scans-tz{}-{}-{}-b{}.npy'.format(tz_num+1, 
-                      len(threat_zone_examples[0][1][0]),
-                      len(threat_zone_examples[0][1][1]), 
-                                                                                                                  batch_num))
-
-            # get this tz's examples
-            tz_examples = [example for example in threat_zone_examples if example[0] == 
-                           [tz_num]]
-
-            # drop unused columns
-            tz_examples_to_save.append([[features_label[1], features_label[2]] 
-                                        for features_label in tz_examples])
-
-            #save batch
-            np.save(PREPROCESSED_DATA_FOLDER + 
-                    'preprocessed_TSA_scans-tz{}-{}-{}-b{}.npy'.format(tz_num+1, 
-                                                     len(threat_zone_examples[0][1][0]),
-                                                     len(threat_zone_examples[0][1][1]), 
-                                                     batch_num), 
-                                                     tz_examples_to_save)
-# unit test ---------------------------------------
-#preprocess_tsa_data()
+data = pd.read_csv('../input/Amazon_Unlocked_Mobile.csv', encoding='utf-8')
+df = data
+df.columns = ['ProductName', 'BrandName', 'Price', 'Rating', 'Reviews', 'ReviewVotes']
+df.head().T
 
 
-# <H3>Train and Test Split</H3>
-# 
-# The next function takes the full minibatch list and splits it between train and test sets, using the TRAIN_TEST_SPLIT_RATIO.  Note that as mentioned above building FILE_LIST searches through the minibatch file name and looks for the string '-tz' + THREAT_ZONE + '-' in the file name.  If you used the preprocessor above, it creates the files in that form.
+# # Describe the data
 
 # In[ ]:
 
 
-#---------------------------------------------------------------------------------------
-# get_train_test_file_list(): gets the batch file list, splits between train and test
-#
-# parameters:      none
-#
-# returns:         none
-#
-#-------------------------------------------------------------------------------------
+data.columns
 
-def get_train_test_file_list():
+
+# In[ ]:
+
+
+data.head(n=2)
+
+
+# In[ ]:
+
+
+df['Price'] = df['Price'].fillna(0)
+df['ReviewVotes'] = df['ReviewVotes'].fillna(0)
+data.describe()
+
+
+# # Categorical features
+
+# In[ ]:
+
+
+categorical_features = (data.select_dtypes(include=['object']).columns.values)
+categorical_features
+
+
+# # Numerical Features
+
+# In[ ]:
+
+
+numerical_features = data.select_dtypes(include = ['float64', 'int64']).columns.values
+numerical_features
+
+
+# # How many Brands exist? 
+
+# In[ ]:
+
+
+len(list(set(df['BrandName'])))
+
+
+# # How many unique products exist? 
+
+# In[ ]:
+
+
+len(list(set(df['ProductName'])))
+
+
+# # Pivot tables
+
+# In[ ]:
+
+
+pivot = pd.pivot_table(df,
+            values = ['Rating', 'ReviewVotes'],
+            index = ['BrandName'], 
+                       columns= [],
+                       aggfunc=[np.sum, np.mean, np.count_nonzero, np.std], 
+                       margins=True).fillna('')
+pivot.head(10)
+
+
+# # Which are the top 10 prominent brands?
+# And how many ratings do they have?  
+
+# In[ ]:
+
+
+pivot = pd.pivot_table(df,
+            values = ['Rating', 'ReviewVotes'],
+            index =  ['BrandName'],
+                       columns= [],
+                       aggfunc=[np.sum, np.mean, np.count_nonzero, np.std], 
+                       margins=True, fill_value=0).sort_values(by=('count_nonzero', 'Rating'), ascending=False).fillna('')
+top_10_brands = pivot.reindex().head(n=11)
+top_10_brands
+
+
+# # Lets extract data only for top 10 brands. 
+
+# In[ ]:
+
+
+top_10_brands = top_10_brands.reset_index()
+tt_brand = top_10_brands['BrandName']
+tt_brand2 = tt_brand.reset_index()
+top_10_brand_list = list(set(tt_brand2['BrandName']))
+top_10_brand_list.remove('All')
+
+
+# In[ ]:
+
+
+top_10_brand_list
+
+
+# In[ ]:
+
+
+df_small=df.loc[df['BrandName'].isin(top_10_brand_list)]
+pivot = pd.pivot_table(df_small,
+            values = ['Rating'],
+            index =  ['BrandName'], 
+                       columns= [],
+                       aggfunc=[np.mean, np.std], 
+                       margins=True, fill_value=0).sort_values(by=('mean', 'Rating'), ascending=False).fillna('')
+pivot
+
+
+# # How do average ratings look like for top 10 brands? 
+
+# In[ ]:
+
+
+cmap = sns.cubehelix_palette(start = 1.5, rot = 1.5, as_cmap = True)
+plt.subplots(figsize = (15, 8))
+sns.heatmap(pivot.T,linewidths=0.2,xticklabels=True, yticklabels=True)
+
+
+# # Lets find out their topmost products: For 10 Brands, what are top 10 products?
+
+# In[ ]:
+
+
+df_small.columns.values
+
+
+# In[ ]:
+
+
+def plot_one_company(company, n=20):
+    df_one_company = df_small.loc[df_small['BrandName'].isin([company])]
+    pivot = pd.pivot_table(df_one_company,
+            values = ['Rating', 'ReviewVotes'],
+            index =  ['ProductName'],
+                       columns= [],
+                       aggfunc=[np.sum, np.mean, np.count_nonzero, np.std], 
+                       margins=True, fill_value=0).sort_values(by=('count_nonzero', 'Rating'), ascending=False).fillna('')
+    top_10_prods = pivot.reindex().head(n=20)
+    top_10_prods = top_10_prods.reset_index()
+    tt_prods = top_10_prods['ProductName']
+    tt_prods2 = tt_prods.reset_index()
+    top_10_prods_list = list(set(tt_prods2['ProductName']))
+    #top_30_prod_list
+
+    try:
+        aa= df_one_company[df_one_company['ProductName'].isin(top_10_prods_list)]
+        g = sns.factorplot(x='ProductName', 
+                           y='Rating',
+                           data=aa, 
+                           saturation=1, 
+                           kind="bar", 
+                           ci=None, 
+                           aspect=4, 
+                           linewidth=1) 
+        locs, labels = plt.xticks()
+        plt.setp(labels, rotation=90)
+    except: 
+        pass
+        
+for i in top_10_brand_list:
+    plot_one_company(i, 20)
     
-    global FILE_LIST
-    global TRAIN_SET_FILE_LIST
-    global TEST_SET_FILE_LIST
 
-    if os.listdir(PREPROCESSED_DATA_FOLDER) == []:
-        print ('No preprocessed data available.  Skipping preprocessed data setup..')
+
+# # Correlations
+
+# In[ ]:
+
+
+def heat_map(corrs_mat):
+    sns.set(style="white")
+    f, ax = plt.subplots(figsize=(10, 10))
+    mask = np.zeros_like(corrs_mat, dtype=np.bool)
+    mask[np.triu_indices_from(mask)] = True 
+    # Generate a custom diverging colormap
+    cmap = sns.diverging_palette(220, 10, as_cmap=True)
+    sns.heatmap(corrs_mat, mask=mask, cmap=cmap, ax=ax)
+
+variable_correlations = df.corr()
+#variable_correlations
+heat_map(variable_correlations)
+
+
+# In[ ]:
+
+
+df.columns.values
+
+
+# # How are review votes distributed for different prices and different ratings? 
+
+# In[ ]:
+
+
+df_small = df[['BrandName', 
+               'Price', 
+               'Rating', 
+               'ReviewVotes']]
+sns.pairplot(df_small, size=4)
+
+
+# # Complex plots
+
+# In[ ]:
+
+
+#data = df
+sns.set(style="white", palette="muted", color_codes=True)
+f, axes = plt.subplots(2, 3, figsize=(20,20))
+sns.despine(left=True)
+sns.distplot(df['Price'],            color="b", ax=axes[0, 0])
+sns.distplot(df['Rating'],           color="r", ax=axes[0, 1])
+sns.distplot(df['ReviewVotes'],      color="g", ax=axes[0, 2])
+sns.distplot(df['Price'],            kde=False, color="b", ax=axes[1, 0])
+sns.distplot(df['Rating'],           kde=False, color="r", ax=axes[1, 1])
+sns.distplot(df['ReviewVotes'],      kde=False, color="g", ax=axes[1, 2])
+#sns.distplot(df['hour'],                  kde=False, color="b", ax=axes[1, 2])
+plt.tight_layout()
+
+
+# # What can we know about Apple, its products and ratings? 
+
+# In[ ]:
+
+
+df_apple = df.loc[df['BrandName'].isin(['Apple'])]
+pivot = pd.pivot_table(df_apple,
+        values = ['Rating', 'ReviewVotes'],
+        index =  ['ProductName'],
+                   columns= [],
+                   aggfunc=[np.sum, np.mean, np.count_nonzero], 
+                   margins=True, fill_value=0).sort_values(by=('count_nonzero', 'Rating'), ascending=False).fillna('')
+topmost_prods = pivot.reindex().head(n=30)
+topmost_prods = topmost_prods.reset_index()
+topmost_prods
+
+
+# In[ ]:
+
+
+tt_brand = topmost_prods['ProductName']
+tt_brand2 = tt_brand.reset_index()
+top_10_prod_list = list(set(tt_brand2['ProductName']))
+top_10_prod_list
+
+
+# Apple's flagship products are cetainly a slightly costlier. 
+
+# # Who is able to charge more to the customers? Apple or Samsung?
+
+# In[ ]:
+
+
+apple_samsumg = ['Apple', 'Samsung']
+df_top_ten = df.loc[df['BrandName'].isin(apple_samsumg)]
+df_small = df_top_ten[['BrandName', 
+               'Price', 
+               'Rating'
+              ]]
+sns.pairplot(df_small, hue='BrandName', size=5)
+
+
+# I was expecting something different, but this is it! I have to admit, this simple method is not exactly creating a one to one comparison. 
+
+# # K Mean clustering use to find out important words in top ten Brands
+
+# In[ ]:
+
+
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_selection import SelectKBest
+
+def find_correlations_one_brand(company):
+    df_one_company = df.loc[df['BrandName'].isin([company])]
+    def corr_matrix_of_important_words(term_doc_mat, word_list, scores, n_features_to_keep):
+        selector = SelectKBest(k=n_features_to_keep).fit(term_doc_mat, scores)
+        informative_words_index = selector.get_support(indices=True)
+        labels = [word_list[i] for i in informative_words_index]
+        data = pd.DataFrame(term_doc_mat[:,informative_words_index].todense(), columns=labels)
+        data['Score'] = df_one_company.Rating
+        return(data.corr())
+
+    def heat_map(corrs_mat):
+        sns.set(style="white")
+        f, ax = plt.subplots(figsize=(20, 20))
+        mask = np.zeros_like(corrs_mat, dtype=np.bool)
+        mask[np.triu_indices_from(mask)] = True 
+        # Generate a custom diverging colormap
+        cmap = sns.diverging_palette(220, 10, as_cmap=True)
+        sns.heatmap(corrs_mat, mask=mask, cmap=cmap, ax=ax)
+    vectorizer = CountVectorizer(max_features = 500, stop_words='english')
+    term_doc_mat = vectorizer.fit_transform(df_one_company.Reviews.values.astype('U'))
+    word_list = vectorizer.get_feature_names()
+
+    corrs_large = corr_matrix_of_important_words(term_doc_mat, word_list, df_one_company.Rating, 60)
+    #print(corrs_large.Score.sort_values(inplace=False)[:-1])
+    corrs_small = corr_matrix_of_important_words(term_doc_mat, word_list, df_one_company.Rating, 15)
+    heat_map(corrs_small)
+
+for item in top_10_brand_list:
+    print (item)
+    find_correlations_one_brand(item)
+
+
+# # Funny to see those words :) 
+
+# In[ ]:
+
+
+df_one_company.columns
+
+
+# # Lets make a word cloud of words appearing in the reviews of various companies: For speed, running this only on Apple vs Samsung 
+
+# In[ ]:
+
+
+def create_word_cloud(one_company):
+    try: 
+        df_one_company = df.loc[df['BrandName'].isin([one_company])]
+        df_one_company_sample = df_one_company.sample(frac=0.05)
+        word_cloud_collection = ''
+        for val in df_one_company_sample.Reviews.str.lower():
+            tokens = nltk.word_tokenize(val)
+            tokens = [word for word in tokens if word not in stopwords.words('english')]
+            for words in tokens:
+                word_cloud_collection = word_cloud_collection + words + ' '
+        wordcloud = WordCloud(max_font_size=50, width=500, height=500).generate(word_cloud_collection)
+        plt.figure(figsize=(20,20))
+        plt.imshow(wordcloud)
+        plt.axis("off")
+        plt.show()
+    except: 
+        pass
+    
+#company_list = ['Apple', 'Samsung']
+for i in top_10_brand_list:
+    print (i)
+    create_word_cloud(i)
+
+
+# # Let us run machine learning algorithms on the text data
+
+# In[ ]:
+
+
+def review_to_wordlist( review, remove_stopwords=True ):
+    # Function to convert a document to a sequence of words,
+    # optionally removing stop words.  Returns a list of words.
+    # 1. Remove HTML
+    review_text = BeautifulSoup(review).get_text()
+    # 2. Remove non-letters
+    review_text = re.sub("[^a-zA-Z]"," ", review)
+    # 3. Convert words to lower case and split them
+    words = review_text.lower().split()
+    # 4. Optionally remove stop words (false by default)
+    if remove_stopwords:
+        stops = set(stopwords.words("english"))
+        words = [w for w in words if not w in stops]
+
+    b=[]
+    stemmer = english_stemmer #PorterStemmer()
+    for word in words:
+        b.append(stemmer.stem(word))
+    # 5. Return a list of words
+    return(words)
+
+def plot_confusion_matrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    plt.figure(figsize=(10,10))
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=90)
+    plt.yticks(tick_marks, classes)
+
+
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        cm = cm.round(3)
+        print("Normalized confusion matrix")
     else:
-        FILE_LIST = [f for f in os.listdir(PREPROCESSED_DATA_FOLDER) 
-                     if re.search(re.compile('-tz' + str(THREAT_ZONE) + '-'), f)]
-        train_test_split = len(FILE_LIST) -                            max(int(len(FILE_LIST)*TRAIN_TEST_SPLIT_RATIO),1)
-        TRAIN_SET_FILE_LIST = FILE_LIST[:train_test_split]
-        TEST_SET_FILE_LIST = FILE_LIST[train_test_split:]
-        print('Train/Test Split -> {} file(s) of {} used for testing'.format( 
-              len(FILE_LIST) - train_test_split, len(FILE_LIST)))
-        
-# unit test ----------------------------
-#get_train_test_file_list()
-#print (
+        print('Confusion matrix, without normalization')
 
+    print(cm)
 
-# <H3>Generating an Input Pipeline</H3>
-# 
-# The following function reads in a minibatch, extracts features and labels, and then returns the data in a form that can be easily streamed into a tensorfow feed dictionary, or as we will do below, as a feed dictionary to a TFLearn based CNN.
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, cm[i, j],
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
+
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
+
 
 # In[ ]:
 
 
-#---------------------------------------------------------------------------------------
-# input_pipeline(filename, path): prepares a batch of features and labels for training
-#
-# parameters:      filename - the file to be batched into the model
-#                  path - the folder where filename resides
-#
-# returns:         feature_batch - a batch of features to train or test on
-#                  label_batch - a batch of labels related to the feature_batch
-#
-#---------------------------------------------------------------------------------------
+mod_df = df[df['Reviews'].isnull()==False]
+mod_df = mod_df.sample(frac = 0.01)
+train, test = train_test_split(mod_df, test_size = 0.3)
 
-def input_pipeline(filename, path):
-
-    preprocessed_tz_scans = []
-    feature_batch = []
-    label_batch = []
-    
-    #Load a batch of preprocessed tz scans
-    preprocessed_tz_scans = np.load(os.path.join(path, filename))
-        
-    #Shuffle to randomize for input into the model
-    np.random.shuffle(preprocessed_tz_scans)
-    
-    # separate features and labels
-    for example_list in preprocessed_tz_scans:
-        for example in example_list:
-            feature_batch.append(example[0])
-            label_batch.append(example[1])
-    
-    feature_batch = np.asarray(feature_batch, dtype=np.float32)
-    label_batch = np.asarray(label_batch, dtype=np.float32)
-    
-    return feature_batch, label_batch
-  
-# unit test ------------------------------------------------------------------------
-#print ('Train Set -----------------------------')
-#for f_in in TRAIN_SET_FILE_LIST:
-#    feature_batch, label_batch = input_pipeline(f_in, PREPROCESSED_DATA_FOLDER)
-#    print (' -> features shape {}:{}:{}'.format(len(feature_batch), 
-#                                                len(feature_batch[0]), 
-#                                                len(feature_batch[0][0])))
-#    print (' -> labels shape   {}:{}'.format(len(label_batch), len(label_batch[0])))
-    
-#print ('Test Set -----------------------------')
-#for f_in in TEST_SET_FILE_LIST:
-#    feature_batch, label_batch = input_pipeline(f_in, PREPROCESSED_DATA_FOLDER)
-#    print (' -> features shape {}:{}:{}'.format(len(feature_batch), 
-#                                                len(feature_batch[0]), 
-#                                                len(feature_batch[0][0])))
-#    print (' -> labels shape   {}:{}'.format(len(label_batch), len(label_batch[0])))
-
-
-# <H3>Shuffling the Training Set</H3>
-# 
-# Below we use TFLearn, an abstraction of Tensorflow, to build the convnet. Using TFLearn we can set the fit operation to shuffle rows within a mini batch.  This function shuffles the minibatch list, so that in addition to intra-minibatch shuffling, the there is also  shuffling of the order the mini batches are fed to the model.
 
 # In[ ]:
 
 
-#---------------------------------------------------------------------------------------
-# shuffle_train_set(): shuffle the list of batch files so that each train step
-#                      receives them in a different order since the TRAIN_SET_FILE_LIST
-#                      is a global
-#
-# parameters:      train_set - the file listing to be shuffled
-#
-# returns:         none
-#
-#-------------------------------------------------------------------------------------
-
-def shuffle_train_set(train_set):
-    sorted_file_list = random.shuffle(train_set)
-    TRAIN_SET_FILE_LIST = sorted_file_list
+clean_train_reviews = []
+for review in train['Reviews']:
+    clean_train_reviews.append( " ".join(review_to_wordlist(review)))
     
-# Unit test ---------------
-#print ('Before Shuffling ->', TRAIN_SET_FILE_LIST)
-#shuffle_train_set(TRAIN_SET_FILE_LIST)
-#print ('After Shuffling ->', TRAIN_SET_FILE_LIST)
+clean_test_reviews = []
+for review in test['Reviews']:
+    clean_test_reviews.append( " ".join(review_to_wordlist(review)))
 
-
-# <H3>Defining the Alexnet CNN</H3>
-# 
-# The Alexnet was first put to the real world test during the ImageNet Large Scale Visual Recognition Challenge in 2012. The performance of this network was a quantum shift for its time as the model achieved a top-5 error of 15.3%, more than 10.8 percentage points ahead of the runner up.  The solution is elaborated in  [this paper by the original author](https://www.nvidia.cn/content/tesla/pdf/machine-learning/imagenet-classification-with-deep-convolutional-nn.pdf) if you are interested in learning more. 
-# 
-# But in short the network consists of 7 layers, 5 convolutions/maxpools, plus 2 regression layers at the end.  The structure of the model looks like this: 
-# 
-# <img src="https://kratzert.github.io/images/finetune_alexnet/alexnet.png" width="700" height="600">
-# 
-# Using TFLearn makes this definition is quite intuitive and simple.  
 
 # In[ ]:
 
 
-#---------------------------------------------------------------------------------------
-# alexnet(width, height, lr): defines the alexnet
-#
-# parameters:      width - width of the input image
-#                  height - height of the input image
-#                  lr - learning rate
-#
-# returns:         none
-#
-#-------------------------------------------------------------------------------------
+vectorizer = TfidfVectorizer( min_df=2, max_df=0.95, max_features = 200000, ngram_range = ( 1, 4 ),
+                              sublinear_tf = True )
 
-def alexnet(width, height, lr):
-    network = input_data(shape=[None, width, height, 1], name='features')
-    network = conv_2d(network, 96, 11, strides=4, activation='relu')
-    network = max_pool_2d(network, 3, strides=2)
-    network = local_response_normalization(network)
-    network = conv_2d(network, 256, 5, activation='relu')
-    network = max_pool_2d(network, 3, strides=2)
-    network = local_response_normalization(network)
-    network = conv_2d(network, 384, 3, activation='relu')
-    network = conv_2d(network, 384, 3, activation='relu')
-    network = conv_2d(network, 256, 3, activation='relu')
-    network = max_pool_2d(network, 3, strides=2)
-    network = local_response_normalization(network)
-    network = fully_connected(network, 4096, activation='tanh')
-    network = dropout(network, 0.5)
-    network = fully_connected(network, 4096, activation='tanh')
-    network = dropout(network, 0.5)
-    network = fully_connected(network, 2, activation='softmax')
-    network = regression(network, optimizer='momentum', loss='categorical_crossentropy', 
-                         learning_rate=lr, name='labels')
+vectorizer = vectorizer.fit(clean_train_reviews)
+train_features = vectorizer.transform(clean_train_reviews)
 
-    model = tflearn.DNN(network, checkpoint_path=MODEL_PATH + MODEL_NAME, 
-                        tensorboard_dir=TRAIN_PATH, tensorboard_verbose=3, max_checkpoints=1)
-
-    return model
+test_features = vectorizer.transform(clean_test_reviews)
+fselect = SelectKBest(chi2 , k=10000)
+train_features = fselect.fit_transform(train_features, train["Rating"])
+test_features = fselect.transform(test_features)
 
 
-# <H3>The Trainer</H3>
-# 
-# Finally, the trainer is straight forward.  Set up the network, loop to read in minibatches for test and train and run the fit method.  Note that TFLearn treats each "minibatch" as an epoch.  For the illustration purposes noted here, its not a big deal, but after may runs it may be quite annoying.  
-# 
-# Up until now, all the work I've personally done has been using the lower level interface.  This was my first time trying TFLearn.  I liked a lot about TFLearn.  Network construction is easy-peasy.  I haven't worked with Keras as of yet, but it looks like it may have a few advantages worth considering.
+# # Machine learning
 
 # In[ ]:
 
 
-#---------------------------------------------------------------------------------------
-# train_conv_net(): runs the train op
-#
-# parameters:      none
-#
-# returns:         none
-#
-#-------------------------------------------------------------------------------------
+classifiers = [('RandomForestClassifierG', RandomForestClassifier(n_jobs=-1, criterion='gini')),
+               ('RandomForestClassifierE', RandomForestClassifier(n_jobs=-1, criterion='entropy')),
+               ('AdaBoostClassifier', AdaBoostClassifier()),
+               ('ExtraTreesClassifier', ExtraTreesClassifier(n_jobs=-1)),
+               ('DecisionTreeClassifier', DecisionTreeClassifier()),
+               ('LogisticRegression', LogisticRegression()),
+               ('MultinomialNB', MultinomialNB(alpha=0.001)), 
+               ('SGDClassifier', SGDClassifier(loss='modified_huber', n_iter=5, random_state=0, shuffle=True)),
+               ('GradientBoostingClassifier', GradientBoostingClassifier()),
+               
+              ]
+allscores = []
+for name, classifier in classifiers:
+    scores = []
+    for i in range(1): # 3 runs
+        print (name)
 
-def train_conv_net():
-    
-    val_features = []
-    val_labels = []
-    
-    # get train and test batches
-    get_train_test_file_list()
-    
-    # instantiate model
-    model = alexnet(IMAGE_DIM, IMAGE_DIM, LEARNING_RATE)
-    
-    # read in the validation test set
-    for j, test_f_in in enumerate(TEST_SET_FILE_LIST):
-        if j == 0:
-            val_features, val_labels = input_pipeline(test_f_in, PREPROCESSED_DATA_FOLDER)
-        else:
-            tmp_feature_batch, tmp_label_batch = input_pipeline(test_f_in, 
-                                                                PREPROCESSED_DATA_FOLDER)
-            val_features = np.concatenate((tmp_feature_batch, val_features), axis=0)
-            val_labels = np.concatenate((tmp_label_batch, val_labels), axis=0)
+        classifier.fit( train_features, train["Rating"] )
+        pred = classifier.predict( test_features.toarray() )
+        print('prediction accuracy: ', accuracy_score(test['Rating'], pred))
+        cnf_matrix = confusion_matrix(test['Rating'], pred)
+        plot_confusion_matrix(cnf_matrix, classes=['1','2','3','4','5'],
+                      title='Confusion matrix, with normalization', normalize=True)
 
-    val_features = val_features.reshape(-1, IMAGE_DIM, IMAGE_DIM, 1)
-
-    
-    
-    # start training process
-    for i in range(N_TRAIN_STEPS):
-
-        # shuffle the train set files before each step
-        shuffle_train_set(TRAIN_SET_FILE_LIST)
-        
-        # run through every batch in the training set
-        for f_in in TRAIN_SET_FILE_LIST:
-            
-            # read in a batch of features and labels for training
-            feature_batch, label_batch = input_pipeline(f_in, PREPROCESSED_DATA_FOLDER)
-            feature_batch = feature_batch.reshape(-1, IMAGE_DIM, IMAGE_DIM, 1)
-            #print ('Feature Batch Shape ->', feature_batch.shape)                
-                
-            # run the fit operation
-            model.fit({'features': feature_batch}, {'labels': label_batch}, n_epoch=1, 
-                      validation_set=({'features': val_features}, {'labels': val_labels}), 
-                      shuffle=True, snapshot_step=None, show_metric=True, 
-                      run_id=MODEL_NAME)
-            
-# unit test -----------------------------------
-#train_conv_net()
-
-
-# <H3>Wrap Up!</H3>
-# 
-# Alright, now its time to cut it loose.  I convert this notebook into a script and let the magic begin.  So far I have run training against the first three threat zones (1-3),  I am currently seeing validation accuracy in the 92-96% range. If you checked out the [EDA](http://s://www.kaggle.com/jbfarrar/exploratory-data-analysis-and-example-generation) you'll recall that the probabilities for the first three zones are 11.6%, 11%, 9.1% respectively.  So a model that just predicts "no contraband", should perform at 88.4%, 89%, and 90.8%.  So while it appears we may be getting some predictive value, much work would be needed to drive those accuracy numbers higher.  With the pipeline working, I'm going to fire up a meaningful training run andI will update this section with a fullsome view by threat zone of the accuracy, once I've run enough epochs to have useful view.
-# 
-# If you've found this helpful, I hope you'll give me an up vote!
-# 
-# Good Luck!
-# 
-# 

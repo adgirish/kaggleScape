@@ -1,75 +1,168 @@
 
 # coding: utf-8
 
-# *This tutorial is part of the [Learn Machine Learning](https://www.kaggle.com/learn/machine-learning) educational track.*
+# ##High level insight on Wikipedia web traffic.
 # 
-# # Starting Your Project
+# Note: If this helped you, some upvotes would be very much appreciated.
 # 
-# You are about to build a simple model and then continually improve it. It is easiest to keep one browser tab (or window) for the tutorials you are reading, and a separate browser window with the code you are writing. You will continue writing code in the same place even as you progress through the sequence of tutorials.
-# 
-# ** The starting point for your project is at [THIS LINK](https://www.kaggle.com/dansbecker/my-model/).  Open that link in a new tab. Then hit the "Fork Notebook" button towards the top of the screen.**
-# 
-# ![Imgur](https://i.imgur.com/GRtMTWw.png)
-# 
-# **You will see examples predicting home prices using data from Melbourne, Australia. You will then write code to build a model predicting prices in the US state of Iowa. The Iowa data is pre-loaded in your coding notebook.**
-# 
-# ### Working in Kaggle Notebooks
-# You will be coding in a "notebook" environment. These allow you to easily see your code and its output in one place.  A couple tips on the Kaggle notebook environment:
-# 
-# 1) It is composed of "cells."  You will write code in the cells. Add a new cell by clicking on a cell, and then using the buttons in that look like this. ![Imgur](https://i.imgur.com/Lscji3d.png) The arrows indicate whether the new cell goes above or below your current location. <br><br>
-# 2) Execute the code in the current cell with the keyboard shortcut Control-Enter.
-# 
-# 
-# ---
-# # Using Pandas to Get Familiar With Your Data
-# 
-# The first thing you'll want to do is familiarize yourself with the data.  You'll use the Pandas library for this.  Pandas is the primary tool that modern data scientists use for exploring and manipulating data.  Most people abbreviate pandas in their code as `pd`.  We do this with the command
+# It is foolish to fear what we have yet to see and know ;) 
+
+# ### Library and Settings
+# Import required library and define constants
 
 # In[ ]:
 
 
+import os
+import math
+import numpy as np
 import pandas as pd
+import seaborn as sns
+import calendar
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+import matplotlib.pyplot as plt
+import plotly.plotly as py
+import plotly.graph_objs as go
+from bokeh.charts import TimeSeries, show
 
 
-# The most important part of the Pandas library is the DataFrame.  A DataFrame holds the type of data you might think of as a table. This is similar to a sheet in Excel, or a table in a SQL database. The Pandas DataFrame has powerful methods for most things you'll want to do with this type of data.  Let's start by looking at a basic data overview with our example data from Melbourne and the data you'll be working with from Iowa.
-# 
-# The example will use data at the file path **`../input/melbourne-housing-snapshot/melb_data.csv`**.  Your data will be available in your notebook at `../input/train.csv` (which is already typed into the sample code for you).
-# 
-# We load and explore the data with the following:
+# ### File Size
 
 # In[ ]:
 
 
-# save filepath to variable for easier access
-melbourne_file_path = '../input/melbourne-housing-snapshot/melb_data.csv'
-# read the data and store data in DataFrame titled melbourne_data
-melbourne_data = pd.read_csv(melbourne_file_path) 
-# print a summary of the data in Melbourne data
-print(melbourne_data.describe())
+for f in os.listdir('../input'):
+    size_bytes = round(os.path.getsize('../input/' + f)/ 1000, 2)
+    size_name = ["KB", "MB"]
+    i = int(math.floor(math.log(size_bytes, 1024)))
+    p = math.pow(1024, i)
+    s = round(size_bytes / p, 2)
+    print(f.ljust(25) + str(s).ljust(7) + size_name[i])
 
 
-# # Interpreting Data Description
-# The results show 8 numbers for each column in your original dataset. The first number, the **count**,  shows how many rows have non-missing values.  
+# In[ ]:
+
+
+train_df = pd.read_csv("../input/train_1.csv")
+key_df = pd.read_csv("../input/key_1.csv")
+
+
+# In[ ]:
+
+
+print("Train".ljust(15), train_df.shape)
+print("Key".ljust(15), key_df.shape)
+
+
+# As we can see Train data frame is having less number of page details than number of mappings between keys and page. First and last rows of train and key data frame.
+
+# In[ ]:
+
+
+print(train_df[:4].append(train_df[-4:], ignore_index=True))
+
+
+# In[ ]:
+
+
+print(key_df[:4].append(key_df[-4:], ignore_index=True))
+
+
+# Each article name has the following format: 'name_project_access_agent' . That would be a good idea to separate out all these 4 features to get better understanding of data
+
+# In[ ]:
+
+
+page_details = pd.DataFrame([i.split("_")[-3:] for i in train_df["Page"]])
+page_details.columns = ["project", "access", "agent"]
+page_details.describe()
+
+
+# As we can see there are 9, 3 and 2 unique values for project, access and agent respectively. Why not have quick look on these values
+
+# In[ ]:
+
+
+project_columns = page_details['project'].unique()
+access_columns = page_details['access'].unique()
+agents_columns = page_details['agent'].unique()
+print(list(page_details['project'].unique()))
+print(list(page_details['access'].unique()))
+print(list(page_details['agent'].unique()))
+
+
+# So no NA values in here. Perfect. Lets merge
+
+# In[ ]:
+
+
+train_df = train_df.merge(page_details, how="inner", left_index=True, right_index=True)
+
+
+# Boom. Let's plot the project wise monthly mean hits.
+
+# In[ ]:
+
+
+def graph_by(plot_hue, graph_columns):
+    train_project_df = train_df.groupby(plot_hue).sum().T
+    train_project_df.index = pd.to_datetime(train_project_df.index)
+    train_project_df = train_project_df.groupby(pd.TimeGrouper('M')).mean().dropna()
+    train_project_df['month'] = 100*train_project_df.index.year + train_project_df.index.month
+    train_project_df = train_project_df.reset_index(drop=True)
+    train_project_df = pd.melt(train_project_df, id_vars=['month'], value_vars=graph_columns)
+    fig = plt.figure(1,figsize=[12,10])
+    ax = sns.pointplot(x="month", y="value", hue=plot_hue, data=train_project_df)
+    ax.set(xlabel='Year-Month', ylabel='Mean Hits')
+
+
+# In[ ]:
+
+
+graph_by("project", project_columns)
+
+
+# Look, everyone is hitting English Wikipedia project more than any other project. Also, Russian Wikipedia is having same hike near to august 2016 as English Wikipedia. 
 # 
-# Missing values arise for many reasons. For example, the size of the 2nd bedroom wouldn't be collected when surveying a 1 bedroom house. We'll come back to the topic of missing data.
+# Now with English project in graph, it is hard to visualise other projects. Why not separate out English project and find some patterns if possible.
+
+# In[ ]:
+
+
+graph_by("project", [x for i,x in enumerate(project_columns) if i!=2])
+
+
+# People rarely use mediawiki, commons or  zh. 
 # 
-# The second value is the **mean**, which is the average.  Under that, **std** is the standard deviation, which measures how numerically spread out the values are.
-# 
-# To interpret the **min**, **25%**, **50%**, **75%** and **max** values, imagine sorting each column from lowest to highest value.  The first (smallest) value is the min.  If you go a quarter way through the list, you'll find a number that is bigger than 25% of the values and smaller than 75% of the values.  That is the **25%** value (pronounced "25th percentile").  The 50th and 75th percentiles are defined analgously, and the **max** is the largest number.
-# 
-# --- 
-# # Your Turn
-# **Remember, the notebook you want to "fork" is [here](https://www.kaggle.com/dansbecker/my-model/).**
-# 
-# Run the equivalent commands (to read the data and print the summary) in the code cell below.  The file path for your data is already shown in your coding notebook. Look at the mean, minimum and maximum values for the first few fields. Are any of the values so crazy that it makes you think you've misinterpreted the data?
-# 
-# There are a lot of fields in this data.  You don't need to look at it all quite yet.
-# 
-# When your code is correct, you'll see the size, in square feet, of the smallest lot in your dataset.  This is from the **min** value of **LotArea**, and you can see the **max** size too.  You should notice that it's a big range of lot sizes! 
-# 
-# You'll also see some columns filled with `...`.  That indicates that we had too many columns of data to print, so the middle ones were omitted from printing.
-# 
-# We'll take care of both issues in the next step.
-# 
-# # Continue
-# Move on to the next [page](https://www.kaggle.com/dansbecker/Selecting-And-Filtering-In-Pandas/) where you will focus in on the most relevant columns.
+# Quick check for access and agents as well
+
+# In[ ]:
+
+
+graph_by("access", access_columns)
+
+
+# In[ ]:
+
+
+graph_by("agent", agents_columns)
+
+
+# We could not get data pattern from above graph. With just two values for agent why not get them plotted in two separate graphs and see how they behave.
+
+# In[ ]:
+
+
+graph_by("agent", agents_columns[0])
+
+
+# In[ ]:
+
+
+graph_by("agent", agents_columns[1])
+
+
+# Lately observed, all-access and all-agents value for access and agents are summation of values for respective attributes. So each value other than all-access contribute in trend for all-access and all values other than all-agents contribute in trend of all-agents.
+
+# To be continued...

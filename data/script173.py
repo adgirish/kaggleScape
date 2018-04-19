@@ -1,224 +1,465 @@
 
 # coding: utf-8
 
-# Hi, Kagglers!
-# 
-# Hereafter I will try to create **some baselines for your submissions to start from.**
-# <br> This Kernel touches **submission part mostly AND ONE WELL-KNOWN FILM :)**
-# <br/>For more details about Dataset - please check my **[Data Exploration Kernel](https://www.kaggle.com/frednavruzov/instacart-exploratory-data-analysis/)**
-# 
-# **Brief description**
-# 
-# The Dataset is an anonymized sample of over 3,000,000 grocery orders from more than 200,000 Instacart users. 
-# <br>The goal of a competition is to predict which previously purchased products will be in a user’s next order. 
-# 
-# ### Stay tuned, this notebook will be updated on a regular basis
-# **P.s. Upvotes and comments would let me update it faster and in a more smart way :)**
-
-# In[ ]:
+# In[6]:
 
 
-import pandas as pd # dataframes
-import numpy as np # algebra & calculus
-import nltk # text preprocessing & manipulation
-# from textblob import TextBlob
-import matplotlib.pyplot as plt # plotting
-import seaborn as sns # plotting
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-from functools import partial # to reduce df memory consumption by applying to_numeric
 
-color = sns.color_palette() # adjusting plotting style
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+plt.style.use('fivethirtyeight')
+import math
+import datetime
+
+# using Basemap for map visualization. Installed it with "conda install basemap"
+from mpl_toolkits.basemap import Basemap
+from matplotlib.animation import FuncAnimation
+from IPython.display import HTML
+
+import folium
+from folium import plugins
+from folium.plugins import HeatMap
+from folium.plugins import FastMarkerCluster
+from folium.plugins import MarkerCluster
+
 import warnings
-warnings.filterwarnings('ignore') # silence annoying warnings
+warnings.filterwarnings('ignore')
+
+import seaborn as sns
+import folium
+from folium import plugins
+from folium.plugins import HeatMap
+from folium.plugins import FastMarkerCluster
+from folium.plugins import MarkerCluster
+
+
+# ## About Kiva.org
+# 
+# **Kiva envisions a world where all people hold the power to create opportunity for themselves and others.**
+# 
+# Kiva is an international nonprofit, founded in 2005 and based in San Francisco, with a mission to connect people through lending to alleviate poverty. 
+# 
+# In Kaggle Datasets' inaugural Data Science for Good challenge, Kiva is inviting the Kaggle community to help them build more localized models to estimate the poverty levels of residents in the regions where Kiva has active loans. 
+# 
+# This notebook tries to explore the ways to achieve that.
+# 
+# Part 1: EDA
+
+# In[7]:
+
+
+kiva_loans=pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/kiva_loans.csv",parse_dates=['funded_time','date'])
+#kiva_loans.shape
+
+kiva_loans["funded_time"]=pd.to_datetime(kiva_loans.funded_time)
+kiva_loans.dropna()
+kiva_loans["funded_year"]=kiva_loans["date"].dt.year
+kiva_loans["funded_month"]=kiva_loans["date"].dt.month
+
+
+# In[8]:
+
+
+color_dict = {'Food': 'red', 'Transportation': 'pink', 'Arts': 'yellow','Services': 'blue', 'Agriculture': 'green',
+'Manufacturing': 'cyan', 'Wholesale': 'brown', 'Retail': 'Gold', 'Clothing': 'black', 'Construction': 'magenta', 'Health': 'lightgreen',
+'Education': 'crimson', 'Personal Use': 'purple', 'Housing': 'orange', 'Entertainment': 'lightblue'}
+
+loc=pd.read_csv('../input/additional-kiva-snapshot/loan_coords.csv')
+loc.rename(index=str, columns={"loan_id": "id"},inplace=True)
+#loc.head()
+
+
+# In[9]:
+
+
+kiva=pd.merge(kiva_loans, loc,on='id',how="left")
+#kiva.shape
+
+
+# ### Loan locations across the world
+
+# In[10]:
+
+
+p=kiva.plot(kind='scatter', x='longitude', y='latitude',
+                color='green',figsize=(15,10), 
+                title='Loan locations for World Map')
+p.grid(False)
+plt.savefig('Loan-location.png');
+
+
+# In[11]:
+
+
+countries_by_sectors_yearly_funded_amount_mean = kiva.groupby(['country','sector', 'funded_year'])['funded_amount'].mean().unstack()
+#print(countries_by_sectors_yearly_funded_amount_mean.shape)
+#countries_by_sectors_yearly_funded_amount_mean.head()
+
+
+# In[12]:
+
+
+Funded_Regions_BySectors = kiva.groupby(['country','sector']).first()[['latitude', 'longitude']]
+#print(Funded_Regions_BySectors.shape)
+#Funded_Regions_BySectors.head()
+
+
+# In[13]:
+
+
+#code credit: https://www.kaggle.com/pavelevap/global-warming-confirmed-basemap-animation?scriptVersionId=485498
+def get_temp_markers(countries, year):
+    
+    k=0
+    points = np.zeros(990, dtype=[('lon', float, 1),
+                                      ('lat', float, 1),
+                                      ('size',  float, 1),
+                                      ('color', object, '')])
+    cmap = plt.get_cmap('viridis')
+    for i, country in enumerate(random_countries):
+        country=country[0]
+        funds = countries_by_sectors_yearly_funded_amount_mean.loc[country]
+        sectors=funds.index
+        for j , sector in enumerate(sectors):
+            amount = funds.loc[sector].loc[year]
+            if(math.isnan(amount)):
+                break;
+            coords = Funded_Regions_BySectors.loc[country].loc[sector][['latitude', 'longitude']].values
+            lat = float(coords[0])
+            lon = float(coords[1])
+            if(math.isnan(lat)):
+                break;
+            points['lat'][k] = lat
+            if(math.isnan(lon)):
+                break;
+            points['lon'][k] = lon
+            points['size'][k] = amount/5
+            points['color'][k] = color_dict[sector]
+            k=k+1
+            #print(k," ",amount," ",lat," ",lon," ",color_dict[sector])
+    points=points[points['lat']!=0]
+    return points
+
+
+# ### Mean Funded Amount According to scetors in year 2014
+
+# In[14]:
+
+
+fig = plt.figure(figsize=(18, 15))
+cmap = plt.get_cmap('viridis')
+map = Basemap(projection='cyl')
+map.drawmapboundary()
+map.drawcoastlines(color='black')
+map.fillcontinents(color='beige',lake_color='lightblue', zorder=3);
+
+START_YEAR = 2014
+LAST_YEAR = 2017
+n_countries = 65
+random_countries = countries_by_sectors_yearly_funded_amount_mean.sample(n_countries).index
+year_text = plt.text(-170, 80, str(START_YEAR),fontsize=15)
+temp_markers = get_temp_markers(random_countries, START_YEAR)
+
+
+xs, ys = map(temp_markers['lon'], temp_markers['lat'])
+scat = map.scatter(xs, ys, s=temp_markers['size'], c=temp_markers['color'], cmap=cmap, marker='o', 
+                   alpha=0.3, zorder=10)
+plt.title('Mean fundings by sectors for year 2014 ',fontsize=19)
+labels=['Agriculture', 'Food', 'Retail', 'Services', 'Personal Use', 'Housing', 'Clothing', 'Education', 'Transportation',
+        'Arts', 'Health', 'Construction', 'Manufacturing', 'Entertainment', 'Wholesale']
+handles=[scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat]
+plt.legend(handles, labels,  loc = 6
+           , title='Sectors', markerscale=0.3,labelspacing=0.3)
+
+ax = plt.gca()
+leg = ax.get_legend()
+leg.legendHandles[0].set_color('green')
+leg.legendHandles[1].set_color('red')
+leg.legendHandles[2].set_color('gold')
+leg.legendHandles[3].set_color('blue')
+leg.legendHandles[4].set_color('purple')
+leg.legendHandles[5].set_color('orange')
+leg.legendHandles[6].set_color('black')
+leg.legendHandles[7].set_color('crimson')
+leg.legendHandles[8].set_color('pink')
+leg.legendHandles[9].set_color('yellow')
+leg.legendHandles[10].set_color('lightgreen')
+leg.legendHandles[11].set_color('magenta')
+leg.legendHandles[12].set_color('cyan');
+plt.savefig('Mean-fundings-by-sectors-for-year-2014.png');
+
+
+# Above plot shows mean Funded amount granted to borrowers and higher the amount higher the size of markers.
+# Colours are according to sectors.
+# 
+# ### Animated Story
+# If animation is taking time to load, kindly check output tab.
+
+# In[15]:
+
+
+get_ipython().run_line_magic('matplotlib', 'nbagg')
+
+# Create new map 
+fig = plt.figure(figsize=(18, 15))
+cmap = plt.get_cmap('viridis')
+map = Basemap(projection='cyl')
+map.drawmapboundary()
+map.drawcoastlines(color='black')
+map.fillcontinents(color='beige',lake_color='lightblue', zorder=3);
+
+
+# Create  data
+START_YEAR = 2014
+LAST_YEAR = 2017
+n_countries = 80
+random_countries = countries_by_sectors_yearly_funded_amount_mean.sample(n_countries).index
+
+
+# Initialize the map in base position
+temp_markers = get_temp_markers(random_countries, START_YEAR)
+xs, ys = map(temp_markers['lon'], temp_markers['lat'])
+
+# Construct the scatter which we will update during animation
+# as the years change.
+scat = map.scatter(xs, ys, s=temp_markers['size'], c=temp_markers['color'], cmap=cmap, marker='o', 
+                   alpha=0.3, zorder=10)
+year_text = plt.text(-170, 80, str(START_YEAR),fontsize=15)
+text="Mean funded Amount According to Sectors"
+title_text = plt.text(-170, -85, text,fontsize=15)
+labels=['Agriculture', 'Food', 'Retail', 'Services', 'Personal Use', 'Housing', 'Clothing', 'Education', 'Transportation',
+        'Arts', 'Health', 'Construction', 'Manufacturing', 'Entertainment', 'Wholesale']
+handles=[scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat]
+plt.legend(handles, labels,  loc = 6
+           , title='Sectors', markerscale=0.3,labelspacing=0.3)
+
+ax = plt.gca()
+leg = ax.get_legend()
+leg.legendHandles[0].set_color('green')
+leg.legendHandles[1].set_color('red')
+leg.legendHandles[2].set_color('gold')
+leg.legendHandles[3].set_color('blue')
+leg.legendHandles[4].set_color('purple')
+leg.legendHandles[5].set_color('orange')
+leg.legendHandles[6].set_color('black')
+leg.legendHandles[7].set_color('crimson')
+leg.legendHandles[8].set_color('pink')
+leg.legendHandles[9].set_color('yellow')
+leg.legendHandles[10].set_color('lightgreen')
+leg.legendHandles[11].set_color('magenta')
+leg.legendHandles[12].set_color('#eeefff');
+
+
+
+def update(frame_number):
+    # Get an index which we can use to re-spawn the oldest year.
+    current_year = START_YEAR + (frame_number % 4)
+
+    temp_markers = get_temp_markers(random_countries, current_year)
+    xs, ys = map(temp_markers['lon'], temp_markers['lat'])
+
+    # Update the scatter collection, with the new colors, sizes and positions.
+    scat.set_offsets(np.c_[xs, ys])
+    scat.set_color(temp_markers['color'])
+    scat.set_sizes(temp_markers['size'])
+    year_text.set_text(str(current_year))
+    text="Kiva - Mean Funded Amount to Borrowers According to Sectors"
+    title_text.set_text(text)
+
+
+
+# Construct the animation, using the update function as the animation
+# director.
+plt.title('Kiva - Mean fundings by sectors for years 2014-2017 ',fontsize=19)
+ani = FuncAnimation(fig, update, interval=1000,repeat=False,blit=True)
+#plt.show()
 
 
 # In[ ]:
 
 
-# aisles
-aisles = pd.read_csv('../input/aisles.csv', engine='c')
-print('Total aisles: {}'.format(aisles.shape[0]))
-aisles.head()
+ani.save('anim.gif', writer='imagemagick', fps=2)
+import io
+import base64
+filename = 'anim.gif'
+video = io.open(filename, 'r+b').read()
+encoded = base64.b64encode(video)
+HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
 
 
-# In[ ]:
+# In[16]:
 
 
-# departments
-departments = pd.read_csv('../input/departments.csv', engine='c')
-print('Total departments: {}'.format(departments.shape[0]))
-departments.head()
+kiva_mpi_region_locations=pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/kiva_mpi_region_locations.csv")
+#kiva_mpi_region_locations.shape
 
 
-# In[ ]:
+# ### World Regions with MPI 
+# OPHI  calculates the Global Multidimensional Poverty Index MPI, which has been published since 2010 in the United Nations Development Programme’s Human Development Report. 
+# 
+# Let's plot Kiva’s estimates as to the geolocation of subnational MPI regions.
+
+# In[17]:
 
 
-# products
-products = pd.read_csv('../input/products.csv', engine='c')
-print('Total products: {}'.format(products.shape[0]))
-products.head(5)
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+plt.figure(figsize=(12,8))
+sns.barplot(x=kiva_mpi_region_locations.world_region.value_counts().values,y=kiva_mpi_region_locations.world_region.value_counts().index)
+plt.title("World Regions")
+plt.savefig('world regions.png');
 
 
-# In[ ]:
+# ### Let's zoom on african countries with MPI region locations
+
+# In[18]:
 
 
-# combine aisles, departments and products (left joined to products)
-goods = pd.merge(left=pd.merge(left=products, right=departments, how='left'), right=aisles, how='left')
-# to retain '-' and make product names more "standard"
-goods.product_name = goods.product_name.str.replace(' ', '_').str.lower() 
-print(goods.info())
-
-goods.head()
+african_countries = kiva_mpi_region_locations[kiva_mpi_region_locations['world_region']== 'Sub-Saharan Africa']
+plt.figure(figsize=(12,15))
+sns.barplot(x=african_countries.country.value_counts().values,y=african_countries.country.value_counts().index,palette="viridis")
+plt.title("African Countries")
+plt.savefig('african countries.png');
 
 
-# In[ ]:
+# ## Heatmap for Multi-Dimentional Poverty index for world
+
+# In[19]:
 
 
-# load datasets
+#remove NANs
+kiva_mpi_region_locations = kiva_mpi_region_locations.dropna(axis=0)
 
-# train dataset
-op_train = pd.read_csv('../input/order_products__train.csv', engine='c', 
-                       dtype={'order_id': np.int32, 'product_id': np.int32, 
-                              'add_to_cart_order': np.int16, 'reordered': np.int8})
-print('Total ordered products(train): {}'.format(op_train.shape[0]))
-op_train.head(10)
+# Create weight column, using date
+kiva_mpi_region_locations['weight'] = kiva_mpi_region_locations.MPI.multiply(15).astype(int)
+#kiva_mpi_region_locations.weight.unique()
 
 
-# In[ ]:
+# In[20]:
 
 
-# test dataset (submission)
-test = pd.read_csv('../input/sample_submission.csv', engine='c')
-print('Total orders(test): {}'.format(test.shape[0]))
-test.head()
+kiva_loactions_on_heatmap = folium.Map(location=[kiva_mpi_region_locations.lat.mean(), kiva_mpi_region_locations.lon.mean() ],tiles= "Stamen Terrain",
+                    zoom_start = 2) 
+
+# List comprehension to make out list of lists
+heat_data = [[[row['lat'],row['lon']] 
+                for index, row in kiva_mpi_region_locations[kiva_mpi_region_locations['weight'] == i].iterrows()] 
+                 for i in range(0,11)]
+#print(heat_data)
+# Plot it on the map
+hm = plugins.HeatMapWithTime(heat_data,auto_play=True,max_opacity=0.8)
+hm.add_to(kiva_loactions_on_heatmap)
+
+hm.save('world MPI heatmap.html')
+
+# Display the map
+kiva_loactions_on_heatmap
 
 
-# In[ ]:
+# 
+# Looks like Africa has got highest number of MPI Locations.
+# 
+# ### Let's zoom on Africa
+
+# In[21]:
 
 
-#prior dataset
-op_prior = pd.read_csv('../input/order_products__prior.csv', engine='c', 
-                       dtype={'order_id': np.int32, 
-                              'product_id': np.int32, 
-                              'add_to_cart_order': np.int16, 
-                              'reordered': np.int8})
+heat_df =kiva_mpi_region_locations[kiva_mpi_region_locations['world_region']== 'Sub-Saharan Africa']
 
-print('Total ordered products(prior): {}'.format(op_prior.shape[0]))
-op_prior.head()
+#remove NANs
+heat_df = heat_df.dropna(axis=0)
 
-
-# In[ ]:
+# Create weight column, using date
+heat_df['weight'] = heat_df.MPI.multiply(15).astype(int)
+heat_df = heat_df.dropna(axis=0,subset=['lat','lon', 'weight','LocationName'])
+#heat_df.weight.unique()
 
 
-# orders
-orders = pd.read_csv('../input/orders.csv', engine='c', dtype={'order_id': np.int32, 
-                                                           'user_id': np.int32, 
-                                                           'order_number': np.int32, 
-                                                           'order_dow': np.int8, 
-                                                           'order_hour_of_day': np.int8, 
-                                                           'days_since_prior_order': np.float16})
-print('Total orders: {}'.format(orders.shape[0]))
-print(orders.info())
-orders.head()
+# In[22]:
 
 
-# ### Combine (orders, order details, product hierarchy) into 1 dataframe order_details 
-# **(be careful, high memory consumption, about 3GB RAM itself)**
+kiva_loactions_on_heatmap_africa = folium.Map(location=[heat_df.lat.mean(), heat_df.lon.mean() ],tiles= "Stamen Terrain",
+                    zoom_start = 3) 
 
-# In[ ]:
+# List comprehension to make out list of lists
+heat_data = [[[row['lat'],row['lon']] 
+                for index, row in heat_df[heat_df['weight'] == i].iterrows()] 
+                 for i in range(0,11)]
+#print(heat_data)
+# Plot it on the map
+hm = plugins.HeatMapWithTime(heat_data,auto_play=True,max_opacity=0.8)
+hm.add_to(kiva_loactions_on_heatmap_africa)
+hm.save('africa MPI heatmap.html')
+
+# Display the map
+kiva_loactions_on_heatmap_africa
 
 
-from functools import partial
+# ### Poverty locations for South Asia as per OPHI's MPI
+# 
+# Click on cluster circle to see clustered points
 
-# merge train and prior together iteratively, to fit into 8GB kernel RAM
-# split df indexes into parts
-indexes = np.linspace(0, len(op_prior), num=10, dtype=np.int32)
+# In[23]:
 
-# initialize it with train dataset
-order_details = pd.merge(
-                left=op_train,
-                 right=orders, 
-                 how='left', 
-                 on='order_id'
-        ).apply(partial(pd.to_numeric, errors='ignore', downcast='integer'))
 
-# add order hierarchy
-order_details = pd.merge(
-                left=order_details,
-                right=goods[['product_id', 
-                             'aisle_id', 
-                             'department_id']].apply(partial(pd.to_numeric, 
-                                                             errors='ignore', 
-                                                             downcast='integer')),
-                how='left',
-                on='product_id'
+kiva_mpi_region_locations_africa = kiva_mpi_region_locations[kiva_mpi_region_locations['world_region'] == 'South Asia']
+kiva_mpi_region_locations_africa.dropna(axis=0, inplace=True)
+m = folium.Map(
+    location=[kiva_mpi_region_locations_africa.lat.mean(), kiva_mpi_region_locations_africa.lon.mean()],
+    tiles='Cartodb Positron',
+    zoom_start=4
 )
 
-print(order_details.shape, op_train.shape)
+marker_cluster = MarkerCluster(
+    name='African Locations',
+    overlay=True,
+    control=False,
+    icon_create_function=None
+)
 
-# delete (redundant now) dataframes
-del op_train
+for k in range(kiva_mpi_region_locations_africa.shape[0]):
+    location = kiva_mpi_region_locations_africa.lat.values[k], kiva_mpi_region_locations_africa.lon.values[k]
+    marker = folium.Marker(location=location,icon=folium.Icon(color='green', icon='ok-sign'))
+    popup = kiva_mpi_region_locations_africa.LocationName.values[k]
+    folium.Popup(popup).add_to(marker)
+    marker_cluster.add_child(marker)
 
-order_details.head()
+marker_cluster.add_to(m)
+
+folium.LayerControl().add_to(m)
+
+m.save("marker cluster south asia.html")
+m
 
 
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', "# update by small portions\nfor i in range(len(indexes)-1):\n    order_details = pd.concat(\n        [   \n            order_details,\n            pd.merge(left=pd.merge(\n                            left=op_prior.loc[indexes[i]:indexes[i+1], :],\n                            right=goods[['product_id', \n                                         'aisle_id', \n                                         'department_id' ]].apply(partial(pd.to_numeric, \n                                                                          errors='ignore', \n                                                                          downcast='integer')),\n                            how='left',\n                            on='product_id'\n                            ),\n                     right=orders, \n                     how='left', \n                     on='order_id'\n                ) #.apply(partial(pd.to_numeric, errors='ignore', downcast='integer'))\n        ]\n    )\n        \nprint('Datafame length: {}'.format(order_details.shape[0]))\nprint('Memory consumption: {:.2f} Mb'.format(sum(order_details.memory_usage(index=True, \n                                                                         deep=True) / 2**20)))\n# check dtypes to see if we use memory effectively\nprint(order_details.dtypes)\n\n# make sure we didn't forget to retain test dataset :D\ntest_orders = orders[orders.eval_set == 'test']\n\n# delete (redundant now) dataframes\ndel op_prior, orders")
-
-
-# ### 1. Greedy Dumb Submission :) <br>(0.2164845 Public LB Score)
-# ![Lloyd level, still better than banana baseline][1]
+# ### Clustering  locations in Africa
 # 
-# 
-#   [1]: http://www.punchnels.com/wp-content/uploads/Jim_Carrey_Dumb-and-Dumber-Inside.jpg
+# Click on cluster circle to see clustered points
 
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', "# dumb submission\ntest_history = order_details[(order_details.user_id.isin(test_orders.user_id))]\\\n.groupby('user_id')['product_id'].apply(lambda x: ' '.join([str(e) for e in set(x)])).reset_index()\ntest_history.columns = ['user_id', 'products']\n\ntest_history = pd.merge(left=test_history, \n                        right=test_orders, \n                        how='right', \n                        on='user_id')[['order_id', 'products']]\n\ntest_history.to_csv('dumb_submission.csv', encoding='utf-8', index=False)")
+# In[24]:
 
 
-# ### Still Greedy But Smarter (Customer Will Take All Reordered) <br>(0.2996690 Public LB Score)
-# ![Lloyd appreciates this][1]
-# 
-# 
-#   [1]: https://i.ytimg.com/vi/CHCmLxqTPOs/hqdefault.jpg
+#%%time
 
-# In[ ]:
+m = folium.Map(
+    location=[kiva_mpi_region_locations_africa.lat.mean(), kiva_mpi_region_locations_africa.lon.mean() ],
+    tiles='Cartodb Positron',
+    zoom_start=4
+)
 
+FastMarkerCluster(data=list(zip(kiva_mpi_region_locations_africa.lat.values, kiva_mpi_region_locations_africa.lon.values))).add_to(m)
 
-get_ipython().run_cell_magic('time', '', "# dumb submission\ntest_history = order_details[(order_details.user_id.isin(test_orders.user_id)) \n                             & (order_details.reordered == 1)]\\\n.groupby('user_id')['product_id'].apply(lambda x: ' '.join([str(e) for e in set(x)])).reset_index()\ntest_history.columns = ['user_id', 'products']\n\ntest_history = pd.merge(left=test_history, \n                        right=test_orders, \n                        how='right', \n                        on='user_id')[['order_id', 'products']]\n\ntest_history.to_csv('dumb2_subm.csv', encoding='utf-8', index=False)")
+folium.LayerControl().add_to(m)
+m.save('africa loc cluster.html')
 
-
-# ### Less Dumb - Repeat Last Order<br>(0.3276746 Public LB Score)
-# ![Lloyd appreciates this][1]
-# 
-# 
-#   [1]: https://www.spin1038.com/content/000/images/000052/54551_60_news_hub_multi_630x0.png
-
-# In[ ]:
+m
 
 
-get_ipython().run_cell_magic('time', '', "test_history = order_details[(order_details.user_id.isin(test_orders.user_id))]\nlast_orders = test_history.groupby('user_id')['order_number'].max()\n\ndef get_last_orders():\n    t = pd.merge(\n            left=pd.merge(\n                    left=last_orders.reset_index(),\n                    right=test_history,\n                    how='inner',\n                    on=['user_id', 'order_number']\n                )[['user_id', 'product_id']],\n            right=test_orders[['user_id', 'order_id']],\n            how='left',\n            on='user_id'\n        ).groupby('order_id')['product_id'].apply(lambda x: ' '.join([str(e) for e in set(x)])).reset_index()\n    t.columns = ['order_id', 'products']\n    return t\n\n# save submission\nget_last_orders().to_csv('less_dumb_subm_last_order.csv', encoding='utf-8', index=False)")
-
-
-# ### Less Dumb - Repeat Last Order (Reordered Products Only)<br>(0.3276826 Public LB Score)
-# ![America is great again!][1]
-# 
-# 
-#   [1]: http://www.totalprosports.com/wp-content/uploads/2016/11/lloyd-and-harry-dumb-and-dumber.jpg
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', "test_history = order_details[(order_details.user_id.isin(test_orders.user_id))]\nlast_orders = test_history.groupby('user_id')['order_number'].max()\n\ndef get_last_orders_reordered():\n    t = pd.merge(\n            left=pd.merge(\n                    left=last_orders.reset_index(),\n                    right=test_history[test_history.reordered == 1],\n                    how='left',\n                    on=['user_id', 'order_number']\n                )[['user_id', 'product_id']],\n            right=test_orders[['user_id', 'order_id']],\n            how='left',\n            on='user_id'\n        ).fillna(-1).groupby('order_id')['product_id'].apply(lambda x: ' '.join([str(int(e)) for e in set(x)]) \n                                                  ).reset_index().replace(to_replace='-1', \n                                                                          value='None')\n    t.columns = ['order_id', 'products']\n    return t\n\n# save submission\nget_last_orders_reordered().to_csv('less_dumb_subm_last_order_reordered_only.csv', \n                         encoding='utf-8', \n                         index=False)")
-
-
-# ### To be continued... 
-# 
-# **(TODO: more creative baselines)**
-
-# ### Stay tuned, this notebook will be updated on a regular basis
-# **P.s. Upvotes and comments would let me update it faster and in a more smart way :)**
+# to be continued...

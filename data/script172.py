@@ -1,228 +1,579 @@
 
 # coding: utf-8
 
-# # Mercedes-Benz Greener Manufacturing
+# Hello everyone!
 # 
-# Welcome to a new competition! This time from Mercedes-Benz - our job is to predict how long a car on a production line will take to pass the testing phase. This is a classical regression problem, and we're evaluated with the R2 metric. Let's take a look at the data we're given:
+# My main aim is to explore this dataset and find some interesting speciality in Data.
+
+# In this Notebook I'll show you an analysis of the most common incidents and their specialty. 
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import os
-import gc
+import pandas as pd
 import matplotlib.pyplot as plt
+import plotly
+plotly.offline.init_notebook_mode()
+from plotly import __version__
+from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
+import numpy as np
 import seaborn as sns
+import calendar
 get_ipython().run_line_magic('matplotlib', 'inline')
+df = pd.read_csv('../input/911.csv')
+df.head()
 
-pal = sns.color_palette()
-
-print('# File sizes')
-for f in os.listdir('../input'):
-    if 'zip' not in f:
-        print(f.ljust(30) + str(round(os.path.getsize('../input/' + f) / 1000000, 2)) + 'MB')
-
-
-# So, a much smaller dataset than what we've been used to recently. No images here! :)
-# We're given a single train and test csv, indicating that the data should also be pretty simple to play with.
-# 
-# Time to load it into memory!
-# ## Training set
 
 # In[ ]:
 
 
-df_train = pd.read_csv('../input/train.csv')
-print('Size of training set: {} rows and {} columns'.format(*df_train.shape))
-df_train.head()
+reason = np.unique(df['title'])
 
-
-# Just from this, we can see that our training data is made up of just 4000 rows, but has 400 seemingly anonymised features inside. As well as this, we are given an ID (which is not equal to the row number, this could be significant) and the target value, which is the number of seconds taken.
-# 
-# Let's start off by looking at the distribution of the target value:
 
 # In[ ]:
 
 
-y_train = df_train['y'].values
-plt.figure(figsize=(15, 5))
-plt.hist(y_train, bins=20)
-plt.xlabel('Target value in seconds')
-plt.ylabel('Occurences')
-plt.title('Distribution of the target value')
-
-print('min: {} max: {} mean: {} std: {}'.format(min(y_train), max(y_train), y_train.mean(), y_train.std()))
-print('Count of values above 180: {}'.format(np.sum(y_train > 200)))
+reason.size
 
 
-# So we have a pretty standard distribution here, which is centred around almost exactly 100. Nothing special to note here, except there is a single outlier at 265 seconds where every other value is below 180.
-# 
-# The fact that our ID is not equal to the row ID seems to suggest that the train and test sets were randomly sampled from the same dataset, which could have some special order to it, for example a time series. Let's take a look at how this target value changes over time in order to understand whether we're given time series data.
-# 
+# As you can see above, there are 117 reasons of 911-calls.
 
 # In[ ]:
 
 
-plt.figure(figsize=(15, 5))
-plt.plot(y_train)
-plt.xlabel('Row ID')
-plt.ylabel('Target value')
-plt.title('Change in target value over the dataset')
+DATA = np.zeros((df.shape[0],6),dtype='O')
+DATA[:,0] = df['lng'].values
+DATA[:,1] = df['lat'].values
+DATA[:,4] = df['title'].values
+DATA[:,5] = df['twp'].values
+for i in range(DATA.shape[0]):
+    DATA[i,2] = df['timeStamp'].values[i][:10]
+    DATA[i,3] = df['timeStamp'].values[i][10:]
+    sp = DATA[i,3].split(':')
+    DATA[i,3] = (int(sp[0])*3600 + int(sp[1])*60 + int(sp[2]))/3600
+
+
+# In[ ]:
+
+
+new_data = np.zeros(reason.size,dtype = 'O')
+for i in range(reason.size):
+    new_data[i] = DATA[np.where(DATA[:,4] == reason[i])]
+
+
+# In[ ]:
+
+
+week = np.array(["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"])
+
+
+# In[ ]:
+
+
+for i in range(new_data.shape[0]):
+    for j in range(new_data[i].shape[0]):
+        w = np.array(new_data[i][j,2].split('-')).astype(int)
+        new_data[i][j,0] = week[calendar.weekday(w[0],w[1],w[2])]
+
+
+# On plots below you can see dependence between day of the week and type of incident. I'am going to show you just the most common types of incidents. The most common types of incidents are those, which have more than 2000 calls. So, here it is:
+
+# In[ ]:
+
+
+for i in range(reason.size):
+    if new_data[i][:,3].size > 1700:
+        sns.plt.figure(figsize=(12,4))
+        sns.plt.title(new_data[i][0][-2])
+        sns.plt.xlabel("Week day")
+        sns.plt.ylabel(new_data[i][0][-2])
+        print("Number of calls with " + new_data[i][0][-2] + " "+ str(new_data[i][:,3].size))
+        sns.countplot((new_data[i][:,0]),order = week)
+
+
+# On plots below you can see dependence between the reason of 911-call and time of the day.
+
+# In[ ]:
+
+
+for i in range(reason.size):
+    if new_data[i][:,3].size > 1700:
+        sns.plt.figure(figsize=(12,4))
+        sns.plt.title(new_data[i][0][-2])
+        sns.plt.xlabel("Time(hour)")
+        sns.plt.ylabel(new_data[i][0][-2])
+        sns.plt.xlim(0,24)
+        sns.countplot((new_data[i][:,3]).astype(int))
+
+
+# In[ ]:
+
+
+for i in range(DATA.shape[0]):
+    DATA[i,2] = DATA[i,2][:-3]
+
+
+# In[ ]:
+
+
+for i in range(reason.size):
+    new_data[i] = DATA[np.where(DATA[:,4] == reason[i])]
+
+
+# On plots below you can see dependence between the reason of 911-call and month.
+
+# In[ ]:
+
+
+for i in range(reason.size):
+    if new_data[i][:,2].size > 1700:
+        sns.plt.figure(figsize=(12,4))
+        sns.plt.title(new_data[i][0][-2])
+        sns.plt.xlabel("month")
+        sns.plt.ylabel(new_data[i][0][-2])
+        sns.countplot(new_data[i][:,2])
+
+
+# In[ ]:
+
+
+all_ = np.zeros(df["timeStamp"].values.size,dtype='O')
+for i in range(all_.size):
+    all_[i] = df['timeStamp'].values[i][:7]
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.title("All situations by month")
+sns.countplot(all_)
+
+
+# In[ ]:
+
+
+all_ = np.zeros(df["timeStamp"].values.size,dtype='O')
+for i in range(all_.size):
+    all_[i] = df['timeStamp'].values[i][:10]
+
+
+# In[ ]:
+
+
+for i in range(all_.size):
+    w = np.array(all_[i].split('-')).astype(int)
+    all_[i] = week[calendar.weekday(w[0],w[1],w[2])]
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("Week day")
+sns.plt.title("All Situations by Week day")
+sns.countplot(all_,order = week)
+
+
+# In[ ]:
+
+
+labels = "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
+sizes = [np.sum(all_ == "Monday"),np.sum(all_ == "Tuesday"),np.sum(all_ == "Wednesday"),np.sum(all_ == "Thursday"),np.sum(all_ == "Friday"),         np.sum(all_ == "Saturday"),np.sum(all_ == "Sunday")]
+colors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue','magenta','orange','lightgreen']
+explode = (0, 0, 0, 0, 0.3, 0, 0)  # explode 1st slice
+plt.figure(figsize=(8,8))
+# Plot
+plt.title('Week day')
+plt.pie(sizes, explode=explode, labels=labels, colors=colors,
+        autopct='%1.1f%%', shadow=True, startangle=140)
+ 
+plt.axis('equal')
 plt.show()
 
-plt.figure(figsize=(15, 5))
-plt.plot(y_train[:100])
-plt.xlabel('Row ID')
-plt.ylabel('Target value')
-plt.title('Change in target value over the dataset (first 100 samples)')
-print()
-
-
-# At first glance, there doesn't seem to be anything overly suspicious here - looks like how a random sort would. I might take a closer look later but for now let's move on to the features.
-# 
-# ## Feature analysis
 
 # In[ ]:
 
 
-cols = [c for c in df_train.columns if 'X' in c]
-print('Number of features: {}'.format(len(cols)))
+all_ = np.zeros(df["timeStamp"].values.size,dtype='O')
+for i in range(all_.size):
+    h = np.array(df['timeStamp'].values[i][11:].split(":")).astype(int)
+    all_[i] = (h[0] * 3600 + h[1] * 60 + h[2])/3600
 
-print('Feature types:')
-df_train[cols].dtypes.value_counts()
-
-
-# So out of all our features, we are given 8 object (likely a string) variables, 368 integer variables. What about the cardinality of our features?
 
 # In[ ]:
 
 
-counts = [[], [], []]
-for c in cols:
-    typ = df_train[c].dtype
-    uniq = len(np.unique(df_train[c]))
-    if uniq == 1: counts[0].append(c)
-    elif uniq == 2 and typ == np.int64: counts[1].append(c)
-    else: counts[2].append(c)
+all_ = all_.astype(int)
 
-print('Constant features: {} Binary features: {} Categorical features: {}\n'.format(*[len(c) for c in counts]))
-
-print('Constant features:', counts[0])
-print('Categorical features:', counts[2])
-
-
-# Interestingly, we have 12 features which only have a single value in them - these are pretty useless for supervised algorithms, and should probably be dropped (unless you want to use them for anomaly detection in case a different value appears in the test set)
-# 
-# The rest of our dataset is made up of many binary features, and a few categorical features.
 
 # In[ ]:
 
 
-binary_means = [np.mean(df_train[c]) for c in counts[1]]
-binary_names = np.array(counts[1])[np.argsort(binary_means)]
-binary_means = np.sort(binary_means)
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("hour")
+sns.plt.title("All Situations by time")
+sns.countplot(all_)
 
-fig, ax = plt.subplots(1, 3, figsize=(12,30))
-ax[0].set_ylabel('Feature name')
-ax[1].set_title('Mean values of binary variables')
-for i in range(3):
-    names, means = binary_names[i*119:(i+1)*119], binary_means[i*119:(i+1)*119]
-    ax[i].barh(range(len(means)), means, color=pal[2])
-    ax[i].set_xlabel('Mean value')
-    ax[i].set_yticks(range(len(means)))
-    ax[i].set_yticklabels(names, rotation='horizontal')
+
+# In[ ]:
+
+
+city = list()
+d = set()
+for i in range(all_.size):
+    city.append(df['twp'].values[i])
+    d.add(city[i])
+d.discard(np.nan)
+for i in range(all_.size):
+    if df['twp'].values[i] in d:
+        city.append(df['twp'].values[i])
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("City")
+sns.plt.title("ALL Situations by time")
+sns.countplot(city,order = d) #alphabet order
+
+
+# In[ ]:
+
+
+d
+
+
+# In[ ]:
+
+
+TIME = np.zeros(all_.size, dtype = "O")
+for i in range(all_.size):
+    for j in range(len(df['desc'][i])):
+        if df['desc'][i][j] == ':':
+            TIME[i] = (df['desc'][i][j-2:j+6])
+            break
+idx = []
+for i in range(TIME.size):
+    try:
+        TIME[i] = (int((TIME[i]).split(':')[0])*3600 + int((TIME[i]).split(':')[1])*60 + int((TIME[i]).split(':')[2]))/3600
+    except:
+        TIME[i] = DATA[i,3]
+diff = np.zeros(all_.size)
+for i in range(all_.size):
+    diff[i] = min(np.abs(DATA[i,3] - TIME[i]),24 - np.abs(DATA[i,3] - TIME[i]))
+
+
+# I noticed that we have difference between time in Description of incident and timeStump. So below you can see plot, which shows this difference.
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,8))
+plt.ylabel("difference between time in desc and timeStamp(in hours)")
+plt.xlabel("number of incident")
+plt.plot(diff)
+
+
+# In general, on the plot above this difference belongs to the segment [0,1]. But there are some cases, where this difference is 3,4,5,6 and even 8 hours.
+
+# In[ ]:
+
+
+number_ = np.zeros(reason.size)
+for i in range(number_.size):
+    number_[i] = new_data[i].shape[0]
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,4))
+plt.xlabel("Reason")
+plt.plot(number_)
+
+
+# In[ ]:
+
+
+data_matrix = []
+for i in range(reason.size):
+    data_matrix.append(tuple([np.hstack((reason.reshape(-1,1),number_.reshape(-1,1).astype(int)))][0][i]))
+
+
+# In[ ]:
+
+
+dtype = [('name', 'S80'), ('number', int)]
+a = np.array(data_matrix,dtype=dtype)
+sorted_a = np.sort(a, order='number')  
+sorted_a = sorted_a[::-1]
+
+
+# In[ ]:
+
+
+data_matrix = [['reason','number of incidents']]
+for i in range(reason.size):
+    data_matrix.append([str(sorted_a[i][0])[2:-1],int((sorted_a[i][1]))])
+
+
+# The table below shows us that Vehicle Accident is the most common reason of 911-calls.
+
+# In[ ]:
+
+
+pd.DataFrame(data_matrix)
+
+
+# In[ ]:
+
+
+type_of_reason_ = np.zeros(DATA.shape[0],dtype='O')
+for i in range(type_of_reason_.size):
+    type_of_reason_[i] = DATA[i][4].split(' ')[0][:-1]
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("type of incident")
+sns.plt.title("All Situations by time")
+sns.countplot(type_of_reason_)
+
+
+# As you can see on the plot above "emergency medical service" - calls exceeds other types of incidents.
+
+# In[ ]:
+
+
+Traffic = DATA[type_of_reason_ == 'Traffic']
+EMS = DATA[type_of_reason_ == 'EMS']
+Fire = DATA[type_of_reason_ == 'Fire']
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("hour")
+sns.plt.title("All Traffic incidents")
+sns.countplot(Traffic[:,3].astype(int))
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("hour")
+sns.plt.title("All EMS incidents")
+sns.countplot(EMS[:,3].astype(int))
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("hour")
+sns.plt.title("All Fire incidents")
+sns.countplot(Fire[:,3].astype(int))
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("month")
+sns.plt.title("All Traffic incidents")
+sns.countplot(Traffic[:,2])
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("month")
+sns.plt.title("All EMS incidents")
+sns.countplot(EMS[:,2])
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("month")
+sns.plt.title("All Fire incidents")
+sns.countplot(Fire[:,2])
+
+
+# In[ ]:
+
+
+DATA = np.zeros((df.shape[0],6),dtype='O')
+DATA[:,0] = df['lng'].values
+DATA[:,1] = df['lat'].values
+DATA[:,4] = df['title'].values
+DATA[:,5] = df['twp'].values
+for i in range(DATA.shape[0]):
+    DATA[i,2] = df['timeStamp'].values[i][:10]
+    DATA[i,3] = df['timeStamp'].values[i][10:]
+    sp = DATA[i,3].split(':')
+    DATA[i,3] = (int(sp[0])*3600 + int(sp[1])*60 + int(sp[2]))/3600
+Traffic = DATA[type_of_reason_ == 'Traffic']
+EMS = DATA[type_of_reason_ == 'EMS']
+Fire = DATA[type_of_reason_ == 'Fire']
+
+
+# In[ ]:
+
+
+week_traffic = np.zeros(Traffic.shape[0],dtype = 'O')
+for i in range(week_traffic.size):
+    w = np.array(Traffic[i][2].split('-')).astype(int)
+    week_traffic[i] = week[calendar.weekday(w[0],w[1],w[2])]
+
+
+# In[ ]:
+
+
+week_EMS = np.zeros(EMS.shape[0],dtype = 'O')
+for i in range(week_EMS.size):
+    w = np.array(EMS[i][2].split('-')).astype(int)
+    week_EMS[i] = week[calendar.weekday(w[0],w[1],w[2])]
+
+
+# In[ ]:
+
+
+week_fire = np.zeros(Fire.shape[0],dtype = 'O')
+for i in range(week_fire.size):
+    w = np.array(Fire[i][2].split('-')).astype(int)
+    week_fire[i] = week[calendar.weekday(w[0],w[1],w[2])]
+
+
+# In[ ]:
+
+
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("week day")
+sns.plt.title("All Traffic incidents")
+sns.countplot(week_traffic,order=week)
+
+
+# In[ ]:
+
+
+all_ = week_traffic
+labels = "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
+sizes = [np.sum(all_ == "Monday"),np.sum(all_ == "Tuesday"),np.sum(all_ == "Wednesday"),np.sum(all_ == "Thursday"),np.sum(all_ == "Friday"),         np.sum(all_ == "Saturday"),np.sum(all_ == "Sunday")]
+colors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue','magenta','orange','lightgreen']
+explode = (0, 0, 0.1, 0, 0.1, 0, 0)  # explode 1st slice
+plt.figure(figsize=(8,8))
+# Plot
+plt.title('Traffic by Week day')
+plt.pie(sizes, explode=explode, labels=labels, colors=colors,
+        autopct='%1.1f%%', shadow=True, startangle=140)
+ 
+plt.axis('equal')
 plt.show()
 
 
 # In[ ]:
 
 
-for c in counts[2]:
-    value_counts = df_train[c].value_counts()
-    fig, ax = plt.subplots(figsize=(10, 5))
-    plt.title('Categorical feature {} - Cardinality {}'.format(c, len(np.unique(df_train[c]))))
-    plt.xlabel('Feature value')
-    plt.ylabel('Occurences')
-    plt.bar(range(len(value_counts)), value_counts.values, color=pal[1])
-    ax.set_xticks(range(len(value_counts)))
-    ax.set_xticklabels(value_counts.index, rotation='vertical')
-    plt.show()
-
-
-# ## XGBoost Starter
-# Now that we know the outline of what the data's made up of, we can make a simple model on it. Time to bring out XGBoost!
-
-# In[ ]:
-
-
-df_test = pd.read_csv('../input/test.csv')
-
-usable_columns = list(set(df_train.columns) - set(['ID', 'y']))
-
-y_train = df_train['y'].values
-id_test = df_test['ID'].values
-
-x_train = df_train[usable_columns]
-x_test = df_test[usable_columns]
-
-for column in usable_columns:
-    cardinality = len(np.unique(x_train[column]))
-    if cardinality == 1:
-        x_train.drop(column, axis=1) # Column with only one value is useless so we drop it
-        x_test.drop(column, axis=1)
-    if cardinality > 2: # Column is categorical
-        mapper = lambda x: sum([ord(digit) for digit in x])
-        x_train[column] = x_train[column].apply(mapper)
-        x_test[column] = x_test[column].apply(mapper)
-        
-x_train.head()
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("week day")
+sns.plt.title("All EMS incidents")
+sns.countplot(week_EMS,order=week)
 
 
 # In[ ]:
 
 
-import xgboost as xgb
-from sklearn.metrics import r2_score
-from sklearn.model_selection import train_test_split
-
-x_train, x_valid, y_train, y_valid = train_test_split(x_train, y_train, test_size=0.2, random_state=4242)
-
-d_train = xgb.DMatrix(x_train, label=y_train)
-d_valid = xgb.DMatrix(x_valid, label=y_valid)
-d_test = xgb.DMatrix(x_test)
-
-params = {}
-params['objective'] = 'reg:linear'
-params['eta'] = 0.02
-params['max_depth'] = 4
-
-def xgb_r2_score(preds, dtrain):
-    labels = dtrain.get_label()
-    return 'r2', r2_score(labels, preds)
-
-watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-
-clf = xgb.train(params, d_train, 1000, watchlist, early_stopping_rounds=50, feval=xgb_r2_score, maximize=True, verbose_eval=10)
+all_ = week_EMS
+labels = "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
+sizes = [np.sum(all_ == "Monday"),np.sum(all_ == "Tuesday"),np.sum(all_ == "Wednesday"),np.sum(all_ == "Thursday"),np.sum(all_ == "Friday"),         np.sum(all_ == "Saturday"),np.sum(all_ == "Sunday")]
+colors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue','magenta','orange','lightgreen']
+explode = (0, 0, 0, 0, 0.1, 0, 0)  # explode 1st slice
+plt.figure(figsize=(8,8))
+# Plot
+plt.title('EMS by Week day')
+plt.pie(sizes, explode=explode, labels=labels, colors=colors,
+        autopct='%1.1f%%', shadow=True, startangle=140)
+ 
+plt.axis('equal')
+plt.show()
 
 
 # In[ ]:
 
 
-p_test = clf.predict(d_test)
-
-sub = pd.DataFrame()
-sub['ID'] = id_test
-sub['y'] = p_test
-sub.to_csv('xgb.csv', index=False)
+sns.plt.figure(figsize=(12,4))
+sns.plt.xlabel("week day")
+sns.plt.title("All Fire incidents")
+sns.countplot(week_fire,order=week)
 
 
 # In[ ]:
 
 
-sub.head()
+all_ = week_fire
+labels = "Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"
+sizes = [np.sum(all_ == "Monday"),np.sum(all_ == "Tuesday"),np.sum(all_ == "Wednesday"),np.sum(all_ == "Thursday"),np.sum(all_ == "Friday"),         np.sum(all_ == "Saturday"),np.sum(all_ == "Sunday")]
+colors = ['gold', 'yellowgreen', 'lightcoral', 'lightskyblue','magenta','orange','lightgreen']
+explode = (0, 0, 0.1, 0, 0., 0, 0)  # explode 1st slice
+plt.figure(figsize=(8,8))
+# Plot
+plt.title('Fire by Week day')
+plt.pie(sizes, explode=explode, labels=labels, colors=colors,
+        autopct='%1.1f%%', shadow=True, startangle=140)
+ 
+plt.axis('equal')
+plt.show()
 
 
-# Thanks for reading my EDA! :)
+# In[ ]:
+
+
+CITY = np.unique((city))
+city = np.array(city)
+
+
+# In[ ]:
+
+
+CITY_matrix = []
+for i in range(CITY.size - 1):
+    CITY_matrix.append(tuple((CITY[i],np.sum(city == CITY[i]))))
+
+
+# In[ ]:
+
+
+dtype = [('name', 'S80'), ('number', int)]
+a = np.array(CITY_matrix,dtype=dtype)
+sorted_a = np.sort(a, order='number')  
+sorted_a = sorted_a[::-1]
+
+
+# In[ ]:
+
+
+CITY_matrix = [['Township','number of incidents']]
+for i in range(CITY.size-1):
+    CITY_matrix.append([str(sorted_a[i][0])[2:-1],int((sorted_a[i][1]))])
+
+
+# In[ ]:
+
+
+pd.DataFrame(CITY_matrix)
+
+
+# So, let's summarize all our results. When we see our results on separated plots we can understand which time is the most common for definite reason, which day of week, month. The majority of Traffic incidents most popular at 16:00 and 17:00, EMS - from 10:00 till 13:00, Fire - 18:00. Also we can see, that Sunday is the most calm week day.
+# Also, in the table above we can see locations in Pennsylvania and number of incidents. According to this information, we can see which townships in  Pennsylvania  are bigger and more developed. 
+# There are a lot of plots in this notebook, and I didn'tin  describe all of them and it is not necessary, because if you see these plots, you'll understand everything.
 # 
-# **If you have any questions or suggestions feel free to leave a comment - and please upvote if this helped you!**
+# Thanks for attention! =)

@@ -1,157 +1,219 @@
-import pandas as pd
-import numpy as np
-import gc
-from sklearn.metrics import roc_auc_score
-train_df = pd.read_csv('../input/train.csv', nrows=40000000)
-test_df = pd.read_csv('../input/test.csv')
-print("load done")
-#dask_df = train_df
-#df_pos = dask_df[(dask_df['is_attributed'] == 1)]
-#df_neg = dask_df[(dask_df['is_attributed'] == 0)]
-#df_pos = df_pos.sample(n=5000)
-#print(len(df_pos))
-#print(len(df_neg))
-#df_neg = df_neg.sample(n=2000000)
-#train_df = pd.concat([df_pos,df_neg]).sample(frac=1)
-#del df_pos, df_neg
-#gc.collect()
-def remove_unkonwn_tag(col, train_df = train_df, test_df = test_df):
-    test_df.loc[~test_df[col].isin(train_df[col]),col] = 9999999
+"""
 
-def remove_lowfreq_tag(col, train_df = train_df,test_df = test_df, N=3):
-    topN_address_list = train_df[col].value_counts()
-    #print(topN_address_list)
-    topN_address_list = topN_address_list[topN_address_list <= N]
-    topN_address_list = topN_address_list.index
-    remove_list = train_df.loc[train_df[col].isin(topN_address_list), col]
-    print('remove:',len(remove_list))
-    print('reserve',len(train_df) - len(remove_list))
-    remove_list = 9999998
-    test_df.loc[test_df[col].isin(topN_address_list), col] = 9999998
+Animated Images with Outlined Nerve Area
 
-def preprocess(df):
-    df['time_t'] = df.click_time.str[11:13] + df.click_time.str[14:16]
+Videos of ultrasounds are helpful for gaining a better sense of the 3D 
+structure of the BP and surrounding tissues. 
 
-for i,j in zip(['app','ip','device','os','channel'],[5,4,4,5,5]):
-    remove_lowfreq_tag(i,N=j)
+Unfortunately, we were NOT given videos for this Kaggle challenge, 
+only images from those videos.  Furthermore, we've been told that the images
+for each patient are unordered. Therefore, one cannot just concatenate all 
+the images together to easily reconstruct a video.
 
+To to rectify this, this script attempts to create a reasonable reconstruction
+of a patient's ultrasound video. It creates an animated GIF after finding
+a sensible order for the patient's images.  The ordering assumes that
+changes between adjacent frames in a video are generally smaller than
+changes between randomly selected frames. Therefore, finding a sequence
+that minimize the sum of changes between frames should approximate the
+original video. 
 
-for i in ['app','ip','device','os','channel']:
-    remove_unkonwn_tag(i)
+The reconstruction also includes a red outline surrounding any nerve tissue, 
+derived from masks that the ultrasound image annotators have provided. 
 
-from sklearn.preprocessing import LabelEncoder
-def process_lable_encoder(col, train_df = train_df, test_df = test_df):
-    le = LabelEncoder()
-    le.fit(np.hstack([train_df[col], test_df[col]]))
-    train_df[col] = le.transform(train_df[col])
-    test_df[col] = le.transform(test_df[col])
+by Chris Hefele, May 2016
 
-coding_list = ['ip','app','device','os','channel','time_t']
+"""
 
-preprocess(train_df)
-preprocess(test_df)
-print("load done")
-
-for i in coding_list:
-    process_lable_encoder(i)
-    
-print("label gen done")
-MAX_IP = np.max(train_df.ip.max()) + 2 #39612 #277396
-MAX_DEVICE = np.max(train_df.device.max()) + 2 #299 #3475
-MAX_OS = np.max(train_df.os.max()) + 2 #161 #3475
-MAX_APP = np.max(train_df.app.max()) + 2 #214 #3475
-MAX_CHANNEL = np.max(train_df.channel.max()) + 2  #155
-MAX_TIME = np.max(train_df.time_t.max()) + 2 #24*60+1
-print("MAX gen done")
-
-def get_keras_data(df):
-    X = {
-        'ip': np.array(df.ip),
-	    'app': np.array(df.app),
-        'device': np.array(df.device),
-        'os': np.array(df.os),
-        'channel': np.array(df.channel),
-        'clicktime': np.array(df.time_t),
-    }
-    return X
-
-from keras.layers import Input, Dropout, Dense, concatenate, GRU, Embedding, Flatten, Activation
-from keras.optimizers import Adam
-from keras.models import Model
-from keras import backend as K
-
-def get_model(lr=0.001, decay=0.0):
-    ip = Input(shape=[1], name="ip")
-    app = Input(shape=[1], name="app")
-    device = Input(shape=[1], name="device")
-    os = Input(shape=[1], name="os")
-    channel = Input(shape=[1], name="channel")
-    clicktime = Input(shape=[1], name="clicktime")
-
-    emb_ip = Embedding(MAX_IP, 64)(ip)
-    emb_device = Embedding(MAX_DEVICE, 16)(device)
-    emb_os= Embedding(MAX_OS, 16)(os)
-    emb_app = Embedding(MAX_APP, 16)(app)
-    emb_channel = Embedding(MAX_CHANNEL, 8)(channel)
-    emb_time = Embedding(MAX_TIME, 32)(clicktime)
-
-    main = concatenate([Flatten()(emb_ip), 
-                        Flatten()(emb_device), 
-                        Flatten()(emb_os),
-                        Flatten()(emb_app),
-                        Flatten()(emb_channel), 
-                        Flatten()(emb_time)])
-    main = Dense(128,kernel_initializer='normal', activation="tanh")(main)
-    main = Dropout(0.2)(main)
-    main = Dense(64,kernel_initializer='normal', activation="tanh")(main)
-    main = Dropout(0.2)(main)    
-    main = Dense(32,kernel_initializer='normal', activation="relu")(main)
-    output = Dense(1,activation="sigmoid") (main)
-    #model
-    model = Model([ip, app, device, os, channel, clicktime], output)
-    optimizer = Adam(lr=lr, decay=decay)
-    model.compile(loss="binary_crossentropy", 
-                  optimizer=optimizer)
-    return model
+import glob
+import os.path 
+import cv2
+import numpy as np 
+import collections
+import matplotlib
+import scipy.spatial.distance
+import itertools
+import matplotlib.pyplot as plt 
+import matplotlib.animation as animation
 
 
-from sklearn.model_selection import train_test_split
+IMAGE_DIR        = '../input/train/'
+MSEC_PER_FRAME   = 200  
+MSEC_REPEAT_DELAY= 2000
+ADD_MASK_OUTLINE = True
+TILE_MIN_SIDE    = 50     # pixels; see tile_features()
+SHOW_GIF         = False  # matplotlib popup of animation 
 
 
-Y_train = train_df.is_attributed.values.reshape(-1, 1)
+def get_image(f):
+    # Read image file 
+    img = cv2.imread(f)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    # print 'Read:', f
+    return img
 
-X_train, X_valid, y_train, y_valid = train_test_split(train_df[coding_list], Y_train, test_size = 0.1, random_state= 1984, stratify = Y_train)
-X_train = get_keras_data(X_train[coding_list])
-X_valid = get_keras_data(X_valid[coding_list])
 
-print("Defining  model...")
+def grays_to_RGB(img):
+    # Convert a 1-channel grayscale image into 3 channel RGB image
+    return np.dstack((img, img, img))
 
-# Model hyper parameters.
-BATCH_SIZE = 1024*2
-epochs = 1
 
-# Calculate learning rate decay.
-exp_decay = lambda init, fin, steps: (init/fin)**(1/(steps-1)) - 1
-steps = int(len(train_df['ip']) / BATCH_SIZE) * epochs
-lr_init, lr_fin = 0.001, 0.0003
-lr_decay = exp_decay(lr_init, lr_fin, steps)
+def image_plus_mask(img, mask):
+    # Returns a copy of the grayscale image, converted to RGB, 
+    # and with the edges of the mask added in red
+    img_color = grays_to_RGB(img)
+    mask_edges = cv2.Canny(mask, 100, 200) > 0  
+    img_color[mask_edges, 0] = 255  # chan 0 = bright red
+    img_color[mask_edges, 1] = 0
+    img_color[mask_edges, 2] = 0
+    return img_color
 
-model = get_model(lr=lr_init, decay=lr_decay)
 
-print("Fitting  model to training examples...")
-cw = {0: 1, 1: 3}
-for i in range(1):
-    model.fit(
-            X_train, y_train, epochs=1, batch_size=BATCH_SIZE,
-            validation_data=(X_valid, y_valid), verbose=1,class_weight=cw
-    )
-    y_val_pred = model.predict(X_valid)[:, 0]
-    print('Valid AUC: {:.4f}'.format(roc_auc_score(y_valid, y_val_pred)))
+def to_mask_path(f_image):
+    # Convert an image file path into a corresponding mask file path 
+    dirname, basename = os.path.split(f_image)
+    maskname = basename.replace(".tif", "_mask.tif")
+    return os.path.join(dirname, maskname)
 
-X_test = get_keras_data(test_df[coding_list])
-preds = model.predict(X_test, batch_size=BATCH_SIZE)
-sub = pd.DataFrame()
-sub['click_id'] = test_df['click_id']
-sub['is_attributed'] = preds
-sub.to_csv('sub_nn.csv', index=False)
-print(sub.head())
+
+def add_masks(images):
+    # Return copies of the group of images with mask outlines added
+    # Images are stored as dict[filepath], output is also dict[filepath]
+    images_plus_masks = {} 
+    for f_image in images:
+        img  = images[f_image]
+        mask = cv2.imread(to_mask_path(f_image))
+        images_plus_masks[f_image] = image_plus_mask(img, mask)
+    return images_plus_masks
+
+
+def get_patient_images(patient):
+    # Return a dict of patient images, i.e. dict[filepath]
+    f_path = IMAGE_DIR + '%i_*.tif' % patient 
+    f_ultrasounds = [f for f in glob.glob(f_path) if 'mask' not in f]
+    images = {f:get_image(f) for f in f_ultrasounds}
+    return images
+
+
+def image_features(img):
+    return tile_features(img)   # a tile is just an image...
+
+
+def tile_features(tile, tile_min_side = TILE_MIN_SIDE):
+    # Recursively split a tile (image) into quadrants, down to a minimum 
+    # tile size, then return flat array of the mean brightness in those tiles.
+    tile_x, tile_y = tile.shape
+    mid_x = tile_x / 2
+    mid_y = tile_y / 2
+    if (mid_x < tile_min_side) or (mid_y < tile_min_side):
+        return np.array([tile.mean()]) # hit minimum tile size
+    else:
+        tiles = [ tile[:mid_x, :mid_y ], tile[mid_x:, :mid_y ], 
+                  tile[:mid_x , mid_y:], tile[mid_x:,  mid_y:] ] 
+        features = [tile_features(t) for t in tiles]
+        return np.array(features).flatten()
+
+
+def feature_dist(feats_0, feats_1):
+    # Definition of the distance metric between image features
+    return scipy.spatial.distance.euclidean(feats_0, feats_1)
+
+
+def feature_dists(features):
+    # Calculate the distance between all pairs of images (using their features)
+    dists = collections.defaultdict(dict)
+    f_img_features = features.keys()
+    for f_img0, f_img1 in itertools.permutations(f_img_features, 2):
+        dists[f_img0][f_img1] = feature_dist(features[f_img0], features[f_img1])
+    return dists
+
+
+def image_seq_start(dists, f_start):
+
+    # Given a starting image (i.e. named f_start), greedily pick a sequence 
+    # of nearest-neighbor images until there are no more unpicked images. 
+
+    f_picked = [f_start]
+    f_unpicked = set(dists.keys()) - set([f_start])
+    f_current = f_start
+    dist_tot = 0
+
+    while f_unpicked:
+
+        # Collect the distances from the current image to the 
+        # remaining unpicked images, then pick the nearest one 
+        candidates = [(dists[f_current][f_next], f_next) for f_next in f_unpicked]
+        dist_nearest, f_nearest = list(sorted(candidates))[0]
+
+        # Update the image accounting & make the nearest image the current image 
+        f_unpicked.remove(f_nearest)
+        f_picked.append(f_nearest)
+        dist_tot += dist_nearest
+        f_current = f_nearest 
+
+    return (dist_tot, f_picked)
+
+
+def image_sequence(dists):
+
+    # Return a sequence of images that minimizes the sum of 
+    # inter-image distances. This function relies on image_seq_start(), 
+    # which requires an arbitray starting image. 
+    # In order to find an even lower-cost sequence, this function
+    # tries all possible staring images and returns the best result.
+
+    f_starts = dists.keys()
+    seqs = [image_seq_start(dists, f_start) for f_start in f_starts]
+    dist_best, seq_best = list(sorted(seqs))[0]
+    return seq_best
+
+
+def grayscale_to_RGB(img):
+    return np.asarray(np.dstack((img, img, img)), dtype=np.uint8)
+
+
+def build_gif(imgs, fname, show_gif=True, save_gif=True, title=''):
+    # Create an animated GIF file from a sequence of images
+    fig = plt.figure()
+    ax = fig.add_subplot(111)
+    ax.set_axis_off()
+    fig.subplots_adjust(left=0, bottom=0, right=1, top=1, 
+                        wspace=None, hspace=None)  # removes white border
+    #imgs = [(ax.imshow(img), ax.set_title(title)) for img in imgs] 
+    imgs = [ (ax.imshow(img), 
+              ax.set_title(title), 
+              ax.annotate(n_img,(5,5))) for n_img, img in enumerate(imgs) ] 
+
+    img_anim = animation.ArtistAnimation(fig, imgs, interval=MSEC_PER_FRAME, 
+                                repeat_delay=MSEC_REPEAT_DELAY, blit=False)
+    if save_gif:
+        print('Writing:', fname)
+        img_anim.save(fname, writer='imagemagick')
+    if show_gif:
+        plt.show()
+    plt.clf() # clearing the figure when done prevents a memory leak 
+
+
+def write_gif(f_seq, images, fname):
+    imgs = [images[f] for f in f_seq] # get images indexed by their filenames
+    build_gif(imgs, fname, show_gif=SHOW_GIF)
+
+
+def write_patient_video(patient):
+    # Given a patient number, create an animaged GIF of their ultrasounds
+    # including an outline of any mask created that identifies nerve tissue.
+    images       = get_patient_images(patient=patient)
+    images_masks = add_masks(images)
+    features     = { f : image_features(images[f]) for f in images }
+    dists        = feature_dists(features)
+    f_seq        = image_sequence(dists)
+    write_gif(f_seq, images_masks, 'patient-%02i.gif' % patient)
+
+
+def main():
+
+    # Animations for patients 32 and 41 are particularly good examples. 
+    write_patient_video(patient=41)
+    write_patient_video(patient=32)
+
+main()

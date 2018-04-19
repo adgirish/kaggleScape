@@ -1,692 +1,879 @@
 
 # coding: utf-8
 
-# # Introduction 
-# 
-# SQL or Structured Query Language is the de-facto language used for interacting with ("querying" per industry speak) relational databases. A relational database consists of tables, where each table contains records, or rows of data organised by fields or columns. On the topic of relational databases,  there are many different flavours and forms of relational database management systems (RDMS) - SQL Server, MySQL, PostgreSQL etc. 
-# 
-# In this Kaggle dataset, the database that we are given to work with is a SQLite  database. SQLite is not your "classical" database in the sense that it is a self-contained, disk-based database that gets embedded in the application that uses it and hence does not require a separate server process.
-# 
-# There seems to be very few notebooks on Kaggle on integrating Python with raw SQL queries and therefore this notebook aims to bridge this gap. Of course one could be able to query a database with an ORM like SQLAlchemy along with the advantages of convenience, security etc that it brings, but there is still something to be had by learning pure SQL. 
-# 
-# so Let's go.
+# # Content
+
+# __1. Exploratory Visualization__  
+# __2. Data Cleaning__  
+# __3. Feature Engineering__  
+# __4. Modeling & Evaluation__  
+# __5. Ensemble Methods__  
 
 # In[ ]:
 
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-import sqlite3
-import os
-from bokeh.plotting import figure, show
-from bokeh.io import output_notebook
-output_notebook()
-get_ipython().run_line_magic('matplotlib', 'inline')
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
 import warnings
 warnings.filterwarnings('ignore')
-
-
-# Unlike my other notebooks, instead of reading data into a pandas dataframe from a csv (comma-separated value) file type right off the bat, we first will query the database (sqlite3) via SQL commands. I will also show how we can integrate Python with SQL by storing any of our relevant queries into a Pandas dataframe. 
-# 
-# To start off, we have to create a connection to the sqlite3 database as such:
-
-# In[ ]:
-
-
-conn = sqlite3.connect('../input/database.sqlite')
-
-
-# Once we have our connection setup in python, we can create a **Cursor** object from which we can call the execute( ) method and to perform SQL statements and queries. 
-
-# In[ ]:
-
-
-c = conn.cursor()
-
-
-# Having created our cursor object, we can now execute our SQL statement. If you are not too familiar with the following syntax, please bear with me until the following section where I will explain in detail what each SQL command does.
-# 
-# You can distinguish SQL commands in my code (from Python) as they will be embedded within a triple quotation mark """
-
-# In[ ]:
-
-
-for row in c.execute(
-                    # SQL statement 
-                    """
-                        SELECT   * 
-                        FROM     Country 
-                        LIMIT    2
-                        
-                     """ ):
-    print(row)
-
-
-# Now that's all and good that we have managed to print out the first two rows of the data from our Sqlite database. However I still have a niggling feeling that the current method is inconvenient in the sense that we have to use a for loop just to execute our SQL statement. 
-# 
-# Thankfully for us, the Pandas library comes with methods that allow one to interact with and query SQL databases and we will explore this in the upcoming section.
-
-# ### Basics of SQL Queries
-# 
-# Before we continue on with the notebook, I will list here the important SQL statements that are most widely used  
-# 
-# **SELECT** : Statement used to select rows and columns from a database. 
-# 
-# **FROM** :  Specifies which table in the database you want to direct your query to
-# 
-# **WHERE**: clause for filtering for a specified value(s)
-# 
-# **GROUP BY**: Aggregating data. Needs to be used in conjunction with SQL aggregating functions like SUM and COUNT.
-# 
-# **ORDER BY**: Sorting columns in the database 
-# 
-# **JOIN** : Joins are used to combine tables with one another. 
-# 
-# **UNION**, **INTERSECT/EXCEPT** : Set operations. Unioning in SQL allows one to append tables on top of one another. 
-
-# # 1. SQL and Pandas Equivalent statements
-# 
-# In this section I shall be comparing a particular SQL statement to its Pandas equivalent in the hope that if you are familiar with the Pandas syntax but not so much SQL, this may allow you to have a familiar reference point with which to familiarise yourself with.
-# 
-# First let us read in the **Country** table in our 
-
-# In[ ]:
-
-
-# Store Country data in a pandas dataframe via a SQL query
-Country = pd.read_sql(
-                       """
-                       
-                        SELECT  * 
-                        FROM    Country
-                        
-                       """, con=conn)
-
-
-# **A.) SELECT, LIMIT and head**
-# 
-# The SELECT statement in SQL is probably the most ubiquitous statement as one will need this statement to select records from a database. Normally you will see this being used very often in conjunction with the asterisk symbol : **SELECT *** .  What this does is to select all rows and columns with in the database. However if one wants to select only a certain number of rows, this is where LIMIT comes in
-# 
-# I think it is rather safe to assume that most Kagglers understand the use of invoking the head( ) call on a dataframe. It essentially returns the top (user-specified) number of rows in your data. Equivalently, one can also do the same thing via a SQL query with the use of the LIMIT statement as follows:
-
-# In[ ]:
-
-
-# Pandas code
-Country.head(3)
+get_ipython().run_line_magic('matplotlib', 'inline')
+plt.style.use('ggplot')
 
 
 # In[ ]:
 
 
-# SQL query 
-pd.read_sql(
-            """
-                SELECT   * 
-                FROM     Country 
-                LIMIT    3 
+from sklearn.base import BaseEstimator, TransformerMixin, RegressorMixin, clone
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import RobustScaler, StandardScaler
+from sklearn.metrics import mean_squared_error
+from sklearn.pipeline import Pipeline, make_pipeline
+from scipy.stats import skew
+from sklearn.decomposition import PCA, KernelPCA
+from sklearn.preprocessing import Imputer
+
+
+# In[ ]:
+
+
+from sklearn.model_selection import cross_val_score, GridSearchCV, KFold
+from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import Ridge
+from sklearn.linear_model import Lasso
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, ExtraTreesRegressor
+from sklearn.svm import SVR, LinearSVR
+from sklearn.linear_model import ElasticNet, SGDRegressor, BayesianRidge
+from sklearn.kernel_ridge import KernelRidge
+from xgboost import XGBRegressor
+
+
+# In[ ]:
+
+
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+
+
+# # Exploratory Visualization
+
+# + __It seems that the price of recent-built houses are higher. So later I 'll use labelencoder for three "Year" feature.__
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8))
+sns.boxplot(train.YearBuilt, train.SalePrice)
+
+
+# + __As is discussed in other kernels, the bottom right two two points with extremely large GrLivArea are likely to be outliers. So we delete them.__
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,6))
+plt.scatter(x=train.GrLivArea, y=train.SalePrice)
+plt.xlabel("GrLivArea", fontsize=13)
+plt.ylabel("SalePrice", fontsize=13)
+plt.ylim(0,800000)
+
+
+# In[ ]:
+
+
+train.drop(train[(train["GrLivArea"]>4000)&(train["SalePrice"]<300000)].index,inplace=True)
+
+
+# In[ ]:
+
+
+full=pd.concat([train,test], ignore_index=True)
+
+
+# In[ ]:
+
+
+full.drop(['Id'],axis=1, inplace=True)
+full.shape
+
+
+# # Data Cleaning
+
+# ### Missing Data
+
+# In[ ]:
+
+
+aa = full.isnull().sum()
+aa[aa>0].sort_values(ascending=False)
+
+
+# + __Let's first imput the missing values of LotFrontage based on the median of LotArea and Neighborhood. Since LotArea is a continuous feature, We use qcut to divide it into 10 parts.__
+
+# In[ ]:
+
+
+full.groupby(['Neighborhood'])[['LotFrontage']].agg(['mean','median','count'])
+
+
+# In[ ]:
+
+
+full["LotAreaCut"] = pd.qcut(full.LotArea,10)
+
+
+# In[ ]:
+
+
+full.groupby(['LotAreaCut'])[['LotFrontage']].agg(['mean','median','count'])
+
+
+# In[ ]:
+
+
+full['LotFrontage']=full.groupby(['LotAreaCut','Neighborhood'])['LotFrontage'].transform(lambda x: x.fillna(x.median()))
+
+
+# In[ ]:
+
+
+# Since some combinations of LotArea and Neighborhood are not available, so we just LotAreaCut alone.
+full['LotFrontage']=full.groupby(['LotAreaCut'])['LotFrontage'].transform(lambda x: x.fillna(x.median()))
+
+
+# + __Then we filling in other missing values according to data_description.__
+
+# In[ ]:
+
+
+cols=["MasVnrArea", "BsmtUnfSF", "TotalBsmtSF", "GarageCars", "BsmtFinSF2", "BsmtFinSF1", "GarageArea"]
+for col in cols:
+    full[col].fillna(0, inplace=True)
+
+
+# In[ ]:
+
+
+cols1 = ["PoolQC" , "MiscFeature", "Alley", "Fence", "FireplaceQu", "GarageQual", "GarageCond", "GarageFinish", "GarageYrBlt", "GarageType", "BsmtExposure", "BsmtCond", "BsmtQual", "BsmtFinType2", "BsmtFinType1", "MasVnrType"]
+for col in cols1:
+    full[col].fillna("None", inplace=True)
+
+
+# In[ ]:
+
+
+# fill in with mode
+cols2 = ["MSZoning", "BsmtFullBath", "BsmtHalfBath", "Utilities", "Functional", "Electrical", "KitchenQual", "SaleType","Exterior1st", "Exterior2nd"]
+for col in cols2:
+    full[col].fillna(full[col].mode()[0], inplace=True)
+
+
+# + __And there is no missing data except for the value we want to predict !__
+
+# In[ ]:
+
+
+full.isnull().sum()[full.isnull().sum()>0]
+
+
+# # Feature Engineering
+
+# + __Convert some numerical features into categorical features. It's better to use LabelEncoder and get_dummies for these features.__
+
+# In[ ]:
+
+
+NumStr = ["MSSubClass","BsmtFullBath","BsmtHalfBath","HalfBath","BedroomAbvGr","KitchenAbvGr","MoSold","YrSold","YearBuilt","YearRemodAdd","LowQualFinSF","GarageYrBlt"]
+for col in NumStr:
+    full[col]=full[col].astype(str)
+
+
+# + __Now I want to do a long list of value-mapping. __
+# + __I was influenced by the insight that we should build as many features as possible and trust the model to choose the right features. So I decided to groupby SalePrice according to one feature and sort it based on mean and median. Here is an example:__
+
+# In[ ]:
+
+
+full.groupby(['MSSubClass'])[['SalePrice']].agg(['mean','median','count'])
+
+
+# + __So basically I'll do__  
+#                 '180' : 1
+#                 '30' : 2   '45' : 2
+#                 '190' : 3, '50' : 3, '90' : 3,
+#                 '85' : 4, '40' : 4, '160' : 4
+#                 '70' : 5, '20' : 5, '75' : 5, '80' : 5, '150' : 5
+#                 '120': 6, '60' : 6
+
+# + __Different people may have different views on how to map these values, so just follow your instinct =^_^=__  
+# __Below I also add a small "o" in front of the features so as to keep the original features to use get_dummies in a moment.__
+
+# In[ ]:
+
+
+def map_values():
+    full["oMSSubClass"] = full.MSSubClass.map({'180':1, 
+                                        '30':2, '45':2, 
+                                        '190':3, '50':3, '90':3, 
+                                        '85':4, '40':4, '160':4, 
+                                        '70':5, '20':5, '75':5, '80':5, '150':5,
+                                        '120': 6, '60':6})
+    
+    full["oMSZoning"] = full.MSZoning.map({'C (all)':1, 'RH':2, 'RM':2, 'RL':3, 'FV':4})
+    
+    full["oNeighborhood"] = full.Neighborhood.map({'MeadowV':1,
+                                               'IDOTRR':2, 'BrDale':2,
+                                               'OldTown':3, 'Edwards':3, 'BrkSide':3,
+                                               'Sawyer':4, 'Blueste':4, 'SWISU':4, 'NAmes':4,
+                                               'NPkVill':5, 'Mitchel':5,
+                                               'SawyerW':6, 'Gilbert':6, 'NWAmes':6,
+                                               'Blmngtn':7, 'CollgCr':7, 'ClearCr':7, 'Crawfor':7,
+                                               'Veenker':8, 'Somerst':8, 'Timber':8,
+                                               'StoneBr':9,
+                                               'NoRidge':10, 'NridgHt':10})
+    
+    full["oCondition1"] = full.Condition1.map({'Artery':1,
+                                           'Feedr':2, 'RRAe':2,
+                                           'Norm':3, 'RRAn':3,
+                                           'PosN':4, 'RRNe':4,
+                                           'PosA':5 ,'RRNn':5})
+    
+    full["oBldgType"] = full.BldgType.map({'2fmCon':1, 'Duplex':1, 'Twnhs':1, '1Fam':2, 'TwnhsE':2})
+    
+    full["oHouseStyle"] = full.HouseStyle.map({'1.5Unf':1, 
+                                           '1.5Fin':2, '2.5Unf':2, 'SFoyer':2, 
+                                           '1Story':3, 'SLvl':3,
+                                           '2Story':4, '2.5Fin':4})
+    
+    full["oExterior1st"] = full.Exterior1st.map({'BrkComm':1,
+                                             'AsphShn':2, 'CBlock':2, 'AsbShng':2,
+                                             'WdShing':3, 'Wd Sdng':3, 'MetalSd':3, 'Stucco':3, 'HdBoard':3,
+                                             'BrkFace':4, 'Plywood':4,
+                                             'VinylSd':5,
+                                             'CemntBd':6,
+                                             'Stone':7, 'ImStucc':7})
+    
+    full["oMasVnrType"] = full.MasVnrType.map({'BrkCmn':1, 'None':1, 'BrkFace':2, 'Stone':3})
+    
+    full["oExterQual"] = full.ExterQual.map({'Fa':1, 'TA':2, 'Gd':3, 'Ex':4})
+    
+    full["oFoundation"] = full.Foundation.map({'Slab':1, 
+                                           'BrkTil':2, 'CBlock':2, 'Stone':2,
+                                           'Wood':3, 'PConc':4})
+    
+    full["oBsmtQual"] = full.BsmtQual.map({'Fa':2, 'None':1, 'TA':3, 'Gd':4, 'Ex':5})
+    
+    full["oBsmtExposure"] = full.BsmtExposure.map({'None':1, 'No':2, 'Av':3, 'Mn':3, 'Gd':4})
+    
+    full["oHeating"] = full.Heating.map({'Floor':1, 'Grav':1, 'Wall':2, 'OthW':3, 'GasW':4, 'GasA':5})
+    
+    full["oHeatingQC"] = full.HeatingQC.map({'Po':1, 'Fa':2, 'TA':3, 'Gd':4, 'Ex':5})
+    
+    full["oKitchenQual"] = full.KitchenQual.map({'Fa':1, 'TA':2, 'Gd':3, 'Ex':4})
+    
+    full["oFunctional"] = full.Functional.map({'Maj2':1, 'Maj1':2, 'Min1':2, 'Min2':2, 'Mod':2, 'Sev':2, 'Typ':3})
+    
+    full["oFireplaceQu"] = full.FireplaceQu.map({'None':1, 'Po':1, 'Fa':2, 'TA':3, 'Gd':4, 'Ex':5})
+    
+    full["oGarageType"] = full.GarageType.map({'CarPort':1, 'None':1,
+                                           'Detchd':2,
+                                           '2Types':3, 'Basment':3,
+                                           'Attchd':4, 'BuiltIn':5})
+    
+    full["oGarageFinish"] = full.GarageFinish.map({'None':1, 'Unf':2, 'RFn':3, 'Fin':4})
+    
+    full["oPavedDrive"] = full.PavedDrive.map({'N':1, 'P':2, 'Y':3})
+    
+    full["oSaleType"] = full.SaleType.map({'COD':1, 'ConLD':1, 'ConLI':1, 'ConLw':1, 'Oth':1, 'WD':1,
+                                       'CWD':2, 'Con':3, 'New':3})
+    
+    full["oSaleCondition"] = full.SaleCondition.map({'AdjLand':1, 'Abnorml':2, 'Alloca':2, 'Family':2, 'Normal':3, 'Partial':4})            
                 
-            """, con=conn)
-
-
-# **B.) WHERE and Boolean Indexing**
-# 
-# The SQL WHERE clause is mainly used for filtering records of interest. Therefore if the records fulfill the conditions as laid out by the WHERE clause, then that record will be returned. The equivalent of this in Python and Pandas is that of Boolean Indexing - a.k.a passing into the DataFrame another DataFrame in a comparison statement as follows:
-
-# In[ ]:
-
-
-# Pandas Boolean Indexing
-Country[Country['CountryCode'] == 'AFG']
+                        
+                        
+    
+    return "Done!"
 
 
 # In[ ]:
 
 
-# SQL WHERE clause
-pd.read_sql(
-        """ 
-            SELECT   * 
-            FROM     Country 
-            WHERE    CountryCode = 'AFG'
+map_values()
+
+
+# In[ ]:
+
+
+# drop two unwanted columns
+full.drop("LotAreaCut",axis=1,inplace=True)
+full.drop(['SalePrice'],axis=1,inplace=True)
+
+
+# ## Pipeline
+
+# + __Next we can build a pipeline. It's convenient to experiment different feature combinations once you've got a pipeline.__
+
+# + __Label Encoding three "Year" features.__
+
+# In[ ]:
+
+
+class labelenc(BaseEstimator, TransformerMixin):
+    def __init__(self):
+        pass
+    
+    def fit(self,X,y=None):
+        return self
+    
+    def transform(self,X):
+        lab=LabelEncoder()
+        X["YearBuilt"] = lab.fit_transform(X["YearBuilt"])
+        X["YearRemodAdd"] = lab.fit_transform(X["YearRemodAdd"])
+        X["GarageYrBlt"] = lab.fit_transform(X["GarageYrBlt"])
+        return X
+
+
+# + __Apply log1p to the skewed features, then get_dummies.__
+
+# In[ ]:
+
+
+class skew_dummies(BaseEstimator, TransformerMixin):
+    def __init__(self,skew=0.5):
+        self.skew = skew
+    
+    def fit(self,X,y=None):
+        return self
+    
+    def transform(self,X):
+        X_numeric=X.select_dtypes(exclude=["object"])
+        skewness = X_numeric.apply(lambda x: skew(x))
+        skewness_features = skewness[abs(skewness) >= self.skew].index
+        X[skewness_features] = np.log1p(X[skewness_features])
+        X = pd.get_dummies(X)
+        return X
+
+
+# In[ ]:
+
+
+# build pipeline
+pipe = Pipeline([
+    ('labenc', labelenc()),
+    ('skew_dummies', skew_dummies(skew=1)),
+    ])
+
+
+# In[ ]:
+
+
+# save the original data for later use
+full2 = full.copy()
+
+
+# In[ ]:
+
+
+data_pipe = pipe.fit_transform(full2)
+
+
+# In[ ]:
+
+
+data_pipe.shape
+
+
+# In[ ]:
+
+
+data_pipe.head()
+
+
+# + __use robustscaler since maybe there are other outliers.__
+
+# In[ ]:
+
+
+scaler = RobustScaler()
+
+
+# In[ ]:
+
+
+n_train=train.shape[0]
+
+X = data_pipe[:n_train]
+test_X = data_pipe[n_train:]
+y= train.SalePrice
+
+X_scaled = scaler.fit(X).transform(X)
+y_log = np.log(train.SalePrice)
+test_X_scaled = scaler.transform(test_X)
+
+
+# ## Feature Selection
+
+# + __I have to confess, the feature engineering above is not enough, so we need more.__   
+# + __Combining different features is usually a good way, but we have no idea what features should we choose. Luckily there are some models that can provide feature selection, here I use Lasso, but you are free to choose Ridge, RandomForest or GradientBoostingTree.__
+
+# In[ ]:
+
+
+lasso=Lasso(alpha=0.001)
+lasso.fit(X_scaled,y_log)
+
+
+# In[ ]:
+
+
+FI_lasso = pd.DataFrame({"Feature Importance":lasso.coef_}, index=data_pipe.columns)
+
+
+# In[ ]:
+
+
+FI_lasso.sort_values("Feature Importance",ascending=False)
+
+
+# In[ ]:
+
+
+FI_lasso[FI_lasso["Feature Importance"]!=0].sort_values("Feature Importance").plot(kind="barh",figsize=(15,25))
+plt.xticks(rotation=90)
+plt.show()
+
+
+# + __Based on the "Feature Importance" plot and other try-and-error, I decided to add some features to the pipeline.__
+
+# In[ ]:
+
+
+class add_feature(BaseEstimator, TransformerMixin):
+    def __init__(self,additional=1):
+        self.additional = additional
+    
+    def fit(self,X,y=None):
+        return self
+    
+    def transform(self,X):
+        if self.additional==1:
+            X["TotalHouse"] = X["TotalBsmtSF"] + X["1stFlrSF"] + X["2ndFlrSF"]   
+            X["TotalArea"] = X["TotalBsmtSF"] + X["1stFlrSF"] + X["2ndFlrSF"] + X["GarageArea"]
             
-        """, con=conn)
-
-
-# **C.) GROUP BY and dataframe aggregation**
-# 
-# The GROUP BY clause is very useful when aggregations are required to be generated. When I say aggregations, these are taken to mean things (in SQL speak) such as COUNT, MAX, MIN, SUM etc. 
-# 
-# In the following example, I shall perform an aggregation on the Country dataset by counting (COUNT function) the number of records that belong to a certain Region. As a rule of thumb, to know what we have to add to our GROUP BY statement is simply the column that we want to aggregate on (Region in our case).
-
-# In[ ]:
-
-
-# SQL GROUP BY Clause
-pd.read_sql(
-        """ 
-            SELECT      Region
-                        ,COUNT(*) AS [Count]
-            FROM        Country 
-            GROUP BY    Region
-            ORDER BY    2 DESC
+        else:
+            X["TotalHouse"] = X["TotalBsmtSF"] + X["1stFlrSF"] + X["2ndFlrSF"]   
+            X["TotalArea"] = X["TotalBsmtSF"] + X["1stFlrSF"] + X["2ndFlrSF"] + X["GarageArea"]
             
-        """, con=conn)
-
-
-# I snuck in an ORDER BY statement and what this does is to sort the data in descending order (DESC keyword). Anyway, we can see that this GROUP BY does counts all the records (aggregate) that belong to a particular region and and then outputs the result in a ordered tabular format. 
-# 
-# Particularly interesting is the fact that we have an empty string as one of our categories in Region and there are 33 records in the database that can be attributed to this. Perhaps this could be brought up as a data quality issue and definitely warrants further investigation.
-
-# **D.) SQL JOIN**
-# 
-# The JOIN clause in SQL is used to combine records from two or more tables and the way the records are combined are based on a related column between these tables. There are 4 main types of JOINs in SQL: 
-# 
-# INNER, LEFT, RIGHT and OUTER JOIN
-# 
-# INNER returns rows that are common to both tables while OUTER returns all records when there is a match in either the left or the right table. LEFT returns all the rows from the left table as well as all matching rows from the right (i.e for rows in the right table that are not matching, it will therefore return NULL values )
-
-# In[ ]:
-
-
-# Let's do a LEFT JOIN on some subqueries 
-pd.read_sql(
-        """ 
+            X["+_TotalHouse_OverallQual"] = X["TotalHouse"] * X["OverallQual"]
+            X["+_GrLivArea_OverallQual"] = X["GrLivArea"] * X["OverallQual"]
+            X["+_oMSZoning_TotalHouse"] = X["oMSZoning"] * X["TotalHouse"]
+            X["+_oMSZoning_OverallQual"] = X["oMSZoning"] + X["OverallQual"]
+            X["+_oMSZoning_YearBuilt"] = X["oMSZoning"] + X["YearBuilt"]
+            X["+_oNeighborhood_TotalHouse"] = X["oNeighborhood"] * X["TotalHouse"]
+            X["+_oNeighborhood_OverallQual"] = X["oNeighborhood"] + X["OverallQual"]
+            X["+_oNeighborhood_YearBuilt"] = X["oNeighborhood"] + X["YearBuilt"]
+            X["+_BsmtFinSF1_OverallQual"] = X["BsmtFinSF1"] * X["OverallQual"]
+            
+            X["-_oFunctional_TotalHouse"] = X["oFunctional"] * X["TotalHouse"]
+            X["-_oFunctional_OverallQual"] = X["oFunctional"] + X["OverallQual"]
+            X["-_LotArea_OverallQual"] = X["LotArea"] * X["OverallQual"]
+            X["-_TotalHouse_LotArea"] = X["TotalHouse"] + X["LotArea"]
+            X["-_oCondition1_TotalHouse"] = X["oCondition1"] * X["TotalHouse"]
+            X["-_oCondition1_OverallQual"] = X["oCondition1"] + X["OverallQual"]
+            
            
-            SELECT      A.CountryCode
-                        ,B.LatestPopulationCensus
-                        ,B.SourceOfMostRecentIncomeAndExpenditureData
-                        ,B.ShortName
-            FROM       ( 
-                            -- First subquery (i.e the Left table)
-                            
-                           SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                           FROM        Country
-                           WHERE       CountryCode IN ('AFG','ALB', 'ASM', 'BEL')
-                        ) AS A
-            LEFT JOIN   (
-                            -- Second subquery (i.e the right table )
-                            
-                            SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                            FROM        Country AS A
-                            WHERE       CountryCode IN ('AFG','ARM', 'URY', 'BEL')
-                            
-                          ) AS B
-            ON          A.CountryCode = B.CountryCode    
-            
-        """, con=conn)
+            X["Bsmt"] = X["BsmtFinSF1"] + X["BsmtFinSF2"] + X["BsmtUnfSF"]
+            X["Rooms"] = X["FullBath"]+X["TotRmsAbvGrd"]
+            X["PorchArea"] = X["OpenPorchSF"]+X["EnclosedPorch"]+X["3SsnPorch"]+X["ScreenPorch"]
+            X["TotalPlace"] = X["TotalBsmtSF"] + X["1stFlrSF"] + X["2ndFlrSF"] + X["GarageArea"] + X["OpenPorchSF"]+X["EnclosedPorch"]+X["3SsnPorch"]+X["ScreenPorch"]
+
+    
+            return X
 
 
-# So as we can see from the LEFT JOIN, it does return all the records from the left table ('AFG','ALB', 'ASM', 'BEL'). However nothing was returned from the right table for the codes 'ALB' and 'ASM' and hence value of None in the columns returned from that table.
-
-# **E) UNION, INTERSECT and EXCEPT**
-# 
-# SQL also comes with a handful of useful Set operations, namely that of UNION, INTERSECT and the EXCEPT statements. These statements perform exactly as their name suggests (set theory) - UNION combines the output from two or more SELECT - FROM statements (it removes duplication in rows while UNION ALL includes duplicates), INTERSECT returns rows common to both top and bottom query while EXCEPT returns rows from the top query not in the bottom query.
+# + __By using a pipeline, you can quickily experiment different feature combinations.__
 
 # In[ ]:
 
 
-# UNION 
-pd.read_sql(
-        """ 
-                           SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                           FROM        Country
-                           WHERE       CountryCode IN ('AFG','ALB', 'ASM', 'BEL')
-                       
-                           UNION
-                           
-                           SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                           FROM        Country AS A
-                           WHERE       CountryCode IN ('AFG','ARM', 'URY', 'BEL')
-            
-        """, con=conn)
+pipe = Pipeline([
+    ('labenc', labelenc()),
+    ('add_feature', add_feature(additional=2)),
+    ('skew_dummies', skew_dummies(skew=1)),
+    ])
+
+
+# ## PCA
+
+# + __Im my case, doing PCA is very important. It lets me gain a relatively big boost on leaderboard. At first I don't believe PCA can help me, but 
+# in retrospect, maybe the reason is that the features I built are highly correlated, and it leads to multicollinearity. PCA can decorrelate these features.__
+
+# + __So I'll use approximately the same dimension in PCA as  in the original data. Since the aim here is not deminsion reduction.__
+
+# In[ ]:
+
+
+full_pipe = pipe.fit_transform(full)
 
 
 # In[ ]:
 
 
-# INTERSECT 
-pd.read_sql(
-        """ 
-                           SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                           FROM        Country
-                           WHERE       CountryCode IN ('AFG','ALB', 'ASM', 'BEL')
-                       
-                           INTERSECT
-                           
-                           SELECT      CountryCode
-                                        ,LatestPopulationCensus
-                                        ,SourceOfMostRecentIncomeAndExpenditureData
-                                        ,ShortName
-                           FROM        Country AS A
-                           WHERE       CountryCode IN ('AFG','ARM', 'URY', 'BEL')
-            
-        """, con=conn)
-
-
-# # 2. Data Analysis and Visualisations
-# 
-# Having discussed at some length to basic SQL statements and how we can interact and query SQL databases through Python let us now carry on with our World Developmental analysis. To start off, I shall create a dataframe via a query of the **Indicator** table with a handful of manually chosen indicators (as the full table contains too many indicators for this notebook)
-# 
-# A quick description of the indicators are as follows:
-# 
-# **AG.LND.PRCP.MM** :  Average precipitation in depth (mm per year)
-# 
-# **EG.ELC.ACCS.ZS** :  Access to electricity (% of population)
-# 
-# **EG.ELC.FOSL.ZS** :  Electricity production from oil, gas and coal sources (% of total)
-# 
-# **SG.VAW.REAS.ZS** : Women who believe that a husband is justified in beating his wife (any of the five reasons)
-# 
-# **SM.POP.NETM** : Net migration
-
-# In[ ]:
-
-
-Indicators = pd.read_sql(""" SELECT   * 
-                             FROM     Indicators 
-                             WHERE    IndicatorCode IN 
-                                      (  'AG.LND.PRCP.MM, AG.LND.FRST.K2'
-                                       , 'EG.ELC.ACCS.ZS', 'EG.ELC.FOSL.ZS'
-                                       , 'EN.POP.DNST', 'SG.VAW.REAS.ZS'
-                                       , 'SM.POP.NETM', 'SP.POP.65UP.TO.ZS'
-                                       , 'FI.RES.TOTL.DT.ZS', 'GC.DOD.TOTL.GD.ZS'
-                                       , 'MS.MIL.XPND.GD.ZS','SI.POV.GINI'
-                                       , 'IP.JRN.ARTC.SC', 'SE.ADT.1524.LT.ZS'
-                                      )  
-                        """, con=conn)
-
-
-# ### 2A. GINI Index analysis
-# 
-# Starting off with our analysis, we first take a look at the GINI index of some of the countries we have in our dataset. As a quick primer the GINI index (in its normalised form) is a statistical measure used to represent the income or wealth distribution of a nation's citizens. Therefore as a consequence, it has come to represent a very ubiquitous measure of inequality in a country. 
-# 
-# The data given in the index has not yet been normalised but we are primarily interested in the trend over the years given in the data. Anyway I'll start of by creating a gini dataframe that only store GINI data as follows:
-
-# In[ ]:
-
-
-#Regions = ['ARB', 'EUU', 'LCN' , 'NAC',  'EAS', 'SSF', 'World']
-gini = Indicators[Indicators['IndicatorCode']== 'SI.POV.GINI']
-
-
-# **Seaborn subplots**
-# 
-# Next, I will utilise the Seaborn plotting library to plot some scatter plots of the GINI index for various countries as follow:
-
-# In[ ]:
-
-
-gini.CountryCode.unique()
+full_pipe.shape
 
 
 # In[ ]:
 
 
-# Plotting a Subplot of the Seaborn regplot
-f, ((ax1, ax2, ax3), (ax4,ax5,ax6), (ax7, ax8, ax9)) = plt.subplots(3,3,figsize=(12,10))
+n_train=train.shape[0]
+X = full_pipe[:n_train]
+test_X = full_pipe[n_train:]
+y= train.SalePrice
 
-# Plot of GINI index of China
-points = ax1.scatter(gini[gini['CountryCode'] == 'CHN']["Year"], gini[gini['CountryCode'] == 'CHN']["Value"],
-                     c=gini[gini['CountryCode'] == 'CHN']["Value"], s=100, cmap="viridis")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'CHN'], ax=ax1)
-ax1.set_title("GINI Index of China")
-
-# Plot of GINI of Argentina
-points = ax2.scatter(gini[gini['CountryCode'] == 'ARG']["Year"], gini[gini['CountryCode'] == 'ARG']["Value"],
-                     c=gini[gini['CountryCode'] == 'ARG']["Value"], s=85, cmap="viridis")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'ARG'], ax=ax2)
-ax2.set_title("GINI Index of Argentina")
-
-points = ax3.scatter(gini[gini['CountryCode'] == 'UGA']["Year"], gini[gini['CountryCode'] == 'UGA']["Value"],
-                     c=gini[gini['CountryCode'] == 'UGA']["Value"], s=100, cmap="afmhot")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'UGA'], ax=ax3)
-ax3.set_title("GINI Index of Uganda")
-
-points = ax4.scatter(gini[gini['CountryCode'] == 'USA']["Year"], gini[gini['CountryCode'] == 'USA']["Value"],
-                     c=gini[gini['CountryCode'] == 'USA']["Value"], s=100, cmap="Purples_r")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'USA'], ax=ax4)
-ax4.set_title("GINI Index of USA")
-
-points = ax5.scatter(gini[gini['CountryCode'] == 'COL']["Year"], gini[gini['CountryCode'] == 'COL']["Value"],
-                     c=gini[gini['CountryCode'] == 'COL']["Value"], s=100, cmap="YlOrBr")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'COL'], ax=ax5)
-ax5.set_title("GINI Index of Colombia")
-
-points = ax6.scatter(gini[gini['CountryCode'] == 'RWA']["Year"], gini[gini['CountryCode'] == 'RWA']["Value"],
-                     c=gini[gini['CountryCode'] == 'RWA']["Value"], s=100, cmap="Blues")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'RWA'], ax=ax6)
-ax6.set_title("GINI Index of Rwanda")
-
-points = ax7.scatter(gini[gini['CountryCode'] == 'RUS']["Year"], gini[gini['CountryCode'] == 'RUS']["Value"],
-                     c=gini[gini['CountryCode'] == 'RUS']["Value"], s=100, cmap="Blues")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'RUS'], ax=ax7)
-ax7.set_title("GINI Index of Russia")
-
-points = ax8.scatter(gini[gini['CountryCode'] == 'ECU']["Year"], gini[gini['CountryCode'] == 'ECU']["Value"],
-                     c=gini[gini['CountryCode'] == 'ECU']["Value"], s=100, cmap="winter")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'ECU'], ax=ax8)
-ax8.set_title("GINI Index of Ecuador")
-
-points = ax9.scatter(gini[gini['CountryCode'] == 'CAF']["Year"], gini[gini['CountryCode'] == 'CAF']["Value"],
-                     c=gini[gini['CountryCode'] == 'CAF']["Value"], s=100, cmap="magma")
-sns.regplot("Year", "Value", data=gini[gini['CountryCode'] == 'CAF'], ax=ax9)
-ax9.set_title("GINI Index of Central African Republic")
-sns.set_style(style="dark")
-plt.tight_layout()
-
-
-# **Takeaway from the Plots**
-# 
-# As one can observe from the Seaborn subplots above, I have attempted to group countries accordingly column-wise. The left-most column contain countries which we would now think of as Global powers in the political scene (USA, China and Russia). It is interesting to note that for these countries, the measurement of inequality has been a clear and increasing trend over the decades. 
-# 
-# For the middle column, I have grouped three South American countries (Argentina, Colombia and Ecuador)  while the right-most column contains African countries.
-
-# ### 2B. Youth Literacy Rate (% of population)
-# 
-# Onto our next indicator, which has an indicator code of **SE.ADT.1524.LT.ZS** : Youth Literacy rates. Previously on one of my other Kernels, I had published a piece of analysis on global Youth unemployment and it seemed to hit quite a chord with readers, especially around the high rates of youth unemployment prevalent around European countries for the past half decade.
-# 
-# Let us plot an interactive barplot via the Plotly visualisation library to observe how Youth literacy rates have changed over two decades - from 1990 to 2010.
-
-# In[ ]:
-
-
-# Barplots of Youth literacy rates in 1990
-data = Indicators[Indicators['IndicatorCode'] == 'SE.ADT.1524.LT.ZS'][Indicators['Year'] == 1990]
-x, y = (list(x) for x in zip(*sorted(zip(data['Value'].values, data['CountryName'].values), 
-                                                            reverse = False)))
-
-# Plotting using Plotly 
-trace2 = go.Bar(
-    x=x ,
-    y=y,
-    marker=dict(
-        color=x,
-        colorscale = 'Portland',
-        reversescale = True
-    ),
-    name='Percentage of Youth Literacy Rate',
-    orientation='h',
-)
-
-layout = dict(
-    title='Barplot of Youth Literacy Rate in 1990',
-     width = 680, height = 1500,
-    yaxis=dict(
-        showgrid=False,
-        showline=False,
-        showticklabels=True,
-#         domain=[0, 0.85],
-    ))
-
-fig1 = go.Figure(data=[trace2])
-fig1['layout'].update(layout)
-py.iplot(fig1, filename='plots')
-
-# Barplot of Youth literacy rates in 2010
-data = Indicators[Indicators['IndicatorCode'] == 'SE.ADT.1524.LT.ZS'][Indicators['Year'] == 2010]
-x, y = (list(x) for x in zip(*sorted(zip(data['Value'].values, data['CountryName'].values), 
-                                                            reverse = False)))
-
-# Plotting using Plotly 
-trace2 = go.Bar(
-    x=x ,
-    y=y,
-    marker=dict(
-        color=x,
-        colorscale = 'Portland',
-        reversescale = True
-    ),
-    name='Percentage of Youth Literacy Rate',
-    orientation='h',
-)
-
-layout = dict(
-    title='Barplot of Youth Literacy Rate in 2010',
-     width = 680, height = 1500,
-    yaxis=dict(
-        showgrid=False,
-        showline=False,
-        showticklabels=True,
-#         domain=[0, 0.85],
-    ))
-
-fig1 = go.Figure(data=[trace2])
-fig1['layout'].update(layout)
-py.iplot(fig1, filename='plots')
-
-
-# ### 2C. Access to Electricity
-# 
-# Let's now inspect another very important indicator and that would be one of a country's access to electricity. For this, let us plot a heatmap and I will switch to using the visualisation library Bokeh for this task. 
-
-# In[ ]:
-
-
-# Create some useful helper variables
-data = Indicators[Indicators['IndicatorCode'] == 'EG.ELC.ACCS.ZS']
-data['Year'] = [str(x) for x in data['Year']]
-years = list(data['Year'].unique())
-country = [
-     u'Jordan', u'Kazakhstan', u'Kenya', u'Kiribati',
-       u'Korea, Dem. Rep.', u'Korea, Rep.', u'Kosovo', u'Kuwait',
-       u'Kyrgyz Republic', u'Lao PDR', u'Latvia', u'Lebanon', u'Lesotho',
-       u'Liberia', u'Libya', u'Liechtenstein', u'Lithuania', u'Luxembourg',
-       u'Macao SAR, China', u'Macedonia, FYR', u'Madagascar', u'Malawi',
-       u'Malaysia', u'Maldives', u'Mali', u'Malta', u'Marshall Islands',
-       u'Mauritania', u'Mauritius', u'Mexico', u'Micronesia, Fed. Sts.',
-       u'Moldova', u'Monaco', u'Mongolia', u'Montenegro', u'Morocco',
-       u'Mozambique', u'Myanmar', u'Namibia', u'Nepal', u'Netherlands',
-       u'New Caledonia', u'New Zealand', u'Nicaragua', u'Niger',
-       u'Nigeria', u'Norway', u'Oman', u'Pakistan', u'Palau', u'Panama',
-       u'Papua New Guinea', u'Paraguay', u'Peru', u'Philippines',
-       u'Poland', u'Portugal', u'Puerto Rico', u'Qatar', u'Romania',
-       u'Russian Federation', u'Rwanda', u'Samoa', u'San Marino',
-       u'Sao Tome and Principe', u'Saudi Arabia', u'Senegal', u'Serbia',
-       u'Seychelles', u'Sierra Leone', u'Singapore', u'Slovak Republic',
-       u'Slovenia', u'Solomon Islands', u'Somalia', u'South Africa',
-       u'South Sudan', u'Spain', u'Sri Lanka' u'Sudan', u'Suriname',
-       u'Swaziland', u'Sweden', u'Switzerland', u'Syrian Arab Republic',
-       u'Tajikistan', u'Tanzania', u'Thailand', u'Timor-Leste', u'Togo',
-       u'Tonga', u'Trinidad and Tobago', u'Tunisia', u'Turkey',
-       u'Turkmenistan', u'Tuvalu', u'Uganda',
-       u'Ukraine', u'United Arab Emirates', u'United Kingdom',
-       u'United States', u'Uruguay'
-]
+X_scaled = scaler.fit(X).transform(X)
+y_log = np.log(train.SalePrice)
+test_X_scaled = scaler.transform(test_X)
 
 
 # In[ ]:
 
 
-from math import pi
-
-from bokeh.io import show
-from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper
-from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper
-# data = data.set_index('Year')
-# this is the colormap from the original NYTimes plot
-colors = ["#75968f", "#a5bab7", "#c9d9d3", "#e2e2e2", "#dfccce", "#ddb7b1", "#cc7878", "#933b41", "#550b1d"]
-mapper = LinearColorMapper(palette=colors)
-# Set up the data for plotting. We will need to have values for every
-# pair of year/month names. Map the rate to a color.
-countr = []
-year = []
-color = []
-rate = []
-for y in years:
-    for m in country:
-        countr.append(m)
-        year.append(y)
-#         d[(d['x']>2) & (d['y']>7)]
-        monthly_rate = data[(data['CountryName']==m) & (data['Year']==y)]['Value']
-        rate.append(monthly_rate)
-
-source = ColumnDataSource(
-    data=dict(country=countr, year=year, rate=rate)
-)
-
-TOOLS = "hover,save,pan,box_zoom,wheel_zoom"
-
-p = figure(title="Access to Electricity",
-           x_range=years, y_range=list(reversed(country)),
-           x_axis_location="above", plot_width=900, plot_height=900,
-           tools=TOOLS)
-
-p.grid.grid_line_color = None
-p.axis.axis_line_color = None
-p.axis.major_tick_line_color = None
-p.axis.major_label_text_font_size = "5pt"
-p.axis.major_label_standoff = 0
-p.xaxis.major_label_orientation = pi / 3
-
-p.rect(x="year", y="country", width=1, height=1,
-       source=source,
-       fill_color={'field': 'rate', 'transform': mapper},
-       line_color=None)
-
-p.select_one(HoverTool).tooltips = [
-#     ('date', '@countr @year'),
-    ('rate', '@rate'),
-]
-
-show(p)      # show the plot
+pca = PCA(n_components=410)
 
 
-# As we can see, there are
+# In[ ]:
 
-# ### 2 D. Women who believe husband is justified in beating the wife
+
+X_scaled=pca.fit_transform(X_scaled)
+test_X_scaled = pca.transform(test_X_scaled)
+
+
+# In[ ]:
+
+
+X_scaled.shape, test_X_scaled.shape
+
+
+# # Modeling & Evaluation
+
+# In[ ]:
+
+
+# define cross validation strategy
+def rmse_cv(model,X,y):
+    rmse = np.sqrt(-cross_val_score(model, X, y, scoring="neg_mean_squared_error", cv=5))
+    return rmse
+
+
+# + __We choose 13 models and use 5-folds cross-calidation to evaluate these models.__
+
+# Models include:
 # 
-# Now this indicator is most controversial but also the one that really caught my attention. This indicator 
+# + LinearRegression
+# + Ridge
+# + Lasso
+# + Random Forrest
+# + Gradient Boosting Tree
+# + Support Vector Regression
+# + Linear Support Vector Regression
+# + ElasticNet
+# + Stochastic Gradient Descent
+# + BayesianRidge
+# + KernelRidge
+# + ExtraTreesRegressor
+# + XgBoost
 
 # In[ ]:
 
 
-data = Indicators[Indicators['IndicatorCode'] == 'SG.VAW.REAS.ZS']
-
-
-# In[ ]:
-
-
-data = Indicators[Indicators['IndicatorCode'] == 'SE.ADT.1524.LT.ZS']
-data['Year'] = [str(x) for x in data['Year']]
-years = ['2000',
- '2001',
- '2002',
- '2003',
- '2004',
- '2005',
- '2006',
- '2007',
- '2008',
- '2009',
- '2010',
- '2011',
- '2012',
- '2013',
- '2014']
-country = ['Burkina Faso', 'Central African Republic', 'Kuwait', 'Turkey',
-       'United Arab Emirates', 'Uruguay', 'Bolivia', 'Cameroon',
-       'Egypt, Arab Rep.', 'Iran, Islamic Rep.', 'Mali', 'New Caledonia',
-       'Swaziland', 'Tonga', 'Maldives', 'Poland', 'Rwanda', 'Afghanistan',
-       'Benin', 'Burundi', 'Guinea-Bissau', 'Jordan', 'Vanuatu', 'Vietnam',
-       'American Samoa', 'Argentina', 'Brazil', 'Comoros', 'Guam',
-       'Hungary', 'Indonesia', 'Malaysia', 'Mexico', 'Mozambique', 'Palau',
-       'Panama', 'Philippines', 'Puerto Rico', 'Singapore', 'South Africa',
-       'Thailand', 'Trinidad and Tobago', 'Bahrain', 'Bangladesh',
-       'Brunei Darussalam', 'Cuba', 'Dominican Republic', 'Greece',
-       'India', 'Italy', 'Macao SAR, China', 'Nepal', 'Pakistan', 'Peru',
-       'Portugal', 'Sao Tome and Principe', 'Spain', 'Sri Lanka',
-       'Syrian Arab Republic', 'Venezuela, RB', 'Chile', 'China',
-       'Ecuador', 'Haiti', 'Morocco', 'Paraguay', 'Zimbabwe', 'Israel',
-       'Myanmar', 'Costa Rica', 'Liberia', 'Libya', 'Tunisia', 'Malta',
-       'Qatar', 'Algeria', 'Malawi', 'Seychelles', "Cote d'Ivoire",
-       'Senegal', 'Tanzania', 'Armenia', 'Belarus', 'Estonia',
-       'Kazakhstan', 'Latvia', 'Lithuania', 'Moldova','Lesotho', 'Madagascar', 'Mauritania', 'Mongolia',
-       'Papua New Guinea', 'Sudan', 'Togo', 'Uzbekistan', 'Albania',
-       'Angola', 'Bulgaria', 'Congo, Dem. Rep.', 'Honduras', 'Nicaragua',
-       'Niger', 'Ukraine', 'Eritrea', 'Georgia', 'Oman', 'Sierra Leone',
-       'Suriname', 'Bhutan', 'Cayman Islands', 'Lebanon',
-       'Korea, Dem. Rep.', 'South Sudan', 'Guyana', 'Timor-Leste',
-       'Congo, Rep.', 'Montenegro', 'Serbia', 'Austria']
+models = [LinearRegression(),Ridge(),Lasso(alpha=0.01,max_iter=10000),RandomForestRegressor(),GradientBoostingRegressor(),SVR(),LinearSVR(),
+          ElasticNet(alpha=0.001,max_iter=10000),SGDRegressor(max_iter=1000,tol=1e-3),BayesianRidge(),KernelRidge(alpha=0.6, kernel='polynomial', degree=2, coef0=2.5),
+          ExtraTreesRegressor(),XGBRegressor()]
 
 
 # In[ ]:
 
 
-from math import pi
+names = ["LR", "Ridge", "Lasso", "RF", "GBR", "SVR", "LinSVR", "Ela","SGD","Bay","Ker","Extra","Xgb"]
+for name, model in zip(names, models):
+    score = rmse_cv(model, X_scaled, y_log)
+    print("{}: {:.6f}, {:.4f}".format(name,score.mean(),score.std()))
 
-from bokeh.io import show
-from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper
-from bokeh.plotting import figure
-from bokeh.models import ColumnDataSource, HoverTool, LinearColorMapper
-# data = data.set_index('Year')
-# this is the colormap from the original NYTimes plot
-colors = ["#75968f", "#a5bab7", "#c9d9d3", "#e2e2e2", "#dfccce", "#ddb7b1", "#cc7878", "#933b41", "#550b1d"]
-mapper = LinearColorMapper(palette=colors)
-# Set up the data for plotting. We will need to have values for every
-# pair of year/month names. Map the rate to a color.
-countr = []
-year = []
-color = []
-rate = []
-for y in years:
-    for m in country:
-        countr.append(m)
-        year.append(y)
-#         d[(d['x']>2) & (d['y']>7)]
-        monthly_rate = data[(data['CountryName']==m) & (data['Year']==y)]['Value']
-        rate.append(monthly_rate)
 
-source = ColumnDataSource(
-    data=dict(country=countr, year=year, rate=rate)
-)
+# + __Next we do some hyperparameters tuning. First define a gridsearch method.__
 
-TOOLS = "hover,save,pan,box_zoom,wheel_zoom"
+# In[ ]:
 
-p = figure(title="Women who believe Husbands are justified in beating wifes",
-           x_range=years, y_range=list(reversed(country)),
-           x_axis_location="above", plot_width=900, plot_height=900,
-           tools=TOOLS)
 
-p.grid.grid_line_color = None
-p.axis.axis_line_color = None
-p.axis.major_tick_line_color = None
-p.axis.major_label_text_font_size = "5pt"
-p.axis.major_label_standoff = 0
-p.xaxis.major_label_orientation = pi / 3
+class grid():
+    def __init__(self,model):
+        self.model = model
+    
+    def grid_get(self,X,y,param_grid):
+        grid_search = GridSearchCV(self.model,param_grid,cv=5, scoring="neg_mean_squared_error")
+        grid_search.fit(X,y)
+        print(grid_search.best_params_, np.sqrt(-grid_search.best_score_))
+        grid_search.cv_results_['mean_test_score'] = np.sqrt(-grid_search.cv_results_['mean_test_score'])
+        print(pd.DataFrame(grid_search.cv_results_)[['params','mean_test_score','std_test_score']])
 
-p.rect(x="year", y="country", width=1, height=1,
-       source=source,
-       fill_color={'field': 'rate', 'transform': mapper},
-       line_color=None)
 
-p.select_one(HoverTool).tooltips = [
-#     ('date', '@countr @year'),
-    ('rate', '@rate'),
-]
+# ### Lasso
 
-show(p)      # show the plot
+# In[ ]:
+
+
+grid(Lasso()).grid_get(X_scaled,y_log,{'alpha': [0.0004,0.0005,0.0007,0.0009],'max_iter':[10000]})
+
+
+# ### Ridge
+
+# In[ ]:
+
+
+grid(Ridge()).grid_get(X_scaled,y_log,{'alpha':[35,40,45,50,55,60,65,70,80,90]})
+
+
+# ### SVR
+
+# In[ ]:
+
+
+grid(SVR()).grid_get(X_scaled,y_log,{'C':[11,13,15],'kernel':["rbf"],"gamma":[0.0003,0.0004],"epsilon":[0.008,0.009]})
+
+
+# ### Kernel Ridge
+
+# In[ ]:
+
+
+param_grid={'alpha':[0.2,0.3,0.4], 'kernel':["polynomial"], 'degree':[3],'coef0':[0.8,1]}
+grid(KernelRidge()).grid_get(X_scaled,y_log,param_grid)
+
+
+# ### ElasticNet
+
+# In[ ]:
+
+
+grid(ElasticNet()).grid_get(X_scaled,y_log,{'alpha':[0.0008,0.004,0.005],'l1_ratio':[0.08,0.1,0.3],'max_iter':[10000]})
+
+
+# # Ensemble Methods 
+
+# ### Weight Average
+
+# + __Average base models according to their weights.__
+
+# In[ ]:
+
+
+class AverageWeight(BaseEstimator, RegressorMixin):
+    def __init__(self,mod,weight):
+        self.mod = mod
+        self.weight = weight
+        
+    def fit(self,X,y):
+        self.models_ = [clone(x) for x in self.mod]
+        for model in self.models_:
+            model.fit(X,y)
+        return self
+    
+    def predict(self,X):
+        w = list()
+        pred = np.array([model.predict(X) for model in self.models_])
+        # for every data point, single model prediction times weight, then add them together
+        for data in range(pred.shape[1]):
+            single = [pred[model,data]*weight for model,weight in zip(range(pred.shape[0]),self.weight)]
+            w.append(np.sum(single))
+        return w
+
+
+# In[ ]:
+
+
+lasso = Lasso(alpha=0.0005,max_iter=10000)
+ridge = Ridge(alpha=60)
+svr = SVR(gamma= 0.0004,kernel='rbf',C=13,epsilon=0.009)
+ker = KernelRidge(alpha=0.2 ,kernel='polynomial',degree=3 , coef0=0.8)
+ela = ElasticNet(alpha=0.005,l1_ratio=0.08,max_iter=10000)
+bay = BayesianRidge()
+
+
+# In[ ]:
+
+
+# assign weights based on their gridsearch score
+w1 = 0.02
+w2 = 0.2
+w3 = 0.25
+w4 = 0.3
+w5 = 0.03
+w6 = 0.2
+
+
+# In[ ]:
+
+
+weight_avg = AverageWeight(mod = [lasso,ridge,svr,ker,ela,bay],weight=[w1,w2,w3,w4,w5,w6])
+
+
+# In[ ]:
+
+
+score = rmse_cv(weight_avg,X_scaled,y_log)
+print(score.mean())
+
+
+# + __But if we average only two best models, we gain better cross-validation score.__
+
+# In[ ]:
+
+
+weight_avg = AverageWeight(mod = [svr,ker],weight=[0.5,0.5])
+
+
+# In[ ]:
+
+
+score = rmse_cv(weight_avg,X_scaled,y_log)
+print(score.mean())
+
+
+# ## Stacking
+
+# + __Aside from normal stacking, I also add the "get_oof" method, because later I'll combine features generated from stacking and original features.__
+
+# In[ ]:
+
+
+class stacking(BaseEstimator, RegressorMixin, TransformerMixin):
+    def __init__(self,mod,meta_model):
+        self.mod = mod
+        self.meta_model = meta_model
+        self.kf = KFold(n_splits=5, random_state=42, shuffle=True)
+        
+    def fit(self,X,y):
+        self.saved_model = [list() for i in self.mod]
+        oof_train = np.zeros((X.shape[0], len(self.mod)))
+        
+        for i,model in enumerate(self.mod):
+            for train_index, val_index in self.kf.split(X,y):
+                renew_model = clone(model)
+                renew_model.fit(X[train_index], y[train_index])
+                self.saved_model[i].append(renew_model)
+                oof_train[val_index,i] = renew_model.predict(X[val_index])
+        
+        self.meta_model.fit(oof_train,y)
+        return self
+    
+    def predict(self,X):
+        whole_test = np.column_stack([np.column_stack(model.predict(X) for model in single_model).mean(axis=1) 
+                                      for single_model in self.saved_model]) 
+        return self.meta_model.predict(whole_test)
+    
+    def get_oof(self,X,y,test_X):
+        oof = np.zeros((X.shape[0],len(self.mod)))
+        test_single = np.zeros((test_X.shape[0],5))
+        test_mean = np.zeros((test_X.shape[0],len(self.mod)))
+        for i,model in enumerate(self.mod):
+            for j, (train_index,val_index) in enumerate(self.kf.split(X,y)):
+                clone_model = clone(model)
+                clone_model.fit(X[train_index],y[train_index])
+                oof[val_index,i] = clone_model.predict(X[val_index])
+                test_single[:,j] = clone_model.predict(test_X)
+            test_mean[:,i] = test_single.mean(axis=1)
+        return oof, test_mean
+
+
+# + __Let's first try it out ! It's a bit slow to run this method, since the process is quite compliated. __
+
+# In[ ]:
+
+
+# must do imputer first, otherwise stacking won't work, and i don't know why.
+a = Imputer().fit_transform(X_scaled)
+b = Imputer().fit_transform(y_log.values.reshape(-1,1)).ravel()
+
+
+# In[ ]:
+
+
+stack_model = stacking(mod=[lasso,ridge,svr,ker,ela,bay],meta_model=ker)
+
+
+# In[ ]:
+
+
+score = rmse_cv(stack_model,a,b)
+print(score.mean())
+
+
+# + __Next we extract the features generated from stacking, then combine them with original features.__
+
+# In[ ]:
+
+
+X_train_stack, X_test_stack = stack_model.get_oof(a,b,test_X_scaled)
+
+
+# In[ ]:
+
+
+X_train_stack.shape, a.shape
+
+
+# In[ ]:
+
+
+X_train_add = np.hstack((a,X_train_stack))
+
+
+# In[ ]:
+
+
+X_test_add = np.hstack((test_X_scaled,X_test_stack))
+
+
+# In[ ]:
+
+
+X_train_add.shape, X_test_add.shape
+
+
+# In[ ]:
+
+
+score = rmse_cv(stack_model,X_train_add,b)
+print(score.mean())
+
+
+# + __You can even do parameter tuning for your meta model after you get "X_train_stack", or do it after combining with the original features. but that's a lot of work too !__
+
+# ### Submission
+
+# In[ ]:
+
+
+# This is the final model I use
+stack_model = stacking(mod=[lasso,ridge,svr,ker,ela,bay],meta_model=ker)
+
+
+# In[ ]:
+
+
+stack_model.fit(a,b)
+
+
+# In[ ]:
+
+
+pred = np.exp(stack_model.predict(test_X_scaled))
+
+
+# In[ ]:
+
+
+result=pd.DataFrame({'Id':test.Id, 'SalePrice':pred})
+result.to_csv("submission.csv",index=False)
 

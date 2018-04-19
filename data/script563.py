@@ -1,769 +1,368 @@
 
 # coding: utf-8
 
+# # Let's perform analysis!
 # 
+# Hello, I'm Dixhom. Here I talk about how to preform feature engineering, delete unwanted variables, build a model and make submission data! So this is a tutorial for data science beginners. So let's get the ball rolling.
 # 
-# ## PyTorch Speech Recognition Challenge
-# 
-# https://www.kaggle.com/c/tensorflow-speech-recognition-challenge
-# 
-# 
-# Notebooks: <a href="https://github.com/QuantScientist/Deep-Learning-Boot-Camp/blob/master/Kaggle-PyTorch/tf/PyTorch%20Speech%20Recognition%20Challenge%20Starter.ipynb"> On GitHub</a>
-# 
-# 
-# #### References:
-# 
-# - http://pytorch.org/tutorials/beginner/transfer_learning_tutorial.html
-# 
-# - https://www.bountysource.com/issues/44576966-a-tutorial-on-writing-custom-datasets-samplers-and-using-transforms
-# 
-# - https://medium.com/towards-data-science/my-first-kaggle-competition-9d56d4773607
-# 
-# - https://github.com/sohyongsheng/kaggle-planet-forest
-# 
-# - https://github.com/rwightman/pytorch-planet-amazon/blob/master/dataset.py
-# 
-# - https://www.kaggle.com/c/tensorflow-speech-recognition-challenge/discussion/43624
-# 
-# ## PyTorch dada sets
-# 
-# - Convert the audio files into images (spectogram) 
-# - Create a CSV file consisting of the good labels 
-# - Then write a custom PyTorch data loader
-# - Simple CNN
-# 
-# ## Issues:
-# - Problem with the loss function for the multi-class case during training, loss is negative
-# 
-# #### Shlomo Kashani
-
-# # PyTorch Imports
-# 
+# (This is for a kaggle competition 'Kobe Bryant Shot Selection' (https://www.kaggle.com/c/kobe-bryant-shot-selection))
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('reset', '-f')
-import torch
-import sys
-import torch
-from torch.utils.data.dataset import Dataset
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from torch import nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.autograd import Variable
-
-from sklearn import cross_validation
-from sklearn import metrics
-from sklearn.metrics import roc_auc_score, log_loss, roc_auc_score, roc_curve, auc
-from sklearn.cross_validation import StratifiedKFold, ShuffleSplit, cross_val_score, train_test_split
-
-print('__Python VERSION:', sys.version)
-print('__pyTorch VERSION:', torch.__version__)
-print('__CUDA VERSION')
-from subprocess import call
-# call(["nvcc", "--version"]) does not work
-get_ipython().system(' nvcc --version')
-print('__CUDNN VERSION:', torch.backends.cudnn.version())
-print('__Number CUDA Devices:', torch.cuda.device_count())
-print('__Devices')
-# call(["nvidia-smi", "--format=csv", "--query-gpu=index,name,driver_version,memory.total,memory.used,memory.free"])
-print('Active CUDA Device: GPU', torch.cuda.current_device())
-
-print ('Available devices ', torch.cuda.device_count())
-print ('Current cuda device ', torch.cuda.current_device())
-
-import numpy
-import numpy as np
-
-use_cuda = torch.cuda.is_available()
-FloatTensor = torch.cuda.FloatTensor if use_cuda else torch.FloatTensor
-LongTensor = torch.cuda.LongTensor if use_cuda else torch.LongTensor
-Tensor = FloatTensor
-
-import pandas
-import pandas as pd
-
-import logging
-handler=logging.basicConfig(level=logging.INFO)
-lgr = logging.getLogger(__name__)
+import numpy as np 
+import pandas as pd 
+import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-# !pip install psutil
-import psutil
-import os
-def cpuStats():
-        print(sys.version)
-        print(psutil.cpu_percent())
-        print(psutil.virtual_memory())  # physical memory usage
-        pid = os.getpid()
-        py = psutil.Process(pid)
-        memoryUse = py.memory_info()[0] / 2. ** 30  # memory use in GB...I think
-        print('memory GB:', memoryUse)
-
-cpuStats()
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.cross_validation import KFold
 
 
 # In[ ]:
 
 
-use_cuda = torch.cuda.is_available()
-# use_cuda = False
-
-FloatTensor = torch.cuda.FloatTensor if use_cuda else torch.FloatTensor
-LongTensor = torch.cuda.LongTensor if use_cuda else torch.LongTensor
-Tensor = FloatTensor
+# import data
+filename= "../input/data.csv"
+raw = pd.read_csv(filename)
 
 
-# # Setting up global variables
+# # Feature engineering
+# Now let's start feature engineering. There are many features which should be modified or deleted for brevity. Let's take a look into variables.
 # 
-# - Root folder
-# - Audio folder
-# - Audio Label folder
+# First, let's take a look at all the variables.
 
 # In[ ]:
 
 
-DATA_ROOT ='d:/db/data/tf/'
-IMG_PATH = DATA_ROOT + '/picts/train/'
-IMG_EXT = '.png'
-IMG_DATA_LABELS = DATA_ROOT + '/train_v2.csv'
+raw.head()
 
 
-# # Turn WAV into Images
-# - See https://www.kaggle.com/timolee/audio-data-conversion-to-images-eda
+# ## Dropping nans
+# We are gonna make a variable without `nan` for our exploratory analysis. 
+
+# In[ ]:
+
+
+nona =  raw[pd.notnull(raw['shot_made_flag'])]
+
+
+# ## loc_x, loc_y, lat and lon
+# What do these mean? From their names, these sound like **location_x, location_y, latitude and longitude**. Let's confirm this assumption. 
+
+# In[ ]:
+
+
+alpha = 0.02
+plt.figure(figsize=(10,10))
+
+# loc_x and loc_y
+plt.subplot(121)
+plt.scatter(nona.loc_x, nona.loc_y, color='blue', alpha=alpha)
+plt.title('loc_x and loc_y')
+
+# lat and lon
+plt.subplot(122)
+plt.scatter(nona.lon, nona.lat, color='green', alpha=alpha)
+plt.title('lat and lon')
+
+
+# These plot are shaped like basket ball courts. So loc_x, loc_y, lat and lon seem to mean the position from which the ball was tossed. However, since the region under the net is half-circle-shaped, it would be more suitable to transform the variable into **polar coodinate**.
+
+# In[ ]:
+
+
+raw['dist'] = np.sqrt(raw['loc_x']**2 + raw['loc_y']**2)
+
+loc_x_zero = raw['loc_x'] == 0
+raw['angle'] = np.array([0]*len(raw))
+raw['angle'][~loc_x_zero] = np.arctan(raw['loc_y'][~loc_x_zero] / raw['loc_x'][~loc_x_zero])
+raw['angle'][loc_x_zero] = np.pi / 2 
+
+
+# Since some of loc_x values cause an error by zero-division, we set just `np.pi / 2` to the corresponding rows.
 # 
+# ## minutes_remaining and seconds_remaining
+# `minutes_remaining` and `seconds_remaining` seem to be a pair, so let's combine them together.
 
 # In[ ]:
 
 
-audio_path = 'd:/db/data/tf/train/audio/'
-pict_Path = 'd:/db/data/tf//picts/train/'
-test_pict_Path = 'd:/db/data/tf//picts/test/'
-test_audio_path = 'd:/db/data/tf//test/audio/'
-samples = []
+raw['remaining_time'] = raw['minutes_remaining'] * 60 + raw['seconds_remaining']
 
 
-if not os.path.exists(pict_Path):
-    os.makedirs(pict_Path)
-
-if not os.path.exists(test_pict_Path):
-    os.makedirs(test_pict_Path)
-    
-subFolderList = []
-
-for x in os.listdir(audio_path):
-    if os.path.isdir(audio_path + '/' + x):
-        subFolderList.append(x)
-        if not os.path.exists(pict_Path + '/' + x):
-            os.makedirs(pict_Path +'/'+ x)
-
+# ## action_type, combined_shot_type, shot_type
+# These represents how the player shot a ball.
 
 # In[ ]:
 
 
-# #### Function: convert audio to spectogram images
-
-# def wav2img(wav_path, targetdir='', figsize=(4,4)):
-#     """
-#     takes in wave file path
-#     and the fig size. Default 4,4 will make images 288 x 288
-#     """
-#     fs = 44100 # sampling frequency
-    
-#     # use soundfile library to read in the wave files
-#     test_sound, samplerate = sf.read(wav_path)
-    
-#     # make the plot
-#     fig = plt.figure(figsize=figsize)
-#     S, freqs, bins, im = plt.specgram(test_sound, NFFT=1024, Fs=samplerate, noverlap=512)
-#     plt.show
-#     plt.axis('off')
-    
-#     ## create output path
-#     output_file = wav_path.split('/')[-1].split('.wav')[0]
-#     output_file = targetdir +'/'+ output_file
-#     plt.savefig('%s.png' % output_file)
-#     plt.close()
+print(nona.action_type.unique())
+print(nona.combined_shot_type.unique())
+print(nona.shot_type.unique())
 
 
-# def wav2img_waveform(wav_path, targetdir='', figsize=(4,4)):
-#     test_sound, samplerate = sf.read(sample_audio[0])
-#     fig = plt.figure(figsize=figsize)
-#     plt.plot(test_sound)
-#     plt.axis('off')
-#     output_file = wav_path.split('/')[-1].split('.wav')[0]
-#     output_file = targetdir +'/'+ output_file
-#     plt.savefig('%s.png' % output_file)
-#     plt.close()
-
-# ### Convert Training Audio
-# #### Loop through source audio and save as pictures 
-# # (may take a while) may also consider running at commandline. 
-# # Code is limited to 3 folders and 10 files each, get rid of array limits to process the entire directory
-
-# # c:\Anaconda3\lib\site-packages\matplotlib\axes\_axes.py:7221: RuntimeWarning: divide by zero encountered in log10
-# #   Z = 10. * np.log10(spec)
-
-# for i, x in enumerate(subFolderList):
-#     print(i, ':', x)
-#     # get all the wave files
-#     all_files = [y for y in os.listdir(audio_path + x) if '.wav' in y]
-#     for file in all_files:
-#         try:
-#             wav2img(audio_path + x + '/' + file, pict_Path + x)                
-#         except Exception:
-#             pass
-            
-
-
-# # Generate lables into a CSV, which is easier for PyTorch Dataset class
+# ## Season
+# `Season` looks like consisting of two parts.
 
 # In[ ]:
 
 
-# from sklearn.preprocessing import MultiLabelBinarizer, LabelBinarizer
-# from sklearn.preprocessing import LabelEncoder
-# from sklearn.pipeline import Pipeline
-# from collections import defaultdict
-# d = defaultdict(LabelEncoder)
-
-# # Build the pictures path
-# subFolderList = []
-# for x in os.listdir(pict_Path):
-#     if os.path.isdir(pict_Path + '/' + x):
-#         subFolderList.append(x)        
-            
-# good_labels=['yes', 'no', 'up', 'down', 'left', 'right', 'on', 'off', 'stop', 'go']
-# POSSIBLE_LABELS = 'yes no up down left right on off stop go silence unknown'.split()
-
-# # print (type(POSSIBLE_LABELS))
-# # print (type(good_labels))
-# columns = ['img', 'label-str','fullpath']
-# df_pred=pd.DataFrame(data=np.zeros((0,len(columns))), columns=columns)
-# # df_pred.id.astype(int)
-
-# for i, x in enumerate(subFolderList):
-#     if (x in POSSIBLE_LABELS):
-#     #     print(i, ':', x)
-#         # get all the wave files
-#         all_files = [y for y in os.listdir(pict_Path + x) if '.png' in y]
-#         for file in all_files:
-#     #         print (audio_path + x + '/' + file, pict_Path + x)
-#             fullPath=pict_Path + x + '/' + file
-#     #         print (fullPath)
-#             df_pred = df_pred.append({'img':file, 'label-str':x,'fullpath':fullPath},ignore_index=True)
-#     #         print (pict_Path + x)    
-    
-
-# # Encode the categorical labels as numeric data
-# df_pred['label'] = LabelEncoder().fit_transform(df_pred['label-str'])
-# # Make sure we dont save the header
-# df_pred.to_csv(IMG_DATA_LABELS, columns=('img','label-str','fullpath', 'label'), index=None, header=False)
-# df_pred.to_csv(IMG_DATA_LABELS +'_header', columns=('img','label-str','fullpath', 'label'), index=None, header=True)
-
-# # img,label,fullpath
-# # 00176480_nohash_0.wav,down,d:/db/data/tf/train/audio/down/00176480_nohash_0.wav
-    
-# df_pred.head(3)
+nona['season'].unique()
 
 
-# # The Torch Dataset Class
+# `Season` seems to be composed of two parts: season year and season ID. Here we only need season ID. Let's modify the data.
 
 # In[ ]:
 
 
+raw['season'] = raw['season'].apply(lambda x: int(x.split('-')[1]) )
+raw['season'].unique()
+
+
+# ## team_id and team_name
+# These contain the same one value for each. Seem useless. 
+
+# In[ ]:
+
+
+print(nona['team_id'].unique())
+print(nona['team_name'].unique())
+
+
+# ## opponent , matchup
+# These are basically the same information. 
+
+# In[ ]:
+
+
+pd.DataFrame({'matchup':nona.matchup, 'opponent':nona.opponent})
+
+
+# Only opponent is needed.
+
+# ## Shot distance
+# We already defined this.
+
+# In[ ]:
+
+
+plt.figure(figsize=(5,5))
+
+plt.scatter(raw.dist, raw.shot_distance, color='blue')
+plt.title('dist and shot_distance')
+
+
+# `shot_distance` is proportional to `dist` and this won't be necessary.
+# 
+# ## shot_zone_area, shot_zone_basic, shot_zone_range
+# These sound like some regions on the court, so let's visualize it.
+
+# In[ ]:
+
+
+import matplotlib.cm as cm
+plt.figure(figsize=(20,10))
+
+def scatter_plot_by_category(feat):
+    alpha = 0.1
+    gs = nona.groupby(feat)
+    cs = cm.rainbow(np.linspace(0, 1, len(gs)))
+    for g, c in zip(gs, cs):
+        plt.scatter(g[1].loc_x, g[1].loc_y, color=c, alpha=alpha)
+
+# shot_zone_area
+plt.subplot(131)
+scatter_plot_by_category('shot_zone_area')
+plt.title('shot_zone_area')
+
+# shot_zone_basic
+plt.subplot(132)
+scatter_plot_by_category('shot_zone_basic')
+plt.title('shot_zone_basic')
+
+# shot_zone_range
+plt.subplot(133)
+scatter_plot_by_category('shot_zone_range')
+plt.title('shot_zone_range')
+
+
+# As we thought, these represent regions on the court. However, these regions can be separated by `dist` and `angle`. So we don't need these.
+
+# ## dropping unneeded variables
+# Let's drop unnecessary variables.
+
+# In[ ]:
+
+
+drops = ['shot_id', 'team_id', 'team_name', 'shot_zone_area', 'shot_zone_range', 'shot_zone_basic',          'matchup', 'lon', 'lat', 'seconds_remaining', 'minutes_remaining',          'shot_distance', 'loc_x', 'loc_y', 'game_event_id', 'game_id', 'game_date']
+for drop in drops:
+    raw = raw.drop(drop, 1)
+
+
+# ## make dummy variables
+# We are going to use randomForest classifier for building our models but this doesn't accept string variables like 'action_type'. So we are going to make dummy variables for those.
+
+# In[ ]:
+
+
+# turn categorical variables into dummy variables
+categorical_vars = ['action_type', 'combined_shot_type', 'shot_type', 'opponent', 'period', 'season']
+for var in categorical_vars:
+    raw = pd.concat([raw, pd.get_dummies(raw[var], prefix=var)], 1)
+    raw = raw.drop(var, 1)
+
+
+# ## separating data for training and submission
+# Now let's separate data.
+
+# In[ ]:
+
+
+df = raw[pd.notnull(raw['shot_made_flag'])]
+submission = raw[pd.isnull(raw['shot_made_flag'])]
+submission = submission.drop('shot_made_flag', 1)
+
+
+# We are separating `df` further into explanatory and response variables.
+
+# In[ ]:
+
+
+# separate df into explanatory and response variables
+train = df.drop('shot_made_flag', 1)
+train_y = df['shot_made_flag']
+
+
+# ## logloss
+# Submissions are evaluated on the log loss. We are going to use it for evaluating our model.
+
+# In[ ]:
+
+
+import scipy as sp
+def logloss(act, pred):
+    epsilon = 1e-15
+    pred = sp.maximum(epsilon, pred)
+    pred = sp.minimum(1-epsilon, pred)
+    ll = sum(act*sp.log(pred) + sp.subtract(1,act)*sp.log(sp.subtract(1,pred)))
+    ll = ll * -1.0/len(act)
+    return ll
+
+
+# # Building a model
+# Now it's time to build a model. We use randomForest classifier and k-fold cross validation for testing our model.
+# We are going to...
+# 
+# 1. pick a `n` from `n_range` for the number of estimators in randomForestClassifier.
+# 1. divide the training data into 10 pieces
+# 2. pick 9 of them for building a model and use the remaining 1 for testing a model
+# 3. repeat the same process for the other 9 pieces.
+# 4. calculate score for each and take an average of them
+# 5. pick the next `n` and do the process again
+# 6. find the `n` which gave the best score among `n_range`
+# 7. repeat the same process with the tree depth parameter.
+# 
+# You can change the value of `np.logspace` for searching optimum value in broader area.
+
+# In[ ]:
+
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import confusion_matrix
 import time
-from sklearn.preprocessing import MultiLabelBinarizer, LabelBinarizer
-from sklearn.preprocessing import LabelEncoder
-from sklearn.feature_extraction import DictVectorizer
-from sklearn.pipeline import Pipeline
-from collections import defaultdict
-d = defaultdict(LabelEncoder)
 
-# Encoding the variable
-# X_df_train_SINGLE = X_df_train_SINGLE.apply(lambda x: d[x.name].fit_transform(x))
-# X_df_train_SINGLE=X_df_train_SINGLE.apply(LabelEncoder().fit_transform)
-# Inverse the encoded
-# fit.apply(lambda x: X_df_train_SINGLE[x.name].inverse_transform(x))
-# Using the dictionary to label future data
-# df.apply(lambda x: X_df_train_SINGLE[x.name].transform(x))
-# answers_1_SINGLE = list (X_df_train_SINGLE[singleResponseVariable].values)
-# answers_1_SINGLE= map(int, answers_1_SINGLE)
 
-def encode_onehot(df, cols):  
-    vec = DictVectorizer()    
-    vec_data = pd.DataFrame(vec.fit_transform(df[cols].to_dict(outtype='records')).toarray())
-    vec_data.columns = vec.get_feature_names()
-    vec_data.index = df.index
+# find the best n_estimators for RandomForestClassifier
+print('Finding best n_estimators for RandomForestClassifier...')
+min_score = 100000
+best_n = 0
+scores_n = []
+range_n = np.logspace(0,2,num=3).astype(int)
+for n in range_n:
+    print("the number of trees : {0}".format(n))
+    t1 = time.time()
     
-    df = df.drop(cols, axis=1)
-    df = df.join(vec_data)
-    return df
+    rfc_score = 0.
+    rfc = RandomForestClassifier(n_estimators=n)
+    for train_k, test_k in KFold(len(train), n_folds=10, shuffle=True):
+        rfc.fit(train.iloc[train_k], train_y.iloc[train_k])
+        #rfc_score += rfc.score(train.iloc[test_k], train_y.iloc[test_k])/10
+        pred = rfc.predict(train.iloc[test_k])
+        rfc_score += logloss(train_y.iloc[test_k], pred) / 10
+    scores_n.append(rfc_score)
+    if rfc_score < min_score:
+        min_score = rfc_score
+        best_n = n
+        
+    t2 = time.time()
+    print('Done processing {0} trees ({1:.3f}sec)'.format(n, t2-t1))
+print(best_n, min_score)
 
-try:
-    from PIL import Image
-except ImportError:
-    import Image
+
+# find best max_depth for RandomForestClassifier
+print('Finding best max_depth for RandomForestClassifier...')
+min_score = 100000
+best_m = 0
+scores_m = []
+range_m = np.logspace(0,2,num=3).astype(int)
+for m in range_m:
+    print("the max depth : {0}".format(m))
+    t1 = time.time()
     
-class GenericImageDataset(Dataset):    
-
-    def __init__(self, csv_path, img_path, img_ext, transform=None):
-        
-        t = time.time()        
-        lgr.info('CSV path {}'.format(csv_path))
-        lgr.info('IMG path {}'.format(img_path))        
-        
-        assert img_ext in ['.png']
-        
-        tmp_df = pd.read_csv(csv_path, header=None) # img,label,fullpath
-                        
-        self.mlb = MultiLabelBinarizer()
-        self.img_path = img_path
-        self.img_ext = img_ext
-        self.transform = transform
-
-        # Encoding the variables                
-        lgr.info("DF CSV:\n" + str (tmp_df.head(3)))
-                        
-        self.X_train = tmp_df[2]        
-        
-        self.y_train = self.mlb.fit_transform(tmp_df[1].str.split()).astype(np.float32)           
-        self.y_train=self.y_train.reshape((self.y_train.shape[0]*10,1)) # Must be reshaped for PyTorch!                
-        
-#         y_df = encode_onehot(tmp_df, cols=[tmp_df[1]])
-#         self.y_train = y_df 
-        
-        lgr.info('y_train {}'.format(self.y_train))
-                
-#         self.y_train = tmp_df[3].astype(np.float32)                          
-#         self.y_train = self.mlb.fit_transform(tmp_df[1].str.split()).astype(np.float32)
-#         self.y_train = tmp_df[3].astype(np.float32)       
-#         d = defaultdict(LabelEncoder)
-#         self.y_train =tmp_df[1].apply(lambda x: d[x].fit_transform(x))
+    rfc_score = 0.
+    rfc = RandomForestClassifier(max_depth=m, n_estimators=best_n)
+    for train_k, test_k in KFold(len(train), n_folds=10, shuffle=True):
+        rfc.fit(train.iloc[train_k], train_y.iloc[train_k])
+        #rfc_score += rfc.score(train.iloc[test_k], train_y.iloc[test_k])/10
+        pred = rfc.predict(train.iloc[test_k])
+        rfc_score += logloss(train_y.iloc[test_k], pred) / 10
+    scores_m.append(rfc_score)
+    if rfc_score < min_score:
+        min_score = rfc_score
+        best_m = m
     
-#         tmp_df=one_hot(tmp_df,tmp_df[1])
-#         self.y_train = tmp_df[1].astype(np.float32)       
-#         encoder = LabelEncoder()
-#         encoder.fit(tmp_df[1])
-#         self.y_train = encoder.transform(tmp_df[1]).astype(np.float32)
-#         self.y_train=self.y_train.reshape((self.y_train.shape[0],1)) # Must be reshaped for PyTorch!
-                
-        lgr.info('[*]Dataset loading time {}'.format(time.time() - t))
-        lgr.info('[*] Data size is {}'.format(len(self)))
-        
-        lgr.info("DF CSV:\n" + str (tmp_df.head(5)))
-        
-        print ()
-
-    def __getitem__(self, index):
-#         lgr.info ("__getitem__:" + str(index))
-        path=self.img_path + self.X_train[index]
-        path=self.X_train[index]
-#         lgr.info (" --- get item path:" + path)
-        img = Image.open(path)
-        img = img.convert('RGB')
-        if self.transform is not None: # TypeError: batch must contain tensors, numbers, or lists; 
-                                     #found <class 'PIL.Image.Image'>
-            img = self.transform(img)
-#             print (str (type(img))) # <class 'torch.FloatTensor'>                
-#         label = torch.from_numpy(self.y_train[index])
-        label = (self.y_train[index])
-        return img, label
-
-    def __len__(self):
-        l=len(self.X_train.index)
-#         lgr.info ("Lenght:" +str(l))
-        return (l)       
-
-    @staticmethod        
-    def imshow(img):
-        img = img / 2 + 0.5     # unnormalize
-        npimg = img.numpy()
-        plt.imshow(np.transpose(npimg, (1, 2, 0)))
-
-    @staticmethod    
-    def flaotTensorToImage(img, mean=0, std=1):
-        """convert a tensor to an image"""
-        img = np.transpose(img.numpy(), (1, 2, 0))
-        img = (img*std+ mean)*255
-        img = img.astype(np.uint8)    
-        return img    
-    
-    @staticmethod
-    def toTensor(img):
-        """convert a numpy array of shape HWC to CHW tensor"""
-        img = img.transpose((2, 0, 1)).astype(np.float32)
-        tensor = torch.from_numpy(img).float()
-        return tensor/255.0    
+    t2 = time.time()
+    print('Done processing {0} trees ({1:.3f}sec)'.format(m, t2-t1))
+print(best_m, min_score)
 
 
-# # The Torch transforms.ToTensor() methood
-# 
-# - Converts: a PIL.Image or numpy.ndarray (H x W x C) in the range [0, 255] to a torch.FloatTensor of shape (C x H x W) in the range [0.0, 1.0].
+# # Visualizing parameters for randomForest
+# By visualizing the parameters, we can check if the chosen parameter is really the best.
 
 # In[ ]:
 
 
-transformations = transforms.Compose([transforms.ToTensor()])
+plt.figure(figsize=(10,5))
+plt.subplot(121)
+plt.plot(range_n, scores_n)
+plt.ylabel('score')
+plt.xlabel('number of trees')
+
+plt.subplot(122)
+plt.plot(range_m, scores_m)
+plt.ylabel('score')
+plt.xlabel('max depth')
 
 
-# # The Torch DataLoader Class
-# 
-# - Will load our GenericImageDataset
-# - Can be regarded as a list (or iterator, technically). 
-# - Each time it is invoked will provide a minibatch of (img, label) pairs.
-
-# In[ ]:
-
-
-dset_train = GenericImageDataset(IMG_DATA_LABELS,IMG_PATH,IMG_EXT,transformations)
-
-
-# # Train Validation Split
-# 
-# - Since there is no train_test_split method in PyTorch, we have to split a Training dataset into training and validation sets.
+# # Building a final model
+# Let's use the parameters we just got for the final model and prediction.
 
 # In[ ]:
 
 
-batch_size = 16 # on GTX 1080
-global_epoches = 10
-LR = 0.0005
-MOMENTUM = 0.95
-validationRatio=0.11    
-
-class FullTrainningDataset(torch.utils.data.Dataset):
-    def __init__(self, full_ds, offset, length):
-        self.full_ds = full_ds
-        self.offset = offset
-        self.length = length
-        assert len(full_ds)>=offset+length, Exception("Parent Dataset not long enough")
-        super(FullTrainningDataset, self).__init__()
-        
-    def __len__(self):
-        return self.length
-    
-    def __getitem__(self, i):
-        return self.full_ds[i+self.offset]
-    
+model = RandomForestClassifier(n_estimators=best_n, max_depth=best_m)
+model.fit(train, train_y)
+pred = model.predict_proba(submission)
 
 
-def trainTestSplit(dataset, val_share=validationRatio):
-    val_offset = int(len(dataset)*(1-val_share))
-    print("Offest:" + str(val_offset))
-    return FullTrainningDataset(dataset, 0, val_offset), FullTrainningDataset(dataset, val_offset, len(dataset)-val_offset)
-
- 
-train_ds, val_ds = trainTestSplit(dset_train)
-
-train_loader = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=False, num_workers=0)
-val_loader = torch.utils.data.DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=0)
-
-print(train_loader)
-print(val_loader)
-
-
-# # Test the DataLoader Class
+# # Making submission data
+# Predicted shot_made_flag is written to a csv file.
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-import matplotlib.pyplot as plt
-
-imagesToShow=4
-
-for i, data in enumerate(train_loader, 0):
-    lgr.info('i=%d: '%(i))            
-    images, labels = data            
-    num = len(images)
-    
-    ax = plt.subplot(1, imagesToShow, i + 1)
-    plt.tight_layout()
-    ax.set_title('Sample #{}'.format(i))
-    ax.axis('off')
-    
-    for n in range(num):
-        image=images[n]
-        label=labels[n]
-        plt.imshow (GenericImageDataset.flaotTensorToImage(image))
-        
-    if i==imagesToShow-1:
-        break    
-
-
-# # The NN model
-# 
-# - We will use a several CNNs with conv(3x3) -> bn -> relu -> pool(4x4) -> fc.
-# 
-# - In PyTorch, a model is defined by a subclass of nn.Module. It has two methods:
-# 
-# - `__init__: constructor. Create layers here. Note that we don't define the connections between layers in this function.`
-# 
-# 
-# - `forward(x): forward function. Receives an input variable x. Returns a output variable. Note that we actually connect the layers here dynamically.` 
-
-# In[ ]:
-
-
-dropout = torch.nn.Dropout(p=0.30)
-class ConvRes(nn.Module):
-    def __init__(self, insize, outsize):
-        super(ConvRes, self).__init__()
-        drate = .3
-        self.math = nn.Sequential(
-            nn.BatchNorm2d(insize),
-            # nn.Dropout(drate),
-            torch.nn.Conv2d(insize, outsize, kernel_size=2, padding=2),
-            nn.PReLU(),
-        )
-
-    def forward(self, x):
-        return self.math(x)
-
-
-class ConvCNN(nn.Module):
-    def __init__(self, insize, outsize, kernel_size=7, padding=2, pool=2, avg=True):
-        super(ConvCNN, self).__init__()
-        self.avg = avg
-        self.math = torch.nn.Sequential(
-            torch.nn.Conv2d(insize, outsize, kernel_size=kernel_size, padding=padding),
-            torch.nn.BatchNorm2d(outsize),
-            torch.nn.LeakyReLU(),
-            torch.nn.MaxPool2d(pool, pool),
-        )
-        self.avgpool = torch.nn.AvgPool2d(pool, pool)
-
-    def forward(self, x):
-        x = self.math(x)
-        if self.avg is True:
-            x = self.avgpool(x)
-        return x
-
-
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-
-        self.avgpool = nn.AdaptiveAvgPool2d(1)
-
-        self.cnn1 = ConvCNN(3, 32, kernel_size=7, pool=4, avg=False)
-        self.cnn2 = ConvCNN(32, 32, kernel_size=5, pool=2, avg=True)
-        self.cnn3 = ConvCNN(32, 32, kernel_size=5, pool=2, avg=True)
-
-        self.res1 = ConvRes(32, 64)
-
-        self.features = nn.Sequential(
-            self.cnn1, dropout,
-            self.cnn2,
-            self.cnn3,
-            self.res1,
-        )
-
-        self.classifier = torch.nn.Sequential(
-            nn.Linear(3136, 1),
-        )
-        self.sig = nn.Sigmoid()
-  
-    def forward(self, x):
-        x = self.features(x)
-#         print (x.data.shape)
-        x = x.view(x.size(0), -1)
-#         print (x.data.shape)
-        x = self.classifier(x)
-#         print (x.data.shape)
-        x = self.sig(x)
-        return x
-
-    
-if use_cuda:
-    lgr.info ("Using the GPU")
-    model = Net().cuda() # On GPU
-else:
-    lgr.info ("Using the CPU")
-    model = Net() # On CPU
-
-lgr.info('Model {}'.format(model))
-
-
-
-# #  Loss and Optimizer
-# 
-# - Select a loss function and the optimization algorithm.
-
-# In[ ]:
-
-
-loss_func=torch.nn.BCELoss()
-loss_func = nn.MultiLabelSoftMarginLoss()
-# loss_func = torch.nn.CrossEntropyLoss()
-# NN params
-LR = 0.005
-MOMENTUM= 0.9
-optimizer = torch.optim.Adam(model.parameters(), lr=LR,weight_decay=5e-5) #  L2 regularization
-if use_cuda:
-    lgr.info ("Using the GPU")    
-    model.cuda()
-    loss_func.cuda()
-
-lgr.info (optimizer)
-lgr.info (loss_func)
-
-
-# # Start training in Batches
-# 
-# See example here:
-# http://codegists.com/snippet/python/pytorch_mnistpy_kernelmode_python
-# 
-# https://github.com/pytorch/examples/blob/53f25e0d0e2710878449900e1e61d31d34b63a9d/mnist/main.py
-
-# In[ ]:
-
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torchvision import datasets, transforms
-from torch.autograd import Variable
- 
-
-    
-clf=model 
-opt= optimizer
-loss_history = []
-acc_history = []
- 
-def train(epoch):
-    clf.train() # set model in training mode (need this because of dropout)
-     
-    # dataset API gives us pythonic batching 
-    for batch_idx, (data, target) in enumerate(train_loader):
-        
-        if use_cuda:
-            data, target = Variable(data.cuda(async=True)), Variable(target.cuda(async=True)) # On GPU                
-        else:            
-            data, target = Variable(data), Variable(target) # RuntimeError: expected CPU tensor (got CUDA tensor)                           
-                 
-        # forward pass, calculate loss and backprop!
-        opt.zero_grad()
-        preds = clf(data)
-        if use_cuda:
-            loss = loss_func(preds, target).cuda()
-#             loss = F.log_softmax(preds).cuda() # TypeError: log_softmax() takes exactly 1 argument (2 given)
-#             loss = F.nll_loss(preds, target).cuda() # https://github.com/torch/cutorch/issues/227
-            
-        else:
-            loss = loss_func(preds, target)
-#             loss = F.log_softmax(preds)
-#             loss = F.nll_loss(preds, target.long()) # RuntimeError: multi-target not supported at /pytorch/torch/lib/THNN/generic/ClassNLLCriterion.c:22
-        loss.backward()
-        
-        opt.step()
-        
-        
-        if batch_idx % 100 == 0:
-            loss_history.append(loss.data[0])
-            lgr.info('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-            epoch, batch_idx * len(data), len(train_loader.dataset),
-            100. * batch_idx / len(train_loader), loss.data[0]))              
-
-            
-start_time = time.time()    
-
-for epoch in range(1, 5):
-    print("Epoch %d" % epoch)
-    train(epoch)    
-end_time = time.time()
-print ('{} {:6.3f} seconds'.format('GPU:', end_time-start_time))
-get_ipython().run_line_magic('matplotlib', 'inline')
-import matplotlib.pyplot as plt
-plt.plot(loss_history)
-plt.show()
-
-
-# In[ ]:
-
-
-criterion = loss_func
-all_losses = []
-val_losses = []
-
-
-if __name__ == '__main__':
-
-    for epoch in range(global_epoches):
-        print('Epoch {}'.format(epoch + 1))
-        print('*' * 5 + ':')
-        running_loss = 0.0
-        running_acc = 0.0
-        for i, data in enumerate(train_loader, 1):
-    
-            img, label = data
-            if use_cuda:
-                img, label = Variable(img.cuda(async=True)), Variable(label.cuda(async=True))  # On GPU
-            else:
-                img, label = Variable(img), Variable(
-                    label)  # RuntimeError: expected CPU tensor (got CUDA tensor)
-    
-            out = model(img)
-            loss = criterion(out, label)
-            running_loss += loss.data[0] * label.size(0)
-    
-            optimizer.zero_grad()
-            loss.backward()
-            optimizer.step()
-    
-            if i % 100 == 0:
-                all_losses.append(running_loss / (batch_size * i))
-                print('[{}/{}] Loss: {:.6f}'.format(
-                    epoch + 1, global_epoches, running_loss / (batch_size * i),
-                    running_acc / (batch_size * i)))
-                
-    
-#                 loss_cost = loss.data[0]                                
-#                 # RuntimeError: can't convert CUDA tensor to numpy (it doesn't support GPU arrays). 
-#                 # Use .cpu() to move the tensor to host memory first.        
-#                 prediction = (model(img).data).float() # probabilities         
-#         #         prediction = (net(X_tensor).data > 0.5).float() # zero or one
-#         #         print ("Pred:" + str (prediction)) # Pred:Variable containing: 0 or 1
-#         #         pred_y = prediction.data.numpy().squeeze()            
-#                 pred_y = prediction.cpu().numpy().squeeze()
-#                 target_y = label.cpu().data.numpy()
-
-#                 tu = (log_loss(target_y, pred_y),roc_auc_score(target_y,pred_y ))
-#                 print ('LOG_LOSS={}, ROC_AUC={} '.format(*tu))  
-        
-    
-        print('Finish {} epoch, Loss: {:.6f}'.format(epoch + 1, running_loss / (len(train_ds))))
-    
-        model.eval()
-        eval_loss = 0
-        eval_acc = 0
-        for data in val_loader:
-            img, label = data
-    
-            if use_cuda:
-                img, label = Variable(img.cuda(async=True), volatile=True),Variable(label.cuda(async=True), volatile=True)  # On GPU
-            else:
-                img = Variable(img, volatile=True)
-                label = Variable(label, volatile=True)
-    
-            out = model(img)
-            loss = criterion(out, label)
-            eval_loss += loss.data[0] * label.size(0)
-    
-        print('VALIDATION Loss: {:.6f}'.format(eval_loss / (len(val_ds))))
-        val_losses.append(eval_loss / (len(val_ds)))
-        print()
-    
-
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('bash', '', "jupyter nbconvert \\\n    --to=slides \\\n    --reveal-prefix=https://cdnjs.cloudflare.com/ajax/libs/reveal.js/3.2.0/ \\\n    --output=py09.html \\\n    './09 PyTorch Kaggle Image Data-set loading with CNN'")
+sub = pd.read_csv("../input/sample_submission.csv")
+sub['shot_made_flag'] = pred
+sub.to_csv("real_submission.csv", index=False)
 

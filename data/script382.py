@@ -1,260 +1,99 @@
 
 # coding: utf-8
 
-# # Montecarlo Model Selection 
+# In data science, we are regularly challenged with the task of extracting meaning from complex and high dimensional datasets.  The rise of sophisticated machine learning and other analytic techniques has undoubtedly revolutionized how we view data, and the kinds and amount of information we can wring out of it. Modern computers have greatly surpassed our own abilities in number-crunching speed and in handling massive quantities of data. You might think that the story ends here, and we should just surrender to the machine.
 # 
-# In this notebook we apply a montecarlo based feature selection method to identify a reduced number of features that can be used as a good predictor for this credit card fraud dataset. Using a reduced number of features is of crucial importance when overfitting needs to be prevented. This models has been tested in some other datasets with similar results.  
+# However, there is still a place for us lowly humans: Our visual brains are phenomenal at detecting complex structure and discovering patterns in massive quantities of data.  In fact, that is just what our visual systems are designed to do.  Every second that your eyes are open, data (in the form of light on your retina) is pouring into visual areas of your brain. And yet remarkably, you have no problem at all recognizing a neat looking shell on a beach, or your mom's face in a large crowd.  Our brains are 'unsupervised-pattern-discovery-aficionados', and we can harness that power to make some fascinating discoveries about the nature of our world.
 # 
-# We expand the set of explanatory features by computing the products of all features against the rest. When the product of two features has better sorting capabilities than both features individually we include the product in our set of candidate features, a minimum threshold is applied. 
+# But hang on now, not so fast: there is one MAJOR drawback to our visual systems: we are essentially capped at perceiving in 3 dimensions (or 4 including changes over time), and most datasets today have much higher dimensionality.  
 # 
-# Additionally the original set of features and the new set resulting from multiplying pairs of feature are transformed by means a logistic distribution. We have observed that this transformation increases predictive capabilities when compared to the ubiquitous normal transformation. 
+# So, the question of the hour is: **how can we harness the incredible pattern-recognition powers of our brains to visualize complex and high dimensional datasets?**
 # 
-# In order to measure if a model has a good predictive power we define a modified Jaccard distance. As follows:
-#                                                   
-# $$Modified\,Jaccard\,Distance = 1 − \dfrac{\sum\limits_{i}{\min{ (target_{i},\,model\, probability_{i})}}}{\sum\limits_{i}{\max{(target_{i},\,model\, probability_{i})}}}$$                               
-# The lower the distance the best the model predicts the target.
+# In comes *dimensionality reduction*, stage right. Dimensionality reduction is just what it sounds like - reducing a high dimensional dataset to a lower dimensional space.  For example, say you have a dataset of mushrooms, where each row is comprised of a bunch of features of the mushroom, like cap size, cap shape, cap color, odor etc.  The simplest way to do dimensionality reduction is to just remove some of the features. However, this is problematic if the features you drop contain valuable diagnostic information about that mushroom. A slightly more sophisticated approach is to reduce the dimensionality of the dataset by only considering its **principal components**, or the combination of features that explains the most variance in the dataset. Using a technique called *principal components analysis* (or PCA), we can reduced the dimensionality of a dataset, while preserving as much of its precious variance as possible.
 # 
-# In each Montecarlo iteration a reduced set of features, say 5 to 8, is randomly selected, then we compute the Logistic Regression model that best predicts fraud with this features and, finally we compute the modified Jaccard distance from the prediction to the target. The process is repeated for a large number of iterations. Resulting models are sorted by distance. 
-# 
-# We have tested modified Jaccard distance metric against most common metrics such as ROC, AUC, recall… and found that models with the low values of this modified Jaccard distance have a better balanced results in the rest of metrics. 
-# 
-# Final model selection is done by choosing the model with me minimum modified Jaccard distance, or any other among those with minimum distance that best fits the test subsample. 
+# So, we are now equipped with the computational prowess to forage for mushrooms using HyperTools, a python toolbox for visualizing and manipulating high-dimensional data, which is built on top of familiar friends like matplotlib, scikit-learn and seaborn. For more about the open-source toolbox, you can visit the [code](https://github.com/ContextLab/hypertools) or read our [paper](https://arxiv.org/abs/1701.08290).
 
-# ### Libraries
-# 
-# We will use [scikit-learn](http://scikit-learn.org/stable/) for machine learning in general. All additional functions needed can be found as a dataset named [MonteCarloModelSelection_Functions.py](https://www.kaggle.com/forzzeeteam/monte-carlo-model-selection/data). 
+# ### Import libraries we need
 
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
-import csv
-from sklearn.model_selection import train_test_split
-
-import os
-print(os.listdir("../input"))
-
-import sys 
-
-sys.path.append ('../input/montecarlomodelselection-functions/')
-from MonteCarloModelSelection_Functions import *      
-
-
+import hypertools as hyp 
 get_ipython().run_line_magic('matplotlib', 'inline')
-get_ipython().run_line_magic('autosave', '0')
 
 
-# ### Loading Dataset 
-
-# In[ ]:
-
-
-# Loading dataset creditcard
-filename = '../input/creditcardfraud/creditcard.csv'   
-
-with open(filename, 'r') as f:
-    reader=csv.reader(f, delimiter=',') 
-    labels=next(reader)
-
-    raw_data=[]
-    for row in reader:
-        raw_data.append(row)
-
-data = np.array(raw_data)
-data = data.astype(np.float)
-
-
-# The Amount column is normalized. 
+# ### Read in the data with pandas
 
 # In[ ]:
 
 
-# Setting target and data
-target = data[:,-1]
-dataAmount   = data[:,29]
-data   = data[:,1:29]
+data = pd.read_csv('../input/mushrooms.csv')
+data.head()
 
-# Normalising Amount column 
-dataAmountNormalize = np.array((dataAmount-np.mean(dataAmount))/np.std(dataAmount))
-data = np.c_[ data,dataAmountNormalize]
 
+# ### pop off column indicating poisonous/non-poisonous
 
 # In[ ]:
 
 
-# Output Path
-path = './output/'
+class_labels = data.pop('class')
 
 
-# ### Transformation 
-# All features are tranformed using Univariate Logistic Regression. Normal transformation can be applied too, however we observed better results for the logit transformation. 
+# ### Now let's plot the high-dimensional data in a low dimensional space by converting it to a numpy array and passing it to hypertools. To handle text columns, hypertools will first convert each text column into a series of binary 'dummy' variables before performing the dimensionality reduction.  For example, if the 'cap size' column contained 'big' and 'small' labels, this single column would be turned into two binary columns: one for 'big' and one for 'small', where 1s represents the presence of that feature and 0s represents the absence. For more, see the documentation for pandas [get_dummies](http://pandas.pydata.org/pandas-docs/stable/generated/pandas.get_dummies.html) function.
 
 # In[ ]:
 
 
-# Calculating transformed dataset by means of logit or normal method
-transformation = 'logit' 
-transformed_dataset = Transformation(data, target, transformation)
+fig, ax, data, _ = hyp.plot(data,'.') # if the number of features is greater than 3, the default is to plot in 3d
 
 
-# Calculate some metrics, initially we will pay special attention to the sorting capabilities of the different features by using different metrics.
+# ### From the plots above, it's clear that there are multiple clusters in this data. In addition to descriptive features, this dataset also contains whether or not the mushroom is poisonous.  Do these clusters have bearing on whether or not the mushroom is poisonous?  Let's try to understand this by coloring the points based on whether the mushroom is poisonous:
+
+# In[ ]:
+
+
+fig, ax, data, _ = hyp.plot(data,'.', group=class_labels, legend=list(set(class_labels)))
+
+
+# ###  From the plot above it is clear that the clustering of the mushrooms carries information about whether or not they are poisonous (red refers to non-poisonous and blue is poisonous). It also looks like there are a number of distinct clusters that are poisonous/non-poisonous.
 # 
-# 
+# ### Let's use the 'cluster' feature of hypertools to discover these clusters using a k-means fitting procedure:
 
 # In[ ]:
 
 
-# Calculating all metric
-metric ='all'
-global_pi = Calculate_Metrics(transformed_dataset, target, metric, path, transformation)
+fig, ax, data, _ = hyp.plot(data, '.', n_clusters=23)
+
+# you can also recover the cluster labels using the cluster tool
+cluster_labels = hyp.tools.cluster(data, n_clusters=23, ndims=3) 
+# hyp.plot(data, 'o', point_colors=cluster_labels, ndims=2)
 
 
-# A new dataset resulting from combinations of products of features can be found. Following we look for products of features that improve the sorting capabilities of the features. First we select products that result in a “modified Jaccard distance” lower than that of the features independently and at the same time the metric is lower than 0.6.
-
-# In[ ]:
-
-
-# Calculating new datasets with combinations of products of features using distance metric
-threshold = 0.6
-transformation = 'logit'
-metric = 'all'
-metric_prod = 'distance'
-new_dataset, new_dataset_df = Products_Analysis(data, transformed_dataset, target, global_pi, metric, metric_prod, transformation, path, threshold)
-
-
-# Since “distance” did not produce predictive products of features the try “roc”.
+# ### Sidenote: we can change the color palette using the palette argument.  Hypertools supports matplotlib and seaborn color palettes.
 
 # In[ ]:
 
 
-# Calculating new datasets with combinations of products of features using roc metric
-threshold = 0.6
-transformation = 'logit'
-metric = 'all'
-metric_prod = 'roc'
-new_dataset, new_dataset_df = Products_Analysis(data, transformed_dataset, target, global_pi, metric, metric_prod, transformation, path, threshold)
+fig, ax, data, _ = hyp.plot(data,'.', group=cluster_labels, palette="deep")
 
 
-# In[ ]:
+# ### Hypertools uses PCA to reduce the dimensionality by default, but there are other ways to do dimensionality reduction.  Let's try reducing with various techniques, but keeping the cluster labels the same.
 
-
-new_dataset_df.tail(20)
-
-
-# 18 new combinations have been created: 0 ratio and 16 ratio, 1 ratio and 6 ratio, etc. 
-
-# ### Resampling and Setting up the Training and Testing Sets
-# The original dataset has 492 fraud and 284.315 no fraud observations. We split the dataset into train and test as in the following table. 
-# 
-# |         | DATASET           | TRAIN  | TEST  | 
-# | ------------- |:-------------:| -----:|-----:|
-# | No Fraud      | 284315 | 199019 |85296 | 
-# | Fraud      | 492      |    345| 147 |
-# | Total | 284807      |   199364 | 85443 |
-# - Dataset
+# ## Independent Components Analysis
 
 # In[ ]:
 
 
-X_train, X_test, y_train, y_test = train_test_split(new_dataset, target, test_size = 0.3, random_state = 0)
+fig, ax, data, _ = hyp.plot(data,'.', model='FastICA', group=class_labels, legend=list(set(class_labels)))
 
 
-# We split the dataset in order to work with a balanced dataset. Equal number of Fraud/No Fraud observations.
-#  
-# 
-# |         | DATASET           | TRAIN UNDERSAMPLED  | TEST UNDERSAMPLED | 
-# | ------------- |:-------------:| -----:|-----:|
-# | No Fraud      | 284315 | 688 | 296 | 
-# | Fraud      | 492      |   343| 149 |
-# | Total | 284807      |   345 | 147 |
-# 
-# - Resampled dataset
+# ## t-SNE
 
 # In[ ]:
 
 
-# Resampling dataset  
-import warnings
-warnings.filterwarnings("ignore", category=np.VisibleDeprecationWarning) 
-np.random.seed(10)
-number_records_fraud = target.sum().astype(int)
-normal_indices = (target==0).nonzero()[0]
-fraud_indices = (target==1).nonzero()[0]
-random_normal_indices = np.random.choice(normal_indices, number_records_fraud, replace = False)
-random_normal_indices = np.array(random_normal_indices)
-under_sample_indices = np.concatenate([fraud_indices,random_normal_indices])
-under_sample_data = new_dataset[under_sample_indices,:]
-X_undersample = under_sample_data
-y_undersample = target[under_sample_indices]
-X_train_undersample, X_test_undersample, y_train_undersample, y_test_undersample = train_test_split(X_undersample, y_undersample, test_size = 0.3, random_state = 0)
+fig, ax, data, _ = hyp.plot(data, '.', model='TSNE', group=class_labels, legend=list(set(class_labels)))
 
 
-# ### Montecarlo selection of features 
-# 
-# We performed **Montecarlo simulation** with 10.000 iterations to randomly select 5 features. In each iteration a new model is calibrated and its permormance metrics are calculated.
-
-# In[ ]:
-
-
-metric = 'Distance'
-number_iterations = 10000
-number_ini_ratio = 5
-number_final_ratio = 5
-results= Multivariate_Best_Model(number_iterations, X_train_undersample, y_train_undersample, X_test_undersample, y_test_undersample, metric, path, number_ini_ratio, number_final_ratio)       
-
-
-# Models resulting from the montecarlo process are stored in a DataFrame with the following columns:
-# - *Models*: set of ratios randomly selected.
-# - *Metrics*: 'Roc', 'Accuracy', 'Precision', 'Recall', 'F1', 'Auc' metrics calculated for each set of models.
-# - *P_def*: model probability.
-# - *Prediction*: model prediction.
-# - *Score*: score as the argument of the logit funtion.
-# - *Betas*: multipliers of each variable in the logit function. 
-# - *Distance*: Modified Jaccard Distance. 
-# 
-# Then models are sorted by the Modified Jaccard Distance
-# 
-
-# In[ ]:
-
-
-results.head(5)
-
-
-# ### PLOTS AND RESULTS
-# 
-# - Resampled dataset
-
-# In[ ]:
-
-
-models_list = [i-1 for i in results['Models'][0]]
-bt = results['Betas'][0]
-ind_best = models_list 
-X_test_b = X_test_undersample[:,ind_best]
-X_test_b_1 = np.array([1]*X_test_b.shape[0])
-X_test_b_ = np.c_[X_test_b_1, X_test_b]
-xtest_bt = np.ravel(np.dot(X_test_b_,np.transpose(bt)))
-
-[tn_u, fp_u, fn_u, tp_u] = Graph(y_test_undersample, xtest_bt)
-
-
-# - Dataset
-
-# In[ ]:
-
-
-models_list = [i-1 for i in results['Models'][0]]
-bt = results['Betas'][0]
-ind_best = models_list 
-X_test_b = X_test[:,ind_best]
-X_test_b_1 = np.array([1]*X_test_b.shape[0])
-X_test_b_ = np.c_[X_test_b_1, X_test_b]
-xtest_bt = np.ravel(np.dot(X_test_b_,np.transpose(bt)))
-
-[tn, fp, fn, tp]  = Graph(y_test, xtest_bt)
-
-
-# ### Conclusion 
-# The parsimony principle tells us to choose the simplest explanation that fits the evidence. In this work we used a Montecarlo method to find a model that can explain the target variable, proving that by selecting the appropriate features a model as simple as a Logistic Regression with 5 variables produces predictions that are as good as those coming from more complex models.
+# This brief demo highlights how HyperTools can be used to explore high-dimensional data in only a few lines of code.  By combining and extending powerful open-source toolboxes such as matplotlib, scikit-learn and seaborn, this toolbox can help you to discover structure in complex, high-dimensional datasets.  This knowledge could then be used to guide future analysis decisions, such as choosing the right classification model for your dataset.  We think this approach will help data scientists to discover that you can learn a lot about a dataset by simply looking at it before you try a million different complicated machine learning techniques. To learn more about the package, visit our [readthedocs](http://readthedocs.org/projects/hypertools/), [code](https://github.com/ContextLab/hypertools), [binder of demos](http://mybinder.org/repo/contextlab/hypertools-paper-notebooks) and [paper](https://arxiv.org/abs/1701.08290).

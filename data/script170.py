@@ -1,219 +1,501 @@
 
 # coding: utf-8
 
-# New to data science? Need a quick refresher? This five day challenge will give you the guidance and support you need to kick-start your data science journey.
+# Introduction
+# ------------
 # 
-# By the time you finish this challenge, you will:
+# This notebook introduces a way to use partial Principal Component Analysis to address the collinearity issue in the data. I first classify the variables into small groups which similar features, for example, church_count, build_count, cafe_price and etc. Then apply a PCA for each group of variables and use a stop criteria of 0.95 of total variance to pick the number of principal component. Finally, I assemble the data and draw the correlation plots to compare before and after transformation of the original data.
 # 
-# - Read in and summarize data
-# - Visualize both numeric and categorical data
-# - Know when and how to use two foundational statistical tests (t-test and chi-squared)
-# 
-# The 5-Day Data Challenge originally ran from October 23, 2017 to October 27, 2017. I've collected all the material here so you can do it at your own pace. Feel free to ask questions on the forums or this notebook if you need a hand.
-# 
-# ____
-# 
-# # Table of Contents
-# 
-# * [Day 1: Reading data into a kernel](#Day-1:-Reading-data-into-a-kernel)
-# * [Day 2: Plot a Numeric Variable with a Histogram](#Day-2:-Plot-a-Numeric-Variable-with-a-Histogram)
-# * [Day 3: Perform a t-test](#Day-3:-Perform-a-t-test)
-# * [Day 4: Visualize categorical data with a bar chart](#Day-4:-Visualize-categorical-data-with-a-bar-chart)
-# * [Day 5: Using a Chi-Square Test](#Day-5:-Using-a-Chi-Square-Test)
-# ____
 
-# # Day 1: Reading data into a kernel
-# 
-# ### What are we doing today?
-# We will read (or import) data into a kernel and summarize it using R or Python. If you're new to coding, go ahead and try the exercise in both languages so you can see what they're like. 
-# 
-# ### What data do you need?
-# For today’s challenge, you’re going to need a dataset that has a .csv file in it. “CSV” stands for “comma separated values”, and is a way of storing a spreadsheet where each row is a new line and there’s a comma between each value. You can see if a dataset has a .csv in it by going to a dataset, clicking on the “Data” tab at the top (under the heading picture) and seeing if there are any files that have the .csv extension. If you’re having trouble finding a dataset, check out this blog post for some pointers.
-# 
-# ### Challenge Instructions
-# 
-# 1.** Find a Kaggle dataset that’s interesting to you and has at least one .csv file in it**. (You can find a list of some fun, beginner-friendly datasets [here](https://www.kaggle.com/rtatman/fun-beginner-friendly-datasets/). For today, it doesn't matter which dataset you pick.)
-# 2. **Start a new kernel.** This is a quick way to see an overview of your dataset. You can do this by clicking the blue “New Kernel” button that shows up on the top left of any dataset. I’d recommend choosing a notebook kernel to get started. Give it a helpful title, like "5 Day Data Challenge: Day 1".
-# 3. **Pick your language. **Kernels launch in Python 3, but you can also write kernels in R. Use the dropdown menu at the top of the notebook to change languages.
-#     - **Python** is a general purpose programming language.
-#     - **R**  is a programming language specifically for data analysis and visualization.
-#     -Want a quick introduction to each language? Check out [this tutorial on R for complete beginners](https://www.kaggle.com/rtatman/getting-started-in-r-first-steps/) and [this beginner’s guide to Python](https://www.kaggle.com/sohier/whirlwind-tour-of-python-index).   
-# 4.** Read in the libraries you’re going to use.** (Libraries are collections of useful functions that aren't included in the base programming language.) I'd recommend:
-#     - Python: pandas (command: import pandas as pd)
-#     - R: tidyverse (command: library(tidyverse))
-# 5. **Read your data into a dataframe. **The filename, which you will need to put in the parentheses, will look like “../input/filename.csv”. Use the:
-#     - **Python**: Read_csv() function from Pandas
-#     - **R**: Read.csv() function built into R or the read_csv() function from the Tidyverse package
-# 6. **Summarize your data.** One way to do this is by putting the read_csv or read.csv function you wrote above inside the parentheses of the functions below. Try the:
-#     - **Python**: Describe() function from Pandas
-#     - **R**: Summary() function built into R
-# 7. **Optional:** If you want to share your analysis with friends or to ask for help, you’ll need to make it public so that other people can see it.
-#     - Publish your kernel by hitting the big blue “publish” button. (This may take a second.)
-#     - Change the visibility to “public” by clicking on the blue “Make Public” text (right above the “Fork Notebook” button).
-# 
-# ### Example kernels & additional resources: 
-# 
-# * [Day 1 (in R)](https://www.kaggle.com/rtatman/5-day-data-challenge-day-1-r)
-# * [Day 1 (in Python)](https://www.kaggle.com/rtatman/5-day-data-challenge-day-1-python)
-# * Recorded livestream of me doing the challenge (first in R, then in Python). The first day is broken into three videos becuase I was having technical problems with the stream. All other days are one video (and also don't' have freezing/buffering problems).
-#     - [Part one](https://www.youtube.com/watch?v=qN9_z3vIp4U)
-#     - [Part two](https://www.youtube.com/watch?v=ILqYEtQ_7G0)
-#     - [Part three](https://www.youtube.com/watch?v=SFQ1ECXiUME)
-#    
-# ----
+# In[ ]:
 
-# # Day 2: Plot a Numeric Variable with a Histogram
-# 
-# ### What are we doing today?
-# Today we’re going to be plotting a numeric variable using a histogram. Numeric data is any type of data where what you’re measuring can be represented with a number–like height, weight, income, distance, or number of clicks.
-# A histogram is a type of chart where the x-axis (along the bottom) is the range of numeric values of the variable, chopped up into a series of bins. For example, if the range of a value is from 0 to 12, it might be split into four bins, the first one being 1 through 3, the second being 4 through 6, the third 7 through 8, and the fourth 9 through 12. The y-axis (along the side) is the count of how many observations fall within each bin.
-#  
-# ### What data do you need?
-# For today’s challenge, you’re going to need a dataset with at least one numeric variable in it. (This just means that one of the columns in your dataframe will have numbers in it.)
-# 
-# ### Challenge Instructions
-# 
-# 1. **Find a dataset, start a kernel, load in your libraries and read your data into a dataframe** (just like we did yesterday). You can find a list of some datasets with at least one numeric variable here. Don’t forget to give your notebook a helpful title, like "5 Day Data Challenge: Day 2".
-# 2. **Load in visualization libraries**. I'd recommend:
-#     - **Python**: Matplotlib.pyplot (command: import matplotlib.pyplot as plt)
-#     - **R**: ggplot2, which is included in the  package. If you’ve loaded in the tidyverse library (command: library(tidyverse)) you’ve already got access to ggplot2.
-# 3. **Pick one column with numeric variables in it. ** (Hint: you can use the describe() function in Python or the summary() function in R to help figure out which columns are numeric.)
-#     - **Python**: To get just one column of a dataframe, you can use the syntax dataframe[“columnName”]
-#     - **R**: To get just one column of a dataframe, you can use the syntax dataframe\$columnName
-# 4. **Plot a histogram of that column**. Try the:
-#     -  **Python**: hist() function from Matplotlib
-#     - **R**: geom_histogram() ggplot2 layer, which you will need to add to a blank plot generated using the ggplot() command
-# 5. ** Don’t forget to add a title!** :) Use the:
-#     -  **Python**: plt.title() command
-#     - **R**: ggtitle() layer
-# 6. ** Optional: **If you want to share your analysis with friends or to ask for help, you’ll need to make it public so that other people can see it.
-#     - Publish your kernel by hitting the big blue “publish” button. (This may take a second.)
-#     - Change the visibility to “public” by clicking on the blue “Make Public” text (right above the “Fork Notebook” button).
-# 
-# ### Example kernels & additional resources: 
-# 
-# * [Day 2 (in R)](https://www.kaggle.com/rtatman/5-day-data-challenge-day-2-r)
-# * [Day 2 (in Python)](https://www.kaggle.com/rtatman/5-day-data-challenge-day-2-python) (Shout out to all the folks on the stream who helped out with this one! :)
-# * [Recording of Day 2 livestream (first in R, then in Python)](https://www.youtube.com/watch?v=HXz6ZEvgorg)
-# 
-# ----
 
-# # Day 3: Perform a t-test
-# 
-# ### What are we doing today?
-# Today, we’re going to answer a question: is a numeric variable different between two groups? To answer this question, we’re going to use a t-test.
-# 
-# A t-test is a statistical test that can help us estimate whether the difference in a numerical measure between two groups is reliable. Because we’re comparing two groups to each other, we’re going to be using a special flavor of a t-test called an independent samples t-test. (You can do a t-test with only one sample, but you need to know what you’d expect the mean and standard deviation of the group you sampled it from to be.) If you want to compare more than two groups, you can use an extension of a t-test called an “Analysis of Variance” or “ANOVA”.
-# 
-# A t-test will return a p-value. If a p-value is very low (generally below 0.01) this is evidence that it’s unlikely that we would have drawn our second sample from the same distribution as the first just by chance. For more information on t-tests, I’d recommend reading Chapter Five of OpenIntro Statistics 3rd Edition, which you can [download for free](https://www.openintro.org/stat/textbook.php?stat_book=os).
-# 
-# ### What data do you need?
-# For today’s challenge, you’re going to need a dataset that has at least one numerical variable it in that has been measured for two different groups. (If your dataset has more than two groups in it, you can always just pick two.)  Here are a couple of datasets that will work well for today’s challenge:
-# 
-# * [The cereals nutrition dataset](https://www.kaggle.com/crawford/80-cereals). You can look at whether there is the same amount of sugar or sodium in the two types of cereal (hot or cold).
-# * [The Museums, Aquariums, and Zoos dataset](https://www.kaggle.com/imls/museum-directory). You can look at whether the revenue for zoos is different than all other types of museums combined. This dataset will require some cleaning.
-# * [The Women's Shoe Price dataset](https://www.kaggle.com/datafiniti/womens-shoes-prices). Are pink shoes more expensive than other colors of shoes? This dataset will require some cleaning.
-# 
-# ### Challenge Instructions
-# 
-# 1. **You know the drill by now!** :) Find a dataset, start a kernel, load in your libraries, and read your data into a dataframe.
-#     - **Python**: Import the ttest_ind() function from scipy.stats (command: from scipy.stats import ttest_ind)
-#     - **R**: You don’t need to import anything. :) (R is a programming language specifically for statistics, so statistical methods are already built into it.)
-# 2. **Figure out which column has your numeric variable in it** and which column has your group labels in it.
-# 3. **Perform a t-test**. I'd recommend using:
-#     - **Python**: The ttest_ind() function from scipy.stats. Note: I’d recommend using the argument “equal_var=False” with this function unless the standard deviation of your numeric variable is the same between the two groups. You can calculate this usig the std() function from numpy.
-#     - **R**: The t.test function, which is built into R.
-# 4. **Extra credit**: Plot two histograms of your data, one for each group you included in your t-test.
-# 5. ** Optional: **If you want to share your analysis with friends or to ask for help, you’ll need to make it public so that other people can see it.
-#     - Publish your kernel by hitting the big blue “publish” button. (This may take a second.)
-#     - Change the visibility to “public”  by clicking on the blue “Make Public” text (right above the “Fork Notebook” button).
-# 
-# ### Example kernels & additional resources: 
-# 
-# * [Day 3 (in R)](https://www.kaggle.com/rtatman/5-day-data-challenge-day-3-r)
-# * [Day 3 (in Python)](https://www.kaggle.com/rtatman/5-day-data-challenge-day-3-python)
-# * [Recording of Day 3 livestream](https://www.youtube.com/watch?v=SFYjnqDUPSQ)
-# 
-# ---
+## Load packages
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+import seaborn as sns
+import numpy as np
+from scipy.stats import norm
+from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import normalize
+from scipy import stats
+import warnings
+warnings.filterwarnings('ignore')
 
-# # Day 4: Visualize categorical data with a bar chart
-# 
-# ### What are we doing today?
-# 
-# Today, we’re going to take a break from numeric data and turn to categorical data.
-# 
-# Categorical data is a data type containing information that categorizes where other data points are from. Example categories are things like t-shirt size, zip code, dog breed, whether someone is a repeat customer, level of education or hair color.
-# 
-# We’re going to visualize categorical data using a bar chart. In a bar chart, each category is represented as a different bar, and the height of the bar indicates the count of items in that category.
-# 
-# ### What data do you need?
-# 
-# For this challenge, you’re going to need a dataset with a categorical variable in it. You can find a list of some datasets with at least one categorical variable [here](https://www.kaggle.com/rtatman/fun-beginner-friendly-datasets/).
-# 
-# ### Challenge Instructions
-# 
-# 1. We’ll start off with the usual stuff: **find a dataset, start a kernel, load in your libraries, and read your data into a dataframe**. You can find a list of some datasets with at least one categorical variable here. Don’t forget to give your notebook a helpful title, like "5 Day Data Challenge: Day 4". I'd recommend:
-#     - **Python**: Seaborn (command: import seaborn as sns) and pandas (command: import pandas as pd)
-#     - **R**: ggplot, which is included in the tidyverse library (command: library(tidyverse))
-# 2. **Pick a column with a categorial variable in it**.
-# 3. **Plot a bar-chart**. I'd recommend:
-#     - **Python**: Using the sns.barplot() function from Seaborn
-#     - **R**: Adding a geom_bar() layer to a ggplot
-# 4. **Don’t forget to add a title!** :) Try the:
-#     - **Python**: plt.title() command
-#     - **R**: ggtitle() layer
-# 5. **Extra credit**: Pick another visualization for your dataset and figure out how to do it in your language of choice. (I really like this interactive data visualization catalog for picking what type of chart or graph to use.)
-# 5. **Optional**: If you want to share your analysis with friends or to ask for help, you’ll need to make it public so that other people can see it.
-#     - Publish your kernel by hitting the big, blue “publish” button. (This may take a second.)
-#     - Change the visibility to “public” by clicking on the blue “Make Public” text (right above the “Fork Notebook” button).
-# 
-# ### Example kernels & additional resources: 
-# 
-# * [Day 4 (in R)](https://www.kaggle.com/rtatman/5-day-data-challenge-day-4-r)
-# * [Day 4 (in Python)](https://www.kaggle.com/rtatman/5-day-data-challenge-day-4-python) (This notebooks includes barcharts 
-# made with both Matplotlib and Seaborn.)
-# * [Recording of Day 4 livestream](https://www.youtube.com/watch?v=_FaOj9Ei5nI)
-# _____
+get_ipython().run_line_magic('matplotlib', 'inline')
+from ggplot import *
 
-# # Day 5: Using a Chi-Square Test
-# 
-# 
-# ### What are we doing today?
-# Is the difference in the number of observations across different groups just the result of random variation? Or does it reflect an underlying difference between the two groups?
-# 
-# For example, we might have red and green apples, some of which are bruised and some which are not. Are apples of one color more likely to be bruised? We can figure out if one color of apple is more likely to bruise using the chi-square test (also written as Χ^2).
-# 
-# ### What data do you need?
-# For this challenge, you’re going to need a dataset with at least two categorical variables in it. (Just like yesterday.)
-# 
-# ### Challenge Instructions
-# 1. At this point you’re already a pro at this step. You should **find a dataset, start a kernel, load in your libraries, and read your data into a dataframe**. You can find a list of some datasets with at least one categorical variable [here](https://www.kaggle.com/rtatman/fun-beginner-friendly-datasets/). Don’t forget to give your notebook a helpful title, like "5 Day Data Challenge: Day 5". I'd recommend:
-#     - **Python**: scipy.stats (command: import scipy.stats) and pandas (command: import pandas as pd)
-#     - **R**: tidyverse (command: library(tidyverse))
-# 2. **Pick two columns** which both have categorical variables in them. (These will probably be strings, characters or objects rather than numbers.)
-# 3. **Calculate chi-square**. Try:
-#     - **Python**: The chi2_contingency() function from scipy.stats
-#     - **R**: Try chisq.test(), which is built into R
-# 4. **Extra credit:** Visualize your dataset.
-# 5. **Optional:** If you want to share your analysis with friends or to ask for help, you’ll need to make it public so that other people can see it.
-#     - Publish your kernel by hitting the big blue “publish” button. (This may take a second.)
-#     - Change the visibility to “public” by clicking on the blue “Make Public” text (right above the “Fork Notebook” button).
-# 
-# ### Example kernels and additional resources:
-# 
-# * [Day 5 (in R)](https://www.kaggle.com/rtatman/5-day-data-challenge-day-5-r)
-# * [Day 5 (in Python)](https://www.kaggle.com/rtatman/5-day-data-challenge-day-5-python)
-# made with both Matplotlib and Seaborn.)
-# * [Recording of Day 5 livestream](https://www.youtube.com/watch?v=78kGMzoMUEE)
-# _____
+pd.options.mode.chained_assignment = None  # default='warn'
+pd.set_option('display.max_columns', 500)
 
-# # Congrats! You've completed the 5-Day Data Challenge
+
+# In[ ]:
+
+
+## Load data into Python
+
+train = pd.read_csv('../input/train.csv', parse_dates=['timestamp'])
+test = pd.read_csv('../input/test.csv', parse_dates=['timestamp'])
+macro = pd.read_csv('../input/macro.csv', parse_dates=['timestamp'])
+
+
+# In[ ]:
+
+
+print(train.columns)
+print(train.shape)
+print(test.shape)
+
+
+# In[ ]:
+
+
+train.head()
+
+
+# In[ ]:
+
+
+## Describe the output field
+print(train['price_doc'].describe())
+sns.distplot(train['price_doc'])
+
+
+# The dependent variable is skewed (as expected for dollars). The easiest would be to take a log tranformation
+
+# In[ ]:
+
+
+train['LogAmt']=np.log(train.price_doc+1.0)
+print(train['LogAmt'].describe())
+sns.distplot(train['LogAmt'])
+
+
+# ** Note the two small bars between 13 and 14, and 14 and 15. We will need to dig into that and see that happens there **.
+
+# In[ ]:
+
+
+## Merge data into one dataset to prepare compare between train and test
+train_1 = train.copy()
+train_1['Source']='Train'
+test_1 = test.copy()
+test_1['Source']='Test'
+alldata = pd.concat([train_1, test_1],ignore_index=True)
+
+macro.columns = ['mac__'+c if c!='timestamp' else 'timestamp' for c in macro.columns ]
+alldata=alldata.merge(macro,on='timestamp',how='left')
+print(alldata.shape)
+
+
+# Most fields are numeric, and a few of them are object.
+
+# In[ ]:
+
+
+## Numerical and Categorical data types
+alldata_dtype=alldata.dtypes
+display_nvar = len(alldata.columns)
+alldata_dtype_dict = alldata_dtype.to_dict()
+alldata.dtypes.value_counts()
+
+
+# Step 2: Transform Variables and Missing Data
+# ---------------------------
 # 
-# ## What now?
+# **Variable Description**
 # 
-# Now that you’ve got a basic set of tools, you’re ready to start exploring more datasets. You can always check out new datasets [here](https://www.kaggle.com/datasets?sortBy=updated&group=featured) or [upload your own](https://www.kaggle.com/datasets?modal=true).
-#  
-#  You can also check out some of the great learning resources and tutorials on Kaggle [here](https://www.kaggle.com/dansbecker/learning-materials-on-kaggle) if you're looking for more structure. 
-#  
-#  <center>
-#  __Good luck and enjoy the rest of your data science journey!__
+# I wrote this function with intension to compare train/test data and check if some variable is illy behaved. It is modified a little to fit this dataset to compared between normal/fraud subset.
+# 
+# It can be applied to both numeric and object data types:
+# 
+#   1. When the data type is object, it will output the value count of each categories
+#   2. When the data type is numeric, it will output the quantiles
+#   3. It also seeks any missing values in the dataset
+
+# In[ ]:
+
+
+def var_desc(dt,alldata):
+    print('--------------------------------------------')
+    for c in alldata.columns:
+        if alldata[c].dtype==dt:
+            t1 = alldata[alldata.Source=='Train'][c]
+            t2 = alldata[alldata.Source=='Test'][c]
+            if dt=="object":
+                f1 = t1[pd.isnull(t1)==False].value_counts()
+                f2 = t2[pd.isnull(t2)==False].value_counts()
+            else:
+                f1 = t1[pd.isnull(t1)==False].describe()
+                f2 = t2[pd.isnull(t2)==False].describe()
+            m1 = t1.isnull().value_counts()
+            m2 = t2.isnull().value_counts()
+            f = pd.concat([f1, f2], axis=1)
+            m = pd.concat([m1, m2], axis=1)
+            f.columns=['Train','Test']
+            m.columns=['Train','Test']
+            print(dt+' - '+c)
+            print('UniqValue - ',len(t1.value_counts()),len(t2.value_counts()))
+            print(f.sort_values(by='Train',ascending=False))
+            print()
+
+            m_print=m[m.index==True]
+            if len(m_print)>0:
+                print('missing - '+c)
+                print(m_print)
+            else:
+                print('NO Missing values - '+c)
+            if dt!="object":
+                if len(t1.value_counts())<=10:
+                    c1 = t1.value_counts()
+                    c2 = t2.value_counts()
+                    c = pd.concat([c1, c2], axis=1)
+                    f.columns=['Train','Test']
+                    print(c)
+            print('--------------------------------------------')
+
+
+# In[ ]:
+
+
+## Uncomment to run variable description
+## var_desc('object',alldata)
+
+
+# There are only a few variables that are object type and most of them are "yes" and "no". It is reasonable to convert them into 0 and 1 numerical variables. 
+
+# In[ ]:
+
+
+## convert obj to num
+for c in alldata.columns:
+    if alldata[c].dtype=='object' and c not in ['sub_area','timestamp','Source']:
+        if len(alldata[c].value_counts())==2:
+            alldata['num_'+c]=[0 if x in ['no','OwnerOccupier'] else 1 for x in alldata[c]]
+        if len(alldata[c].value_counts())==5:
+            alldata['num_'+c]=0
+            alldata['num_'+c].loc[alldata[c]=='poor']=0
+            alldata['num_'+c].loc[alldata[c]=='satisfactory']=1
+            alldata['num_'+c].loc[alldata[c]=='good']=2
+            alldata['num_'+c].loc[alldata[c]=='excellent']=3
+            alldata['num_'+c].loc[alldata[c]=='no data']=1
+
+
+# In[ ]:
+
+
+## missing values
+missing_col = [[c,sum(alldata[alldata.Source=='Train'][c].isnull()==True),sum(alldata[alldata.Source=='Test'][c].isnull()==True)] for c in alldata.columns]
+missing_col = pd.DataFrame(missing_col,columns=['Var','missingTrain','missingTest'])
+
+
+# ** Missing Values **
+# 
+# Below is an analysis of missing values. There are a couple variables with very rate of missing. So we want to keep them in the resv_col list so that we don't PCA them and make the entire set of the principal components as missing. 
+
+# In[ ]:
+
+
+missingdf=missing_col[missing_col.missingTrain+missing_col.missingTest>0]
+missingdf=missingdf.sort('missingTrain')
+f, ax = plt.subplots(figsize=(6, 15))
+sns.barplot(y=missingdf.Var,x=missingdf.missingTrain)
+
+
+# ## Step 3: Principal Component Analysis##
+# 
+# First, we group variables into small categories, 
+# 
+# Then apply PCA on each of the categories and show correlation plots
+
+# In[ ]:
+
+
+excl_col=['id','timestamp','sub_area'] + [c for c in alldata.columns if alldata[c].dtype=='object']
+resv_col=['price_doc','LogAmt','Source','cafe_sum_500_max_price_avg','cafe_sum_500_min_price_avg','cafe_avg_price_500','hospital_beds_raion']
+def sel_grp(keys):
+    lst_all = list()
+    for k in keys:
+        lst = [c for c in alldata.columns if c.find(k)!=-1 and c not in excl_col and c not in resv_col]
+        lst = list(set(lst))
+        lst_all += lst
+    return(lst_all)
+
+
+# In[ ]:
+
+
+col_grp = dict({})
+col_grp['people']=sel_grp(['_all','male'])
+col_grp['id'] = sel_grp(['ID_'])
+col_grp['church']=sel_grp(['church'])
+col_grp['build']=sel_grp(['build_count_'])
+col_grp['cafe']=sel_grp(['cafe_count'])
+col_grp['cafeprice']=sel_grp(['cafe_sum','cafe_avg'])
+col_grp['km']=sel_grp(['_km','metro_min','_avto_min','_walk_min','_min_walk'])
+col_grp['mosque']=sel_grp(['mosque_count'])
+col_grp['market']=sel_grp(['market_count'])
+col_grp['office']=sel_grp(['office_count'])
+col_grp['leisure']=sel_grp(['leisure_count'])
+col_grp['sport']=sel_grp(['sport_count'])
+col_grp['green']=sel_grp(['green_part'])
+col_grp['prom']=sel_grp(['prom_part'])
+col_grp['trc']=sel_grp(['trc_count'])
+col_grp['sqm']=sel_grp(['_sqm_'])
+col_grp['raion']=sel_grp(['_raion'])
+col_grp['macro']=sel_grp(['mac__'])
+col_grp.keys()
+
+
+# In[ ]:
+
+
+col_tmp = list()
+for d in col_grp:
+    col_tmp+=(col_grp[d])
+col_grp['other']=[c for c in alldata.columns if c not in col_tmp and c not in excl_col and c not in resv_col]
+col_grp['other']  ## these 'other' variables are not to be PCA
+
+
+# In[ ]:
+
+
+## remove variables in macro data with too many missing data
+macro_missing_2 = pd.DataFrame([[c,sum(alldata[c].isnull())] for c in col_grp['macro']],columns=['Var','Missing'])
+macro_missing_3=macro_missing_2[macro_missing_2.Missing>5000]
+print(macro_missing_3)
+excl_col+=list(macro_missing_3.Var)
+print(excl_col)
+
+col_grp['macro']=sel_grp(['mac__'])
+
+
+# In[ ]:
+
+
+loopkeys=list(col_grp.keys())
+print(loopkeys)
+
+
+# In[ ]:
+
+
+def partial_pca(var,data,col_grp):
+    from sklearn.decomposition import PCA
+    import bisect
+    pca = PCA()
+    df = data[col_grp[var]].dropna()
+    print([len(data[col_grp[var]]), len(df)])
+    df = (df-df.mean())/df.std(ddof=0)
+    pca.fit(df)
+    varexp = pca.explained_variance_ratio_.cumsum()
+    cutoff = bisect.bisect(varexp, 0.95)
+    #print(cutoff)
+    #print(pca.explained_variance_ratio_.cumsum())
+    newcol=pd.DataFrame(pca.fit_transform(X=df)[:,0:(cutoff+1)],columns=['PCA_'+var+'_'+str(i) for i in range(cutoff+1)],index=df.index)
+    #print(newcol)
+    col_grp['PCA_'+var]=list(newcol.columns)
+    return(newcol,col_grp,pca)
+
+
+# In[ ]:
+
+
+for c in loopkeys:
+    if c!='other':
+        print(c)
+        newcol,col_grp,pca = partial_pca(c,alldata,col_grp)
+        alldata=alldata.join(newcol)
+        print(alldata.shape)
+
+
+# Correlation
+# ------
+# Correlation is useful to find peers of input field so we are aware when building models, either to transform them (principal component) or remove one of the two.
+# The first plot below the overall correlation matrix and there are blocks of variables that are highly correlated
+# The second plot shows the highly correlated variables with response.
+
+# In[ ]:
+
+
+wpca=list()
+wopca=list()
+for c in col_grp.keys():
+    if c.find('PCA_')!=-1:
+        wpca+=col_grp[c]
+    else:
+        wopca+=col_grp[c]
+        
+wpca+=col_grp['other']
+wpca+=resv_col
+wopca+=col_grp['other']
+wopca+=resv_col
+
+wpca=list(set(wpca))
+wopca=list(set(wopca))
+
+wpca.sort()
+wopca.sort()
+
+
+# Below is a comparison of w/o PCA and w/ PCA correlation, after PCA transformation, it looks much better in terms of high correlated variables. It is also interesting to notice that some of the intra-group principal components have high correlations. 
+
+# In[ ]:
+
+
+## Correlation without PCA
+corrmat = alldata[wopca].corr()
+f, ax = plt.subplots(figsize=(10, 10))
+sns.heatmap(corrmat, vmax=.8, square=True,xticklabels=False,yticklabels=False,cbar=False,annot=False);
+
+
+# In[ ]:
+
+
+## Correlation with PCA
+corrmat = alldata[wpca].corr()
+f, ax = plt.subplots(figsize=(10, 10))
+sns.heatmap(corrmat, vmax=.8, square=True,xticklabels=True,yticklabels=True,cbar=False,annot=False);
+
+
+# In[ ]:
+
+
+## Top 20 correlated variables
+corrmat = alldata[wpca].corr()
+k = 20 #number of variables for heatmap
+cols = corrmat.nlargest(k, 'price_doc')['price_doc'].index
+cm = alldata[cols].corr()
+f, ax = plt.subplots(figsize=(10, 10))
+sns.set(font_scale=1.25)
+hm = sns.heatmap(cm, cbar=False, annot=True, square=True, fmt='.2f', annot_kws={'size': 10}, yticklabels=cols.values, xticklabels=cols.values)
+plt.show()
+
+
+# XGB on the PCA transformed Data
+# ---------
+# 
+# Now PCA transformed data shows much better correlation. Next we will test a simple XGB model and see its performance. 
+
+# In[ ]:
+
+
+## these are the variables going into the model.
+alldata[wpca].columns
+
+
+# In[ ]:
+
+
+## Add a few more features suggested by other discussions
+##
+# Add month-year
+month_year = (alldata.timestamp.dt.month + alldata.timestamp.dt.year * 100)
+month_year_cnt_map = month_year.value_counts().to_dict()
+alldata['month_year_cnt'] = month_year.map(month_year_cnt_map)
+
+# Add week-year count
+week_year = (alldata.timestamp.dt.weekofyear + alldata.timestamp.dt.year * 100)
+week_year_cnt_map = week_year.value_counts().to_dict()
+alldata['week_year_cnt'] = week_year.map(week_year_cnt_map)
+
+# Add month and day-of-week
+alldata['month'] = alldata.timestamp.dt.month
+alldata['dow'] = alldata.timestamp.dt.dayofweek
+
+# Other feature engineering
+alldata['rel_floor'] = alldata['floor'] / alldata['max_floor'].astype(float)
+alldata['rel_kitch_sq'] = alldata['kitch_sq'] / alldata['full_sq'].astype(float)
+
+
+# In[ ]:
+
+
+wpca +=['month_year_cnt','week_year_cnt','dow','month','rel_floor','rel_kitch_sq']
+wopca+=['month_year_cnt','week_year_cnt','dow','month','rel_floor','rel_kitch_sq']
+allfeature=list(set(wpca+wopca))
+
+
+# In[ ]:
+
+
+## let's try a 5-fold CV
+from sklearn.model_selection import KFold
+kf = KFold(5,shuffle =True)
+
+
+# In[ ]:
+
+
+import xgboost as xgb
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 12,
+    'subsample': 1,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1,
+    'min_child_weight': 200
+}
+
+def cv_xgb(val_train_X,val_train_Y,val_val_X,val_val_Y):
+    dtrain = xgb.DMatrix(val_train_X, val_train_Y, feature_names=val_train_X.columns)
+    dval = xgb.DMatrix(val_val_X, val_val_Y, feature_names=val_val_X.columns)
+
+    # Uncomment to tune XGB `num_boost_rounds`
+    partial_model = xgb.train(xgb_params, dtrain, num_boost_round=1000, evals=[(dval, 'val')],
+                           early_stopping_rounds=50, verbose_eval=20)
+
+    num_boost_round = partial_model.best_iteration
+    return(num_boost_round,partial_model.best_score)
+
+
+# In[ ]:
+
+
+train_col = [c for c in alldata[wpca].columns if c not in ['price_doc','Source']]
+alldata_1 = alldata[alldata.Source=='Train'][train_col]
+
+for val_train, val_val in kf.split(alldata_1):
+    val_train_X = alldata_1.ix[val_train].drop('LogAmt',axis=1)
+    val_train_Y = alldata_1.ix[val_train].LogAmt
+    val_val_X = alldata_1.ix[val_val].drop('LogAmt',axis=1)
+    val_val_Y = alldata_1.ix[val_val].LogAmt
+    print("%s %s %s %s" % (val_train_X.shape, val_train_Y.shape, val_train.shape, val_val.shape))
+    print(cv_xgb(val_train_X,val_train_Y,val_val_X,val_val_Y))
+    break  ## this takes long to run, I am breaking it to demostrate; comment the line if you want full CV
+
+
+# In[ ]:
+
+
+## Run it on the full model 
+num_boost_round = 200
+all_train_X = alldata_1.drop('LogAmt',axis=1)
+all_train_Y = alldata_1.LogAmt
+all_test_X = alldata[alldata.Source=='Test'][train_col].drop('LogAmt',axis=1)
+dtrain_all = xgb.DMatrix(all_train_X, all_train_Y, feature_names=all_train_X.columns)
+dtest      = xgb.DMatrix(all_test_X, feature_names=all_test_X.columns)
+model = xgb.train(dict(xgb_params, silent=0), dtrain_all, num_boost_round=num_boost_round)
+
+
+# In[ ]:
+
+
+## important features
+fig, ax = plt.subplots(1, 1, figsize=(8, 16))
+xgb.plot_importance(model, max_num_features=50, height=0.5, ax=ax)
+
+
+# In[ ]:
+
+
+## Make a predicition
+ylog_pred = model.predict(dtest)
+y_pred = np.exp(ylog_pred) - 1
+id_test = alldata[alldata.Source=='Test'].id
+df_sub = pd.DataFrame({'id': id_test, 'price_doc': y_pred})
+df_sub.to_csv('sub_pca.csv', index=False)
+

@@ -1,1250 +1,935 @@
 
 # coding: utf-8
 
-# Finally, the Kaggle 2017 Survey results are out. This survey can provide very meaningful insights (almost everything) about the people working in the field of Data Science. 
+# # **Introduction**
 # 
-# In this notebook, I will try to explore different things within the data. I will cover some simple to intermediate techniques to explore and visualize the data. If you are new to Kaggle or if you have some basic/intermediate EDA skills, then this notebook is  a head start for you. 
+# This is an initial Explanatory Data Analysis for the [Mercari Price Suggestion Challenge](https://www.kaggle.com/c/mercari-price-suggestion-challenge#description) with matplotlib. [bokeh](https://bokeh.pydata.org/en/latest/) and [Plot.ly](https://plot.ly/feed/) - a visualization tool that creates beautiful interactive plots and dashboards.  The competition is hosted by Mercari, the biggest Japanese community-powered shopping app with the main objective to predict an accurate price that Mercari should suggest to its sellers, given the item's information. 
+# 
+# ***Update***: The abundant amount of food from my family's Thanksgiving dinner has really energized me to continue working on this model. I decided to dive deeper into the NLP analysis and found an amazing tutorial by Ahmed BESBES. The framework below is  based on his [source code](https://ahmedbesbes.com/how-to-mine-newsfeed-data-and-extract-interactive-insights-in-python.html).  It provides guidance on pre-processing documents and  machine learning techniques (K-means and LDA) to clustering topics.  So that this kernel will be divided into 2 parts: 
+# 
+# 1. Explanatory Data Analysis 
+# 2. Text Processing  
+#     2.1. Tokenizing and  tf-idf algorithm  
+#     2.2. K-means Clustering  
+#     2.3. Latent Dirichlet Allocation (LDA)  / Topic Modelling
+#  
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-import os
+import nltk
+import string
 import re
-import glob
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import seaborn as sns
+import numpy as np
+import pandas as pd
+import pickle
+#import lda
+
 import matplotlib.pyplot as plt
-import scipy.stats as sst
-from collections import defaultdict
-color = sns.color_palette()
+import seaborn as sns
+sns.set(style="white")
+
+from nltk.stem.porter import *
+from nltk.tokenize import word_tokenize, sent_tokenize
+from nltk.corpus import stopwords
+from sklearn.feature_extraction import stop_words
+
+from collections import Counter
+from wordcloud import WordCloud
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.decomposition import LatentDirichletAllocation
+
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
+import plotly.graph_objs as go
+import plotly.tools as tls
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+import bokeh.plotting as bp
+from bokeh.models import HoverTool, BoxSelectTool
+from bokeh.models import ColumnDataSource
+from bokeh.plotting import figure, show, output_notebook
+#from bokeh.transform import factor_cmap
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# In[ ]:
-
-
-# Read each of the file
-cvRates = pd.read_csv('../input/conversionRates.csv', encoding="ISO-8859-1")
-freeForm = pd.read_csv('../input/freeformResponses.csv', encoding="ISO-8859-1")
-multiChoice = pd.read_csv('../input/multipleChoiceResponses.csv', encoding="ISO-8859-1")
-schema = pd.read_csv('../input/schema.csv', encoding="ISO-8859-1")
+import warnings
+warnings.filterwarnings('ignore')
+import logging
+logging.getLogger("lda").setLevel(logging.WARNING)
 
 
-# In[ ]:
-
-
-# Check the schema first
-schema.head()
-
-
-# In[ ]:
-
-
-# Let's check the multiple response file first where each row corresponds to all answers 
-# given by a single person
-multiChoice.head(10)
-
-
-# We will select each column and try to explore as much as possible,
-
-# # **Diversity**
-
-# In[ ]:
-
-
-# Checking the diversity first
-gender_count = multiChoice.GenderSelect.value_counts()
-plt.figure(figsize=(10,8))
-sns.barplot(x=gender_count.index, y= gender_count.values, color=color[2])
-plt.title('Gender diversity in Data Science', fontsize=14)
-plt.xlabel('Gender', fontsize=12)
-plt.ylabel('Count', fontsize=12)
-plt.xticks(range(len(gender_count.index)), ['Male', 'Female', 'Different', 'Non-confirming'])
-plt.show()
-
-
-# Woah!! This ratio is disturbing. I am actually surprised seeing such a low number of females working in DS even in 2017.
-
-# In[ ]:
-
-
-total_surveys = gender_count.values.sum()
-for i, idx in enumerate(gender_count.index):
-    num_survey = gender_count.values[i]
-    percentage = (num_survey/total_surveys)*100
-    print("Number of surveys done by {} are {} which corresponds to {:.2f}% of the total surveys taken".format(idx, num_survey, percentage))
-
-
-# ## **Country-wise survey**
-
-# In[ ]:
-
-
-# There are a lot of null values in this column. I am going to replace them with "others" for now.
-multiChoice['Country'] = multiChoice['Country'].fillna("Others")
-
-
-# In[ ]:
-
-
-# Get the count of people in data science per country
-country_count = multiChoice['Country'].value_counts()
-print("Maximum number of surveys taken {} by {}: ".format(country_count.values[0], country_count.index[0]))
-print("Minimum number of survesy taken {} by {}: ".format(country_count.values[-1], country_count.index[-1]))
-print("Average number of surveys : ", format(round(country_count.values.mean())))
-print("Number of countries where the surveys count was less than the average survey count: ", end=" ")
-print(country_count[country_count.values < country_count.values.mean() ].count())
-
-
-# In[ ]:
-
-
-# For the sake of a good plot, I will be excluding all those countries from the graph
-# where the number of surveys is less 100
-country_count_ex = country_count[country_count.values > 100]
-plt.figure(figsize=(20,20))
-sns.barplot(y=country_count_ex.index, x= country_count_ex.values, color=color[4], orient='h')
-plt.title('Number of surveys taken in different countries', fontsize=16)
-plt.xlabel('Count', fontsize=16)
-plt.ylabel('Country', fontsize=16)
-plt.show()
-
-
-# So, most of the people working in the field of data science are based in United States followed by India, Russia and United Kingdom. It's a surprise that countries like Germany, China and Japan are lagging behind here.
+# # **Exploratory Data Analysis**
+# On the first look at the data, besides the unique identifier (item_id), there are 7 variables in this model. This notebook will sequentially go through each of them with a brief statistical summary. 
 # 
+# 1. **Numerical/Continuous Features**
+#     1. price: the item's final bidding price. This will be our reponse / independent variable that we need to predict in the test set
+#     2. shipping cost     
+#  
+# 1. **Categorical Features**: 
+#     1. shipping cost: A binary indicator, 1 if shipping fee is paid by seller and 0 if it's paid by buyer
+#     2. item_condition_id: The condition of the items provided by the seller
+#     1. name: The item's name
+#     2. brand_name: The item's producer brand name
+#     2. category_name: The item's single or multiple categories that are separated by "\" 
+#     3. item_description: A short description on the item that may include removed words, flagged by [rm]
+
+# In[ ]:
+
+
+PATH = "../input/"
+
+
+# In[ ]:
+
+
+train = pd.read_csv(f'{PATH}train.tsv', sep='\t')
+test = pd.read_csv(f'{PATH}test.tsv', sep='\t')
+
+
+# In[ ]:
+
+
+# size of training and dataset
+print(train.shape)
+print(test.shape)
+
+
+# In[ ]:
+
+
+# different data types in the dataset: categorical (strings) and numeric
+train.dtypes
+
+
+# In[ ]:
+
+
+train.head()
+
+
+# ## Target Variable: **Price**
+
+# The next standard check is with our response or target variables, which in this case is the `price` we are suggesting to the Mercari's marketplace sellers.  The median price of all the items in the training is about \$267 but given the existence of some extreme values of over \$100 and the maximum at \$2,009, the distribution of the variables is heavily skewed to the left. So let's make log-transformation on the price (we added +1 to the value before the transformation to avoid zero and negative values).
+
+# In[ ]:
+
+
+train.price.describe()
+
+
+# In[ ]:
+
+
+plt.subplot(1, 2, 1)
+(train['price']).plot.hist(bins=50, figsize=(20,10), edgecolor='white',range=[0,250])
+plt.xlabel('price+', fontsize=17)
+plt.ylabel('frequency', fontsize=17)
+plt.tick_params(labelsize=15)
+plt.title('Price Distribution - Training Set', fontsize=17)
+
+plt.subplot(1, 2, 2)
+np.log(train['price']+1).plot.hist(bins=50, figsize=(20,10), edgecolor='white')
+plt.xlabel('log(price+1)', fontsize=17)
+plt.ylabel('frequency', fontsize=17)
+plt.tick_params(labelsize=15)
+plt.title('Log(Price) Distribution - Training Set', fontsize=17)
+plt.show()
+
+
+# ## **Shipping**
 # 
-# # **Age**
+# The shipping cost burden is decently splitted between sellers and buyers with more than half of the items' shipping fees are paid by the sellers (55%). In addition, the average price paid by users who have to pay for shipping fees is lower than those that don't require additional shipping cost. This matches with our perception that the sellers need a lower price to compensate for the additional shipping.
+
+# In[ ]:
+
+
+train.shipping.value_counts()/len(train)
+
+
+# In[ ]:
+
+
+prc_shipBySeller = train.loc[train.shipping==1, 'price']
+prc_shipByBuyer = train.loc[train.shipping==0, 'price']
+
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(figsize=(20,10))
+ax.hist(np.log(prc_shipBySeller+1), color='#8CB4E1', alpha=1.0, bins=50,
+       label='Price when Seller pays Shipping')
+ax.hist(np.log(prc_shipByBuyer+1), color='#007D00', alpha=0.7, bins=50,
+       label='Price when Buyer pays Shipping')
+ax.set(title='Histogram Comparison', ylabel='% of Dataset in Bin')
+plt.xlabel('log(price+1)', fontsize=17)
+plt.ylabel('frequency', fontsize=17)
+plt.title('Price Distribution by Shipping Type', fontsize=17)
+plt.tick_params(labelsize=15)
+plt.show()
+
+
+# ## **Item Category**
 # 
-# Anyways, let's move to the Age column now. This will be interesting. These are the steps that we are going to follow:
-# * Check for any null values. Replace them with mean, median or mode age.
-# * Check for the age count. Find the min, max and average age of the people working in DS
-# * Will try to group by countries and do a country-wise analysis too.
+# There are about **1,287** unique categories but among each of them, we will always see a main/general category firstly, followed by two more particular subcategories (e.g. Beauty/Makeup/Face or Lips). In adidition, there are about 6,327 items that do not have a category labels. Let's split the categories into three different columns. We will see later that this information is actually quite important from the seller's point of view and how we handle the missing information in the `brand_name` column will impact the model's prediction. 
 
 # In[ ]:
 
 
-# A handy-dandy function
-def check_age(data):
-    print("Null values count: ", data.isnull().sum())
-    print("Minimum age: ", data.min())
-    print("Maximum age: ", data.max())
-    print("Average age: ", data.mean())
-    print("Median age: ", np.median(data.values))
-    print("Mode age: ", sst.mode(data.values))
+print("There are %d unique values in the category column." % train['category_name'].nunique())
 
 
 # In[ ]:
 
 
-check_age(multiChoice['Age'])
-
-
-# There are a total of 331 null values here. Also, as expected, people have filled age upto 100. We will cap the age at 60 as I don't think it matters that much after 60. Also, we will copy the original data into a series so that we can use our original data for some other purpose later on.
-
-# In[ ]:
-
-
-# Copy the series
-age = multiChoice['Age']
-# Drop the null values
-age = age.dropna()
-# Drop values > 60 and < 10
-age = age.drop(age.index[(age.values > 60) | (age.values < 10)]).reset_index(drop=True)
-# Check for the stats again
-check_age(age)
+# TOP 5 RAW CATEGORIES
+train['category_name'].value_counts()[:5]
 
 
 # In[ ]:
 
 
-age_count = age.value_counts()
-plt.figure(figsize=(30,15))
-sns.barplot(x=age_count.index, y=age_count.values, color=color[2])
-plt.xlabel('Age', fontsize=16)
-plt.ylabel('Count',fontsize=16)
-plt.title('Age distribution',fontsize=16)
-plt.show()
-
-
-# Maximum people doing DS are somewhat between 19-35. Let's see what's the age difference between the top two countries 
-
-# In[ ]:
-
-
-age_country = multiChoice[['Country', 'Age']]
-# Drop the null values
-age_country = age_country.dropna()
-# Drop values > 60 and < 10
-age_country = age_country.drop(age_country.index[(age_country['Age'] > 60) | (age_country['Age'] < 10)]).reset_index(drop=True)
+# missing categories
+print("There are %d items that do not have a label." % train['category_name'].isnull().sum())
 
 
 # In[ ]:
 
 
-# Get USA and India from the groups
-age_USA = age_country.groupby('Country').get_group('United States')
-age_India = age_country.groupby('Country').get_group('India')
+# reference: BuryBuryZymon at https://www.kaggle.com/maheshdadhich/i-will-sell-everything-for-free-0-55
+def split_cat(text):
+    try: return text.split("/")
+    except: return ("No Label", "No Label", "No Label")
 
-# Stats
-print("======== USA ==============")
-check_age(age_USA['Age'])
-print("")
-print("======= India ============")
-check_age(age_India['Age'])
-
-# Count and plot 
-age_count = age_USA.Age.value_counts()
-plt.figure(figsize=(30,15))
-sns.barplot(x=age_count.index, y=age_count.values, color=color[2])
-plt.xlabel('Age', fontsize=16)
-plt.ylabel('Count',fontsize=16)
-plt.title('Age distribution in USA',fontsize=16)
-plt.show()
-
-
-age_count = age_India.Age.value_counts()
-plt.figure(figsize=(30,15))
-sns.barplot(x=age_count.index, y=age_count.values, color=color[2])
-plt.xlabel('Age', fontsize=16)
-plt.ylabel('Count',fontsize=16)
-plt.title('Age distribution in India',fontsize=16)
-plt.show()
-
-
-# This is so cool. While the minimum age in USA is less than minimum age in India but the mode age in India is much better as compared to USA. In USA, maximum people doing DS are of age 25-35 while in India it is between 21-27. Nice.
-# 
-# # **Employment Status**
 
 # In[ ]:
 
 
-employment = multiChoice['EmploymentStatus'].value_counts()
-total = employment.values.sum()
-for i, idx in enumerate(employment.index):
-    val = employment.values[i]
-    percent = (val/total)*100
-    print("Total number of {} is {}  approx.  {:.2f}%".format(idx, val, percent))
-    
-plt.figure(figsize=(10,8))
-sns.barplot(y=employment.index, x= employment.values, color=color[3], orient='h')
-plt.title('Employment status', fontsize=16)
-plt.xlabel('Count', fontsize=16)
-plt.ylabel('Type', fontsize=16)
-plt.show()    
+train['general_cat'], train['subcat_1'], train['subcat_2'] = zip(*train['category_name'].apply(lambda x: split_cat(x)))
+train.head()
 
-
-# Most of the people are employed full time which is obvious given the demand now-a-days. The most interesting are the ones who are not employed and still not looking for work. (Attitude!!)
-# 
-# Again, we will look at the employment status in the two major countries i.e. United States and India. This is gonna be interesting...LOL!!
 
 # In[ ]:
 
 
-emp_country = multiChoice[['Country', 'EmploymentStatus']]
+# repeat the same step for the test set
+test['general_cat'], test['subcat_1'], test['subcat_2'] = zip(*test['category_name'].apply(lambda x: split_cat(x)))
 
-# Get USA and India from the groups
-emp_USA = emp_country.groupby('Country').get_group('United States')
-emp_India = emp_country.groupby('Country').get_group('India')
-emp_country = pd.concat([emp_USA, emp_India]).reset_index(drop=True)
-del emp_USA, emp_India
-
-# Count and plot 
-plt.figure(figsize=(20,15))
-sns.set(font_scale=2)
-sns.countplot(y=emp_country['EmploymentStatus'],orient='h', data=emp_country, hue='Country')
-plt.title('Employment status', fontsize=16)
-plt.xlabel('Count', fontsize=16)
-plt.ylabel('Type', fontsize=16)
-plt.legend(loc=(1.04,0))
-plt.show()
-
-
-# As expected, the number of employed-full time in US is almost double the number in India. Also, the number of freelancers are less in India but the number of people who are not employed and still not looking for work is higher as compared to US
-
-# # **StudentStatus** 
 
 # In[ ]:
 
 
-# How many people, who took the survey, are students?
-students = multiChoice['StudentStatus']
+print("There are %d unique first sub-categories." % train['subcat_1'].nunique())
 
-# We will drop the NaN values from this column because we just can't say whether a person who
-# took the survey is student or not 
-students.dropna(inplace=True)
-
-students_count = students.value_counts()
-total = multiChoice['StudentStatus'].shape[0]
-del students
-
-for i, idx in enumerate(students_count.index):
-    val = students_count.values[i]
-    percentage = (val/total)*100
-    print("Student?: {} How many?: {}  or roughly {:.2f}% of the total".format(idx, val, percentage))
-    
-plt.figure(figsize=(10,8))
-sns.barplot(x=students_count.index, y=students_count.values, color=color[5])
-plt.title("Student status of the people who took the survey", fontsize=16)
-plt.xlabel("Status", fontsize=16)
-plt.ylabel("Count", fontsize=16)
-plt.xticks(range(len(students_count.index)), students_count.index)
-plt.show()
-
-
-# So, there are a lot of students as per the survey. Let's check how this holds up for the top two countries: US and India. If I am not wrong, there would be more students in India as compared to US.
 
 # In[ ]:
 
 
-# Choose the required column
-student_country = multiChoice[['Country', 'StudentStatus']]
-# Drop the rows with null values 
-student_country = student_country.dropna()
-student_group = student_country.groupby('Country')
+print("There are %d unique second sub-categories." % train['subcat_2'].nunique())
 
-# Check which country has the highes and lowest number of students
-students_count = [(None, 0)]
-for group, df in student_group:
-    count = df['StudentStatus'].value_counts()
+
+# Overall, we have  **7 main categories** (114 in the first sub-categories and 871 second sub-categories): women's and beauty items as the two most popular categories (more than 50% of the observations), followed by kids and electronics. 
+
+# In[ ]:
+
+
+x = train['general_cat'].value_counts().index.values.astype('str')
+y = train['general_cat'].value_counts().values
+pct = [("%.2f"%(v*100))+"%"for v in (y/len(train))]
+
+
+# In[ ]:
+
+
+trace1 = go.Bar(x=x, y=y, text=pct)
+layout = dict(title= 'Number of Items by Main Category',
+              yaxis = dict(title='Count'),
+              xaxis = dict(title='Category'))
+fig=dict(data=[trace1], layout=layout)
+py.iplot(fig)
+
+
+# In[ ]:
+
+
+x = train['subcat_1'].value_counts().index.values.astype('str')[:15]
+y = train['subcat_1'].value_counts().values[:15]
+pct = [("%.2f"%(v*100))+"%"for v in (y/len(train))][:15]
+
+
+# In[ ]:
+
+
+trace1 = go.Bar(x=x, y=y, text=pct,
+                marker=dict(
+                color = y,colorscale='Portland',showscale=True,
+                reversescale = False
+                ))
+layout = dict(title= 'Number of Items by Sub Category (Top 15)',
+              yaxis = dict(title='Count'),
+              xaxis = dict(title='SubCategory'))
+fig=dict(data=[trace1], layout=layout)
+py.iplot(fig)
+
+
+# From the pricing (log of price) point of view, all the categories are pretty well distributed, with no category with an extraordinary pricing point 
+
+# In[ ]:
+
+
+general_cats = train['general_cat'].unique()
+x = [train.loc[train['general_cat']==cat, 'price'] for cat in general_cats]
+
+
+# In[ ]:
+
+
+data = [go.Box(x=np.log(x[i]+1), name=general_cats[i]) for i in range(len(general_cats))]
+
+
+# In[ ]:
+
+
+layout = dict(title="Price Distribution by General Category",
+              yaxis = dict(title='Frequency'),
+              xaxis = dict(title='Category'))
+fig = dict(data=data, layout=layout)
+py.iplot(fig)
+
+
+# ## **Brand Name**
+
+# In[ ]:
+
+
+print("There are %d unique brand names in the training dataset." % train['brand_name'].nunique())
+
+
+# In[ ]:
+
+
+x = train['brand_name'].value_counts().index.values.astype('str')[:10]
+y = train['brand_name'].value_counts().values[:10]
+
+
+# In[ ]:
+
+
+# trace1 = go.Bar(x=x, y=y, 
+#                 marker=dict(
+#                 color = y,colorscale='Portland',showscale=True,
+#                 reversescale = False
+#                 ))
+# layout = dict(title= 'Top 10 Brand by Number of Items',
+#               yaxis = dict(title='Brand Name'),
+#               xaxis = dict(title='Count'))
+# fig=dict(data=[trace1], layout=layout)
+# py.iplot(fig)
+
+
+# ## **Item Description**
+
+# It will be more challenging to parse through this particular item since it's unstructured data. Does it mean a more detailed and lengthy description will result in a higher bidding price? We will strip out all punctuations, remove some english stop words (i.e. redundant words such as "a", "the", etc.) and any other words with a length less than 3: 
+
+# In[ ]:
+
+
+def wordCount(text):
+    # convert to lower case and strip regex
     try:
-        if count.index[0]=='Yes':
-            yes = count.values[0]
-            students_count.append((group, yes))
-        elif count.index[1]=='Yes':
-            yes = count.values[1]
-            students_count.append((group, yes))
-    except:
-        pass
-students_count.sort(key = lambda x: x[1], reverse=True)
-print("Maximum number of students in any country: ", students_count[0])
-print("Minimum number of students in any country: ", students_count[-2])
-del students_count
-
-# get US and India
-student_US = student_group.get_group('United States')
-student_India =  student_group.get_group('India')
-
-student_country = pd.concat([student_US, student_India]).reset_index(drop=True)
-del student_US, student_India
-
-plt.figure(figsize=(10,5))
-sns.countplot(x=student_country['StudentStatus'], data=student_country, hue='Country')
-plt.title('Student status for US and India', fontsize=16)
-plt.xlabel('Status', fontsize=16)
-plt.ylabel('Count', fontsize=16)
-plt.legend(loc=(1.04,0))
-plt.show()
-
-
-# So, my assumption was right. In India, there are almost 1.5x students as compared to US. This is so common. And the reason behind it is that, no matter what, almost everyone is calling themselves as **Data Scientist**
-
-# ### How many people are learning data science skills?
-
-# In[ ]:
-
-
-# How many are learning Data Sciece?
-learning = multiChoice['LearningDataScience'].dropna()
-learning_count = learning.value_counts()
-
-for i, idx in enumerate(learning_count.index):
-    val = learning_count.values[i]
-    percent = (val/learning.shape[0])*100
-    print("{}: {}  which is roughly {:.2f}% ".format(idx, val, percent))
-    
-plt.figure(figsize=(10,5))
-sns.set(font_scale=1.2)
-sns.barplot(x=learning_count.values, y=learning_count.index, orient='h', color=color[6])
-plt.title("Number of people learning data science skills", fontsize=16)
-plt.xlabel("Count", fontsize=16)
-plt.ylabel(" Is Learning?", fontsize=16)
-plt.show()
+         # convert to lower case and strip regex
+        text = text.lower()
+        regex = re.compile('[' +re.escape(string.punctuation) + '0-9\\r\\t\\n]')
+        txt = regex.sub(" ", text)
+        # tokenize
+        # words = nltk.word_tokenize(clean_txt)
+        # remove words in stop words
+        words = [w for w in txt.split(" ")                  if not w in stop_words.ENGLISH_STOP_WORDS and len(w)>3]
+        return len(words)
+    except: 
+        return 0
 
 
 # In[ ]:
 
 
-# There are a number of categories of learning as asked and answered in the survey
-#Let's check the distribution of all the sources of learning
-
-# How many are doing Kaggle?
-kaggle = multiChoice['LearningCategoryKaggle'].dropna()
-
-# How many are taking courses at a University?
-university= multiChoice['LearningCategoryUniversity'].dropna()
-
-# How many are doing online courses?
-online = multiChoice['LearningCategoryOnlineCourses'].dropna()
-
-# How many are learning at work?
-work = multiChoice['LearningCategoryWork'].dropna()
-
-# How many are self-taught?
-self_taught = multiChoice['LearningCategorySelftTaught'].dropna()
-
-# How many learn from other sources(Youtube, Meetups, etc)?
-other = multiChoice['LearningCategoryOther'].dropna()
+# add a column of word counts to both the training and test set
+train['desc_len'] = train['item_description'].apply(lambda x: wordCount(x))
+test['desc_len'] = test['item_description'].apply(lambda x: wordCount(x))
 
 
-learning_category = [kaggle, university, online, work, self_taught, other]
-
-f,axs = plt.subplots(2,3, figsize=(20,10))
-
-for i, catg in enumerate(learning_category):
-    sns.distplot(catg, ax=axs[i//3, i%3], hist=False)
-
-f.suptitle("Density as per the learning sources", fontsize=16)
-plt.show()    
+# In[ ]:
 
 
-# # Job Specific questions 
+train.head()
+
+
+# In[ ]:
+
+
+df = train.groupby('desc_len')['price'].mean().reset_index()
+
+
+# In[ ]:
+
+
+trace1 = go.Scatter(
+    x = df['desc_len'],
+    y = np.log(df['price']+1),
+    mode = 'lines+markers',
+    name = 'lines+markers'
+)
+layout = dict(title= 'Average Log(Price) by Description Length',
+              yaxis = dict(title='Average Log(Price)'),
+              xaxis = dict(title='Description Length'))
+fig=dict(data=[trace1], layout=layout)
+py.iplot(fig)
+
+
+# We also need to check if there are any missing values in the item description (4 observations don't have a description) andl remove those observations from our training set.
+
+# In[ ]:
+
+
+train.item_description.isnull().sum()
+
+
+# In[ ]:
+
+
+# remove missing values in item description
+train = train[pd.notnull(train['item_description'])]
+
+
+# In[ ]:
+
+
+# create a dictionary of words for each category
+cat_desc = dict()
+for cat in general_cats: 
+    text = " ".join(train.loc[train['general_cat']==cat, 'item_description'].values)
+    cat_desc[cat] = tokenize(text)
+
+# flat list of all words combined
+flat_lst = [item for sublist in list(cat_desc.values()) for item in sublist]
+allWordsCount = Counter(flat_lst)
+all_top10 = allWordsCount.most_common(20)
+x = [w[0] for w in all_top10]
+y = [w[1] for w in all_top10]
+
+
+# In[ ]:
+
+
+trace1 = go.Bar(x=x, y=y, text=pct)
+layout = dict(title= 'Word Frequency',
+              yaxis = dict(title='Count'),
+              xaxis = dict(title='Word'))
+fig=dict(data=[trace1], layout=layout)
+py.iplot(fig)
+
+
+# If we look at the most common words by category, we could also see that, ***size***, ***free*** and ***shipping*** is very commonly used by the sellers, probably with the intention to attract customers, which is contradictory to what  we have shown previously that there is little correlation between the two variables `price` and `shipping` (or shipping fees do not account for a differentiation in prices). ***Brand names*** also played quite an important role - it's one of the most popular in all four categories.  
+
+# # **Text Processing - Item Description**
+# *
+# The following section is based on the tutorial at https://ahmedbesbes.com/how-to-mine-newsfeed-data-and-extract-interactive-insights-in-python.html*
+
+# ## **Pre-processing:  tokenization**
 # 
-# These questions were basically asked for those persons who are partly/fully employed. I will take each column one by one and I will not analyze all the columns as of now but will pick up the interesting ones
-
-# ### Job title
+# Most of the time, the first steps of an NLP project is to **"tokenize"** your documents, which main purpose is to normalize our texts. The three fundamental stages will usually include: 
+# * break the descriptions into sentences and then break the sentences into tokens
+# * remove punctuation and stop words
+# * lowercase the tokens
+# * herein, I will also only consider words that have length equal to or greater than 3 characters
 
 # In[ ]:
 
 
-job_title = multiChoice['CurrentJobTitleSelect'].dropna()
-title_count = job_title.value_counts()
+stop = set(stopwords.words('english'))
+def tokenize(text):
+    """
+    sent_tokenize(): segment text into sentences
+    word_tokenize(): break sentences into words
+    """
+    try: 
+        regex = re.compile('[' +re.escape(string.punctuation) + '0-9\\r\\t\\n]')
+        text = regex.sub(" ", text) # remove punctuation
+        
+        tokens_ = [word_tokenize(s) for s in sent_tokenize(text)]
+        tokens = []
+        for token_by_sent in tokens_:
+            tokens += token_by_sent
+        tokens = list(filter(lambda t: t.lower() not in stop, tokens))
+        filtered_tokens = [w for w in tokens if re.search('[a-zA-Z]', w)]
+        filtered_tokens = [w.lower() for w in filtered_tokens if len(w)>=3]
+        
+        return filtered_tokens
+            
+    except TypeError as e: print(text,e)
 
-for i in range(len(title_count)):
-    title = title_count.index[i]
-    count = title_count.values[i]
-    percent = (count/len(job_title))*100
-    print("{:<40s}: {} or {:.2f}%".format(title, count, percent))
-    
-f = plt.figure(figsize=(10,8))
-sns.barplot(x=title_count.values, y=title_count.index, orient='h', color=color[1])
-plt.title("Job titles", fontsize=16)
-plt.xlabel("Count")
-plt.show()
+
+# In[ ]:
 
 
-# ### Coders
+# apply the tokenizer into the item descriptipn column
+train['tokens'] = train['item_description'].map(tokenize)
+test['tokens'] = test['item_description'].map(tokenize)
+
+
+# In[ ]:
+
+
+train.reset_index(drop=True, inplace=True)
+test.reset_index(drop=True, inplace=True)
+
+
+# Let's look at the examples of if the tokenizer did a good job in cleaning up our descriptions
+
+# In[ ]:
+
+
+for description, tokens in zip(train['item_description'].head(),
+                              train['tokens'].head()):
+    print('description:', description)
+    print('tokens:', tokens)
+    print()
+
+
+# We could aso use the package `WordCloud` to easily visualize which words has the highest frequencies within each category:
+
+# In[ ]:
+
+
+# build dictionary with key=category and values as all the descriptions related.
+cat_desc = dict()
+for cat in general_cats: 
+    text = " ".join(train.loc[train['general_cat']==cat, 'item_description'].values)
+    cat_desc[cat] = tokenize(text)
+
+
+# find the most common words for the top 4 categories
+women100 = Counter(cat_desc['Women']).most_common(100)
+beauty100 = Counter(cat_desc['Beauty']).most_common(100)
+kids100 = Counter(cat_desc['Kids']).most_common(100)
+electronics100 = Counter(cat_desc['Electronics']).most_common(100)
+
+
+# In[ ]:
+
+
+def generate_wordcloud(tup):
+    wordcloud = WordCloud(background_color='white',
+                          max_words=50, max_font_size=40,
+                          random_state=42
+                         ).generate(str(tup))
+    return wordcloud
+
+
+# In[ ]:
+
+
+fig,axes = plt.subplots(2, 2, figsize=(30, 15))
+
+ax = axes[0, 0]
+ax.imshow(generate_wordcloud(women100), interpolation="bilinear")
+ax.axis('off')
+ax.set_title("Women Top 100", fontsize=30)
+
+ax = axes[0, 1]
+ax.imshow(generate_wordcloud(beauty100))
+ax.axis('off')
+ax.set_title("Beauty Top 100", fontsize=30)
+
+ax = axes[1, 0]
+ax.imshow(generate_wordcloud(kids100))
+ax.axis('off')
+ax.set_title("Kids Top 100", fontsize=30)
+
+ax = axes[1, 1]
+ax.imshow(generate_wordcloud(electronics100))
+ax.axis('off')
+ax.set_title("Electronic Top 100", fontsize=30)
+
+
+# ## **Pre-processing:  tf-idf**
+
+# tf-idf is the acronym for **Term Frequency–inverse Document Frequency**. It quantifies the importance of a particular word in relative to the vocabulary of a collection of documents or corpus. The metric depends on two factors: 
+# - **Term Frequency**: the occurences of a word in a given document (i.e. bag of words)
+# - **Inverse Document Frequency**: the reciprocal number of times a word occurs in a corpus of documents
 # 
-# How many of the above people write code in their day-to-day job?
+# Think about of it this way: If the word is used extensively in all documents, its existence within a specific document will not be able to provide us much specific information about the document itself. So the second term could be seen as a penalty term that penalizes common words such as "a", "the", "and", etc. tf-idf can therefore, be seen as a weighting scheme for words relevancy in a specific document.
 
 # In[ ]:
 
 
-coders = multiChoice['CodeWriter'].dropna()
-coders_count = coders.value_counts()
+from sklearn.feature_extraction.text import TfidfVectorizer
+vectorizer = TfidfVectorizer(min_df=10,
+                             max_features=180000,
+                             tokenizer=tokenize,
+                             ngram_range=(1, 2))
 
-for i in range(len(coders_count)):
-    coder = coders_count.index[i]
-    count = coders_count.values[i]
-    percent = (count/len(coders))*100
-    print("{}: {} approx. {:.2f}%".format(coder, count, percent))
-    
-f = plt.figure(figsize=(10,8))
-sns.barplot(x=coders_count.index, y=coders_count.values, orient='v', color=color[1])
-plt.title("How many people code at their job?", fontsize=16)
-plt.ylabel("Count", fontsize=16)
-plt.show()
-
-
-# ### Coding experience(in years)
 
 # In[ ]:
 
 
-# Q. How long have you been writing code to analyze data?
-coding_exp = multiChoice['Tenure'].dropna()
-coding_exp_count = coding_exp.value_counts()
-
-for i in range(len(coding_exp_count)):
-    choice = coding_exp_count.index[i]
-    count = coding_exp_count.values[i]
-    percent = (count/len(coding_exp))*100
-    print("{:<40s}: {} --> approx. {:.2f}%".format(choice, count, percent))
-    
-
-f = plt.figure(figsize=(10,8))
-sns.barplot(y=coding_exp_count.index, x=coding_exp_count.values, orient='h', color=color[1])
-plt.title("For how many years ahve you been coding?", fontsize=16)
-plt.ylabel("Coding exp. in years", fontsize=16)
-plt.xlabel("Count", fontsize=16)
-plt.show()
+all_desc = np.append(train['item_description'].values, test['item_description'].values)
+vz = vectorizer.fit_transform(list(all_desc))
 
 
-# ### Career Switch
-# How many people are thinking for a career switch to data science field?
+# vz is a tfidf matrix where:
+# * the number of rows is the total number of descriptions
+# * the number of columns is the total number of unique tokens across the descriptions
 
 # In[ ]:
 
 
-career = multiChoice['CareerSwitcher'].dropna()
-career_switch = career.value_counts()
-
-for i in range(len(career_switch)):
-    choice = career_switch.index[i]
-    count = career_switch.values[i]
-    percent = (count/len(career))*100
-    print("{}: {} approx. {:.2f}%".format(choice, count, percent))
+#  create a dictionary mapping the tokens to their tfidf values
+tfidf = dict(zip(vectorizer.get_feature_names(), vectorizer.idf_))
+tfidf = pd.DataFrame(columns=['tfidf']).from_dict(
+                    dict(tfidf), orient='index')
+tfidf.columns = ['tfidf']
 
 
-# Given the hype ML/DL has gained in the recent years, I was expecting more than 70% but 70% is fine too. This totally makes sense as a large number of companies are adopting DS now.
+# Below is the 10 tokens with the lowest tfidf score, which is unsurprisingly, very generic words that we could not use to distinguish one description from another.
 
-# ### TitleFit
+# In[ ]:
+
+
+tfidf.sort_values(by=['tfidf'], ascending=True).head(10)
+
+
+# Below is the 10 tokens with the highest tfidf score, which includes words that are a lot specific that by looking at them, we could guess the categories that they belong to: 
+
+# In[ ]:
+
+
+tfidf.sort_values(by=['tfidf'], ascending=False).head(10)
+
+
+# Given the high dimension of our tfidf matrix, we need to reduce their dimension using the Singular Value Decomposition (SVD) technique. And to visualize our vocabulary, we could next use t-SNE to reduce the dimension from 50 to 2. t-SNE is more suitable for dimensionality reduction to 2 or 3. 
 # 
-# This is an interesting one. I have seen that most of the recruiters(especially HR) don't fully understand the difference between the the job titles. For example, I have seen people putting titles at Linkedin like this: Full Stack Data Scientist. Also, some people wants a Data Scientist but mix it with the title of Business Analyst.
+# ### **t-Distributed Stochastic Neighbor Embedding (t-SNE)**
 # 
-# Let's check how mnay people think that their job title is adequate.
-
-# In[ ]:
-
-
-title_fit = multiChoice['TitleFit'].dropna()
-title_fit_count = title_fit.value_counts()
-
-for i in range(len(title_fit_count)):
-    choice = title_fit_count.index[i]
-    count = title_fit_count.values[i]
-    percent = (count/len(title_fit))*100
-    print("{}: {} --- approx. {:.2f}%".format(choice, count, percent))
-
-
-# This is bad. And I will tell you why. Even though 65% people say the title is fine but it is not very cler what a person actually means when he/she says "fine". For example, a ML engineer working as a predictive modeler could have said fine just because he knows how to do that stuff. This doesn't mean he is happy with his work when his job title means much more. 
-
-# ### Self-proclaimed Data Scientist?
+# t-SNE is a technique for dimensionality reduction that is particularly well suited for the visualization of high-dimensional datasets. The goal is to take a set of points in a high-dimensional space and find a representation of those points in a lower-dimensional space, typically the 2D plane. It is based on probability distributions with random walk on neighborhood graphs to find the structure within the data. But since t-SNE complexity is significantly high, usually we'd use other high-dimension reduction techniques before applying t-SNE.
 # 
-# There are many people who consider themseleves data scientist even though they haven't actually worked as a data scientist in the industry. Now there can be some exceptions to this. For example, my friend [Mikel](https://www.kaggle.com/anokas) is a kick ass Data Scientist even though he is only 16 years old. But the number of such exceptions is very less. Let's take a look at this stat now.
+# First, let's take a sample from the both training and testing item's description since t-SNE can take a very long time to execute. We can then reduce the dimension of each vector from to n_components (50) using SVD.
 
 # In[ ]:
 
 
-# Q. Do you currently consider yourself a data scientist?
-ds = multiChoice['DataScienceIdentitySelect'].dropna()
-ds_count = ds.value_counts()
+trn = train.copy()
+tst = test.copy()
+trn['is_train'] = 1
+tst['is_train'] = 0
 
-for i in range(len(ds_count)):
-    choice = ds_count.index[i]
-    count = ds_count.values[i]
-    percent = (count/len(ds))*100
-    print("{}: {} --> approx. {:.2f}%".format(choice, count, percent))
+sample_sz = 15000
 
+combined_df = pd.concat([trn, tst])
+combined_sample = combined_df.sample(n=sample_sz)
+vz_sample = vectorizer.fit_transform(list(combined_sample['item_description']))
 
-# I will take this **Sort of** as yes for now because most of them will claim themselves as Data Scientist no matter what. So, in short we have approx. 65% of data scientists here. I will show you one more interesting thing here. Let's check this claim for the top two countries i.e. USA and India.
 
 # In[ ]:
 
 
-ds_country = multiChoice[['Country','EmploymentStatus','DataScienceIdentitySelect']].dropna()
+from sklearn.decomposition import TruncatedSVD
 
-# Groupby country and get India and US
-ds_country_US = ds_country.groupby('Country').get_group('United States').reset_index(drop=True)
-ds_country_India = ds_country.groupby('Country').get_group('India').reset_index(drop=True)
-
-plt.figure(figsize=(10,5))
-sns.countplot(y=ds_country_US['EmploymentStatus'], data=ds_country_US, hue='DataScienceIdentitySelect')
-plt.title("Who consider themseleves as data scientist in USA?", fontsize=16)
-plt.show()
-
-plt.figure(figsize=(10,5))
-sns.countplot(y=ds_country_India['EmploymentStatus'], data=ds_country_India, hue='DataScienceIdentitySelect')
-plt.title("Who consider themseleves as data scientist in India?", fontsize=16)
-plt.show()
+n_comp=30
+svd = TruncatedSVD(n_components=n_comp, random_state=42)
+svd_tfidf = svd.fit_transform(vz_sample)
 
 
-# Did you notice that? Yes, the number of **Yes** and **Sort of** is almost always equal in any case in India. As I said, every other kid is calling himself/herself a data scientist now a days. Reminds me of the days when web development was at hype, and everyone became a web developer all of a sudden. This is the one of the main reasons why data scientists re exploited and not paid well in India. and this situation is getting worse everyday.
+# Now we can reduce the dimension from 50 to 2 using t-SNE!
 
-# Anyways, let's move to the background check now.
+# In[ ]:
+
+
+from sklearn.manifold import TSNE
+tsne_model = TSNE(n_components=2, verbose=1, random_state=42, n_iter=500)
+
+
+# In[ ]:
+
+
+tsne_tfidf = tsne_model.fit_transform(svd_tfidf)
+
+
+# It's now possible to visualize our data points. Note that the deviation as well as the size of the clusters imply little information  in t-SNE.
+
+# In[ ]:
+
+
+output_notebook()
+plot_tfidf = bp.figure(plot_width=700, plot_height=600,
+                       title="tf-idf clustering of the item description",
+    tools="pan,wheel_zoom,box_zoom,reset,hover,previewsave",
+    x_axis_type=None, y_axis_type=None, min_border=1)
+
+
+# In[ ]:
+
+
+combined_sample.reset_index(inplace=True, drop=True)
+
+
+# In[ ]:
+
+
+tfidf_df = pd.DataFrame(tsne_tfidf, columns=['x', 'y'])
+tfidf_df['description'] = combined_sample['item_description']
+tfidf_df['tokens'] = combined_sample['tokens']
+tfidf_df['category'] = combined_sample['general_cat']
+
+
+# In[ ]:
+
+
+plot_tfidf.scatter(x='x', y='y', source=tfidf_df, alpha=0.7)
+hover = plot_tfidf.select(dict(type=HoverTool))
+hover.tooltips={"description": "@description", "tokens": "@tokens", "category":"@category"}
+show(plot_tfidf)
+
+
+# ## **K-Means Clustering**
 # 
-# # Background-Check
+# K-means clustering obejctive is to minimize the average squared Euclidean distance of the document / description from their cluster centroids. 
+
+# In[ ]:
+
+
+from sklearn.cluster import MiniBatchKMeans
+
+num_clusters = 30 # need to be selected wisely
+kmeans_model = MiniBatchKMeans(n_clusters=num_clusters,
+                               init='k-means++',
+                               n_init=1,
+                               init_size=1000, batch_size=1000, verbose=0, max_iter=1000)
+
+
+# In[ ]:
+
+
+kmeans = kmeans_model.fit(vz)
+kmeans_clusters = kmeans.predict(vz)
+kmeans_distances = kmeans.transform(vz)
+
+
+# In[ ]:
+
+
+sorted_centroids = kmeans.cluster_centers_.argsort()[:, ::-1]
+terms = vectorizer.get_feature_names()
+
+for i in range(num_clusters):
+    print("Cluster %d:" % i)
+    aux = ''
+    for j in sorted_centroids[i, :10]:
+        aux += terms[j] + ' | '
+    print(aux)
+    print() 
+
+
+# In order to plot these clusters, first we will need to reduce the dimension of the distances to 2 using tsne: 
+
+# In[ ]:
+
+
+# repeat the same steps for the sample
+kmeans = kmeans_model.fit(vz_sample)
+kmeans_clusters = kmeans.predict(vz_sample)
+kmeans_distances = kmeans.transform(vz_sample)
+# reduce dimension to 2 using tsne
+tsne_kmeans = tsne_model.fit_transform(kmeans_distances)
+
+
+# In[ ]:
+
+
+colormap = np.array(["#6d8dca", "#69de53", "#723bca", "#c3e14c", "#c84dc9", "#68af4e", "#6e6cd5",
+"#e3be38", "#4e2d7c", "#5fdfa8", "#d34690", "#3f6d31", "#d44427", "#7fcdd8", "#cb4053", "#5e9981",
+"#803a62", "#9b9e39", "#c88cca", "#e1c37b", "#34223b", "#bdd8a3", "#6e3326", "#cfbdce", "#d07d3c",
+"#52697d", "#194196", "#d27c88", "#36422b", "#b68f79"])
+
+
+# In[ ]:
+
+
+#combined_sample.reset_index(drop=True, inplace=True)
+kmeans_df = pd.DataFrame(tsne_kmeans, columns=['x', 'y'])
+kmeans_df['cluster'] = kmeans_clusters
+kmeans_df['description'] = combined_sample['item_description']
+kmeans_df['category'] = combined_sample['general_cat']
+#kmeans_df['cluster']=kmeans_df.cluster.astype(str).astype('category')
+
+
+# In[ ]:
+
+
+plot_kmeans = bp.figure(plot_width=700, plot_height=600,
+                        title="KMeans clustering of the description",
+    tools="pan,wheel_zoom,box_zoom,reset,hover,previewsave",
+    x_axis_type=None, y_axis_type=None, min_border=1)
+
+
+# In[ ]:
+
+
+source = ColumnDataSource(data=dict(x=kmeans_df['x'], y=kmeans_df['y'],
+                                    color=colormap[kmeans_clusters],
+                                    description=kmeans_df['description'],
+                                    category=kmeans_df['category'],
+                                    cluster=kmeans_df['cluster']))
+
+plot_kmeans.scatter(x='x', y='y', color='color', source=source)
+hover = plot_kmeans.select(dict(type=HoverTool))
+hover.tooltips={"description": "@description", "category": "@category", "cluster":"@cluster" }
+show(plot_kmeans)
+
+
+# ## **Latent Dirichlet Allocation**
 # 
-# ### Highest level of Education
-
-# In[ ]:
-
-
-# Q. Which level of formal education have you attained?
-
-edu = multiChoice['FormalEducation'].dropna()
-edu_count = edu.value_counts()
-
-for i in range(len(edu_count)):
-    choice = edu_count.index[i]
-    count = edu_count.values[i]
-    percent = (count/len(edu))*100
-    print("{:<70s}: {} --> approx. {:.2f}%".format(choice, count, percent))
-    
-
-f = plt.figure(figsize=(10,8))
-sns.barplot(y=edu_count.index, x=edu_count.values, orient='h', color=color[5])
-plt.title("Formal education check", fontsize=16)
-plt.ylabel("Highest level of degree obtained", fontsize=16)
-plt.xlabel("Count", fontsize=16)
-plt.show()    
-
-
-# I don't think there is anything abnormal here. But I doubt, that in the near future, the ratio of people having Masters or Bachelors doing data science will change drastically, more positively in case of Bachelors.
-
-# ### Major during graduation
-
-# In[ ]:
-
-
-# Q. Which best describes your undergraduate major?
-major = multiChoice['MajorSelect'].dropna()
-major_count = major.value_counts()
-
-for i in range(len(major_count)):
-    choice = major_count.index[i]
-    count = major_count.values[i]
-    percent = (count/len(major))*100
-    print("{:<60s}: {} --> approx. {:.2f}%".format(choice, count, percent))
-    
-
-f = plt.figure(figsize=(10,8))
-sns.barplot(y=major_count.index, x=major_count.values, orient='h', color=color[2])
-plt.title("Formal education check", fontsize=16)
-plt.ylabel("Undergaduate Major", fontsize=16)
-plt.xlabel("Count", fontsize=16)
-plt.show() 
-
-
-# # What people do at work?
-
-# ### Algorithm
+# Latent Dirichlet Allocation (LDA) is an algorithms used to discover the topics that are present in a corpus.
 # 
-# It will be interesting to see what kind of algorithms people use in their day to day work and what's the ratio. Let's dive in. 
-
-# In[ ]:
-
-
-# Geth the corresponding column and drop the null values
-algo = multiChoice['WorkAlgorithmsSelect'].dropna()
-
-# This was a multiplr choice question. So, let's have a look how at the data first
-algo.head()
-
-
-# In[ ]:
-
-
-# A handy-dandy function to process the values for multiple choice questions
-def split_values(x, samples_dict):
-    # Split values based on comma, just don't split the values with comma inside a parentheses
-    items = re.split(r',(?!(?:[^(]*\([^)]*\))*[^()]*\))', x)
-    for item in items:
-        samples_dict[item] +=1
-
-
-# In[ ]:
-
-
-'''
-This is how are going to process this.
-1) Initialize an empty dictionary to keep count of each of the algorithm
-2) Split the string in each row at ',' and update the items in the dict accordingly
-3) Find the count and percentage for each algorithm
-'''
-
-# Create a new dictionary
-samples_dict = defaultdict(int)
-
-
-# Apply the fucntion to each row of the series
-algo = algo.apply(split_values, args=(samples_dict,))
-
-# Sort the dictionay based on its values
-samples_dict = dict(sorted(samples_dict.items(), key=lambda x: x[1], reverse=True))
-
-# Check the percentage of each algorithm used
-for item in samples_dict.keys():
-    val = samples_dict[item]
-    percent = (val/len(algo))*100
-    print("{:<30s} -->   {} ----->   approx.   {:.2f}%".format(item, val, percent))
-
-
-# So, more than 60% of the people use LR at work. This doesn't surprise me. Most of the time you would be hearning from top authorities in your firm `Why don't use LR and get done with it?` or `Don't you know LR?`. GANs are used by only a very small fraction and that makes sense too because not a lot of people know about it or how to use it.Also, GANs haven't find their way yet into the daily applications
-
-# ### Algorithms applied on what kind of work?
-
-# In[ ]:
-
-
-# Selct the corresponding column and drop any null values
-work = multiChoice['WorkDataTypeSelect'].dropna()
-work.head()
-
-
-# In[ ]:
-
-
-# Create a new dictionary
-samples_dict = defaultdict(int)
-
-# Apply the fucntion to each row of the series
-work = work.apply(split_values, args=(samples_dict,))
-
-# Sort the dictionay based on its values
-samples_dict = dict(sorted(samples_dict.items(), key=lambda x: x[1], reverse=True))
-
-# Check the percentage of each algorithm used
-for item in samples_dict.keys():
-    val = samples_dict[item]
-    percent = (val/len(work))*100
-    print("{:<30s} -->   {} ----->   approx.   {:.2f}%".format(item, val, percent))
-
-
-# The only thing that is weird is that **Image** data is used only by 18%. Come on!!
-
-# ### Hardware
-
-# In[ ]:
-
-
-hardware = multiChoice['WorkHardwareSelect'].dropna()
-
-# Create a new dictionary
-samples_dict = defaultdict(int)
-
-# Apply the fucntion to each row of the series
-hardware = hardware.apply(split_values, args=(samples_dict,))
-
-# Sort the dictionay based on its values
-samples_dict = dict(sorted(samples_dict.items(), key=lambda x: x[1], reverse=True))
-
-plt.figure(figsize=(10,8))
-sns.barplot(x=list(samples_dict.values()), y=list(samples_dict.keys()), orient='h', color=color[0])
-plt.title("Type of hardware used by people at work", fontsize=16)
-plt.xlabel("Count", fontsize=16)
-plt.show()
-
-
-# ### Tools 
-
-# In[ ]:
-
-
-tools = multiChoice['WorkToolsSelect'].dropna()
-
-# Initialize an empy dict
-samples_dict = defaultdict(int)
-
-# Apply the fucntion to each row of the series
-tools = tools.apply(split_values, args=(samples_dict,))
-
-# Sort the dictionay based on its values
-samples_dict = dict(sorted(samples_dict.items(), key=lambda x: x[1], reverse=True))
-
-# Check the percentage of each algorithm used
-for item in samples_dict.keys():
-    val = samples_dict[item]
-    percent = (val/len(tools))*100
-    print("{:<50s} -->   {} ----->   approx.   {:.2f}%".format(item, val, percent))
-
-
-# **Python...Python....Python!!** More than 75% people use Python at their work. FYI, as per StackoverFlow survey Python has overtaken R in 2017. In fact it is one of the fastest growing languages. All credits goes to **Pandas**, **Jupyter**, **TensorFlow**, **Keras**, etc.
+# >  LDA starts from a fixed number of topics. Each topic is represented as a distribution over words, and each document is then represented as a distribution over topics. Although the tokens themselves are meaningless, the probability distributions over words provided by the topics provide a sense of the different ideas contained in the documents.
+# > 
+# > Reference: https://medium.com/intuitionmachine/the-two-paths-from-natural-language-processing-to-artificial-intelligence-d5384ddbfc18
 # 
-# If you look closely, you will find that **Jupyter** is used by 40% and **TensorFlow** by almost 30%. Both are awesome. I use notebooks heavily. Can't imagine a life without them.
+# Its input is a **bag of words**, i.e. each document represented as a row, with each columns containing the count of words in the corpus. We are going to use a powerful tool called pyLDAvis that gives us an interactive visualization for LDA. 
 
 # In[ ]:
 
 
-# Let's plot the top 10 tools used 
-tool = list(samples_dict.keys())[:10]
-count = list(samples_dict.values())[:10]
+cvectorizer = CountVectorizer(min_df=4,
+                              max_features=180000,
+                              tokenizer=tokenize,
+                              ngram_range=(1,2))
 
 
-plt.figure(figsize=(10,8))
-plt.pie(count, labels=tool)
-plt.title("Top 10 tools used by people at work", fontsize=16)
-plt.show()
+# In[ ]:
 
 
-# ### Production first!
+cvz = cvectorizer.fit_transform(combined_sample['item_description'])
+
+
+# In[ ]:
+
+
+lda_model = LatentDirichletAllocation(n_components=20,
+                                      learning_method='online',
+                                      max_iter=20,
+                                      random_state=42)
+
+
+# In[ ]:
+
+
+X_topics = lda_model.fit_transform(cvz)
+
+
+# In[ ]:
+
+
+n_top_words = 10
+topic_summaries = []
+
+topic_word = lda_model.components_  # get the topic words
+vocab = cvectorizer.get_feature_names()
+
+for i, topic_dist in enumerate(topic_word):
+    topic_words = np.array(vocab)[np.argsort(topic_dist)][:-(n_top_words+1):-1]
+    topic_summaries.append(' '.join(topic_words))
+    print('Topic {}: {}'.format(i, ' | '.join(topic_words)))
+
+
+# In[ ]:
+
+
+# reduce dimension to 2 using tsne
+tsne_lda = tsne_model.fit_transform(X_topics)
+
+
+# In[ ]:
+
+
+unnormalized = np.matrix(X_topics)
+doc_topic = unnormalized/unnormalized.sum(axis=1)
+
+lda_keys = []
+for i, tweet in enumerate(combined_sample['item_description']):
+    lda_keys += [doc_topic[i].argmax()]
+
+lda_df = pd.DataFrame(tsne_lda, columns=['x','y'])
+lda_df['description'] = combined_sample['item_description']
+lda_df['category'] = combined_sample['general_cat']
+lda_df['topic'] = lda_keys
+lda_df['topic'] = lda_df['topic'].map(int)
+
+
+# In[ ]:
+
+
+plot_lda = bp.figure(plot_width=700,
+                     plot_height=600,
+                     title="LDA topic visualization",
+    tools="pan,wheel_zoom,box_zoom,reset,hover,previewsave",
+    x_axis_type=None, y_axis_type=None, min_border=1)
+
+
+# In[ ]:
+
+
+source = ColumnDataSource(data=dict(x=lda_df['x'], y=lda_df['y'],
+                                    color=colormap[lda_keys],
+                                    description=lda_df['description'],
+                                    topic=lda_df['topic'],
+                                    category=lda_df['category']))
+
+plot_lda.scatter(source=source, x='x', y='y', color='color')
+hover = plot_kmeans.select(dict(type=HoverTool))
+hover = plot_lda.select(dict(type=HoverTool))
+hover.tooltips={"description":"@description",
+                "topic":"@topic", "category":"@category"}
+show(plot_lda)
+
+
+# In[ ]:
+
+
+def prepareLDAData():
+    data = {
+        'vocab': vocab,
+        'doc_topic_dists': doc_topic,
+        'doc_lengths': list(lda_df['len_docs']),
+        'term_frequency':cvectorizer.vocabulary_,
+        'topic_term_dists': lda_model.components_
+    } 
+    return data
+
+
+# *Note: It's a shame that by putting the HTML of the visualization using pyLDAvis, it will distort the layout of the kernel, I won't upload in here. But if you follow the below code, there should be an HTML file generated with very interesting interactive bubble chart that visualizes the space of your topic clusters and the term components within each topic.*
 # 
-# I have always wondered how many people actually worry about doing production-ready things (I take this very seriously).
+# ![](https://farm5.staticflickr.com/4536/38709272151_7128c577ee_h.jpg)
 
 # In[ ]:
 
 
-production = multiChoice['WorkProductionFrequency'].dropna()
-production_count = production.value_counts()
+import pyLDAvis
 
-plt.figure(figsize=(10,8))
-sns.barplot(x=production_count.index, y=production_count.values, color=color[5])
-plt.title("Putting work to production", fontsize=16)
-plt.ylabel("Count", fontsize=16)
-plt.show()
+lda_df['len_docs'] = combined_sample['tokens'].map(len)
+ldadata = prepareLDAData()
+pyLDAvis.enable_notebook()
+prepared_data = pyLDAvis.prepare(**ldadata)
 
 
-# ### Size of the dataset
-# 
-# I have seen a lot of people throwing away the term **Big Data** at everyone's face. Let's check how many people actually work with how much amount of data.
+# <a data-flickr-embed="true"  href="https://www.flickr.com/photos/thykhuely/38709272151/in/dateposted-public/" title="pyLDAvis"><img src="https://farm5.staticflickr.com/4536/38709272151_7128c577ee_h.jpg" width="1600" height="976" alt="pyLDAvis"></a><script async src="//embedr.flickr.com/assets/client-code.js" charset="utf-8"></script>
 
 # In[ ]:
 
 
-dataset = multiChoice['WorkDatasetSize'].dropna()
-dataset_count = dataset.value_counts()
+import IPython.display
+from IPython.core.display import display, HTML, Javascript
 
-for i in range(len(dataset_count)):
-    choice = dataset_count.index[i]
-    count = dataset_count.values[i]
-    percent = (count/len(dataset))*100
-    print("{:<10s}: {} --> approx. {:.2f}%".format(choice, count, percent))
+#h = IPython.display.display(HTML(html_string))
+#IPython.display.display_HTML(h)
 
-
-# 25% of the people work mainly on 1GB of data at max. **Big Data** ..LOL
-
-# ### How much time does each sub-tasks take?
-# 
-# Building model is not a single process. It includes data cleansing, preprocessing, finding insights, model selection and building, etc. Each of these task takes certain percentage of the toatl time taken from initial to final step. 
-
-# In[ ]:
-
-
-# Get all the relevant columns
-df = multiChoice[['TimeGatheringData', 'TimeFindingInsights', 'TimeVisualizing','TimeModelBuilding', 'TimeProduction']]
-
-# Drop the null values
-df = df.dropna().reset_index(drop=True)
-
-# Take the sum and remove all those rows where sum is greater than 100
-df['total_time'] = df.sum(axis=1)
-df = df.drop(df.index[((df.total_time > 100.0) | (df.total_time==0.0))], axis=0).reset_index(drop=True)
-df = df.drop(df['total_time'], axis=0)
-
-
-category = ['TimeGatheringData', 'TimeFindingInsights', 'TimeVisualizing','TimeModelBuilding', 'TimeProduction']
-names =['Data Gathering', 'Finding Insights', 'Visualization', 'Model selection and building', 'Production']
-
-f,axs = plt.subplots(2,3, figsize=(18,10), sharey=True)
-for i, catg in enumerate(category):
-    axs[i//3, i%3].hist(df[catg],bins=10,normed=0)
-    axs[i//3, i%3].set_title(names[i], fontsize=16)
-    axs[i//3, i%3].set_xlabel('Percentage of total time')
-    axs[i//3, i%3].set_ylabel('Count')
-
-f.delaxes(axs[1][2])
-f.suptitle("Percentage of time spent on different tasks", fontsize=18)
-plt.show()
-
-
-# No doubt that gathering data is the most time consuming process. Many times you are able to get data, but then you find out that most of the data is so bad that you need to collect more before starting working on it 
-
-# ### Internal or External resources?
-
-# In[ ]:
-
-
-resources = multiChoice['WorkInternalVsExternalTools'].dropna()
-resoucres_count = resources.value_counts()
-
-for i in range(len(resoucres_count)):
-    choice = resoucres_count.index[i]
-    count = resoucres_count.values[i]
-    percent = (count/len(resources))*100
-    print("{:<50s}: {}  -->   approx.  {:.2f}%".format(choice, count, percent))
-
-
-# I don't know why I feel bad about this. IMO, people should be free to use any tool they like until unless it's something that violates some policy or it doesn't help in the long run.
-# 
-# Also, I don't understand these people who have answered **Do not know**. If you don't know the tools you are working on, what in the world are you doing in the company?
-
-# ### Storage
-
-# In[ ]:
-
-
-# Q. At work, which of these data storage models do you typically use? 
-storage = multiChoice['WorkDataStorage'].dropna()
-
-# This is a multiplt choice question. So, we will use our handy-dandy function we defined earlier
-# Create a new dictionary
-samples_dict = defaultdict(int)
-
-# Apply the fucntion to each row of the series
-storage = storage.apply(split_values, args=(samples_dict,))
-
-# Sort the dictionay based on its values
-samples_dict = dict(sorted(samples_dict.items(), key=lambda x: x[1], reverse=True))
-
-plt.figure(figsize=(10,8))
-sns.barplot(x=list(samples_dict.values()), y=list(samples_dict.keys()), color=color[3])
-plt.title("Types of storage used by the companies", fontsize=16)
-plt.xlabel("Count", fontsize=16)
-plt.show()
-
-
-# ### Code sharing
-
-# In[ ]:
-
-
-# Q. At work, which tools do you use to share code?
-code_share = multiChoice['WorkCodeSharing'].dropna()
-
-# Create a new dictionary
-samples_dict = defaultdict(int)
-
-# Apply the fucntion to each row of the series
-code_share = code_share.apply(split_values, args=(samples_dict,))
-
-# Sort the dictionay based on its values
-samples_dict = dict(sorted(samples_dict.items(), key=lambda x: x[1], reverse=True))
-
-tool = list(samples_dict.keys())
-count = list(samples_dict.values())
-
-# Fancy way of showing percentage in pie chart
-#Courtesy: StackOverflow
-def show_autopct(values):
-    def my_autopct(pct):
-        total = len(code_share)
-        val = int(round(pct*total/100.0))
-        return '{p:.2f}%  ({v:d})'.format(p=pct,v=val)
-    return my_autopct
-
-
-plt.figure(figsize=(10,10))
-patches, text, autotext = plt.pie(count, labels=tool, autopct=show_autopct(count))
-plt.title("How people share code?", fontsize=16)
-plt.show()    
-
-
-# No doubt **Git** would have been the first choice. I am surprise by the low percentage of **Bit Bucket** though. I know a lot of companies are using it. Strange.
-
-# ### Challenges or Barriers?
-
-# In[ ]:
-
-
-# Q. At work, which barriers or challenges have you faced this past year?
-barriers = multiChoice['WorkChallengesSelect'].dropna()
-
-# Create a new dictionary
-samples_dict = defaultdict(int)
-
-# Apply the fucntion to each row of the series
-barriers = barriers.apply(split_values, args=(samples_dict,))
-
-# Sort the dictionay based on its values
-samples_dict = dict(sorted(samples_dict.items(), key=lambda x: x[1], reverse=True))
-
-# Check the percentage of each algorithm used
-for item in samples_dict.keys():
-    val = samples_dict[item]
-    percent = (val/len(barriers))*100
-    print("{:<70s} ->   {}  {:.2f}%".format(item, val, percent))
-
-
-# **Dirty data** or **unavailability of data** is certainly a big challenge. I am surprised by the thing about 42% people states that there is a lack of talent in the DS team in the organization. This is actually bad. **Company politics** has always been a barrier in the corporate world. TBH, I don't get it. Why people focus on gossips and all rather than doing work as a team? Why is it so hard for people to understand that everyone at the company is for some good reason?
-
-# ### Annual Salary
-# 
-# This one is going to be very interesting. We will first get an overview how people are paid and thereafter we will correlate the differences between the salary people are getting in some top countries
-
-# In[ ]:
-
-
-# Select the column for compensation amount along with the currency column
-salary = multiChoice[['CompensationAmount', 'CompensationCurrency']].dropna().reset_index(drop=True)
-
-# Let's take a look 
-salary.head()
-
-
-# In[ ]:
-
-
-# We are given a currency conversion rate CSV which we read in the begining. Let's have a look at it first
-cvRates.head()
-
-
-# In[ ]:
-
-
-# Drop the extra column from the rates files
-cvRates.drop(['Unnamed: 0'], axis=1, inplace=True)
-
-# Convert the exchangeRate column to numeric
-cvRates['exchangeRate'] = pd.to_numeric(cvRates['exchangeRate']).astype(np.float)
-
-# Let's join this table with our salary table
-salary_rate = pd.merge(left=salary ,right=cvRates, how='left', left_on='CompensationCurrency', right_on='originCountry')
-
-# Check if everything is in the way we want it to be
-salary_rate.head()
-
-
-# In[ ]:
-
-
-"""
-We are going to process the salary as following:
-1) Convert the CompensationAmount column values to numeric
-2) Multiply the compensation with the exchange rate to find the salary in USD 
-3) Find the top annual salaries
-4) Compare salaries difference for some of the countries
-"""
-
-# A handy-dandy function to convert string values to integers
-def convert_values(x):
-    try:
-        x = int("".join(x.split(','))) 
-    except:
-        x = 0
-    return x   
-
-# Convert the string values to numbers
-salary_rate['CompensationAmount'] = salary_rate['CompensationAmount'].apply(convert_values)
-
-# Drop the rows where CompensationAnmount is 0
-salary_rate = salary_rate.drop(salary_rate.index[salary_rate['CompensationAmount']==0])
-
-# Multiply the exchange rate with the compensation to get salary amount in USD
-salary_rate['SalaryUSD'] = salary_rate['CompensationAmount'] * salary_rate['exchangeRate']
-
-salary_rate.head()
-
-
-# In[ ]:
-
-
-# Check the median salary
-median_sal = salary_rate.SalaryUSD.median()
-print("Median salary is : ", median_sal)
-
-# For plotting purpose, remove all values above the 300,000. The count of such values will be low.
-salary_rate = salary_rate.drop(salary_rate.index[salary_rate['SalaryUSD'] > 300000 ], axis=0).reset_index(drop=True)
-
-# Drop null values
-salary_rate = salary_rate.dropna()
-
-# Plot the distribution of the annula salaries
-plt.figure(figsize=(10,8))
-plt.hist(salary_rate['SalaryUSD'], bins=100, normed=0)
-plt.title("Annual salary distribution", fontsize=18)
-plt.xlabel("Salary in USD")
-plt.ylabel("Count")
-plt.show()
-
-
-# So, most of the people working in data science field are earning 10,000-100,000 USD annualy. 
-
-# In[ ]:
-
-
-# How the salary compares in India and US?
-salary_IN = salary_rate.groupby('originCountry').get_group('INR')
-salary_US = salary_rate.groupby('originCountry').get_group('USD')
-
-# Plot the results
-f, ax = plt.subplots(1,2, figsize=(20,6))
-ax[0].hist(salary_IN['SalaryUSD'], bins=50, normed=0)
-ax[0].set_title('Annual salary in India')
-ax[0].set_xlabel('Salary in USD')
-ax[0].set_ylabel('Count')
-
-ax[1].hist(salary_US['SalaryUSD'], bins=50, normed=0)
-ax[1].set_title('Annual salary in US')
-ax[1].set_xlabel('Salary in USD')
-ax[1].set_ylabel('Count')
-
-f.suptitle('Annual Salary comparison', fontsize=18)
-plt.show()
-
-
-# Did you see that? Yes, most of the people in India earns below 25,000USD/year whereas in US most of the people earn above 100,000USD/year. I know that US is more expensive in terms of living and all but still, people in India are underpaid and one of the biggest factor contributing to this fact is the **Yes/Sort of** situation we discussed above
-# 
-# Anyways, let's move on to some other aspects.
-
-# ### Job Satisfaction
-
-# In[ ]:
-
-
-# Q. On a scale from 0 (Highly Dissatisfied) - 10 (Highly Satisfied), how satisfied are you with your current job?
-job_satisfaction = multiChoice['JobSatisfaction'].dropna()
-job_satis_count = job_satisfaction.value_counts()
-
-for i in range(len(job_satis_count)):
-    choice = job_satis_count.index[i]
-    count = job_satis_count.values[i]
-    percent = (count/len(job_satisfaction))*100
-    print("{:<30s}: {} -->  approx. {:.2f}%".format(choice, count, percent))
-    
-
-plt.figure(figsize=(20,6))
-sns.barplot(y=job_satis_count.values, x=job_satis_count.index, orient='v', color=color[4])
-plt.title("How many people are satisfied with their jobs?", fontsize=16)
-plt.xlabel("Satisfaction level")
-plt.ylabel("Count")
-plt.show()
-
-
-# More than 50% of the people provided a value between 5 and 10. And it's good. Playing with data is always fun until unless you are paid very low for your job or there is some internal dirty politics within the office
-
-# ## Plans for future, recommendations, and so on....
-
-# ### Tools for Next year
-
-# In[ ]:
-
-
-# Q. Which tool or technology are you most excited about learning in the next year?
-future_tool = multiChoice['MLToolNextYearSelect'].dropna()
-future_tool_count = future_tool.value_counts()
-
-for i in range(len(future_tool_count)):
-    choice = future_tool_count.index[i]
-    count = future_tool_count.values[i]
-    percent = (count/len(future_tool))*100
-    print("{:<50s}: {} --> approx. {:.2f}%".format(choice, count, percent))
-
-
-# Ha!! 25% of the people want to learn **TensorFlow** and **Python** next year. And then there are people who publishe article with the title: "TensorFlow sucks". They should actually rename it to "TensorFlow sucks for me".
-
-# ### Language recommendation by experts to new/aspiring data scientists
-
-# In[ ]:
-
-
-# Q. What programming language would you recommend a new data scientist learn first?
-recommended_lang = multiChoice['LanguageRecommendationSelect'].dropna()
-lang_count = recommended_lang.value_counts()
-
-for i in range(len(lang_count)):
-    choice = lang_count.index[i]
-    count = lang_count.values[i]
-    percent = (count/len(recommended_lang))*100
-    print("{:<30s}: {} --> approx. {:.2f}%".format(choice, count, percent))
-    
-plt.figure(figsize=(10,6))
-sns.barplot(x=lang_count.index, y=lang_count.values, color=color[6])
-plt.title("Recommended programming language for new data scientists", fontsize=16)
-plt.xlabel("Programming Language", fontsize=16)
-plt.xticks(rotation=30)
-plt.ylabel("No. of recommendations")
-plt.show()
-
-
-# Let me say it loud this time: **Welcome to the world of Python!!**
-
-# ### ML Methods people want to learn...
-
-# In[ ]:
-
-
-# Q.Which ML/DS method are you most excited about learning in the next year?
-mlMethods = multiChoice['MLMethodNextYearSelect'].dropna()
-mlMethods_count = mlMethods.value_counts()
-
-for i in range(len(mlMethods_count)):
-    choice = mlMethods_count.index[i]
-    count = mlMethods_count.values[i]
-    percent = (count/len(mlMethods))*100
-    print("{:<50s}: {} --> approx. {:.2f}%".format(choice, count, percent))
-
-
-# Well, this isn't surprising. Given the progress, we have made using DL, it's the most obvious choice to learn. Combining Neural Nets and Deep Learning, more than 50% people want to learn these skills
-
-# ### Learning platforms and resources
-
-# In[ ]:
-
-
-# Q.What platforms & resources have you used to continue learning data science skills?
-resources = multiChoice['LearningPlatformSelect'].dropna()
-
-# This is a multiplt choice question. So, we will use our handy-dandy function we defined earlier
-# Create a new dictionary
-samples_dict = defaultdict(int)
-
-# Apply the fucntion to each row of the series
-resources = resources.apply(split_values, args=(samples_dict,))
-
-# Sort the dictionay based on its values
-samples_dict = dict(sorted(samples_dict.items(), key=lambda x: x[1], reverse=True))
-
-# Check the percentage of each algorithm used
-for item in samples_dict.keys():
-    val = samples_dict[item]
-    percent = (val/len(resources))*100
-    print("{:<30s}:   {} ----->   approx.   {:.2f}%".format(item, val, percent))
-
-plt.figure(figsize=(10,8))
-sns.barplot(x=list(samples_dict.values()), y=list(samples_dict.keys()), orient='h', color=color[5])
-plt.title("Learning platforms used by people all over the world", fontsize=16)
-plt.xlabel("No. of people", fontsize=16)
-plt.show()
-
-
-# **Kaggle** is the most obvious choice. Even for me, I think Kaggle contributes to my learning more than anything else.
-# One good thing about these stats is that this actually represents the true learning platforms. People start with Kaggle, do some online courses for getting a background on the subject, then SO is the one when it comes to doubts and questions related to anything. Except for that, I would advise people to read more papers from **arxiv** as well as go through documentation too. For example, in case of **TensorFlow**, documentation is the real resource to learn it.
-
-# ### How long have you been learning data science?
-
-# In[ ]:
-
-
-learning = multiChoice['LearningDataScienceTime'].dropna()
-learning_count = learning.value_counts()
-
-for i in range(len(learning_count)):
-    choice = learning_count.index[i]
-    count = learning_count.values[i]
-    percent = (count/len(learning))*100
-    print("{:<20s}: {} --> approx. {:.2f}%".format(choice, count, percent))
-    
-plt.figure(figsize=(10,6))
-sns.barplot(x=learning_count.index, y=learning_count.values, color=color[3])
-plt.title("How long have people been learning DS?", fontsize=16)
-plt.xlabel("Years", fontsize=16)
-plt.xticks(rotation=30)
-plt.ylabel("No. of such people")
-plt.show()
-
-
-# More than 80% people started learning DS for less than 2 years. If I remember correctly, it was 2014 onwards, when the hype for ML and DL actually went up. So, it makes sense that large number of people have just started learning this because of that hype
-
-# ### Importance of skills for getting job in the field of DS
-
-# In[ ]:
-
-
-# Q. How important do you think the below skills or certifications are in getting a data science job?
-
-#Selevct all columns that starts with "JobSkillImportance" but no the on that contain "FreeForm"
-skill_cols = [col for col in multiChoice.columns if "JobSkillImportance" in col and 'FreeForm' not in col]
-
-# Get a df for all these columns and drop any null values
-skills = multiChoice[skill_cols]
-
-# Plot each of the skills 
-f, axs = plt.subplots(5,3, figsize=(15,15), sharey=True)
-for i, skill in enumerate(skill_cols):
-    skill_count = skills[skill].dropna().value_counts()
-    skill_count = dict(zip(skill_count.index, skill_count.values))
-    skill_count = dict(sorted(skill_count.items()))
-    sns.barplot(x=list(skill_count.keys()),y=list(skill_count.values()), ax=axs[i//3, i%3])
-    axs[i//3, i%3].set_title(skill[18:])
-
-f.suptitle("Skill Importance in DS", fontsize=18)    
-f.delaxes(axs[4][1])
-f.delaxes(axs[4][2])
-plt.tight_layout()
-plt.show()
-
-
-# So, **Python, Stats and Visualizations** are the most necessary things for getting a job in the field of DS while it's good if you have a **Kaggle Ranking**, a **degree** or **knowledge of R**
-
-# More to come soon!! Any suggestions/feedback would be highly appreciated. Also, don't forget to **upvote** this kernel if you liked it or found it useful in anyway.

@@ -1,246 +1,334 @@
-from __future__ import print_function
-import numpy as np
-import datetime
-import csv
-from lasagne.layers import InputLayer, DropoutLayer, DenseLayer
-from lasagne.updates import nesterov_momentum
-from lasagne.objectives import binary_crossentropy
-from nolearn.lasagne import NeuralNet
-import theano
-from theano import tensor as T
-from theano.tensor.nnet import sigmoid
-from sklearn import metrics
-from sklearn.utils import shuffle
+import os
+os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import math as mt
+from pylab import savefig
 
-species_map = {'CULEX RESTUANS' : "100000",
-              'CULEX TERRITANS' : "010000", 
-              'CULEX PIPIENS'   : "001000", 
-              'CULEX PIPIENS/RESTUANS' : "101000", 
-              'CULEX ERRATICUS' : "000100", 
-              'CULEX SALINARIUS': "000010", 
-              'CULEX TARSALIS' :  "000001",
-              'UNSPECIFIED CULEX': "001000"} # Treating unspecified as PIPIENS (http://www.ajtmh.org/content/80/2/268.full)
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-def date(text):
-    return datetime.datetime.strptime(text, "%Y-%m-%d").date()
-    
-def precip(text):
-    TRACE = 1e-3
-    text = text.strip()
-    if text == "M":
-        return None
-    if text == "T":
-        return TRACE
-    return float(text)
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-def impute_missing_weather_station_values(weather):
-    # Stupid simple
-    for k, v in weather.items():
-        if v[0] is None:
-            v[0] = v[1]
-        elif v[1] is None:
-            v[1] = v[0]
-        for k1 in v[0]:
-            if v[0][k1] is None:
-                v[0][k1] = v[1][k1]
-        for k1 in v[1]:
-            if v[1][k1] is None:
-                v[1][k1] = v[0][k1]
-    
-def load_weather():
-    weather = {}
-    for line in csv.DictReader(open("../input/weather.csv")):
-        for name, converter in {"Date" : date,
-                                "Tmax" : float,"Tmin" : float,"Tavg" : float,
-                                "DewPoint" : float, "WetBulb" : float,
-                                "PrecipTotal" : precip,
-                                "Depart" : float, 
-                                "ResultSpeed" : float,"ResultDir" : float,"AvgSpeed" : float,
-                                "StnPressure" : float, "SeaLevel" : float}.items():
-            x = line[name].strip()
-            line[name] = converter(x) if (x != "M") else None
-        station = int(line["Station"]) - 1
-        assert station in [0,1]
-        dt = line["Date"]
-        if dt not in weather:
-            weather[dt] = [None, None]
-        assert weather[dt][station] is None, "duplicate weather reading {0}:{1}".format(dt, station)
-        weather[dt][station] = line
-    impute_missing_weather_station_values(weather)        
-    return weather
-    
-    
-def load_training():
-    training = []
-    for line in csv.DictReader(open("../input/train.csv")):
-        for name, converter in {"Date" : date, 
-                                "Latitude" : float, "Longitude" : float,
-                                "NumMosquitos" : int, "WnvPresent" : int}.items():
-            line[name] = converter(line[name])
-        training.append(line)
-    return training
-    
-def load_testing():
-    training = []
-    for line in csv.DictReader(open("../input/test.csv")):
-        for name, converter in {"Date" : date, 
-                                "Latitude" : float, "Longitude" : float}.items():
-            line[name] = converter(line[name])
-        training.append(line)
-    return training
-    
-    
-def closest_station(lat, long):
-    # Chicago is small enough that we can treat coordinates as rectangular.
-    stations = np.array([[41.995, -87.933],
-                         [41.786, -87.752]])
-    loc = np.array([lat, long])
-    deltas = stations - loc[None, :]
-    dist2 = (deltas**2).sum(1)
-    return np.argmin(dist2)
-       
-def normalize(X, mean=None, std=None):
-    count = X.shape[1]
-    if mean is None:
-        mean = np.nanmean(X, axis=0)
-    for i in range(count):
-        X[np.isnan(X[:,i]), i] = mean[i]
-    if std is None:
-        std = np.std(X, axis=0)
-    for i in range(count):
-        X[:,i] = (X[:,i] - mean[i]) / std[i]
-    return mean, std
-    
-def scaled_count(record):
-    SCALE = 10.0
-    if "NumMosquitos" not in record:
-        # This is test data
-        return 1
-    return int(np.ceil(record["NumMosquitos"] / SCALE))
-    
-    
-def assemble_X(base, weather):
-    X = []
-    for b in base:
-        date = b["Date"]
-        lat, long = b["Latitude"], b["Longitude"]
-        case = [date.year, date.month, date.day, lat, long]
-        # Look at a selection of past weather values
-        for days_ago in [1,3,7,14]:
-            day = date - datetime.timedelta(days=days_ago)
-            for obs in ["Tmax","Tmin","Tavg","DewPoint","WetBulb","PrecipTotal","Depart"]:
-                station = closest_station(lat, long)
-                case.append(weather[day][station][obs])
-        # Specify which mosquitos are present
-        species_vector = [float(x) for x in species_map[b["Species"]]]
-        case.extend(species_vector)
-        # Weight each observation by the number of mosquitos seen. Test data
-        # Doesn't have this column, so in that case use 1. This accidentally
-        # Takes into account multiple entries that result from >50 mosquitos
-        # on one day. 
-        for repeat in range(scaled_count(b)):
-            X.append(case)    
-    X = np.asarray(X, dtype=np.float32)
-    return X
-    
-def assemble_y(base):
-    y = []
-    for b in base:
-        present = b["WnvPresent"]
-        for repeat in range(scaled_count(b)):
-            y.append(present)    
-    return np.asarray(y, dtype=np.int32).reshape(-1,1)
+# Keras is a deep learning library that wraps the efficient numerical libraries Theano and TensorFlow.
+# It provides a clean and simple API that allows you to define and evaluate deep learning models in just a few lines of code.from keras.models import Sequential, load_model
+from keras.models import Sequential, load_model
+from keras.layers import Dense, Dropout, BatchNormalization, Activation
+from keras.wrappers.scikit_learn import KerasRegressor
+from keras.callbacks import EarlyStopping, ModelCheckpoint
 
+# define custom R2 metrics for Keras backend
+from keras import backend as K
 
-class AdjustVariable(object):
-    def __init__(self, variable, target, half_life=20):
-        self.variable = variable
-        self.target = target
-        self.half_life = half_life
-    def __call__(self, nn, train_history):
-        delta = self.variable.get_value() - self.target
-        delta /= 2**(1.0/self.half_life)
-        self.variable.set_value(np.float32(self.target + delta))
+# model evaluation
+from sklearn.model_selection import KFold, train_test_split 
+from sklearn.metrics import r2_score, mean_squared_error
 
-def train():
-    weather = load_weather()
-    training = load_training()
-    
-    X = assemble_X(training, weather)
-    mean, std = normalize(X)
-    y = assemble_y(training)
-        
-    input_size = len(X[0])
-    
-    learning_rate = theano.shared(np.float32(0.1))
-    
-    net = NeuralNet(
-    layers=[  
-        ('input', InputLayer),
-         ('hidden1', DenseLayer),
-        ('dropout1', DropoutLayer),
-        ('hidden2', DenseLayer),
-        ('dropout2', DropoutLayer),
-        ('output', DenseLayer),
-        ],
-    # layer parameters:
-    input_shape=(None, input_size), 
-    hidden1_num_units=256, 
-    dropout1_p=0.4,
-    hidden2_num_units=256, 
-    dropout2_p=0.4,
-    output_nonlinearity=sigmoid, 
-    output_num_units=1, 
+# define path to save model
+model_path = 'keras_model.h5'
 
-    # optimization method:
-    update=nesterov_momentum,
-    update_learning_rate=learning_rate,
-    update_momentum=0.9,
-    
-    # Decay the learning rate
-    on_epoch_finished=[
-            AdjustVariable(learning_rate, target=0, half_life=4),
-            ],
+# fix random seed for reproducibility
+seed = 42
+np.random.seed(seed)
 
-    # This is silly, but we don't want a stratified K-Fold here
-    # To compensate we need to pass in the y_tensor_type and the loss.
-    regression=True,
-    y_tensor_type = T.imatrix,
-    objective_loss_function = binary_crossentropy,
-     
-    max_epochs=32, 
-    eval_size=0.1,
-    verbose=1,
+# Read datasets
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+
+# save IDs for submission
+id_test = test['ID'].copy()
+
+###########################
+# DATA PREPARATION
+###########################
+
+# glue datasets together
+total = pd.concat([train, test], axis=0)
+print('initial shape: {}'.format(total.shape))
+
+# binary indexes for train/test set split
+is_train = ~total.y.isnull()
+
+# find all categorical features
+cf = total.select_dtypes(include=['object']).columns
+
+# make one-hot-encoding convenient way - pandas.get_dummies(df) function
+dummies = pd.get_dummies(
+    total[cf],
+    drop_first=False # you can set it = True to ommit multicollinearity (crucial for linear models)
+)
+
+print('oh-encoded shape: {}'.format(dummies.shape))
+
+# get rid of old columns and append them encoded
+total = pd.concat(
+    [
+        total.drop(cf, axis=1), # drop old
+        dummies # append them one-hot-encoded
+    ],
+    axis=1 # column-wise
+)
+
+print('appended-encoded shape: {}'.format(total.shape))
+
+# recreate train/test again, now with dropped ID column
+train, test = total[is_train].drop(['ID'], axis=1), total[~is_train].drop(['ID', 'y'], axis=1)
+
+# drop redundant objects
+del total
+
+# check shape
+print('\nTrain shape: {}\nTest shape: {}'.format(train.shape, test.shape))
+
+#########################################################################################################################################
+# GENERATE MODEL
+# The Keras wrappers require a function as an argument. 
+# This function that we must define is responsible for creating the neural network model to be evaluated.
+# Below we define the function to create the baseline model to be evaluated. 
+# The network uses good practices such as the rectifier activation function for the hidden layer. 
+# No activation function is used for the output layer because it is a regression problem and we are interested in predicting numerical 
+# values directly without transform.# The efficient ADAM optimization algorithm is used and a mean squared error loss function is optimized. 
+# This will be the same metric that we will use to evaluate the performance of the model. 
+# It is a desirable metric because by taking the square root gives us an error value we can directly understand in the context of the problem.
+##########################################################################################################################################
+
+def r2_keras(y_true, y_pred):
+    SS_res =  K.sum(K.square( y_true - y_pred )) 
+    SS_tot = K.sum(K.square( y_true - K.mean(y_true) ) ) 
+    return ( 1 - SS_res/(SS_tot + K.epsilon()) )
+    
+# Base model architecture definition.
+# Dropout is a technique where randomly selected neurons are ignored during training. 
+# They are dropped-out randomly. This means that their contribution to the activation.
+# of downstream neurons is temporally removed on the forward pass and any weight updates are
+# not applied to the neuron on the backward pass.
+# More info on Dropout here http://machinelearningmastery.com/dropout-regularization-deep-learning-models-keras/
+# BatchNormalization, Normalize the activations of the previous layer at each batch, i.e. applies a transformation 
+# that maintains the mean activation close to 0 and the activation standard deviation close to 1.
+def model():
+    model = Sequential()
+    #input layer
+    model.add(Dense(input_dims, input_dim=input_dims))
+    model.add(BatchNormalization())
+    model.add(Activation('relu'))
+    model.add(Dropout(0.4))
+    # hidden layers
+    model.add(Dense(input_dims))
+    model.add(BatchNormalization())
+    model.add(Activation(act_func))
+    model.add(Dropout(0.4))
+    
+    model.add(Dense(input_dims//2))
+    model.add(BatchNormalization())
+    model.add(Activation(act_func))
+    model.add(Dropout(0.4))
+    
+    model.add(Dense(input_dims//4, activation=act_func))
+    
+    # output layer (y_pred)
+    model.add(Dense(1, activation='linear'))
+    
+    # compile this model
+    model.compile(loss='mean_squared_error', # one may use 'mean_absolute_error' as alternative
+                  optimizer='adam',
+                  metrics=[r2_keras] # you can add several if needed
+                 )
+    # Visualize NN architecture
+    print(model.summary())
+    return model
+
+#activation functions for hidden layers
+act_func = 'tanh' # could be 'relu', 'sigmoid', ...tanh
+
+# initialize input dimension
+
+input_dims = train.shape[1]-1
+# input_dims = train_reduced.shape[1]
+
+# initialize estimator, wrap model in KerasRegressor
+estimator = KerasRegressor(
+    build_fn=model, 
+    nb_epoch=300, 
+    batch_size=30,
+    verbose=1
+)
+
+# X, y preparation
+X, y = train.drop('y', axis=1).copy().values, train.y.values
+X_test = test.values
+print('\nTrain shape No Feature Selection: {}\nTest shape No Feature Selection: {}'.format(X.shape, X_test.shape))
+
+###############
+# K-FOLD
+###############
+"""Return the sample arithmetic mean of data."""
+def mean(numbers):
+    return float(sum(numbers)) / max(len(numbers), 1)
+"""Return sum of square deviations of sequence data."""    
+def sum_of_square_deviation(numbers,mean):
+    return float(1/len(numbers) * sum((x - mean)** 2 for x in numbers))    
+  
+n_splits = 4
+kf = KFold(n_splits=n_splits, random_state=seed, shuffle=True)
+kf.get_n_splits(X)
+
+mse_scores = list()
+r2_scores = list()
+
+for fold, (train_index, test_index) in enumerate(kf.split(X)):
+    
+    print("TRAIN:", train_index, "TEST:", test_index)
+    X_tr, X_val = X[train_index], X[test_index]
+    y_tr, y_val = y[train_index], y[test_index]
+
+    # prepare callbacks
+    callbacks = [
+        EarlyStopping(
+            monitor='val_r2_keras', 
+            patience=20,
+            mode='max',
+            verbose=1)
+    ]
+    # fit estimator
+    history = estimator.fit(
+        X_tr, 
+        y_tr, 
+        epochs=500,
+        validation_data=(X_val, y_val),
+        verbose=2,
+        callbacks=callbacks,
+        shuffle=True
     )
-
-    X, y = shuffle(X, y, random_state=123)
-    net.fit(X, y)
     
-    _, X_valid, _, y_valid = net.train_test_split(X, y, net.eval_size)
-    probas = net.predict_proba(X_valid)[:,0]
-    print("ROC score", metrics.roc_auc_score(y_valid, probas))
-
-    return net, mean, std     
+    pred = estimator.predict(X_val)
     
-
-def submit(net, mean, std):
-    weather = load_weather()
-    testing = load_testing()
-    X = assemble_X(testing, weather) 
-    normalize(X, mean, std)
-    predictions = net.predict_proba(X)[:,0]    
-    #
-    out = csv.writer(open("west_nile.csv", "w"))
-    out.writerow(["Id","WnvPresent"])
-    for row, p in zip(testing, predictions):
-        out.writerow([row["Id"], p])
-
-
-if __name__ == "__main__":
-    net, mean, std = train()
-    submit(net, mean, std)
-
-
-
+    mse = mean_squared_error(y_val, estimator.predict(X_val))**0.5
+    r2 = r2_score(y_val, estimator.predict(X_val))
+    mse_scores.append(mse)
+    r2_scores.append(r2)
     
+    print('Fold %d: Mean Squared Error %f'%(fold, mse))
+    print('Fold %d: R^2 %f'%(fold, r2))
+
+    #save results
+    pred = estimator.predict(X_test)
+    output = pd.DataFrame({'id': id_test, 'y': pred})
+    output.to_csv(str(r2)+'_submission_keras.csv', index=False)
+
+mean_mse = mean(mse_scores)
+mean_r2 = mean(r2_scores)
+
+standard_deviation_mse = mt.sqrt(sum_of_square_deviation(mse_scores,mean_mse))
+standard_deviation_r2 = mt.sqrt(sum_of_square_deviation(r2_scores,mean_r2))
+
+print('=====================')
+print( 'Mean Squared Error %f'%mean_mse)
+print('=====================')
+print('=====================')
+print( 'Stdev Squared Error %f'%standard_deviation_mse)
+print('=====================')
+print('=====================')
+print( 'Mean R^2 %f'%mean_r2)
+print('=====================')
+print('=====================')
+print( 'Stdev R^2 %f'%standard_deviation_r2)
+print('=====================')
+
+# prepare callbacks
+callbacks = [
+    EarlyStopping(
+        monitor='val_r2_keras', 
+        patience=20,
+        mode='max',
+        verbose=1),
+    ModelCheckpoint(
+        model_path, 
+        monitor='val_r2_keras', 
+        save_best_only=True, 
+        mode='max',
+        verbose=0)
+]
+
+# train/validation split
+X_tr, X_val, y_tr, y_val = train_test_split(
+    X, 
+    y, 
+    test_size=0.2, 
+    random_state=seed
+)
+
+# fit estimator
+history = estimator.fit(
+    X_tr, 
+    y_tr, 
+    epochs=500,
+    validation_data=(X_val, y_val),
+    verbose=2,
+    callbacks=callbacks,
+    shuffle=True
+)
+
+# list all data in history
+print(history.history.keys())
+
+# summarize history for R^2
+fig_acc = plt.figure(figsize=(10, 10))
+plt.plot(history.history['r2_keras'])
+plt.plot(history.history['val_r2_keras'])
+plt.title('model accuracy')
+plt.ylabel('R^2')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+fig_acc.savefig("model_accuracy.png")
+
+# summarize history for loss
+fig_loss = plt.figure(figsize=(10, 10))
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.show()
+fig_loss.savefig("model_loss.png")
+
+# if best iteration's model was saved then load and use it
+if os.path.isfile(model_path):
+    estimator = load_model(model_path, custom_objects={'r2_keras': r2_keras})
+
+# Plot in blue color the predicted data and in green color the
+# actual data to verify visually the accuracy of the model.
+predicted = estimator.predict(X_val)
+fig_verify = plt.figure(figsize=(100, 50))
+plt.plot(predicted, color="blue")
+plt.plot(y_val, color="green")
+plt.title('prediction')
+plt.ylabel('value')
+plt.xlabel('row')
+plt.legend(['predicted', 'actual data'], loc='upper left')
+plt.show()
+fig_verify.savefig("model_verify.png")
+
+# check performance on train set
+print('MSE train: {}'.format(mean_squared_error(y_tr, estimator.predict(X_tr))**0.5)) # mse train
+print('R^2 train: {}'.format(r2_score(y_tr, estimator.predict(X_tr)))) # R^2 train
+
+# check performance on validation set
+print('MSE val: {}'.format(mean_squared_error(y_val, estimator.predict(X_val))**0.5)) # mse val
+print('R^2 val: {}'.format(r2_score(y_val, estimator.predict(X_val)))) # R^2 val
+pass
+
+# predict results
+res = estimator.predict(X_test).ravel()
+print(res)
+
+# create df and convert it to csv
+output = pd.DataFrame({'id': id_test, 'y': res})
+output.to_csv('keras-baseline.csv', index=False)

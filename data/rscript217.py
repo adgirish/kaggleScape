@@ -1,920 +1,258 @@
-from __future__ import print_function
-from __future__ import division
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import warnings
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore",category=DeprecationWarning)
-    import math
-    import pandas as pd
-    import numpy as np
-    from datetime import datetime
-    from scipy.stats import norm
-    from scipy.sparse import csr_matrix, coo_matrix, hstack
-    from sklearn.preprocessing import StandardScaler, MinMaxScaler
-    from sklearn.cross_validation import cross_val_score, cross_val_predict
-    from sklearn.feature_extraction.text import CountVectorizer
-    from sklearn.svm import SVR
-    import matplotlib.pyplot as plt
-    import scipy.interpolate
-# UNCOMMENT THE NEXT LINE IF YOU HAVE bayes_opt INSTALLED
-#    from bayes_opt import BayesianOptimization
+"""
+This simple scripts demonstrates the use of xgboost eval results to get the best round
+for the current fold and accross folds. 
+It also shows an upsampling method that limits cross-validation overfitting.
+"""
 
-############################################
-#
-#  Most of the lines below (#46-611)
-#  are copied from an excellent library
-#  for global optimization with gaussian
-#  processes (see below). The only reason
-#  for that is because Kaggle does not
-#  have this library installed.
-#
-#  You can delete the section below
-#  (everything between lines 22-621)
-#  if you have bayes_opt installed
-#  on your system. Don't forget to
-#  uncomment line #19 above
-#
-############################################
-
-####################################################################################
-#
-#  The author of Bayesian Optimization is Fernando https://libraries.io/github/fmfn
-#  For installing bayes_opt, see https://github.com/fmfn/BayesianOptimization
-#
-####################################################################################
-
-    from sklearn.gaussian_process import GaussianProcess
-    from scipy.optimize import minimize
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from xgboost import XGBClassifier
+from sklearn.model_selection import StratifiedKFold
+import gc
+from numba import jit
+from sklearn.preprocessing import LabelEncoder
+import time 
 
 
-def acq_max(ac, gp, y_max, bounds):
+@jit
+def eval_gini(y_true, y_prob):
     """
-    A function to find the maximum of the acquisition function using
-    the 'L-BFGS-B' method.
-
-    Parameters
-    ----------
-    :param ac:
-        The acquisition function object that return its point-wise value.
-
-    :param gp:
-        A gaussian process fitted to the relevant data.
-
-    :param y_max:
-        The current maximum known value of the target function.
-
-    :param bounds:
-        The variables bounds to limit the search of the acq max.
-
-
-    Returns
-    -------
-    :return: x_max, The arg max of the acquisition function.
+    Original author CPMP : https://www.kaggle.com/cpmpml
+    In kernel : https://www.kaggle.com/cpmpml/extremely-fast-gini-computation
     """
+    y_true = np.asarray(y_true)
+    y_true = y_true[np.argsort(y_prob)]
+    ntrue = 0
+    gini = 0
+    delta = 0
+    n = len(y_true)
+    for i in range(n-1, -1, -1):
+        y_i = y_true[i]
+        ntrue += y_i
+        gini += y_i * delta
+        delta += 1 - y_i
+    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
+    return gini
 
-    # Start with the lower bound as the argmax
-    x_max = bounds[:, 0]
-    max_acq = None
+def gini_xgb(preds, dtrain):
+    labels = dtrain.get_label()
+    gini_score = eval_gini(labels, preds)
+    return [('gini', gini_score)]
 
-    x_tries = np.random.uniform(bounds[:, 0], bounds[:, 1],
-                                size=(100, bounds.shape[0]))
 
-    for x_try in x_tries:
-        # Find the minimum of minus the acquisition function
-        res = minimize(lambda x: -ac(x.reshape(1, -1), gp=gp, y_max=y_max),
-                       x_try.reshape(1, -1),
-                       bounds=bounds,
-                       method="L-BFGS-B")
+def add_noise(series, noise_level):
+    return series * (1 + noise_level * np.random.randn(len(series)))
 
-        # Store it if better than previous minimum(maximum).
-        if max_acq is None or -res.fun >= max_acq:
-            x_max = res.x
-            max_acq = -res.fun
 
-    # Clip output to make sure it lies within the bounds. Due to floating
-    # point technicalities this is not always the case.
-    return np.clip(x_max, bounds[:, 0], bounds[:, 1])
-
-def matern52(theta, d):
+def target_encode(trn_series=None,
+                  tst_series=None,
+                  target=None,
+                  min_samples_leaf=1,
+                  smoothing=1,
+                  noise_level=0):
     """
-    Matern 5/2 correlation model.::
+    Smoothing is computed like in the following paper by Daniele Micci-Barreca
+    https://kaggle2.blob.core.windows.net/forum-message-attachments/225952/7441/high%20cardinality%20categoricals.pdf
+    trn_series : training categorical feature as a pd.Series
+    tst_series : test categorical feature as a pd.Series
+    target : target data as a pd.Series
+    min_samples_leaf (int) : minimum samples to take category average into account
+    smoothing (int) : smoothing effect to balance categorical average vs prior
+    """
+    assert len(trn_series) == len(target)
+    assert trn_series.name == tst_series.name
+    temp = pd.concat([trn_series, target], axis=1)
+    # Compute target mean
+    averages = temp.groupby(by=trn_series.name)[target.name].agg(["mean", "count"])
+    # Compute smoothing
+    smoothing = 1 / (1 + np.exp(-(averages["count"] - min_samples_leaf) / smoothing))
+    # Apply average function to all target data
+    prior = target.mean()
+    # The bigger the count the less full_avg is taken into account
+    averages[target.name] = prior * (1 - smoothing) + averages["mean"] * smoothing
+    averages.drop(["mean", "count"], axis=1, inplace=True)
+    # Apply averages to trn and tst series
+    ft_trn_series = pd.merge(
+        trn_series.to_frame(trn_series.name),
+        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+        on=trn_series.name,
+        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+    # pd.merge does not keep the index so restore it
+    ft_trn_series.index = trn_series.index
+    ft_tst_series = pd.merge(
+        tst_series.to_frame(tst_series.name),
+        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+        on=tst_series.name,
+        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+    # pd.merge does not keep the index so restore it
+    ft_tst_series.index = tst_series.index
+    return add_noise(ft_trn_series, noise_level), add_noise(ft_tst_series, noise_level)
+
+gc.enable()
+
+trn_df = pd.read_csv("../input/train.csv", index_col=0)
+sub_df = pd.read_csv("../input/test.csv", index_col=0)
+
+target = trn_df["target"]
+del trn_df["target"]
+
+train_features = [
+    "ps_car_13",  #            : 1571.65 / shadow  609.23
+	"ps_reg_03",  #            : 1408.42 / shadow  511.15
+	"ps_ind_05_cat",  #        : 1387.87 / shadow   84.72
+	"ps_ind_03",  #            : 1219.47 / shadow  230.55
+	"ps_ind_15",  #            :  922.18 / shadow  242.00
+	"ps_reg_02",  #            :  920.65 / shadow  267.50
+	"ps_car_14",  #            :  798.48 / shadow  549.58
+	"ps_car_12",  #            :  731.93 / shadow  293.62
+	"ps_car_01_cat",  #        :  698.07 / shadow  178.72
+	"ps_car_07_cat",  #        :  694.53 / shadow   36.35
+	"ps_ind_17_bin",  #        :  620.77 / shadow   23.15
+	"ps_car_03_cat",  #        :  611.73 / shadow   50.67
+	"ps_reg_01",  #            :  598.60 / shadow  178.57
+	"ps_car_15",  #            :  593.35 / shadow  226.43
+	"ps_ind_01",  #            :  547.32 / shadow  154.58
+	"ps_ind_16_bin",  #        :  475.37 / shadow   34.17
+	"ps_ind_07_bin",  #        :  435.28 / shadow   28.92
+	"ps_car_06_cat",  #        :  398.02 / shadow  212.43
+	"ps_car_04_cat",  #        :  376.87 / shadow   76.98
+	"ps_ind_06_bin",  #        :  370.97 / shadow   36.13
+	"ps_car_09_cat",  #        :  214.12 / shadow   81.38
+	"ps_car_02_cat",  #        :  203.03 / shadow   26.67
+	"ps_ind_02_cat",  #        :  189.47 / shadow   65.68
+	"ps_car_11",  #            :  173.28 / shadow   76.45
+	"ps_car_05_cat",  #        :  172.75 / shadow   62.92
+	"ps_calc_09",  #           :  169.13 / shadow  129.72
+	"ps_calc_05",  #           :  148.83 / shadow  120.68
+	"ps_ind_08_bin",  #        :  140.73 / shadow   27.63
+	"ps_car_08_cat",  #        :  120.87 / shadow   28.82
+	"ps_ind_09_bin",  #        :  113.92 / shadow   27.05
+	"ps_ind_04_cat",  #        :  107.27 / shadow   37.43
+	"ps_ind_18_bin",  #        :   77.42 / shadow   25.97
+	"ps_ind_12_bin",  #        :   39.67 / shadow   15.52
+	"ps_ind_14",  #            :   37.37 / shadow   16.65
+	"ps_car_11_cat" # Very nice spot from Tilii : https://www.kaggle.com/tilii7
+]
+# add combinations
+combs = [
+    ('ps_reg_01', 'ps_car_02_cat'),  
+    ('ps_reg_01', 'ps_car_04_cat'),
+]
+start = time.time()
+for n_c, (f1, f2) in enumerate(combs):
+    name1 = f1 + "_plus_" + f2
+    print('current feature %60s %4d in %5.1f'
+          % (name1, n_c + 1, (time.time() - start) / 60), end='')
+    print('\r' * 75, end='')
+    trn_df[name1] = trn_df[f1].apply(lambda x: str(x)) + "_" + trn_df[f2].apply(lambda x: str(x))
+    sub_df[name1] = sub_df[f1].apply(lambda x: str(x)) + "_" + sub_df[f2].apply(lambda x: str(x))
+    # Label Encode
+    lbl = LabelEncoder()
+    lbl.fit(list(trn_df[name1].values) + list(sub_df[name1].values))
+    trn_df[name1] = lbl.transform(list(trn_df[name1].values))
+    sub_df[name1] = lbl.transform(list(sub_df[name1].values))
+
+    train_features.append(name1)
     
-        theta, d --> r(theta, d) = (1+sqrt(5)*r + 5/3*r^2)*exp(-sqrt(5)*r)
-        
-                               n
-            where r = sqrt(   sum  (d_i)^2 / (theta_i)^2 )
-                             i = 1
-                             
-    Parameters
-    ----------
-    theta : array_like
-        An array with shape 1 (isotropic) or n (anisotropic) giving the 
-        autocorrelation parameter(s).
-        
-    d : array_like
-        An array with shape (n_eval, n_features) giving the componentwise
-        distances between locations x and x' at which the correlation model
-        should be evaluated.
-        
-    Returns
-    -------
-    r : array_like
-        An array with shape (n_eval, ) containing the values of the
-        autocorrelation modle.
-    """
+trn_df = trn_df[train_features]
+sub_df = sub_df[train_features]
 
-    theta = np.asarray(theta, dtype=np.float)
-    d = np.asarray(d, dtype=np.float)
+f_cats = [f for f in trn_df.columns if "_cat" in f]
+
+for f in f_cats:
+    trn_df[f + "_avg"], sub_df[f + "_avg"] = target_encode(trn_series=trn_df[f],
+                                         tst_series=sub_df[f],
+                                         target=target,
+                                         min_samples_leaf=200,
+                                         smoothing=10,
+                                         noise_level=0)
+
+n_splits = 5
+n_estimators = 200
+folds = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=15) 
+imp_df = np.zeros((len(trn_df.columns), n_splits))
+xgb_evals = np.zeros((n_estimators, n_splits))
+oof = np.empty(len(trn_df))
+sub_preds = np.zeros(len(sub_df))
+increase = True
+np.random.seed(0)
+
+for fold_, (trn_idx, val_idx) in enumerate(folds.split(target, target)):
+    trn_dat, trn_tgt = trn_df.iloc[trn_idx], target.iloc[trn_idx]
+    val_dat, val_tgt = trn_df.iloc[val_idx], target.iloc[val_idx]
+
+    clf = XGBClassifier(n_estimators=n_estimators,
+                        max_depth=4,
+                        objective="binary:logistic",
+                        learning_rate=.1, 
+                        subsample=.8, 
+                        colsample_bytree=.8,
+                        gamma=1,
+                        reg_alpha=0,
+                        reg_lambda=1,
+                        nthread=2)
+    # Upsample during cross validation to avoid having the same samples
+    # in both train and validation sets
+    # Validation set is not up-sampled to monitor overfitting
+    if increase:
+        # Get positive examples
+        pos = pd.Series(trn_tgt == 1)
+        # Add positive examples
+        trn_dat = pd.concat([trn_dat, trn_dat.loc[pos]], axis=0)
+        trn_tgt = pd.concat([trn_tgt, trn_tgt.loc[pos]], axis=0)
+        # Shuffle data
+        idx = np.arange(len(trn_dat))
+        np.random.shuffle(idx)
+        trn_dat = trn_dat.iloc[idx]
+        trn_tgt = trn_tgt.iloc[idx]
+        
+    clf.fit(trn_dat, trn_tgt, 
+            eval_set=[(trn_dat, trn_tgt), (val_dat, val_tgt)],
+            eval_metric=gini_xgb,
+            early_stopping_rounds=None,
+            verbose=False)
+            
+    # Keep feature importances
+    imp_df[:, fold_] = clf.feature_importances_
+
+    # Find best round for validation set
+    xgb_evals[:, fold_] = clf.evals_result_["validation_1"]["gini"]
+    # Xgboost provides best round starting from 0 so it has to be incremented
+    best_round = np.argsort(xgb_evals[:, fold_])[::-1][0]
+
+    # Predict OOF and submission probas with the best round
+    oof[val_idx] = clf.predict_proba(val_dat, ntree_limit=best_round)[:, 1]
+    # Update submission
+    sub_preds += clf.predict_proba(sub_df, ntree_limit=best_round)[:, 1] / n_splits
+
+    # Display results
+    print("Fold %2d : %.6f @%4d / best score is %.6f @%4d"
+          % (fold_ + 1,
+             eval_gini(val_tgt, oof[val_idx]),
+             n_estimators,
+             xgb_evals[best_round, fold_],
+             best_round))
+          
+print("Full OOF score : %.6f" % eval_gini(target, oof))
+
+# Compute mean score and std
+mean_eval = np.mean(xgb_evals, axis=1)
+std_eval = np.std(xgb_evals, axis=1)
+best_round = np.argsort(mean_eval)[::-1][0]
+
+print("Best mean score : %.6f + %.6f @%4d"
+      % (mean_eval[best_round], std_eval[best_round], best_round))
     
-    if d.ndim > 1:
-        n_features = d.shape[1]
-    else:
-        n_features = 1
-        
-    if theta.size == 1:
-        r = np.sqrt(np.sum(d ** 2, axis=1)) / theta[0]
-    elif theta.size != n_features:
-        raise ValueError("Length of theta must be 1 or %s" % n_features)
-    else:
-        r = np.sqrt(np.sum(d ** 2 / theta.reshape(1,n_features) ** 2 , axis=1))
-        
-    return (1 + np.sqrt(5)*r + 5/3.*r ** 2) * np.exp(-np.sqrt(5)*r)
-        
-
-class BayesianOptimization(object):
-
-    def __init__(self, f, pbounds, verbose=1):
-        """
-        :param f:
-            Function to be maximized.
-
-        :param pbounds:
-            Dictionary with parameters names as keys and a tuple with minimum
-            and maximum values.
-
-        :param verbose:
-            Whether or not to print progress.
-
-        """
-        # Store the original dictionary
-        self.pbounds = pbounds
-
-        # Get the name of the parameters
-        self.keys = list(pbounds.keys())
-
-        # Find number of parameters
-        self.dim = len(pbounds)
-
-        # Create an array with parameters bounds
-        self.bounds = []
-        for key in self.pbounds.keys():
-            self.bounds.append(self.pbounds[key])
-        self.bounds = np.asarray(self.bounds)
-
-        # Some function to be optimized
-        self.f = f
-
-        # Initialization flag
-        self.initialized = False
-
-        # Initialization lists --- stores starting points before process begins
-        self.init_points = []
-        self.x_init = []
-        self.y_init = []
-
-        # Numpy array place holders
-        self.X = None
-        self.Y = None
-
-        # Counter of iterations
-        self.i = 0
-
-        # Since scipy 0.16 passing lower and upper bound to theta seems to be
-        # broken. However, there is a lot of development going on around GP
-        # is scikit-learn. So I'll pick the easy route here and simple specify
-        # only theta0.
-        self.gp = GaussianProcess(corr=matern52,
-                                  theta0=np.random.uniform(0.001, 0.05, self.dim),
-                                  thetaL=1e-5 * np.ones(self.dim),
-                                  thetaU=1e0 * np.ones(self.dim),
-                                  random_start=30)
-
-        # Utility Function placeholder
-        self.util = None
-
-        # PrintLog object
-        self.plog = PrintLog(self.keys)
-
-        # Output dictionary
-        self.res = {}
-        # Output dictionary
-        self.res['max'] = {'max_val': None,
-                           'max_params': None}
-        self.res['all'] = {'values': [], 'params': []}
-
-        # Verbose
-        self.verbose = verbose
-
-    def init(self, init_points):
-        """
-        Initialization method to kick start the optimization process. It is a
-        combination of points passed by the user, and randomly sampled ones.
-
-        :param init_points:
-            Number of random points to probe.
-        """
-
-        # Generate random points
-        l = [np.random.uniform(x[0], x[1], size=init_points) for x in self.bounds]
-
-        # Concatenate new random points to possible existing
-        # points from self.explore method.
-        self.init_points += list(map(list, zip(*l)))
-
-        # Create empty list to store the new values of the function
-        y_init = []
-
-        # Evaluate target function at all initialization
-        # points (random + explore)
-        for x in self.init_points:
-
-            y_init.append(self.f(**dict(zip(self.keys, x))))
-
-            if self.verbose:
-                self.plog.print_step(x, y_init[-1])
-
-        # Append any other points passed by the self.initialize method (these
-        # also have a corresponding target value passed by the user).
-        self.init_points += self.x_init
-
-        # Append the target value of self.initialize method.
-        y_init += self.y_init
-
-        # Turn it into np array and store.
-        self.X = np.asarray(self.init_points)
-        self.Y = np.asarray(y_init)
-
-        # Updates the flag
-        self.initialized = True
-
-    def explore(self, points_dict):
-        """
-        Method to explore user defined points
-
-        :param points_dict:
-        :return:
-        """
-
-        # Consistency check
-        param_tup_lens = []
-
-        for key in self.keys:
-            param_tup_lens.append(len(list(points_dict[key])))
-
-        if all([e == param_tup_lens[0] for e in param_tup_lens]):
-            pass
-        else:
-            raise ValueError('The same number of initialization points '
-                             'must be entered for every parameter.')
-
-        # Turn into list of lists
-        all_points = []
-        for key in self.keys:
-            all_points.append(points_dict[key])
-
-        # Take transpose of list
-        self.init_points = list(map(list, zip(*all_points)))
-
-    def initialize(self, points_dict):
-        """
-        Method to introduce point for which the target function
-        value is known
-
-        :param points_dict:
-        :return:
-        """
-
-        for target in points_dict:
-
-            self.y_init.append(target)
-
-            all_points = []
-            for key in self.keys:
-                all_points.append(points_dict[target][key])
-
-            self.x_init.append(all_points)
-
-    def set_bounds(self, new_bounds):
-        """
-        A method that allows changing the lower and upper searching bounds
-
-        :param new_bounds:
-            A dictionary with the parameter name and its new bounds
-
-        """
-
-        # Update the internal object stored dict
-        self.pbounds.update(new_bounds)
-
-        # Loop through the all bounds and reset the min-max bound matrix
-        for row, key in enumerate(self.pbounds.keys()):
-
-            # Reset all entries, even if the same.
-            self.bounds[row] = self.pbounds[key]
-
-    def maximize(self,
-                 init_points=5,
-                 n_iter=25,
-                 acq='ei',
-                 kappa=2.576,
-                 xi=0.0,
-                 **gp_params):
-        """
-        Main optimization method.
-
-        Parameters
-        ----------
-        :param init_points:
-            Number of randomly chosen points to sample the
-            target function before fitting the gp.
-
-        :param n_iter:
-            Total number of times the process is to repeated. Note that
-            currently this methods does not have stopping criteria (due to a
-            number of reasons), therefore the total number of points to be
-            sampled must be specified.
-
-        :param acq:
-            Acquisition function to be used, defaults to Expected Improvement.
-
-        :param gp_params:
-            Parameters to be passed to the Scikit-learn Gaussian Process object
-
-        Returns
-        -------
-        :return: Nothing
-        """
-        # Reset timer
-        self.plog.reset_timer()
-
-        # Set acquisition function
-        self.util = UtilityFunction(kind=acq, kappa=kappa, xi=xi)
-
-        # Initialize x, y and find current y_max
-        if not self.initialized:
-            if self.verbose:
-                self.plog.print_header()
-            self.init(init_points)
-
-        y_max = self.Y.max()
-
-        # Set parameters if any was passed
-        self.gp.set_params(**gp_params)
-
-        # Find unique rows of X to avoid GP from breaking
-        ur = unique_rows(self.X)
-        self.gp.fit(self.X[ur], self.Y[ur])
-
-        # Finding argmax of the acquisition function.
-        x_max = acq_max(ac=self.util.utility,
-                        gp=self.gp,
-                        y_max=y_max,
-                        bounds=self.bounds)
-
-        # Print new header
-        if self.verbose:
-            self.plog.print_header(initialization=False)
-        # Iterative process of searching for the maximum. At each round the
-        # most recent x and y values probed are added to the X and Y arrays
-        # used to train the Gaussian Process. Next the maximum known value
-        # of the target function is found and passed to the acq_max function.
-        # The arg_max of the acquisition function is found and this will be
-        # the next probed value of the target function in the next round.
-        for i in range(n_iter):
-            # Test if x_max is repeated, if it is, draw another one at random
-            # If it is repeated, print a warning
-            pwarning = False
-            if np.any((self.X - x_max).sum(axis=1) == 0):
-
-                x_max = np.random.uniform(self.bounds[:, 0],
-                                          self.bounds[:, 1],
-                                          size=self.bounds.shape[0])
-
-                pwarning = True
-
-            # Append most recently generated values to X and Y arrays
-            self.X = np.vstack((self.X, x_max.reshape((1, -1))))
-            self.Y = np.append(self.Y, self.f(**dict(zip(self.keys, x_max))))
-
-            # Updating the GP.
-            ur = unique_rows(self.X)
-            self.gp.fit(self.X[ur], self.Y[ur])
-
-            # Update maximum value to search for next probe point.
-            if self.Y[-1] > y_max:
-                y_max = self.Y[-1]
-
-            # Maximize acquisition function to find next probing point
-            x_max = acq_max(ac=self.util.utility,
-                            gp=self.gp,
-                            y_max=y_max,
-                            bounds=self.bounds)
-
-            # Print stuff
-            if self.verbose:
-                self.plog.print_step(self.X[-1], self.Y[-1], warning=pwarning)
-
-            # Keep track of total number of iterations
-            self.i += 1
-
-            self.res['max'] = {'max_val': self.Y.max(),
-                               'max_params': dict(zip(self.keys,
-                                                      self.X[self.Y.argmax()]))
-                               }
-            self.res['all']['values'].append(self.Y[-1])
-            self.res['all']['params'].append(dict(zip(self.keys, self.X[-1])))
-
-        # Print a final report if verbose active.
-        if self.verbose:
-            self.plog.print_summary()
-
-class UtilityFunction(object):
-    """
-    An object to compute the acquisition functions.
-    """
-
-    def __init__(self, kind, kappa, xi):
-        """
-        If UCB is to be used, a constant kappa is needed.
-        """
-        self.kappa = kappa
-        
-        self.xi = xi
-
-        if kind not in ['ucb', 'ei', 'poi']:
-            err = "The utility function " \
-                  "{} has not been implemented, " \
-                  "please choose one of ucb, ei, or poi.".format(kind)
-            raise NotImplementedError(err)
-        else:
-            self.kind = kind
-
-    def utility(self, x, gp, y_max):
-        if self.kind == 'ucb':
-            return self._ucb(x, gp, self.kappa)
-        if self.kind == 'ei':
-            return self._ei(x, gp, y_max, self.xi)
-        if self.kind == 'poi':
-            return self._poi(x, gp, y_max, self.xi)
-
-    @staticmethod
-    def _ucb(x, gp, kappa):
-        mean, var = gp.predict(x, eval_MSE=True)
-        return mean + kappa * np.sqrt(var)
-
-    @staticmethod
-    def _ei(x, gp, y_max, xi):
-        mean, var = gp.predict(x, eval_MSE=True)
-
-        # Avoid points with zero variance
-        var = np.maximum(var, 1e-9 + 0 * var)
-
-        z = (mean - y_max - xi)/np.sqrt(var)
-        return (mean - y_max - xi) * norm.cdf(z) + np.sqrt(var) * norm.pdf(z)
-
-    @staticmethod
-    def _poi(x, gp, y_max, xi):
-        mean, var = gp.predict(x, eval_MSE=True)
-
-        # Avoid points with zero variance
-        var = np.maximum(var, 1e-9 + 0 * var)
-
-        z = (mean - y_max - xi)/np.sqrt(var)
-        return norm.cdf(z)
-
-
-def unique_rows(a):
-    """
-    A functions to trim repeated rows that may appear when optimizing.
-    This is necessary to avoid the sklearn GP object from breaking
-
-    :param a: array to trim repeated rows from
-
-    :return: mask of unique rows
-    """
-
-    # Sort array and kep track of where things should go back to
-    order = np.lexsort(a.T)
-    reorder = np.argsort(order)
-
-    a = a[order]
-    diff = np.diff(a, axis=0)
-    ui = np.ones(len(a), 'bool')
-    ui[1:] = (diff != 0).any(axis=1)
-
-    return ui[reorder]
-
-
-class BColours(object):
-    BLUE = '\033[94m'
-    CYAN = '\033[36m'
-    GREEN = '\033[32m'
-    MAGENTA = '\033[35m'
-    RED = '\033[31m'
-    ENDC = '\033[0m'
-
-
-class PrintLog(object):
-
-    def __init__(self, params):
-
-        self.ymax = None
-        self.xmax = None
-        self.params = params
-        self.ite = 1
-
-        self.start_time = datetime.now()
-        self.last_round = datetime.now()
-
-        # sizes of parameters name and all
-        self.sizes = [max(len(ps), 7) for ps in params]
-
-        # Sorted indexes to access parameters
-        self.sorti = sorted(range(len(self.params)),
-                            key=self.params.__getitem__)
-
-    def reset_timer(self):
-        self.start_time = datetime.now()
-        self.last_round = datetime.now()
-
-    def print_header(self, initialization=True):
-
-        if initialization:
-            print("{}Initialization{}".format(BColours.RED,
-                                              BColours.ENDC))
-        else:
-            print("{}Bayesian Optimization{}".format(BColours.RED,
-                                                     BColours.ENDC))
-
-        print(BColours.BLUE + "-" * (29 + sum([s + 5 for s in self.sizes])) + BColours.ENDC)
-
-        print("{0:>{1}}".format("Step", 5), end=" | ")
-        print("{0:>{1}}".format("Time", 6), end=" | ")
-        print("{0:>{1}}".format("Value", 10), end=" | ")
-
-        for index in self.sorti:
-            print("{0:>{1}}".format(self.params[index],
-                                    self.sizes[index] + 2),
-                  end=" | ")
-        print('')
-
-    def print_step(self, x, y, warning=False):
-
-        print("{:>5d}".format(self.ite), end=" | ")
-
-        m, s = divmod((datetime.now() - self.last_round).total_seconds(), 60)
-        print("{:>02d}m{:>02d}s".format(int(m), int(s)), end=" | ")
-
-        if self.ymax is None or self.ymax < y:
-            self.ymax = y
-            self.xmax = x
-            print("{0}{2: >10.5f}{1}".format(BColours.MAGENTA,
-                                             BColours.ENDC,
-                                             y),
-                  end=" | ")
-
-            for index in self.sorti:
-                print("{0}{2: >{3}.{4}f}{1}".format(BColours.GREEN, BColours.ENDC,
-                                                    x[index],
-                                                    self.sizes[index] + 2,
-                                                    min(self.sizes[index] - 3, 6 - 2)),
-                      end=" | ")
-        else:
-            print("{: >10.5f}".format(y), end=" | ")
-            for index in self.sorti:
-                print("{0: >{1}.{2}f}".format(x[index],
-                                              self.sizes[index] + 2,
-                                              min(self.sizes[index] - 3, 6 - 2)),
-                      end=" | ")
-
-        if warning:
-            print("{}Warning: Test point chose at "
-                  "random due to repeated sample.{}".format(BColours.RED,
-                                                            BColours.ENDC))
-
-        print()
-
-        self.last_round = datetime.now()
-        self.ite += 1
-
-    def print_summary(self):
-        pass
-
-#######################################
-#
-#  You can delete the section above
-#  (everything between lines #22-621)
-#  if you have bayes_opt installed
-#  on your system. Don't forget to
-#  uncomment line #19
-#
-#######################################
-
-#######################################
-#
-#  The actual code starts here
-#
-#######################################
-
-def timer(start_time=None):
-    if not start_time:
-        start_time = datetime.now()
-        return start_time
-    elif start_time:
-        tmin, tsec = divmod((datetime.now() - start_time).total_seconds(), 60)
-        print(" Time taken: %i minutes and %s seconds." % (tmin, round(tsec,2)))
-
-def svrcv(log2C, log2gamma):
-    cv_score = cross_val_score(
-        SVR
-        (
-        C=math.pow(2,log2C),
-        kernel='rbf',
-        gamma=math.pow(2,log2gamma),
-        cache_size=2000,
-        verbose=False,
-        max_iter=-1,
-        shrinking=False,
-        ),
-        train_data,
-        target,
-        'mean_squared_error',
-        cv=folds
-        ).mean()
-    return ( -1.0 * np.sqrt(-cv_score))
-
-def scale_data(X, scaler=None):
-    if not scaler:
-        scaler = MinMaxScaler(feature_range=(-1, 1))
-        scaler.fit(X)
-    X = scaler.transform(X)
-    return X, scaler
-
-def sparse_df_to_array(df):
-    num_rows = df.shape[0]
-    data = []
-    row = []
-    col = []
-    for i, col_name in enumerate(df.columns):
-        if isinstance(df[col_name], pd.SparseSeries):
-            column_index = df[col_name].sp_index
-            if isinstance(column_index, BlockIndex):
-                column_index = column_index.to_int_index()
-            ix = column_index.indices
-            data.append(df[col_name].sp_values)
-            row.append(ix)
-            col.append(len(df[col_name].sp_values) * [i])
-        else:
-            data.append(df[col_name].values)
-            row.append(np.array(range(0, num_rows)))
-            col.append(np.array(num_rows * [i]))
-    data_f = np.concatenate(data)
-    row_f = np.concatenate(row)
-    col_f = np.concatenate(col)
-    arr = coo_matrix((data_f, (row_f, col_f)), df.shape, dtype=np.float64)
-    return arr.tocsr()
-
-if __name__ == "__main__":
-
-    folds = 5
-
-    CV = CountVectorizer(min_df=1, analyzer='word', max_features=30000, binary=True)
-
-    print("\n Please read the comments carefully. The code can be much shorter if you follow directions.")
-
-# Load data set and target values
-
-    start_time = timer(None)
-    print("\n# Reading and Processing Data")
-    train = pd.read_csv("../input/train.csv", dtype = {'Id' : np.str} )
-    print("\n Initial Train Set Matrix Dimensions: %d x %d" % (train.shape[0], train.shape[1]))
-    target = np.log(np.array(train['SalePrice']))
-    test = pd.read_csv("../input/test.csv", dtype = {'Id' : np.str} )
-    print("\n Initial Test Set Matrix Dimensions: %d x %d" % (test.shape[0], test.shape[1]))
-    ids = test['Id']
-
-# Minimal feature engineering - this can be done much better
-    train['Age'] = train['YrSold'] - train['YearBuilt']
-    test['Age'] = train['YrSold'] - train['YearBuilt']
-    train['AgeRemod'] = train['YrSold'] - train['YearRemodAdd']
-    test['AgeRemod'] = train['YrSold'] - train['YearRemodAdd']
-    train['Baths'] = train['FullBath'] + train['HalfBath']
-    test['Baths'] = test['FullBath'] + test['HalfBath']
-    train['BsmtBaths'] = train['BsmtFullBath'] + train['BsmtHalfBath']
-    test['BsmtBaths'] = test['BsmtFullBath'] + test['BsmtHalfBath']
-
-# Feature fixing - converting numerical to categorical, removing spaces from features, coverting single-letter features
-    train['MSSubClass'] = train['MSSubClass'].astype(str)
-    test['MSSubClass'] = test['MSSubClass'].astype(str)
-    train['Alley'].replace('NA', 'NoAlley', inplace=True)
-    test['Alley'].replace('NA', 'NoAlley', inplace=True)
-    train['MSZoning'].replace('A', 'AG', inplace=True)
-    train['MSZoning'].replace('C', 'CO', inplace=True)
-    train['MSZoning'].replace('I', 'IN', inplace=True)
-    test['MSZoning'].replace('A', 'AG', inplace=True)
-    test['MSZoning'].replace('C', 'CO', inplace=True)
-    test['MSZoning'].replace('I', 'IN', inplace=True)
-    train['HouseStyle'].replace('1.5Fin', '1_5Fin', inplace=True)
-    train['HouseStyle'].replace('1.5Unf', '1_5Unf', inplace=True)
-    train['HouseStyle'].replace('2.5Fin', '2_5Fin', inplace=True)
-    train['HouseStyle'].replace('2.5Unf', '2_5Unf', inplace=True)
-    test['HouseStyle'].replace('1.5Fin', '1_5Fin', inplace=True)
-    test['HouseStyle'].replace('1.5Unf', '1_5Unf', inplace=True)
-    test['HouseStyle'].replace('2.5Fin', '2_5Fin', inplace=True)
-    test['HouseStyle'].replace('2.5Unf', '2_5Unf', inplace=True)
-    train['RoofMatl'].replace('Tar&Grv', 'Tar_Grv', inplace=True)
-    test['RoofMatl'].replace('Tar&Grv', 'Tar_Grv', inplace=True)
-    train['Exterior1st'].replace('Wd Sdng', 'WdSdng', inplace=True)
-    test['Exterior1st'].replace('Wd Sdng', 'WdSdng', inplace=True)
-    train['Exterior2nd'].replace('Wd Sdng', 'WdSdng', inplace=True)
-    test['Exterior2nd'].replace('Wd Sdng', 'WdSdng', inplace=True)
-    train['MasVnrType'].replace('None', 'NoVen', inplace=True)
-    test['MasVnrType'].replace('None', 'NoVen', inplace=True)
-    train['BsmtQual'].replace('NA', 'NB', inplace=True)
-    test['BsmtQual'].replace('NA', 'NB', inplace=True)
-    train['BsmtCond'].replace('NA', 'NB', inplace=True)
-    test['BsmtCond'].replace('NA', 'NB', inplace=True)
-    train['BsmtExposure'].replace('NA', 'NB', inplace=True)
-    test['BsmtExposure'].replace('NA', 'NB', inplace=True)
-    train['BsmtFinType1'].replace('NA', 'NB', inplace=True)
-    test['BsmtFinType1'].replace('NA', 'NB', inplace=True)
-    train['BsmtFinType2'].replace('NA', 'NB', inplace=True)
-    test['BsmtFinType2'].replace('NA', 'NB', inplace=True)
-    train['FireplaceQu'].replace('NA', 'NF', inplace=True)
-    test['FireplaceQu'].replace('NA', 'NF', inplace=True)
-    train['GarageType'].replace('NA', 'NG', inplace=True)
-    test['GarageType'].replace('NA', 'NG', inplace=True)
-    train['GarageFinish'].replace('NA', 'NG', inplace=True)
-    test['GarageFinish'].replace('NA', 'NG', inplace=True)
-    train['GarageQual'].replace('NA', 'NG', inplace=True)
-    test['GarageQual'].replace('NA', 'NG', inplace=True)
-    train['GarageCond'].replace('NA', 'NG', inplace=True)
-    test['GarageCond'].replace('NA', 'NG', inplace=True)
-    train['PoolQC'].replace('NA', 'NP', inplace=True)
-    test['PoolQC'].replace('NA', 'NP', inplace=True)
-    train['Fence'].replace('NA', 'NF', inplace=True)
-    test['Fence'].replace('NA', 'NF', inplace=True)
-    train['MiscFeature'].replace('NA', 'NoF', inplace=True)
-    test['MiscFeature'].replace('NA', 'NoF', inplace=True)
-    train['CentralAir'].replace('Y', 'Yes', inplace=True)
-    train['CentralAir'].replace('N', 'No', inplace=True)
-    test['CentralAir'].replace('Y', 'Yes', inplace=True)
-    test['CentralAir'].replace('N', 'No', inplace=True)
-    train['PavedDrive'].replace('Y', 'Yes', inplace=True)
-    train['PavedDrive'].replace('N', 'No', inplace=True)
-    train['PavedDrive'].replace('P', 'Partial', inplace=True)
-    test['PavedDrive'].replace('Y', 'Yes', inplace=True)
-    test['PavedDrive'].replace('N', 'No', inplace=True)
-    test['PavedDrive'].replace('P', 'Partial', inplace=True)
-
-# Feature consolidation
-    train['Conditions'] = train[['Condition1', 'Condition2']].apply(lambda x: ' '.join(x), axis=1)
-    test['Conditions'] = test[['Condition1', 'Condition2']].apply(lambda x: ' '.join(x), axis=1)
-    train['MonthYearSold'] = train[['MoSold', 'YrSold']].astype(str).apply(lambda x: '_'.join(x), axis=1)
-    test['MonthYearSold'] = test[['MoSold', 'YrSold']].astype(str).apply(lambda x: '_'.join(x), axis=1)
-
-# Makee numerical and non-numerical subsets of data
-    numerical = ['1stFlrSF', '2ndFlrSF', '3SsnPorch', 'Age', 'AgeRemod', 'Baths', 'BedroomAbvGr', 'BsmtBaths', 'BsmtFinSF1', 'BsmtFinSF2', 'BsmtFullBath', 'BsmtHalfBath', 'BsmtUnfSF', 'EnclosedPorch', 'Fireplaces', 'FullBath', 'GarageArea', 'GarageCars', 'GarageYrBlt', 'GrLivArea', 'HalfBath', 'KitchenAbvGr', 'LotArea', 'LotFrontage', 'LowQualFinSF', 'MasVnrArea', 'MiscVal', 'MoSold', 'OpenPorchSF', 'OverallCond', 'OverallQual', 'PoolArea', 'ScreenPorch', 'TotalBsmtSF', 'TotRmsAbvGrd', 'WoodDeckSF', 'YearBuilt', 'YearRemodAdd', 'YrSold']
-    non = ['Alley', 'BldgType', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2', 'BsmtQual', 'CentralAir', 'Conditions', 'Electrical', 'ExterCond', 'Exterior1st', 'Exterior2nd', 'ExterQual', 'Fence', 'FireplaceQu', 'Foundation', 'Functional', 'GarageCond', 'GarageFinish', 'GarageQual', 'GarageType', 'Heating', 'HeatingQC', 'HouseStyle', 'KitchenQual', 'LandContour', 'LandSlope', 'LotConfig', 'LotShape', 'MasVnrType', 'MiscFeature', 'MonthYearSold', 'MSSubClass', 'MSZoning', 'Neighborhood', 'PavedDrive', 'PoolQC', 'RoofMatl', 'RoofStyle', 'SaleCondition', 'SaleType', 'Street', 'Utilities']
-
-    train_num = train[numerical]
-    train_num.reset_index(drop=True, inplace=True)
-    train_non = train[non]
-    train_non.reset_index(drop=True, inplace=True)
-    test_num = test[numerical]
-    test_num.reset_index(drop=True, inplace=True)
-    test_non = test[non]
-    test_non.reset_index(drop=True, inplace=True)
-    train_non = train_non.replace(np.NaN, '')
-    train_num = train_num.replace(np.NaN, -999)
-    test_non = test_non.replace(np.NaN, '')
-    test_num = test_num.replace(np.NaN, -999)
-
-# Scale only numerical data
-    train_test_num = pd.concat((train_num, test_num), ignore_index=True)
-    train_test_num, scaler = scale_data( train_test_num )
-    train_num, _ = scale_data( train_num, scaler )
-    test_num, _ = scale_data( test_num, scaler )
-    train_num = pd.DataFrame(train_num, columns=numerical)
-    test_num = pd.DataFrame(test_num, columns=numerical)
-
-# Create sparse matrices, first only from numerical data
-    train_data = sparse_df_to_array(train_num)
-    test_data = sparse_df_to_array(test_num)
-    train_test_non = pd.concat((train_non, test_non), ignore_index=True)
-
-# Convert individual categorical columns to sparse matrices, add to existing sparse matrices
-    for i, col_name in enumerate(train_test_non.columns):
-        CV.fit(train_test_non[col_name])
-        train_sparse = CV.transform(train_non[col_name])
-        test_sparse = CV.transform(test_non[col_name])
-        train_data = hstack((train_data, train_sparse), format='csr')
-        test_data = hstack((test_data, test_sparse), format='csr')
-
-    print("\n Sparse Train Set Matrix Dimensions: %d x %d" % (train_data.shape[0], train_data.shape[1]))
-    print("\n Sparse Test Set Matrix Dimensions: %d x %d\n" % (test_data.shape[0], test_data.shape[1]))
-    timer(start_time)
-
-    start_time = timer(None)
-    print("\n# Global Optimization Search for SVR Parameters C and gamma\n")
-    print("\n Please note that negative RMSE values will be shown below. This is because")
-    print(" RMSE needs to be minimized, while Bayes optimizer always maximizes the function.\n")
-
-    svrBO = BayesianOptimization(svrcv, {
-                                         'log2C': (-6, 6),
-                                         'log2gamma': (-12, 0)
-                                        })
-
-    svrBO.maximize(init_points=50, n_iter=150, acq="ei", xi=0.0)
-    print("-" * 53)
-    timer(start_time)
-
-    best_RMSE = round((-1.0 * svrBO.res['max']['max_val']), 6)
-    C = svrBO.res['max']['max_params']['log2C']
-    gamma = svrBO.res['max']['max_params']['log2gamma']
-
-    print("\n Best RMSE value: %f" % best_RMSE)
-    print(" Best SVR parameters:  log2(C) = %f  log2(gamma) = %f" % (C, gamma))
-
-    start_time = timer(None)
-    print("\n# Making Prediction")
-
-    svr = SVR(kernel='rbf', C=math.pow(2,C), gamma=math.pow(2,gamma), cache_size=2000, verbose=False, max_iter=-1, shrinking=False)
-
-    x_true = np.array(train['SalePrice'])
-    x_pred = np.exp(cross_val_predict(svr, X=train_data, y=target, cv=folds))
-
-# Normalized prediction error clipped to -40% to 40% range
-    x_diff = np.clip(100 * ( (x_pred - x_true) / x_true ), -40, 40)
-
-# Make a figure showing colored true vs predicted values
-    plt.figure(1)
-    plt.title("True vs Predicted Sale Prices")
-    plt.scatter(x_true, x_pred, c=x_diff)
-    plt.colorbar()
-    plt.plot([x_true.min()-5000, x_true.max()+5000], [x_true.min()-5000, x_true.max()+5000], 'k--', lw=1)
-    plt.xlabel('Sale Price')
-    plt.ylabel('Predicted Sale Price')
-    plt.xlim( 0, 800000 )
-    plt.ylim( 0, 800000 )
-    plt.ticklabel_format(style='sci', axis='both', scilimits=(0,0))
-    plt.savefig('./HousePrices-SVR-' + str(folds) + 'fold-train-predictions-01-v4.png')
-    plt.show(block=False)
-
-# Fit with optimized parameters and make a prediction
-    svr.fit(train_data, target)
-    y_pred = np.exp(svr.predict(test_data))
-    result = pd.DataFrame(y_pred, columns=['SalePrice'])
-    result["Id"] = ids
-    result = result.set_index("Id")
-    print("\n First 10 Lines of Your Prediction:\n")
-    print(result.head(10))
-    now = datetime.now()
-    sub_file = 'submission_SVR_' + str(best_RMSE) + '_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
-    print("\n Writing Submission File: %s" % sub_file)
-    result.to_csv(sub_file, index=True, index_label='Id')
-    timer(start_time)
-
-# Save all parameters and RMSE values from Bayesian optimization
-    history_df = pd.DataFrame(svrBO.res['all']['params'])
-    history_df2 = pd.DataFrame(svrBO.res['all']['values'])
-    history_df = pd.concat((history_df, history_df2), axis=1)
-    history_df.rename(columns = { 'log2C' : 'log2(C)'}, inplace=True)
-    history_df.rename(columns = { 'log2gamma' : 'log2(gamma)'}, inplace=True)
-    history_df.rename(columns = { 0 : 'RMSE'}, inplace=True)
-    history_df.index.names = ['Iteration']
-    history_df.to_csv("./HousePrices-SVR-" + str(folds) + "fold-01-v4-grid.csv")
-    print("\n Grid Search Results Saved:  HousePrices-SVR-%dfold-01-v4-grid.csv" % folds)
-
-# Make a figure showing interpolated RMSE values from known C vs gamma outcomes
-    x, y, z = history_df['log2(C)'].values, history_df['log2(gamma)'].values, history_df['RMSE'].values
-# Set up a regular grid of interpolation points
-    xi, yi = np.linspace(-6.5, 6.5, 100), np.linspace(-12.5, 0.5, 100)
-    xi, yi = np.meshgrid(xi, yi)
-
-# Interpolate
-    rbf = scipy.interpolate.Rbf(x, y, z, function='multiquadric', smooth=0.5)
-    zi = rbf(xi, yi)
-
-    plt.figure(2)
-    plt.title("Interpolated density distribution of C vs gamma")
-    plt.imshow(zi, vmin=z.min(), vmax=z.max(), origin='lower',
-           extent=[-6.5, 6.5, -12.5, 0.5], interpolation = 'lanczos')
-    plt.scatter(x, y, c=z)
-    plt.colorbar()
-    plt.xlabel('log2(C)')
-    plt.ylabel('log2(gamma)')
-    plt.savefig('./HousePrices-SVR-' + str(folds) + 'fold-01-v4.png')
-    plt.show(block=False)
-    print("\n Optimization Plot Saved:  HousePrices-SVR-%dfold-01-v4.png\n" % folds)
+importances = sorted([(trn_df.columns[i], imp) for i, imp in enumerate(imp_df.mean(axis=1))],
+                     key=lambda x: x[1])
+
+for f, imp in importances[::-1]:
+    print("%-34s : %10.4f" % (f, imp))
     
+sub_df["target"] = sub_preds
+
+sub_df[["target"]].to_csv("submission.csv", index=True, float_format="%.9f")

@@ -1,307 +1,292 @@
 
 # coding: utf-8
 
-# # Credit Card Fraud: Handling highly imbalance classes and why Receiver Operating Characteristics Curve (ROC Curve) should not be used, and Precision/Recall curve should be preferred in highly imbalanced situations
+# This notebook demonstrates a custom loss function for neural nets, that provides a differentiable approximation to AUC. AUC, in turn, has a linear relationship with Gini, hence this is very useful when we want to train a network to maximise AUC.
 # 
-# ## Motivation
-# In this notebook, we will explore the data through initial EDA with some visualizations. Then we will hit the main point of the notebook, which is to explore ways to handle imbalanced data. We will use two methods:
-# 1. Using the weights parameters in Sci-Kit Learn classifiers
-# 2. Over and Undersampling (to be developed in the next version)
+# We set up 2 identical NNs and run them for a few epochs, to show how this approach improves convergence on AUC compared to binary crossentropy.
 # 
-# Finally, we will quantify and illustrate the effects of the trade off between True Positive Rate and False Positive Rate using ROC and Precision/Recall (PR) curves, and disucss **why the popular ROC curve should not be used on highly imbalanced dataset** (or in general, why I prefer PR curves over ROC).
+# I've used this to get a network that has a local CV AUC around 0.642, which corresponds to Gini of 0.284. The performance on the LB test set is considerably worse (around 0.276)
+# 
+# This is hacked together from various bits of my local code, and hasn't been thoroughly tested, so let please me know of any bugs etc.
+# 
+# I would have coded as a script, but I need to use the Theano backend as the AUC function uses Theano specific code. If anyone knows how to make Kaggle Kernels use the Theano backend for script, let me know.
+# 
+# First of all, imports and constants
 
-# ## Imports and reading in the data
-
-# In[ ]:
+# In[1]:
 
 
-import pandas as pd
-pd.options.display.max_colwidth = 200
-pd.options.display.max_columns = 200
 import numpy as np
+import pandas as pd
 
-import time
+get_ipython().run_line_magic('env', 'KERAS_BACKEND=theano')
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import GradientBoostingClassifier,RandomForestClassifier,AdaBoostClassifier
-from sklearn.neural_network import MLPClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_predict,cross_val_score,train_test_split
-from sklearn.metrics import classification_report,confusion_matrix,roc_curve,auc,precision_recall_curve,roc_curve
+from keras.models import Sequential
+from keras.layers import Dropout
+from keras.layers.normalization import BatchNormalization
+from keras import regularizers
+from keras.layers import Dense
+from keras.optimizers import Adam
+from keras.utils import custom_object_scope
+from keras import callbacks
 
-import os
+from sklearn.metrics import roc_auc_score
+from sklearn import preprocessing
 
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
+import theano
 
+# train and test data path
+#DATA_TRAIN_PATH = '../input/train.csv'
+#DATA_TEST_PATH = '../input/test.csv'
 
-# In[ ]:
-
-
-df = pd.read_csv('../input/creditcard.csv')
-
-
-# The data has a column called 'Time', which are seconds from which the very first data observation took place. Let's convert that to hours of a day. I'm guessing the data starts at midnight and ends at midnight.
-
-# In[ ]:
+DATA_TRAIN_PATH = 'c:\\projects\\psdriver\\data\\train.csv'
+DATA_TEST_PATH = 'c:\\projects\\psdriver\\data\\test.csv'
 
 
-df['hour'] = df['Time'].apply(lambda x: np.ceil(float(x)/3600) % 24)
+featuresToDrop = [
+    'ps_calc_10',
+    'ps_calc_01',
+    'ps_calc_02',
+    'ps_calc_03',
+    'ps_calc_13',
+    'ps_calc_08',
+    'ps_calc_07',
+    'ps_calc_12',
+    'ps_calc_04',
+    'ps_calc_17_bin',
+    'ps_car_10_cat',
+    'ps_car_11_cat',
+    'ps_calc_14',
+    'ps_calc_11',
+    'ps_calc_06',
+    'ps_calc_16_bin',
+    'ps_calc_19_bin',
+    'ps_calc_20_bin',
+    'ps_calc_15_bin',
+    'ps_ind_11_bin',
+    'ps_ind_10_bin'
+]
 
 
-# Seems right that we have the least transactions from 1AM to 5AM. Let's see a breakdown of our legit vs fraud transactions via a pivot table.
-# 
-# **Note:**
-# * Class 0 = Legit transactions
-# * Class 1 = Fruadulent transactions
 
-# In[ ]:
-
-
-df.pivot_table(values='Amount',index='hour',columns='Class',aggfunc='count')
-
-
-# # Visualizing the data
-
-# In[ ]:
-
-
-def PlotHistogram(df,norm):
-    bins = np.arange(df['hour'].min(),df['hour'].max()+2)
-    plt.figure(figsize=(15,4))
-    sns.distplot(df[df['Class']==0.0]['hour'],
-                 norm_hist=norm,
-                 bins=bins,
-                 kde=False,
-                 color='b',
-                 hist_kws={'alpha':.5},
-                 label='Legit')
-    sns.distplot(df[df['Class']==1.0]['hour'],
-                 norm_hist=norm,
-                 bins=bins,
-                 kde=False,
-                 color='r',
-                 label='Fraud',
-                 hist_kws={'alpha':.5})
-    plt.xticks(range(0,24))
-    plt.legend()
-    plt.show()
-
+# Now, the secret sauce
 
 # In[ ]:
 
 
-start = time.time()
-print('Normalized histogram of Legit/Fraud over hour of the day')
-PlotHistogram(df,True)
-print('Counts histogram of Legit/Fraud over hour of the day')
-print('*you can barely see the Fraud cases since there are so little of them.')
-PlotHistogram(df,False)
-print(time.time()-start)
 
+# An analogue to AUC which takes the differences between each pair of true/false predictions
+# and takes the average sigmoid of the differences to get a differentiable loss function.
+# Based on code and ideas from https://github.com/Lasagne/Lasagne/issues/767
+def soft_AUC_theano(y_true, y_pred):
+    # Extract 1s
+    pos_pred_vr = y_pred[y_true.nonzero()]
+    # Extract zeroes
+    neg_pred_vr = y_pred[theano.tensor.eq(y_true, 0).nonzero()]
+    # Broadcast the subtraction to give a matrix of differences  between pairs of observations.
+    pred_diffs_vr = pos_pred_vr.dimshuffle(0, 'x') - neg_pred_vr.dimshuffle('x', 0)
+    # Get signmoid of each pair.
+    stats = theano.tensor.nnet.sigmoid(pred_diffs_vr * 2)
+    # Take average and reverse sign
+    return 1-theano.tensor.mean(stats) # as we want to minimise, and get this to zero
+
+
+# This callback records the SKLearn calculated AUC each round, for use by early stopping
+# It also has slots where you can save down metadata or the model at useful points -
+# for Kaggle kernel purposes I've commented these out
+class AUC_SKlearn_callback(callbacks.Callback):
+    def __init__(self, X_train, y_train, useCv = True):
+        super(AUC_SKlearn_callback, self).__init__()
+        self.bestAucCv = 0
+        self.bestAucTrain = 0
+        self.cvLosses = []
+        self.bestCvLoss = 1,
+        self.X_train = X_train
+        self.y_train = y_train
+        self.useCv = useCv
+
+    def on_train_begin(self, logs={}):
+        return
+
+    def on_train_end(self, logs={}):
+        return
+
+    def on_epoch_begin(self, epoch, logs={}):
+        return
+
+    def on_epoch_end(self, epoch, logs={}):
+        train_pred = self.model.predict(np.array(self.X_train))
+        aucTrain = roc_auc_score(self.y_train, train_pred)
+        print("SKLearn Train AUC score: " + str(aucTrain))
+
+        if (self.bestAucTrain < aucTrain):
+            self.bestAucTrain = aucTrain
+            print ("Best SKlearn AUC training score so far")
+            #**TODO: Add your own logging/saving/record keeping code here
+
+        if (self.useCv) :
+            cv_pred = self.model.predict(self.validation_data[0])
+            aucCv = roc_auc_score(self.validation_data[1], cv_pred)
+            print ("SKLearn CV AUC score: " +  str(aucCv))
+
+            if (self.bestAucCv < aucCv) :
+                # Great! New best *actual* CV AUC found (as opposed to the proxy AUC surface we are descending)
+                print("Best SKLearn genuine AUC so far so saving model")
+                self.bestAucCv = aucCv
+
+                # **TODO: Add your own logging/model saving/record keeping code here.
+                self.model.save("best_auc_model.h5", overwrite=True)
+
+            vl = logs.get('val_loss')
+            if (self.bestCvLoss < vl) :
+                print("Best val loss on SoftAUC so far")
+                #**TODO -  Add your own logging/saving/record keeping code here.
+        return
+
+    def on_batch_begin(self, batch, logs={}):
+        return
+
+    def on_batch_end(self, batch, logs={}):
+        # logs include loss, and optionally acc( if accuracy monitoring is enabled).
+        return
+
+
+# Create the model.
+def create_model_AUC(input_dim, first_layer_size, second_layer_size, third_layer_size, lr, l2reg, dropout):
+    return create_model(input_dim, first_layer_size, second_layer_size, third_layer_size, lr, l2reg, dropout, "AUC")
 
-# In[ ]:
+def create_model_bce(input_dim, first_layer_size, second_layer_size, third_layer_size, lr, l2reg, dropout):
+    return create_model(input_dim, first_layer_size, second_layer_size, third_layer_size, lr, l2reg, dropout, "crossentropy")
+
 
+def create_model(input_dim, first_layer_size, second_layer_size, third_layer_size, lr, l2reg, dropout, mode="AUC") :
+    print("Creating model with input dim ", input_dim)
+    # likely to need tuning!
+    reg = regularizers.l2(l2reg)
+
+    model = Sequential()
+
+    model.add(Dense(units=first_layer_size, kernel_initializer='lecun_normal', kernel_regularizer=reg, activation='relu', input_dim=input_dim))
+    model.add(BatchNormalization())
+    model.add(Dropout(dropout))
+
+    model.add(Dense(units=second_layer_size, kernel_initializer='lecun_normal', activation='relu', kernel_regularizer=reg))
+    model.add(BatchNormalization(axis=1))
+    model.add(Dropout(dropout))
+
+    model.add(Dense(units=third_layer_size, kernel_initializer='lecun_normal', activation='relu', kernel_regularizer=reg))
+    model.add(BatchNormalization())
+    model.add(Dropout(dropout))
 
-print('Fraud is {}% of our data.'.format(df['Class'].value_counts()[1] / float(df['Class'].value_counts()[0])*100))
+    model.add(Dense(1, kernel_initializer='lecun_normal', activation='sigmoid'))
+
+    # classifier.compile(loss='mean_absolute_error', optimizer='rmsprop', metrics=['mae', 'accuracy'])
+    opt = Adam(lr=lr, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
+    if (mode == "AUC"):
+        model.compile(loss=soft_AUC_theano, metrics=[soft_AUC_theano], optimizer=opt)  # not sure whether to use metrics here?
+    else:
+        model.compile(loss='binary_crossentropy', metrics=['accuracy'], optimizer=opt)  # not sure whether to use metrics here?
+    return model
+
 
+def train_model( X_train, y_train, model, valSplit=0.15, epochs = 5, batch_size = 4096):
 
-# Hour of the day seems to  have some impact on the number of Fraud cases. I'll be sure to to add the 'hour' dimension to visualizations later to further investigate its impact. 
-# 
-# Before we train our classifers, we need to normalize the Amount since it's on a totally different scale. The distributions are also highly skewed with a lot of statistical outliers. All Fraud cases are in the low dollar values i.e. Amount.
-# 
-# **We also have a HUGE class imbalance.** More on that later when we start to train classifiers.
+    callbacksList = [AUC_SKlearn_callback(X_train, y_train, useCv = (valSplit > 0))]
+    if (valSplit > 0) :
+        early_stopping = callbacks.EarlyStopping(monitor='val_loss', min_delta=0.00001, patience=5,
+                                                       verbose=0, mode='min')
+        callbacksList.append( early_stopping )
+    return model.fit(x=np.array(X_train), y=np.array(y_train),
+                        callbacks=callbacksList, validation_split=valSplit,
+                        verbose=2, batch_size=batch_size, epochs=epochs)
 
-# In[ ]:
 
 
-mask_true = (df['Class'] == 1.0) 
-mask_false = (df['Class'] == 0.0)
+def scale_features(df_for_range, df_to_scale, columnsToScale) :
+    # Scale columnsToScale in df_to_scale
+    columnsOut = list(map( (lambda x: x + "_scaled"), columnsToScale))
+    for c, co in zip(columnsToScale, columnsOut) :
+        scaler = preprocessing.MinMaxScaler(feature_range=(-1,1))
+        print("scaling ", c ," to ",co)
+        vals = df_for_range[c].values.reshape(-1, 1)
+        scaler.fit(vals )
+        df_to_scale[co]=scaler.transform(df_to_scale[c].values.reshape(-1,1))
 
-df['Amount'] = StandardScaler().fit_transform(df[['Amount']])
+    df_to_scale.drop (columnsToScale, axis=1, inplace = True)
 
+    return df_to_scale
 
-# In[ ]:
 
+def one_hot (df, cols):
+    # One hot cols requested, drop original cols, return df
+    df = pd.concat([df, pd.get_dummies(df[cols], columns=cols)], axis=1)
+    df.drop(cols, axis=1, inplace = True)
+    return df
 
-def PlotViolins(minHour,maxHour):
-    plt.figure(figsize=(15,6))
-    plt.title('Amount by class throughout the day')
-    plt.ylim([-1,3.0])
-    sns.violinplot(data=df[df['hour'].isin(range(minHour,maxHour+1))],x='hour',y='Amount',hue='Class',split=True,palette='Set2',cut=0)
-    plt.legend(loc='lower right')
-    plt.show()
-PlotViolins(0,11)
-PlotViolins(12,23)
+def get_data() :
+    X_train = pd.read_csv(DATA_TRAIN_PATH, index_col = "id")
+    X_test = pd.read_csv(DATA_TEST_PATH, index_col = "id")
 
+    y_train = pd.DataFrame(index = X_train.index)
+    y_train['target'] = X_train.loc[:,'target']
+    X_train.drop ('target', axis=1, inplace = True)
+    X_train.drop (featuresToDrop, axis=1, inplace = True)
+    X_test.drop (featuresToDrop,axis=1, inplace = True)
 
-# Let's see how well the PCA components complement each other by looking their interactions with each other. I'm only including the first 6 components here.
+    # car_11 is really a cat col
+    X_train.rename(columns={'ps_car_11': 'ps_car_11a_cat'}, inplace=True)
+    X_test.rename(columns={'ps_car_11': 'ps_car_11a_cat'}, inplace=True)
 
-# In[ ]:
+    cat_cols = [elem for elem in list(X_train.columns) if "cat" in elem]
+    bin_cols = [elem for elem in list(X_train.columns) if "bin" in elem]
+    other_cols = [elem for elem in list(X_train.columns) if elem not in bin_cols and elem not in cat_cols]
 
+    # Scale numeric features in region of -1,1 using training set as the scaling range
+    X_test = scale_features(X_train, X_test, columnsToScale=other_cols)
+    X_train = scale_features(X_train, X_train, columnsToScale=other_cols)
 
-# Model building
-Let's start with a vanilla Logistic Regression since it seems like for some of the features, a sigmoid curve can sort of separate the classes.sns.pairplot(data=pd.concat([df.loc[:,'hour'],df.loc[:,'V1':'V6'],df.loc[:,'Class']],axis=1),
-             hue='Class',
-             diag_kind='kde',
-             plot_kws={'alpha':0.2})
+    X_train = one_hot(X_train, cat_cols)
+    X_test = one_hot(X_test, cat_cols)
 
 
-# Seems like most features show both Fraud and Legit purchases overlapping each other, with V4 showing a little promise. We can't rely on our eyes to do all the investigation work since we at most can make 4-dimensional charts (3 features + a color) to investigate our data, and our data has more than 30 features.
-# 
-# Let's get to model building and see how well our data can separate the classes.
+    return X_train, X_test, y_train
 
-# # Model building
-# Let's start with a vanilla Logistic Regression since it seems like for some of the features, a sigmoid curve can sort of separate the classes.
 
-# In[ ]:
+def makeOutputFile(pred_fun, test, subsFile) :
+    df_out = pd.DataFrame(index=test.index)
+    y_pred = pred_fun( test )
+    df_out['target'] = y_pred
+    df_out.to_csv(subsFile, index_label="id")
 
+def main() :
+    X_train, X_test, y_train = get_data()
+    model = create_model( input_dim=X_train.shape[1],
+                          first_layer_size=300,
+                          second_layer_size=200,
+                          third_layer_size=200,
+                          lr=0.0001,
+                          l2reg = 0.1,
+                          dropout = 0.2,
+                          mode="AUC")
 
-features = pd.concat([df.loc[:,'V1':'Amount'],df.loc[:,'Time']],axis=1)
-target = df['Class']
+    train_model(X_train, y_train, model)
 
-x_train,x_test,y_train,y_test = train_test_split(features,target, stratify=target,test_size=0.35, random_state=1)
+    with custom_object_scope({'soft_AUC_theano': soft_AUC_theano}):
+        pred_fun = lambda x: model.predict(np.array(x))
+        makeOutputFile(pred_fun, X_test, "auc.csv")
 
-print('y_train class counts')
-print(y_train.value_counts())
-print('')
-print('y_test class counts')
-print(y_test.value_counts())
+    model = create_model_bce( input_dim=X_train.shape[1],
+                          first_layer_size=300,
+                          second_layer_size=200,
+                          third_layer_size=200,
+                          lr=0.0001,
+                          l2reg = 0.1,
+                          dropout = 0.2)
 
+    train_model(X_train, y_train, model)
 
-# Let's store our y_test legit and fraud counts for normalization purposes later on
-y_test_legit = y_test.value_counts()[0]
-y_test_fraud = y_test.value_counts()[1]
+    pred_fun = lambda x: model.predict(np.array(x))
+    makeOutputFile(pred_fun, X_test, "no_auc.csv")
 
+main()
 
-# In[ ]:
-
-
-lr_model = LogisticRegression()
-lr_model.fit(x_train,y_train)
-
-pred = lr_model.predict(x_test)
-
-
-# In[ ]:
-
-
-def PlotConfusionMatrix(y_test,pred,y_test_legit,y_test_fraud):
-
-    cfn_matrix = confusion_matrix(y_test,pred)
-    cfn_norm_matrix = np.array([[1.0 / y_test_legit,1.0/y_test_legit],[1.0/y_test_fraud,1.0/y_test_fraud]])
-    norm_cfn_matrix = cfn_matrix * cfn_norm_matrix
-
-    fig = plt.figure(figsize=(15,5))
-    ax = fig.add_subplot(1,2,1)
-    sns.heatmap(cfn_matrix,cmap='coolwarm_r',linewidths=0.5,annot=True,ax=ax)
-    plt.title('Confusion Matrix')
-    plt.ylabel('Real Classes')
-    plt.xlabel('Predicted Classes')
-
-    ax = fig.add_subplot(1,2,2)
-    sns.heatmap(norm_cfn_matrix,cmap='coolwarm_r',linewidths=0.5,annot=True,ax=ax)
-
-    plt.title('Normalized Confusion Matrix')
-    plt.ylabel('Real Classes')
-    plt.xlabel('Predicted Classes')
-    plt.show()
-    
-    print('---Classification Report---')
-    print(classification_report(y_test,pred))
-
-PlotConfusionMatrix(y_test,pred,y_test_legit,y_test_fraud)
-
-
-# I'm not a huge fan of confusion matrix because they can be misleading. I almost ALWAYS go directly to my classification report for precision and recall scores for each class. And Seaborn's heatmap coloring scheme is not helping. Our True Positive rate is 0.59 as also shown in the classification report which is not TOO bad, but it's shown as blood red. The normalized confusion matrix tells a better story. But, actual precision and recall scores are my go-to metrics.
-# 
-# It seems like we aren't very good with catching our frauds, which is expected with a vanilla Logistic Regression without addressing the class imbalance issue. 
-
-# # Addressing class imbalance
-# ### Using weights to counteract the class imbalance
-# Sci-Kit Learn classifiers can give heavier weights to the minority class using a simple parameter during model initiation. Let's see how that will improve our results
-
-# In[ ]:
-
-
-lr_model = LogisticRegression(class_weight='balanced')
-lr_model.fit(x_train,y_train)
-
-pred = lr_model.predict(x_test)
-
-PlotConfusionMatrix(y_test,pred,y_test_legit,y_test_fraud)
-
-
-# Looking at the normalized confusion matrix, it seems like our classifer is doing very well! We have a 98% True Negative rate and a 92% True Positive rate! Seems like a perfect classifer, doesn't it?
-# 
-# However, if we look at the individual precision scores, this classifer is now a lot less precise than before. This is because we have increased our Fraud recall score at the expense of more mis-classified Legit cases. With the "balanced" weight parameter, we have increased our false positive counts from 39 to 2300. 2300 is still only a small fraction of truely negative cases (out of 99511), that's why the percentage shown on the Normalized Confusion Matrix is still relatively small at 0.023%. Let's try to specify our own weights. The weights are somewhat arbitrary but it illustrates the tradeoff between precision and recall.
-
-# In[ ]:
-
-
-for w in [1,5,10,100,500,1000]:
-    print('---Weight of {} for Fraud class---'.format(w))
-    lr_model = LogisticRegression(class_weight={0:1,1:w})
-    lr_model.fit(x_train,y_train)
-
-    pred = lr_model.predict(x_test)
-    PlotConfusionMatrix(y_test,pred,y_test_legit,y_test_fraud)
-
-
-# ## ROC versus Precision/Recall Curves
-# Just by manaually selecting a range of weights to boost the minority class already helped our model have better recall, and in some cases, better precision also. Recall and Precision are usually trade offs of each other, so when you can improve both **at the same time**, your model's overall performance is undeniably improved. 
-# 
-# 
-# To illustrate the trade off between precision vs recall, and let's also include False Positive Rate vs True Positive Rate (ROC), let's plot the ROC and Precision/Recall curves for different weights for the minority class.
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(15,8))
-ax1 = fig.add_subplot(1,2,1)
-ax1.set_xlim([-0.05,1.05])
-ax1.set_ylim([-0.05,1.05])
-ax1.set_xlabel('Recall')
-ax1.set_ylabel('Precision')
-ax1.set_title('PR Curve')
-
-ax2 = fig.add_subplot(1,2,2)
-ax2.set_xlim([-0.05,1.05])
-ax2.set_ylim([-0.05,1.05])
-ax2.set_xlabel('False Positive Rate')
-ax2.set_ylabel('True Positive Rate')
-ax2.set_title('ROC Curve')
-
-for w,k in zip([1,5,10,20,50,100,10000],'bgrcmykw'):
-    lr_model = LogisticRegression(class_weight={0:1,1:w})
-    lr_model.fit(x_train,y_train)
-    pred_prob = lr_model.predict_proba(x_test)[:,1]
-
-    p,r,_ = precision_recall_curve(y_test,pred_prob)
-    tpr,fpr,_ = roc_curve(y_test,pred_prob)
-    
-    ax1.plot(r,p,c=k,label=w)
-    ax2.plot(tpr,fpr,c=k,label=w)
-ax1.legend(loc='lower left')    
-ax2.legend(loc='lower left')
-
-plt.show()
-
-
-# # Conclusion
-# 
-# For a PR curve, a good classifer aims for the upper right corner of the chart but upper left for the ROC curve.
-# 
-# While PR and ROC curves use the same data, i.e. the real class labels and predicted probability for the class lables, you can see that the two charts tell very different stories, with some weights seem to perform better in ROC than in the PR curve.
-# 
-# While the blue, w=1, line performed poorly in both charts, the black, w=10000, line performed "well" in the ROC but poorly in the PR curve. This is due to the high class imbalance in our data. ROC curve is not a good visual illustration for highly imbalanced data, because the False Positive Rate ( False Positives / Total Real Negatives ) does not drop drastically when the Total Real Negatives is huge.
-# 
-# Whereas Precision ( True Positives / (True Positives + False Positives) ) is highly sensitive to False Positives and is not impacted by a large total real negative denominator. 
-# 
-# The biggest difference among the models are at around 0.8 recall rate. Seems like a lower weight, i.e. 5 and 10, out performs other weights significantly at 0.8 recall. This means that with those specific weights, our model can detect frauds fairly well (catching 80% of fraud) while not annoying a bunch of customers with false positives with an equally high precision of 80%.
-# 
-# Without further tuning our model, and of course we should do cross validation for any real model tuning/validation, it seems like a vanilla Logistic Regression is stuck at around 0.8 Precision and Recall. 
-# 
-# So how do we know if we should sacrifice our precision for more recall, i.e. catching fraud? That is where data science meets your core business parameters. If the cost of missing a fraud highly outweighs the cost of canceling a bunch of legit customer transactions, i.e. false positives, then perhaps we can choose a weight that gives us a higher recall rate. Or maybe catching 80% of fraud is good enough for your business if you can minimize also minimize the "user friction" or credit card disruptions by keeping our precision high.

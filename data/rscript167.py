@@ -1,142 +1,155 @@
-# Fork of Sergei Fironov's script CNN GLOVE300 3-OOF 3 epochs
+"""
+This is an upgraded version of Ceshine's LGBM starter script, simply adding more
+average features and weekly average features on it. It also replaces LGBM with XGB. 
+There is still room for improvement, but the current version is the best that can 
+run in a kernel.
+"""
+from datetime import date, timedelta
 
-import os
-os.environ['OMP_NUM_THREADS'] = '4'
-
-import tensorflow as tf
-import numpy as np
 import pandas as pd
-from keras.models import Model
-from keras.layers import Dense, Embedding, Input, Concatenate, Conv1D, Activation, TimeDistributed, Flatten, RepeatVector, Permute,multiply
-from keras.layers import LSTM, Bidirectional, GlobalMaxPool1D, Dropout, GRU, GlobalAveragePooling1D, MaxPooling1D, SpatialDropout1D, BatchNormalization
-from keras.preprocessing import text, sequence
-from keras.callbacks import EarlyStopping, ModelCheckpoint
-from keras.optimizers import Adam
-from keras.preprocessing.text import Tokenizer
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
-import re 
-from sklearn.model_selection import KFold
-from sklearn.metrics import roc_auc_score
+import numpy as np
+from sklearn.metrics import mean_squared_error
+import xgboost as xgb
 
-print('loading embeddings vectors')
-def get_coefs(word,*arr): return word, np.asarray(arr, dtype='float32')
-embeddings_index = dict(get_coefs(*o.split(' ')) for o in open('../input/glove840b300dtxt/glove.840B.300d.txt'))
+df_train = pd.read_csv(
+    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
+    dtype={'onpromotion': bool},
+    converters={'unit_sales': lambda u: np.log1p(
+        float(u)) if float(u) > 0 else 0},
+    parse_dates=["date"],
+    skiprows=range(1, 66458909)  # 2016-01-01
+)
 
-min_count = 10 #the minimum required word frequency in the text
-max_features = 27403 #it's from previous run with min_count=10
-maxlen = 150 #padding length
-num_folds = 3 #number of folds
-batch_size = 512 
-epochs = 4
-embed_size = 300 #embeddings dimension
+df_test = pd.read_csv(
+    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
+    dtype={'onpromotion': bool},
+    parse_dates=["date"]  # , date_parser=parser
+).set_index(
+    ['store_nbr', 'item_nbr', 'date']
+)
 
-sia = SentimentIntensityAnalyzer()
+items = pd.read_csv(
+    "../input/items.csv",
+).set_index("item_nbr")
 
-train = pd.read_csv("../input/jigsaw-toxic-comment-classification-challenge/train.csv")
-test = pd.read_csv("../input/jigsaw-toxic-comment-classification-challenge/test.csv")
+df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
+del df_train
 
-list_sentences_train = train["comment_text"].fillna("").values
-list_classes = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
-y = train[list_classes].values
-list_sentences_test = test["comment_text"].fillna("").values
+promo_2017_train = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
+        level=-1).fillna(False)
+promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
+promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
+promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
+promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
+promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
+del promo_2017_test, promo_2017_train
 
-print('mean text len:',train["comment_text"].str.count('\S+').mean())
-print('max text len:',train["comment_text"].str.count('\S+').max())
+df_2017 = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
+        level=-1).fillna(0)
+df_2017.columns = df_2017.columns.get_level_values(1)
 
-#tokenizer = Tokenizer()
-#tokenizer.fit_on_texts(list(list_sentences_train)) #  + list(list_sentences_test)
-#num_words = sum([1 for _, v in tokenizer.word_counts.items() if v >= min_count])
-#print('num_words',num_words)
-#max_features = num_words
-tokenizer = Tokenizer(num_words=max_features)
-tokenizer.fit_on_texts(list(list_sentences_train)) # + list(list_sentences_test)
-list_tokenized_train = tokenizer.texts_to_sequences(list_sentences_train)
-list_tokenized_test = tokenizer.texts_to_sequences(list_sentences_test)
-print('padding sequences')
-X_train = {}
-X_test = {}
-X_train['text'] = sequence.pad_sequences(list_tokenized_train, maxlen=maxlen, padding='post', truncating='post')
-X_test['text'] = sequence.pad_sequences(list_tokenized_test, maxlen=maxlen, padding='post', truncating='post')
+items = items.reindex(df_2017.index.get_level_values(1))
 
-print('numerical variables')
-train['num_words'] = train.comment_text.str.count('\S+')
-test['num_words'] = test.comment_text.str.count('\S+')
-train['num_comas'] = train.comment_text.str.count('\.')
-test['num_comas'] = test.comment_text.str.count('\.')
-train['num_bangs'] = train.comment_text.str.count('\!')
-test['num_bangs'] = test.comment_text.str.count('\!')
-train['num_quotas'] = train.comment_text.str.count('\"')
-test['num_quotas'] = test.comment_text.str.count('\"')
-train['avg_word'] = train.comment_text.str.len() / (1 + train.num_words)
-test['avg_word'] = test.comment_text.str.len() / (1 + test.num_words)
-#print('sentiment')
-#train['sentiment'] = train.comment_text.apply(lambda s : sia.polarity_scores(s)['compound'])
-#test['sentiment'] = test.comment_text.apply(lambda s : sia.polarity_scores(s)['compound'])
-scaler = MinMaxScaler()
-X_train['num_vars'] = scaler.fit_transform(train[['num_words','num_comas','num_bangs','num_quotas','avg_word']])
-X_test['num_vars'] = scaler.transform(test[['num_words','num_comas','num_bangs','num_quotas','avg_word']])
+def get_timespan(df, dt, minus, periods, freq='D'):
+    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
 
-all_embs = np.stack(embeddings_index.values())
-emb_mean,emb_std = all_embs.mean(), all_embs.std()
+def prepare_dataset(t2017, is_train=True):
+    X = pd.DataFrame({
+        "day_1_2017": get_timespan(df_2017, t2017, 1, 1).values.ravel(),
+        "mean_3_2017": get_timespan(df_2017, t2017, 3, 3).mean(axis=1).values,
+        "mean_7_2017": get_timespan(df_2017, t2017, 7, 7).mean(axis=1).values,
+        "mean_14_2017": get_timespan(df_2017, t2017, 14, 14).mean(axis=1).values,
+        "mean_30_2017": get_timespan(df_2017, t2017, 30, 30).mean(axis=1).values,
+        "mean_60_2017": get_timespan(df_2017, t2017, 60, 60).mean(axis=1).values,
+        "mean_140_2017": get_timespan(df_2017, t2017, 140, 140).mean(axis=1).values,
+        "promo_14_2017": get_timespan(promo_2017, t2017, 14, 14).sum(axis=1).values,
+        "promo_60_2017": get_timespan(promo_2017, t2017, 60, 60).sum(axis=1).values,
+        "promo_140_2017": get_timespan(promo_2017, t2017, 140, 140).sum(axis=1).values
+    })
+    for i in range(7):
+        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 28-i, 4, freq='7D').mean(axis=1).values
+        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 140-i, 20, freq='7D').mean(axis=1).values
+    for i in range(16):
+        X["promo_{}".format(i)] = promo_2017[
+            t2017 + timedelta(days=i)].values.astype(np.uint8)
+    if is_train:
+        y = df_2017[
+            pd.date_range(t2017, periods=16)
+        ].values
+        return X, y
+    return X
 
-print('create embedding matrix')
-word_index = tokenizer.word_index
-nb_words = min(max_features, len(word_index))
-embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
-for word, i in word_index.items():
-    if i >= max_features: continue
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None: embedding_matrix[i] = embedding_vector
+print("Preparing dataset...")
+t2017 = date(2017, 5, 31)
+X_l, y_l = [], []
+for i in range(6):
+    delta = timedelta(days=7 * i)
+    X_tmp, y_tmp = prepare_dataset(
+        t2017 + delta
+    )
+    X_l.append(X_tmp)
+    y_l.append(y_tmp)
+X_train = pd.concat(X_l, axis=0)
+y_train = np.concatenate(y_l, axis=0)
+del X_l, y_l
+X_val, y_val = prepare_dataset(date(2017, 7, 26))
+X_test = prepare_dataset(date(2017, 8, 16), is_train=False)
 
-def get_model_cnn(X_train):
-    global embed_size
-    inp = Input(shape=(maxlen, ), name="text")
-    num_vars = Input(shape=[X_train["num_vars"].shape[1]], name="num_vars")
-    x = Embedding(max_features, embed_size, weights=[embedding_matrix])(inp)
-    x = SpatialDropout1D(0.2)(x)
-    z = GlobalMaxPool1D()(x)
-    x = GlobalMaxPool1D()(Conv1D(embed_size, 4, activation="relu")(x))
-    x = Concatenate()([x,z,num_vars])
-    x = Dropout(0.3)(x)
-    x = Dense(6, activation="sigmoid")(x)
-    model = Model(inputs=[inp,num_vars], outputs=x)
-    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
-    return model        
+print("Training and predicting models...")
 
-print('start modeling')
-scores = []
-predict = np.zeros((test.shape[0],6))
-oof_predict = np.zeros((train.shape[0],6))
-
-kf = KFold(n_splits=num_folds, shuffle=True, random_state=239)
-for train_index, test_index in kf.split(X_train['num_vars']):
-    kfold_X_train = {}
-    kfold_X_valid = {}
-    y_train,y_test = y[train_index], y[test_index]
-    for c in ['text','num_vars']:
-        kfold_X_train[c] = X_train[c][train_index]
-        kfold_X_valid[c] = X_train[c][test_index]
-
-    model = get_model_cnn(X_train)
-    model.fit(kfold_X_train, y_train, batch_size=batch_size, epochs=epochs, verbose=1)
-    predict += model.predict(X_test, batch_size=1000) / num_folds
-    oof_predict[test_index] = model.predict(kfold_X_valid, batch_size=1000)
-    cv_score = roc_auc_score(y_test, oof_predict[test_index])
-    scores.append(cv_score)
-    print('score: ',cv_score)
-
-print('Total CV score is {}'.format(np.mean(scores)))    
+param = {}
+param['objective'] = 'reg:linear'
+param['eta'] = 0.5
+param['max_depth'] = 3
+param['silent'] = 1
+param['eval_metric'] = 'rmse'
+param['min_child_weight'] = 4
+param['subsample'] = 0.8
+param['colsample_bytree'] = 0.7
+param['seed'] = 137
+num_rounds = 157
 
 
-sample_submission = pd.DataFrame.from_dict({'id': test['id']})
-oof = pd.DataFrame.from_dict({'id': train['id']})
-for c in list_classes:
-    oof[c] = np.zeros(len(train))
-    sample_submission[c] = np.zeros(len(test))
+
+plst = list(param.items())
+
+MAX_ROUNDS = 157
+val_pred = []
+test_pred = []
+cate_vars = []
+
+dtest = xgb.DMatrix(X_test)
+for i in range(16):
+    print("=" * 50)
+    print("Step %d" % (i+1))
+    print("=" * 50)
+    dtrain = xgb.DMatrix(
+        X_train, label=y_train[:, i],
+        weight=pd.concat([items["perishable"]] * 6) * 0.25 + 1
+    )
+    dval = xgb.DMatrix(
+        X_val, label=y_val[:, i],
+        weight=items["perishable"] * 0.25 + 1)
+        
+    watchlist = [ (dtrain,'train'), (dval, 'val') ]
+    model = xgb.train(plst, dtrain, num_rounds, watchlist, early_stopping_rounds=50, verbose_eval=50)
     
-sample_submission[list_classes] = predict
-sample_submission.to_csv('submit_cnn_avg_' + str(num_folds) + '_folds.csv', index=False)
+    val_pred.append(model.predict(dval))
+    test_pred.append(model.predict(dtest))
 
-oof[list_classes] = oof_predict
-oof.to_csv('cnn_'+str(num_folds)+'_oof.csv', index=False)
+print("Validation mse:", mean_squared_error(
+    y_val, np.array(val_pred).transpose()))
+
+print("Making submission...")
+y_test = np.array(test_pred).transpose()
+df_preds = pd.DataFrame(
+    y_test, index=df_2017.index,
+    columns=pd.date_range("2017-08-16", periods=16)
+).stack().to_frame("unit_sales")
+df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
+
+submission = df_test[["id"]].join(df_preds, how="left").fillna(0)
+submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 1000)
+submission.to_csv('xgb.csv', float_format='%.4f', index=None)

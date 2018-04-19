@@ -1,460 +1,711 @@
 
 # coding: utf-8
 
-# **Introduction**
-# This is actually my first public kernel, so i hope it will be useful for someone.
+# # **An Interactive Data Science Tutorial**
 # 
-# Before you read the notebook, it is immportant to know that this notebook is a compilation of already existing notebooks and some model modifications
-# Here is list of notebooks:
-# * Data analysis - https://www.kaggle.com/muonneutrino/exploration-transforming-images-in-python
-# * Image conversion, Network architecture - https://www.kaggle.com/tivigovidiu/keras-model-for-beginners-0-210-on-lb-eda-r-d
-# * Some ideas - https://www.kaggle.com/knowledgegrappler/a-keras-prototype-0-21174-on-pl
-# * Code for conversion to image provided by MadScientist but i don't know which kernel it is.
 # 
-# Before running the model it is good idea to run thgrough kernels mentioned here and upvote them.
+# *[Based on the Titanic competition on Kaggle](https://www.kaggle.com/c/titanic)*
 # 
-# **Comments**
-# I've executed this code on my machine with 1080 TI and it may be pretty slow if you have low-end GPU or CPU
+# *by Helge Bjorland & Stian Eide*
 # 
-# It is also important that i don't know how to execute code in the notebook with GPU, since keras is not freeing memory after model training, so train results here may be uncomplete.
+# *January 2017*
 # 
-# I am also not sure about random seed initialization and haven't checked it, so maybe your results may differ from mine.
+# ---
 # 
-# I am also sorry for a WinAPI style functions with 10+ arguments, but this solutin was made less than in a one day and basically my second solution. If someone is able to rewrite it in a normal style i will appreciate that, so feel free to fork and rewrite.
+# ## Content
+# 
+# 
+#  1. Business Understanding (5 min)
+#      * Objective
+#      * Description
+#  2. Data Understanding (15 min)
+#     * Import Libraries
+#     * Load data
+#     * Statistical summaries and visualisations
+#     * Excersises
+#  3. Data Preparation (5 min)
+#     * Missing values imputation
+#     * Feature Engineering
+#  4. Modeling (5 min)
+#      * Build the model
+#  5. Evaluation (25 min)
+#      * Model performance
+#      * Feature importance
+#      * Who gets the best performing model?
+#  6. Deployment  (5 min)
+#      * Submit result to Kaggle leaderboard     
+# 
+# [*Adopted from Cross Industry Standard Process for Data Mining (CRISP-DM)*](http://www.sv-europe.com/crisp-dm-methodology/)
+# 
+# ![CripsDM](https://upload.wikimedia.org/wikipedia/commons/thumb/b/b9/CRISP-DM_Process_Diagram.png/220px-CRISP-DM_Process_Diagram.png "Process diagram showing the relationship between the different phases of CRISP-DM")
+
+# # 1. Business Understanding
+# 
+# ## 1.1 Objective
+# Predict survival on the Titanic
+# 
+# ## 1.2 Description
+# The sinking of the RMS Titanic is one of the most infamous shipwrecks in history.  On April 15, 1912, during her maiden voyage, the Titanic sank after colliding with an iceberg, killing 1502 out of 2224 passengers and crew. This sensational tragedy shocked the international community and led to better safety regulations for ships.
+# 
+# One of the reasons that the shipwreck led to such loss of life was that there were not enough lifeboats for the passengers and crew. Although there was some element of luck involved in surviving the sinking, some groups of people were more likely to survive than others, such as women, children, and the upper-class.
+# 
+# In this challenge, we ask you to complete the analysis of what sorts of people were likely to survive. In particular, we ask you to apply the tools of machine learning to predict which passengers survived the tragedy.
+# 
+# **Before going further, what do you think is the most important reasons passangers survived the Titanic sinking?**
+# 
+# [Description from Kaggle](https://www.kaggle.com/c/titanic)
+
+# # 2. Data Understanding
+# 
+# ## 2.1 Import Libraries
+# First of some preparation. We need to import python libraries containing the necessary functionality we will need. 
+# 
+# *Simply run the cell below by selecting it and pressing the play button.*
 
 # In[ ]:
 
 
-# Random initialization
+# Ignore warnings
+import warnings
+warnings.filterwarnings('ignore')
+
+# Handle table-like data and matrices
 import numpy as np
-np.random.seed(98643)
-import tensorflow as tf
-tf.set_random_seed(683)
-# Uncomment this to hide TF warnings about allocation
-#import os
-#os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
-
-# An image clearing dependencies
-from skimage.restoration import (denoise_tv_chambolle, denoise_bilateral,
-                                 denoise_wavelet, estimate_sigma, denoise_tv_bregman, denoise_nl_means)
-from skimage.filters import gaussian
-from skimage.color import rgb2gray
-
-# Data reading and visualization
 import pandas as pd
+
+# Modelling Algorithms
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.svm import SVC, LinearSVC
+from sklearn.ensemble import RandomForestClassifier , GradientBoostingClassifier
+
+# Modelling Helpers
+from sklearn.preprocessing import Imputer , Normalizer , scale
+from sklearn.cross_validation import train_test_split , StratifiedKFold
+from sklearn.feature_selection import RFECV
+
+# Visualisation
+import matplotlib as mpl
 import matplotlib.pyplot as plt
+import matplotlib.pylab as pylab
+import seaborn as sns
+
+# Configure visualisations
 get_ipython().run_line_magic('matplotlib', 'inline')
-from sklearn.preprocessing import MinMaxScaler
-
-# Training part
-from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten, GlobalAveragePooling2D, Lambda
-from keras.layers import GlobalMaxPooling2D
-from keras.layers.normalization import BatchNormalization
-from keras.layers.merge import Concatenate
-from keras.models import Model
-from keras.optimizers import Adam, SGD
-from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
-from sklearn.model_selection import train_test_split
-from sklearn.utils import shuffle
-
-# Any results you write to the current directory are saved as output.
+mpl.style.use( 'ggplot' )
+sns.set_style( 'white' )
+pylab.rcParams[ 'figure.figsize' ] = 8 , 6
 
 
-# First of all, some data preprocessing is required.
+# ## 2.2 Setup helper Functions
+# There is no need to understand this code. Just run it to simplify the code later in the tutorial.
 # 
-# The basic idea is that images, that provided in a dataset are very noisy and if we will get rid of granular noise, we will be able to predict better and construct noisy dataset by our own.
+# *Simply run the cell below by selecting it and pressing the play button.*
+
+# In[ ]:
+
+
+def plot_histograms( df , variables , n_rows , n_cols ):
+    fig = plt.figure( figsize = ( 16 , 12 ) )
+    for i, var_name in enumerate( variables ):
+        ax=fig.add_subplot( n_rows , n_cols , i+1 )
+        df[ var_name ].hist( bins=10 , ax=ax )
+        ax.set_title( 'Skew: ' + str( round( float( df[ var_name ].skew() ) , ) ) ) # + ' ' + var_name ) #var_name+" Distribution")
+        ax.set_xticklabels( [] , visible=False )
+        ax.set_yticklabels( [] , visible=False )
+    fig.tight_layout()  # Improves appearance a bit.
+    plt.show()
+
+def plot_distribution( df , var , target , **kwargs ):
+    row = kwargs.get( 'row' , None )
+    col = kwargs.get( 'col' , None )
+    facet = sns.FacetGrid( df , hue=target , aspect=4 , row = row , col = col )
+    facet.map( sns.kdeplot , var , shade= True )
+    facet.set( xlim=( 0 , df[ var ].max() ) )
+    facet.add_legend()
+
+def plot_categories( df , cat , target , **kwargs ):
+    row = kwargs.get( 'row' , None )
+    col = kwargs.get( 'col' , None )
+    facet = sns.FacetGrid( df , row = row , col = col )
+    facet.map( sns.barplot , cat , target )
+    facet.add_legend()
+
+def plot_correlation_map( df ):
+    corr = titanic.corr()
+    _ , ax = plt.subplots( figsize =( 12 , 10 ) )
+    cmap = sns.diverging_palette( 220 , 10 , as_cmap = True )
+    _ = sns.heatmap(
+        corr, 
+        cmap = cmap,
+        square=True, 
+        cbar_kws={ 'shrink' : .9 }, 
+        ax=ax, 
+        annot = True, 
+        annot_kws = { 'fontsize' : 12 }
+    )
+
+def describe_more( df ):
+    var = [] ; l = [] ; t = []
+    for x in df:
+        var.append( x )
+        l.append( len( pd.value_counts( df[ x ] ) ) )
+        t.append( df[ x ].dtypes )
+    levels = pd.DataFrame( { 'Variable' : var , 'Levels' : l , 'Datatype' : t } )
+    levels.sort_values( by = 'Levels' , inplace = True )
+    return levels
+
+def plot_variable_importance( X , y ):
+    tree = DecisionTreeClassifier( random_state = 99 )
+    tree.fit( X , y )
+    plot_model_var_imp( tree , X , y )
+    
+def plot_model_var_imp( model , X , y ):
+    imp = pd.DataFrame( 
+        model.feature_importances_  , 
+        columns = [ 'Importance' ] , 
+        index = X.columns 
+    )
+    imp = imp.sort_values( [ 'Importance' ] , ascending = True )
+    imp[ : 10 ].plot( kind = 'barh' )
+    print (model.score( X , y ))
+    
+
+
+# ## 2.3 Load data
+# Now that our packages are loaded, let's read in and take a peek at the data.
 # 
-# It is also interesting to train a denoising autoencoder on dataset in order to extract some global features that may be used further on model training.
+# *Select the cell below and run it by pressing the play button.*
 
 # In[ ]:
 
 
-# Translate data to an image format
-def color_composite(data):
-    rgb_arrays = []
-    for i, row in data.iterrows():
-        band_1 = np.array(row['band_1']).reshape(75, 75)
-        band_2 = np.array(row['band_2']).reshape(75, 75)
-        band_3 = band_1 / band_2
+# get titanic & test csv files as a DataFrame
+train = pd.read_csv("../input/train.csv")
+test    = pd.read_csv("../input/test.csv")
 
-        r = (band_1 + abs(band_1.min())) / np.max((band_1 + abs(band_1.min())))
-        g = (band_2 + abs(band_2.min())) / np.max((band_2 + abs(band_2.min())))
-        b = (band_3 + abs(band_3.min())) / np.max((band_3 + abs(band_3.min())))
+full = train.append( test , ignore_index = True )
+titanic = full[ :891 ]
 
-        rgb = np.dstack((r, g, b))
-        rgb_arrays.append(rgb)
-    return np.array(rgb_arrays)
+del train , test
 
-def denoise(X, weight, multichannel):
-    return np.asarray([denoise_tv_chambolle(item, weight=weight, multichannel=multichannel) for item in X])
-
-def smooth(X, sigma):
-    return np.asarray([gaussian(item, sigma=sigma) for item in X])
-
-def grayscale(X):
-    return np.asarray([rgb2gray(item) for item in X])
+print ('Datasets:' , 'full:' , full.shape , 'titanic:' , titanic.shape)
 
 
-# In[ ]:
-
-
-train = pd.read_json("../input/train.json")
-train.inc_angle = train.inc_angle.replace('na', 0)
-train.inc_angle = train.inc_angle.astype(float).fillna(0.0)
-train_all = True
-
-# These are train flags that required to train model more efficiently and 
-# select proper model parameters
-train_b = True or train_all
-train_img = True or train_all
-train_total = True or train_all
-predict_submission = True and train_all
-
-clean_all = True
-clean_b = True or clean_all
-clean_img = True or clean_all
-
-load_all = False
-load_b = False or load_all
-load_img = False or load_all
-
-
-# In[ ]:
-
-
-def create_dataset(frame, labeled, smooth_rgb=0.2, smooth_gray=0.5,
-                   weight_rgb=0.05, weight_gray=0.05):
-    band_1, band_2, images = frame['band_1'].values, frame['band_2'].values, color_composite(frame)
-    to_arr = lambda x: np.asarray([np.asarray(item) for item in x])
-    band_1 = to_arr(band_1)
-    band_2 = to_arr(band_2)
-    band_3 = (band_1 + band_2) / 2
-    gray_reshape = lambda x: np.asarray([item.reshape(75, 75) for item in x])
-    # Make a picture format from flat vector
-    band_1 = gray_reshape(band_1)
-    band_2 = gray_reshape(band_2)
-    band_3 = gray_reshape(band_3)
-    print('Denoising and reshaping')
-    if train_b and clean_b:
-        # Smooth and denoise data
-        band_1 = smooth(denoise(band_1, weight_gray, False), smooth_gray)
-        print('Gray 1 done')
-        band_2 = smooth(denoise(band_2, weight_gray, False), smooth_gray)
-        print('Gray 2 done')
-        band_3 = smooth(denoise(band_3, weight_gray, False), smooth_gray)
-        print('Gray 3 done')
-    if train_img and clean_img:
-        images = smooth(denoise(images, weight_rgb, True), smooth_rgb)
-    print('RGB done')
-    tf_reshape = lambda x: np.asarray([item.reshape(75, 75, 1) for item in x])
-    band_1 = tf_reshape(band_1)
-    band_2 = tf_reshape(band_2)
-    band_3 = tf_reshape(band_3)
-    #images = tf_reshape(images)
-    band = np.concatenate([band_1, band_2, band_3], axis=3)
-    X_angle = np.array(frame.inc_angle)
-    if labeled:
-        y = np.array(frame["is_iceberg"])
-    else:
-        y = None
-    return y, X_angle, band, images
-
-
-# In[ ]:
-
-
-y_train, X_angles, X_b, X_images = create_dataset(train, True)
-
-
-# Plotting some random images to check how cleaning works
-
-# In[ ]:
-
-
-fig = plt.figure(200, figsize=(15, 15))
-random_indicies = np.random.choice(range(len(X_images)), 9, False)
-subset = X_images[random_indicies]
-for i in range(9):
-    ax = fig.add_subplot(3, 3, i + 1)
-    ax.imshow(subset[i])
-plt.show()
-
-
-# In[ ]:
-
-
-fig = plt.figure(202, figsize=(15, 15))
-band_1_x = train['band_1'].values
-subset = np.asarray(band_1_x)[random_indicies]
-subset = np.asarray([np.asarray(item).reshape(75, 75) for item in subset])
-for i in range(9):
-    ax = fig.add_subplot(3, 3, i + 1)
-    ax.imshow(subset[i])
-plt.show()
-
-
-# In[ ]:
-
-
-fig = plt.figure(202, figsize=(15, 15))
-subset = np.asarray(band_1_x)[random_indicies]
-subset = denoise(np.asarray([np.asarray(item).reshape(75, 75) for item in subset]), 0.05, False)
-for i in range(9):
-    ax = fig.add_subplot(3, 3, i + 1)
-    ax.imshow(subset[i])
-plt.show()
-
-
-# In[ ]:
-
-
-fig = plt.figure(202, figsize=(15, 15))
-subset = np.asarray(band_1_x)[random_indicies]
-subset = smooth(denoise(np.asarray(
-    [np.asarray(item).reshape(75, 75) for item in subset]), 0.05, False), 0.5)
-for i in range(9):
-    ax = fig.add_subplot(3, 3, i + 1)
-    ax.imshow(subset[i])
-plt.show()
-
-
-# **A few words about model**
+# ## 2.4 Statistical summaries and visualisations
 # 
-# The model itself consists of 3 convolutional neural networks.
-# Two basic networks and one combined. The idea is to train two basic networks on different data representations and after that, using trained convolutional layers in combination to train common network.
+# To understand the data we are now going to consider some key facts about various variables including their relationship with the target variable, i.e. survival.
 # 
-# Architecture for these networks is taken from notebook mentioned in the vere beginning.
+# We start by looking at a few lines of the data
 # 
-# For training i'm using 3 datasets, 1 that network sees only once and default keras val split for model selection.
+# *Select the cell below and run it by pressing the play button.*
 
 # In[ ]:
 
 
-def get_model_notebook(angle, lr, decay, channels, relu_type='relu'):
-    # angle variable defines if we should use angle parameter or ignore it
-    input_1 = Input(shape=(75, 75, channels))
-    input_2 = Input(shape=[1])
-
-    fcnn = Conv2D(32, kernel_size=(3, 3), activation=relu_type)(input_1)
-    fcnn = MaxPooling2D((3, 3))(fcnn)
-    fcnn = Dropout(0.2)(fcnn)
-    fcnn = Conv2D(64, kernel_size=(3, 3), activation=relu_type)(fcnn)
-    fcnn = MaxPooling2D((2, 2), strides=(2, 2))(fcnn)
-    fcnn = Dropout(0.2)(fcnn)
-    fcnn = Conv2D(128, kernel_size=(3, 3), activation=relu_type)(fcnn)
-    fcnn = MaxPooling2D((2, 2), strides=(2, 2))(fcnn)
-    fcnn = Dropout(0.2)(fcnn)
-    fcnn = Conv2D(128, kernel_size=(3, 3), activation=relu_type)(fcnn)
-    fcnn = MaxPooling2D((2, 2), strides=(2, 2))(fcnn)
-    fcnn = Dropout(0.2)(fcnn)
-    fcnn = Flatten()(fcnn)
-    if angle:
-        local_input = [input_1, input_2]
-    else:
-        local_input = input_1
-    dense = Dropout(0.2)(fcnn)
-    dense = Dense(256, activation=relu_type)(dense)
-    partial_model = Model(input_1, fcnn)
-    dense = Dropout(0.2)(dense)
-    dense = Dense(128, activation=relu_type)(dense)
-    dense = Dropout(0.2)(dense)
-    dense = Dense(64, activation=relu_type)(dense)
-    dense = Dropout(0.2)(dense)
-    # For some reason i've decided not to normalize angle data
-    if angle:
-        dense = Concatenate()([dense, input_2])
-    else:
-        dense = dense
-    output = Dense(1, activation="sigmoid")(dense)
-    model = Model(local_input, output)
-    optimizer = Adam(lr=lr, decay=decay)
-    model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
-    return model, partial_model
+# Run the code to see the variables, then read the variable description below to understand them.
+titanic.head()
 
 
-# In[ ]:
-
-
-def combined_model(m_b, m_img, lr, decay):
-    input_b = Input(shape=(75, 75, 3))
-    input_img = Input(shape=(75, 75, 3))
-    input_angular = Input(shape=[1])
-
-    # I've never tested non-trainable source models tho
-    #for layer in m_b.layers:
-    #    layer.trainable = False
-    #for layer in m_img.layers:
-    #    layer.trainable = False
-
-    m1 = m_b(input_b)
-    m2 = m_img(input_img)
-
-    # So, combine models and train perceptron based on that
-    # The iteresting idea is to use XGB for this task, but i actually hate this method
-    common = Concatenate()([m1, m2])
-    common = BatchNormalization()(common)
-    common = Dropout(0.3)(common)
-    common = Dense(2048, activation='relu')(common)
-    common = Dropout(0.3)(common)
-    common = Dense(1024, activation='relu')(common)
-    common = Dropout(0.3)(common)
-    common = Dense(512, activation='relu')(common)
-    common = Dropout(0.3)(common)
-    common = Concatenate()([common, BatchNormalization()(input_angular)])
-    output = Dense(1, activation="sigmoid")(common)
-    model = Model([input_b, input_img, input_angular], output)
-   # optimizer = Adam(lr=lr, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=decay)
-    optimizer = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
-    model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
-    return model
-
-
-# In[ ]:
-
-
-def train_model(model, batch_size, epochs, checkpoint_name, X_train, y_train, verbose=2, val_data=None, val_split=0.15):
-    callbacks = [ModelCheckpoint(checkpoint_name, save_best_only=True, monitor='val_loss')]
-    try:
-        if val_data is None:
-            model.fit(X_train, y_train, epochs=epochs, validation_split=val_split,
-                      batch_size=batch_size, callbacks=callbacks, verbose=verbose, shuffle=True)
-        else:
-            x_val, y_val = val_data
-            model.fit(X_train, y_train, epochs=epochs, validation_data=[x_val, y_val],
-                      batch_size=batch_size, callbacks=callbacks, verbose=verbose, shuffle=True)
-    except KeyboardInterrupt:
-        if verbose > 0:
-            print('Interrupted')
-    if verbose > 0:
-        print('Loading model')
-    model.load_weights(filepath=checkpoint_name)
-    return model
-
-
-# In[ ]:
-
-
-def get_angular_status(angle, x, x_a):
-    if angle:
-        result = [x, x_a]
-    else:
-        result = x
-    return result
-
-
-# In[ ]:
-
-
-#Train a particular model
-def gen_model_weights(angle, lr, decay, channels, relu, batch_size, epochs, path_name, data, only_load=False, verbose=2):
-    X_train, X_angle_train, y_train, X_val, X_angles_val, y_val = data
-    X_train, X_angle_train, y_train = shuffle(X_train, X_angle_train, y_train, random_state=np.random.randint(1, 123))
-    model, partial_model = get_model_notebook(angle, lr, decay, channels, relu)
-    if only_load:
-        model.load_weights(path_name)
-        return model, partial_model
-    model = train_model(model, batch_size, epochs, path_name,
-                           get_angular_status(angle, X_train, X_angle_train), y_train, verbose=verbose)
-
-    if verbose > 0:
-        loss_val, acc_val = model.evaluate(get_angular_status(angle, X_val, X_angles_val), y_val,
-                               verbose=0, batch_size=batch_size)
-
-        loss_train, acc_train = model.evaluate(get_angular_status(angle, X_train, X_angle_train), y_train,
-                                       verbose=0, batch_size=batch_size)
-
-        print('Val/Train Loss:', str(loss_val) + '/' + str(loss_train),             'Val/Train Acc:', str(acc_val) + '/' + str(acc_train))
-    return model, partial_model
-
-
-# In[ ]:
-
-
-# Train all 3 models
-def train_models(dataset, lr, batch_size, max_epoch, verbose=2, return_model=False):
-    X_angles, y_train, X_b, X_images = dataset
-    angle_b = True
-    angle_images = True
-    X_angles, X_angles_val,    y_train, y_val,    X_b, X_b_val,    X_images, X_images_val = train_test_split(X_angles, y_train, X_b, X_images, random_state=687, train_size=0.9)
-
-    if train_b:
-        if verbose > 0:
-            print('Training bandwidth network')
-        data_b1 = (X_b, X_angles, y_train, X_b_val, X_angles_val, y_val)
-        model_b, model_b_cut = gen_model_weights(angle_b, lr, 0, 3, 'relu', batch_size, max_epoch, 'model_b',
-                                             data_b1, only_load=load_b, verbose=verbose)
-
-    if train_img:
-        if verbose > 0:
-            print('Training image network')
-        data_images = (X_images, X_angles, y_train, X_b_val, X_angles_val, y_val)
-        model_images, model_images_cut = gen_model_weights(angle_images, lr, 0, 3, 'relu', batch_size, max_epoch, 'model_img',
-                                                       data_images, only_load=load_img, verbose=verbose)
-
-    if train_total:
-        common_model = combined_model(model_b_cut, model_images_cut, lr, 0)
-        common_x_train = [X_b, X_images, X_angles]
-        common_y_train = y_train
-        common_x_val = [X_b_val, X_images_val, X_angles_val]
-        common_y_val = y_val
-        if verbose > 0:
-            print('Training common network')
-        common_model = train_model(common_model, batch_size, max_epoch, 'common_check', common_x_train,
-                           common_y_train, verbose=verbose, val_split=0.2)
-
-        loss_val, acc_val = common_model.evaluate(common_x_val, common_y_val,
-                                           verbose=0, batch_size=batch_size)
-        loss_train, acc_train = common_model.evaluate(common_x_train, common_y_train,
-                                                  verbose=0, batch_size=batch_size)
-        if verbose > 0:
-            print('Loss:', loss_val, 'Acc:', acc_val)
-    if return_model:
-        return common_model
-    else:
-        return (loss_train, acc_train), (loss_val, acc_val)
-
-
-# Model parameters that are used in training assumes that you have enough computational power to process all the data.
+# **VARIABLE DESCRIPTIONS:**
 # 
-# (Don't know if it is obvious or not) The important moment here is to save 3 sets, since if you are selecting model based on a validation set it affects final performance since it causes inderect observations of validation set and affect final evaluation score.
+# We've got a sense of our variables, their class type, and the first few observations of each. We know we're working with 1309 observations of 12 variables. To make things a bit more explicit since a couple of the variable names aren't 100% illuminating, here's what we've got to deal with:
+# 
+# 
+# **Variable Description**
+# 
+#  - Survived: Survived (1) or died (0)
+#  - Pclass: Passenger's class
+#  - Name: Passenger's name
+#  - Sex: Passenger's sex
+#  - Age: Passenger's age
+#  - SibSp: Number of siblings/spouses aboard
+#  - Parch: Number of parents/children aboard
+#  - Ticket: Ticket number
+#  - Fare: Fare
+#  - Cabin: Cabin
+#  - Embarked: Port of embarkation
+# 
+# [More information on the Kaggle site](https://www.kaggle.com/c/titanic/data)
+
+# ### 2.4.1 Next have a look at some key information about the variables
+# An numeric variable is one with values of integers or real numbers while a categorical variable is a variable that can take on one of a limited, and usually fixed, number of possible values, such as blood type.
+# 
+# Notice especially what type of variable each is, how many observations there are and some of the variable values.
+# 
+# An interesting observation could for example be the minimum age 0.42, do you know why this is?
+# 
+# *Select the cell below and run it by pressing the play button.*
 
 # In[ ]:
 
 
-# Best parameters i got are
-# epochs : 250
-# learning rate : 8e-5
-# batch size : 32
-# CARE: The image model is overfits with parameters used here
-common_model = train_models((X_angles, y_train, X_b, X_images), 5e-04, 32, 50, 1, return_model=True)
+titanic.describe()
 
 
-# *The filtration step for RGB images may take a lot of time.*
+# ### 2.4.2 A heat map of correlation may give us a understanding of which variables are important
+# *Select the cell below and run it by pressing the play button.*
 
 # In[ ]:
 
 
-if predict_submission:
-    print('Reading test dataset')
-    test = pd.read_json("../input/test.json")
-    test.inc_angle = test.inc_angle.replace('na', 0)
-    test.inc_angle = test.inc_angle.astype(float).fillna(0.0)
-    y_fin, X_angle_fin, X_fin_b, X_fin_img = create_dataset(test, False)
-    print('X shape:', X_fin_img.shape)
-    print('X angle shape:', X_angle_fin.shape)
-    print('Predicting')
-    prediction = common_model.predict([X_fin_b, X_fin_img, X_angle_fin], verbose=1, batch_size=32)
-    print('Submitting')
-    submission = pd.DataFrame({'id': test["id"], 'is_iceberg': prediction.reshape((prediction.shape[0]))})
-
-    submission.to_csv("./submission.csv", index=False)
-    print('Done')
+plot_correlation_map( titanic )
 
 
-# **TODO:**
-# * Add features from https://www.kaggle.com/muonneutrino/exploration-transforming-images-in-python
-# * Modify base model and train different models for pictures and bandwidth
-# * Select denoising algorithm more meaningfully
-# * Use XBG on output features of convolutional nets
-# * Train denoising autoencoder on train and test data ot extract additional features and clean data
-# * Data preprocessing parallelization
+# ### 2.4.3 Let's further explore the relationship between the features and survival of passengers 
+# We start by looking at the relationship between age and survival.
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+# Plot distributions of Age of passangers who survived or did not survive
+plot_distribution( titanic , var = 'Age' , target = 'Survived' , row = 'Sex' )
+
+
+# Consider the graphs above. Differences between survival for different values is what will be used to separate the target variable (survival in this case) in the model. If the two lines had been about the same, then it would not have been a good variable for our predictive model. 
+# 
+# Consider some key questions such as; what age does males/females have a higher or lower probability of survival? 
+
+# ### 2.4.3 Excersise 1: Investigating numeric variables
+# It's time to get your hands dirty and do some coding! Try to plot the distributions of Fare of passangers who survived or did not survive. Then consider if this could be a good predictive variable.
+# 
+# *Hint: use the code from the previous cell as a starting point.*
+
+# In[ ]:
+
+
+# Excersise 1
+# Plot distributions of Fare of passangers who survived or did not survive
+
+
+# ### 2.4.4 Embarked
+# We can also look at categorical variables like Embarked and their relationship with survival.
+# 
+# - C = Cherbourg  
+# - Q = Queenstown
+# - S = Southampton
+
+# In[ ]:
+
+
+# Plot survival rate by Embarked
+plot_categories( titanic , cat = 'Embarked' , target = 'Survived' )
+
+
+# ### 2.4.4 Excersise 2 - 5: Investigating categorical variables
+# Even more coding practice! Try to plot the survival rate of Sex, Pclass, SibSp and Parch below. 
+# 
+# *Hint: use the code from the previous cell as a starting point.*
+# 
+# After considering these graphs, which variables do you expect to be good predictors of survival? 
+
+# In[ ]:
+
+
+# Excersise 2
+# Plot survival rate by Sex
+
+
+# In[ ]:
+
+
+# Excersise 3
+# Plot survival rate by Pclass
+
+
+# In[ ]:
+
+
+# Excersise 4
+# Plot survival rate by SibSp
+
+
+# In[ ]:
+
+
+# Excersise 5
+# Plot survival rate by Parch
+
+
+# # 3. Data Preparation
+
+# ## 3.1 Categorical variables need to be transformed to numeric variables
+# The variables *Embarked*, *Pclass* and *Sex* are treated as categorical variables. Some of our model algorithms can only handle numeric values and so we need to create a new variable (dummy variable) for every unique value of the categorical variables.
+# 
+# This variable will have a value 1 if the row has a particular value and a value 0 if not. *Sex* is a dichotomy (old school gender theory) and will be encoded as one binary variable (0 or 1).
+# 
+# *Select the cells below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+# Transform Sex into binary values 0 and 1
+sex = pd.Series( np.where( full.Sex == 'male' , 1 , 0 ) , name = 'Sex' )
+
+
+# In[ ]:
+
+
+# Create a new variable for every unique value of Embarked
+embarked = pd.get_dummies( full.Embarked , prefix='Embarked' )
+embarked.head()
+
+
+# In[ ]:
+
+
+# Create a new variable for every unique value of Embarked
+pclass = pd.get_dummies( full.Pclass , prefix='Pclass' )
+pclass.head()
+
+
+# ## 3.2 Fill missing values in variables
+# Most machine learning alghorims require all variables to have values in order to use it for training the model. The simplest method is to fill missing values with the average of the variable across all observations in the training set.
+# 
+# *Select the cells below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+# Create dataset
+imputed = pd.DataFrame()
+
+# Fill missing values of Age with the average of Age (mean)
+imputed[ 'Age' ] = full.Age.fillna( full.Age.mean() )
+
+# Fill missing values of Fare with the average of Fare (mean)
+imputed[ 'Fare' ] = full.Fare.fillna( full.Fare.mean() )
+
+imputed.head()
+
+
+# ## 3.3 Feature Engineering &ndash; Creating new variables
+# Credit: http://ahmedbesbes.com/how-to-score-08134-in-titanic-kaggle-challenge.html
+
+# ### 3.3.1 Extract titles from passenger names
+# Titles reflect social status and may predict survival probability
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+title = pd.DataFrame()
+# we extract the title from each name
+title[ 'Title' ] = full[ 'Name' ].map( lambda name: name.split( ',' )[1].split( '.' )[0].strip() )
+
+# a map of more aggregated titles
+Title_Dictionary = {
+                    "Capt":       "Officer",
+                    "Col":        "Officer",
+                    "Major":      "Officer",
+                    "Jonkheer":   "Royalty",
+                    "Don":        "Royalty",
+                    "Sir" :       "Royalty",
+                    "Dr":         "Officer",
+                    "Rev":        "Officer",
+                    "the Countess":"Royalty",
+                    "Dona":       "Royalty",
+                    "Mme":        "Mrs",
+                    "Mlle":       "Miss",
+                    "Ms":         "Mrs",
+                    "Mr" :        "Mr",
+                    "Mrs" :       "Mrs",
+                    "Miss" :      "Miss",
+                    "Master" :    "Master",
+                    "Lady" :      "Royalty"
+
+                    }
+
+# we map each title
+title[ 'Title' ] = title.Title.map( Title_Dictionary )
+title = pd.get_dummies( title.Title )
+#title = pd.concat( [ title , titles_dummies ] , axis = 1 )
+
+title.head()
+
+
+# ### 3.3.2 Extract Cabin category information from the Cabin number
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+cabin = pd.DataFrame()
+
+# replacing missing cabins with U (for Uknown)
+cabin[ 'Cabin' ] = full.Cabin.fillna( 'U' )
+
+# mapping each Cabin value with the cabin letter
+cabin[ 'Cabin' ] = cabin[ 'Cabin' ].map( lambda c : c[0] )
+
+# dummy encoding ...
+cabin = pd.get_dummies( cabin['Cabin'] , prefix = 'Cabin' )
+
+cabin.head()
+
+
+# ### 3.3.3 Extract ticket class from ticket number
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+# a function that extracts each prefix of the ticket, returns 'XXX' if no prefix (i.e the ticket is a digit)
+def cleanTicket( ticket ):
+    ticket = ticket.replace( '.' , '' )
+    ticket = ticket.replace( '/' , '' )
+    ticket = ticket.split()
+    ticket = map( lambda t : t.strip() , ticket )
+    ticket = list(filter( lambda t : not t.isdigit() , ticket ))
+    if len( ticket ) > 0:
+        return ticket[0]
+    else: 
+        return 'XXX'
+
+ticket = pd.DataFrame()
+
+# Extracting dummy variables from tickets:
+ticket[ 'Ticket' ] = full[ 'Ticket' ].map( cleanTicket )
+ticket = pd.get_dummies( ticket[ 'Ticket' ] , prefix = 'Ticket' )
+
+ticket.shape
+ticket.head()
+
+
+# ### 3.3.4 Create family size and category for family size
+# The two variables *Parch* and *SibSp* are used to create the famiy size variable
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+family = pd.DataFrame()
+
+# introducing a new feature : the size of families (including the passenger)
+family[ 'FamilySize' ] = full[ 'Parch' ] + full[ 'SibSp' ] + 1
+
+# introducing other features based on the family size
+family[ 'Family_Single' ] = family[ 'FamilySize' ].map( lambda s : 1 if s == 1 else 0 )
+family[ 'Family_Small' ]  = family[ 'FamilySize' ].map( lambda s : 1 if 2 <= s <= 4 else 0 )
+family[ 'Family_Large' ]  = family[ 'FamilySize' ].map( lambda s : 1 if 5 <= s else 0 )
+
+family.head()
+
+
+# ## 3.4 Assemble final datasets for modelling
+# 
+# Split dataset by rows into test and train in order to have a holdout set to do model evaluation on. The dataset is also split by columns in a matrix (X) containing the input data and a vector (y) containing the target (or labels).
+
+# ### 3.4.1 Variable selection
+# Select which features/variables to inculde in the dataset from the list below:
+# 
+#  - imputed 
+#  - embarked
+#  - pclass
+#  - sex
+#  - family
+#  - cabin
+#  - ticket
+# 
+# *Include the variables you would like to use in the function below seperated by comma, then run the cell*
+
+# In[ ]:
+
+
+# Select which features/variables to include in the dataset from the list below:
+# imputed , embarked , pclass , sex , family , cabin , ticket
+
+full_X = pd.concat( [ imputed , embarked , cabin , sex ] , axis=1 )
+full_X.head()
+
+
+# ### 3.4.2 Create datasets
+# Below we will seperate the data into training and test datasets.
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+# Create all datasets that are necessary to train, validate and test models
+train_valid_X = full_X[ 0:891 ]
+train_valid_y = titanic.Survived
+test_X = full_X[ 891: ]
+train_X , valid_X , train_y , valid_y = train_test_split( train_valid_X , train_valid_y , train_size = .7 )
+
+print (full_X.shape , train_X.shape , valid_X.shape , train_y.shape , valid_y.shape , test_X.shape)
+
+
+# ### 3.4.3 Feature importance
+# Selecting the optimal features in the model is important. 
+# We will now try to evaluate what the most important variables are for the model to make the prediction.
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+plot_variable_importance(train_X, train_y)
+
+
+# # 4. Modeling
+# We will now select a model we would like to try then use the training dataset to train this model and thereby check the performance of the model using the test set. 
+# 
+# ## 4.1 Model Selection
+# Then there are several options to choose from when it comes to models. A good starting point is logisic regression. 
+# 
+# **Select ONLY the model you would like to try below and run the corresponding cell by pressing the play button.**
+
+# ### 4.1.1 Random Forests Model
+# Try a random forest model by running the cell below. 
+
+# In[ ]:
+
+
+model = RandomForestClassifier(n_estimators=100)
+
+
+# ### 4.1.2 Support Vector Machines
+# Try a Support Vector Machines model by running the cell below. 
+
+# In[ ]:
+
+
+model = SVC()
+
+
+# ### 4.1.3 Gradient Boosting Classifier
+# Try a Gradient Boosting Classifier model by running the cell below. 
+
+# In[ ]:
+
+
+model = GradientBoostingClassifier()
+
+
+# ### 4.1.4 K-nearest neighbors
+# Try a k-nearest neighbors model by running the cell below. 
+
+# In[ ]:
+
+
+model = KNeighborsClassifier(n_neighbors = 3)
+
+
+# ### 4.1.5 Gaussian Naive Bayes
+# Try a Gaussian Naive Bayes model by running the cell below. 
+
+# In[ ]:
+
+
+model = GaussianNB()
+
+
+# ### 4.1.6 Logistic Regression
+# Try a Logistic Regression model by running the cell below. 
+
+# In[ ]:
+
+
+model = LogisticRegression()
+
+
+# ## 4.2 Train the selected model
+# When you have selected a dataset with the features you want and a model you would like to try it is now time to train the model. After all our preparation model training is simply done with the one line below.
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+model.fit( train_X , train_y )
+
+
+# # 5. Evaluation
+# Now we are going to evaluate model performance and the feature importance.
+# 
+# ## 5.1 Model performance
+# We can evaluate the accuracy of the model by using the validation set where we know the actual outcome. This data set have not been used for training the model, so it's completely new to the model. 
+# 
+# We then compare this accuracy score with the accuracy when using the model on the training data. If the difference between these are significant this is an indication of overfitting. We try to avoid this because it means the model will not generalize well to new data and is expected to perform poorly.
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+# Score the model
+print (model.score( train_X , train_y ) , model.score( valid_X , valid_y ))
+
+
+# ## 5.2 Feature importance - selecting the optimal features in the model
+# We will now try to evaluate what the most important variables are for the model to make the prediction. The function below will only work for decision trees, so if that's the model you chose you can uncomment the code below (remove # in the beginning)  and see the feature importance.
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+#plot_model_var_imp(model, train_X, train_y)
+
+
+# ### 5.2.1 Automagic
+# It's also possible to automatically select the optimal number of features and visualize this. This is uncommented and can be tried in the competition part of the tutorial.
+# 
+# *Select the cell below and run it by pressing the play button.*
+
+# In[ ]:
+
+
+rfecv = RFECV( estimator = model , step = 1 , cv = StratifiedKFold( train_y , 2 ) , scoring = 'accuracy' )
+rfecv.fit( train_X , train_y )
+
+#print (rfecv.score( train_X , train_y ) , rfecv.score( valid_X , valid_y ))
+#print( "Optimal number of features : %d" % rfecv.n_features_ )
+
+# Plot number of features VS. cross-validation scores
+#plt.figure()
+#plt.xlabel( "Number of features selected" )
+#plt.ylabel( "Cross validation score (nb of correct classifications)" )
+#plt.plot( range( 1 , len( rfecv.grid_scores_ ) + 1 ) , rfecv.grid_scores_ )
+#plt.show()
+
+
+# ## 5.3 Competition time!
+# It's now time for you to get your hands even dirtier and go at it all by yourself in a `challenge`! 
+# 
+# 1. Try to the other models in step 4.1 and compare their result
+#     * Do this by uncommenting the code and running the cell you want to try
+# 2. Try adding new features in step 3.4.1
+#     * Do this by adding them in to the function in the feature section.
+# 
+# 
+# **The winner is the one to get the highest scoring model for the validation set**
+
+# # 6. Deployment
+# 
+# Deployment in this context means publishing the resulting prediction from the model to the Kaggle leaderboard. To do this do the following:
+# 
+#  1. select the cell below and run it by pressing the play button.
+#  2. Press the `Publish` button in top right corner.
+#  3. Select `Output` on the notebook menubar
+#  4. Select the result dataset and press `Submit to Competition` button
+
+# In[ ]:
+
+
+test_Y = model.predict( test_X )
+passenger_id = full[891:].PassengerId
+test = pd.DataFrame( { 'PassengerId': passenger_id , 'Survived': test_Y } )
+test.shape
+test.head()
+test.to_csv( 'titanic_pred.csv' , index = False )
+

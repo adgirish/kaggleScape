@@ -1,198 +1,192 @@
 
 # coding: utf-8
 
-# As shown before, some features per id can be clustered intro groups that perform the same kind of time evolution.  Unfortunately a unique feature does not perform the same dynamics for different ids. But maybe there are groups of ids that have identical or similar features and perhaps this groups can give some insights into the "global" dynamics. 
+# In[ ]:
+
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import keras
+from keras.applications.vgg19 import VGG19
+from keras.models import Model
+from keras.layers import Dense, Dropout, Flatten
+
+import os
+from tqdm import tqdm
+from sklearn import preprocessing
+from sklearn.model_selection import train_test_split
+import cv2
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# First we will read in the csv's so we can see some more information on the filenames and breeds
+
+# In[ ]:
+
+
+df_train = pd.read_csv('../input/labels.csv')
+df_test = pd.read_csv('../input/sample_submission.csv')
+
+
+# In[ ]:
+
+
+df_train.head(10)
+
+
+# We can see that the breed needs to be one-hot encoded for the final submission, so we will now do this.
+
+# In[ ]:
+
+
+targets_series = pd.Series(df_train['breed'])
+one_hot = pd.get_dummies(targets_series, sparse = True)
+
+
+# In[ ]:
+
+
+one_hot_labels = np.asarray(one_hot)
+
+
+# Next we will read in all of the images for test and train, using a for loop through the values of the csv files. I have also set an im_size variable which sets the size for the image to be re-sized to,  90x90 px, you should play with this number to see how it affects accuracy.
+
+# In[ ]:
+
+
+im_size = 90
+
+
+# In[ ]:
+
+
+x_train = []
+y_train = []
+x_test = []
+
+
+# In[ ]:
+
+
+i = 0 
+for f, breed in tqdm(df_train.values):
+    img = cv2.imread('../input/train/{}.jpg'.format(f))
+    label = one_hot_labels[i]
+    x_train.append(cv2.resize(img, (im_size, im_size)))
+    y_train.append(label)
+    i += 1
+
+
+# In[ ]:
+
+
+for f in tqdm(df_test['id'].values):
+    img = cv2.imread('../input/test/{}.jpg'.format(f))
+    x_test.append(cv2.resize(img, (im_size, im_size)))
+
+
+# In[ ]:
+
+
+y_train_raw = np.array(y_train, np.uint8)
+x_train_raw = np.array(x_train, np.float32) / 255.
+x_test  = np.array(x_test, np.float32) / 255.
+
+
+# We check the shape of the outputs to make sure everyting went as expected.
+
+# In[ ]:
+
+
+print(x_train_raw.shape)
+print(y_train_raw.shape)
+print(x_test.shape)
+
+
 # 
-# ## Assumptions: ##
+# We can see above that there are 120 different breeds. We can put this in a num_class variable below that can then be used when creating the CNN model.
+
+# In[ ]:
+
+
+num_class = y_train_raw.shape[1]
+
+
+# It is important to create a validation set so that you can gauge the performance of your model on independent data, unseen to the model in training. We do this by splitting the current training set (x_train_raw) and the corresponding labels (y_train_raw) so that we set aside 30 % of the data at random and put these in validation sets (X_valid and Y_valid).
 # 
-#  - NaN values make sense. An id that has always NaNs for a specific feature has no relationship with it.  
-#  - Id's live in different time-zones (and have different lifetimes)
+# * This split needs to be improved so that it contains images from every class, with 120 separate classes some can not be represented and so the validation score is not informative. 
 
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-import kagglegym
-import matplotlib.pyplot as plt
-
-with pd.HDFStore("../input/train.h5", "r") as train:
-    # Note that the "train" dataframe is the only dataframe in the file
-    df = train.get("train")
-
-# Create an environment
-env = kagglegym.make()
-
-# Get first observation
-observation = env.reset()
-
-# Get the train dataframe
-train = observation.train
+X_train, X_valid, Y_train, Y_valid = train_test_split(x_train_raw, y_train_raw, test_size=0.3, random_state=1)
 
 
-# **Lifetimes** 
+# Now we build the CNN architecture. Here we are using a pre-trained model VGG19 which has already been trained to identify many different dog breeds (as well as a lot of other objects from the imagenet dataset see here for more information: http://image-net.org/about-overview). Unfortunately it doesn't seem possible to downlod the weights from within this kernel so make sure you set the weights argument to 'imagenet' and not None, as it currently is below.
 # 
-# First, I will pick up the idea of Chase, to [look at id lifetimes][1]. There are a lot of ids having a large number of timestamps and maybe they could give more insights into the time evolution and dynamics of features. Perhaps one could also find id-groups of same lifetimes with similar behavior. 
+# We then remove the final layer and instead replace it with a single dense layer with the number of nodes corresponding to the number of breed classes we have (120).
+
+# In[ ]:
+
+
+# Create the base pre-trained model
+# Can't download weights in the kernel
+base_model = VGG19(#weights='imagenet',
+    weights = None, include_top=False, input_shape=(im_size, im_size, 3))
+
+# Add a new top layer
+x = base_model.output
+x = Flatten()(x)
+predictions = Dense(num_class, activation='softmax')(x)
+
+# This is the model we will train
+model = Model(inputs=base_model.input, outputs=predictions)
+
+# First: train only the top layers (which were randomly initialized)
+for layer in base_model.layers:
+    layer.trainable = False
+
+model.compile(loss='categorical_crossentropy', 
+              optimizer='adam', 
+              metrics=['accuracy'])
+
+callbacks_list = [keras.callbacks.EarlyStopping(monitor='val_acc', patience=3, verbose=1)]
+model.summary()
+
+
+# In[ ]:
+
+
+model.fit(X_train, Y_train, epochs=1, validation_data=(X_valid, Y_valid), verbose=1)
+
+
+# Remember, accuracy is low here because we are not taking advantage of the pre-trained weights as they cannot be downloaded in the kernel. This means we are training the wights from scratch and I we have only run 1 epoch due to the hardware constraints in the kernel.
 # 
-#   [1]: https://www.kaggle.com/chaseos/two-sigma-financial-modeling/understanding-id-and-timestamp
+# Next we will make our predictions.
 
 # In[ ]:
 
 
-lifetimes = df.groupby('id').apply(len)
-lifetimes = lifetimes.sort_values(ascending=False)
-lifetimes = lifetimes.reset_index()
-lifetimes.columns = ["id", "duration"]
-lifetimes.head()
-
-
-# Let's collect all id's that have a lifetime of 1813.
-
-# In[ ]:
-
-
-long_lifetime_ids = lifetimes[lifetimes["duration"] == 1813]
-long_lifetime_ids.info()
-
-
-# **Select ids of same nan-structure**
-# 
-# There are 527 ids with a lifetime of 1813 timestamps. As I want to study the feature dynamics of id's that behave the same way, I need to find all those id's that share the same features (and nan-structures). Let's do this by a simple approach: Select one example id of the dataframe "long_lifetimes_ids" and find all ids in that frame that match its feature-presence (nan-structure). 
-# 
-# I will be careful with binary transformations because a nan-value may not be present all over the time of my selected id and perhaps 0.0 is the first value that occurs in the situation where "nan" changes to a value.  Instead, I will do the following:
-# 
-#  - Kick out features that have a permanent nan-structure over all 1813 timestamps
-#  - Keep features with partial present nan-structures, but collect their labels for safety 
-
-# In[ ]:
-
-
-long_lifetime_ids.head()
+preds = model.predict(x_test, verbose=1)
 
 
 # In[ ]:
 
 
-def find_nan_structure(instrument, data):
-    data_id = data.loc[data["id"]==instrument,:]
-    no_nan_features = []
-    partial_nan_features = []
-    total_nan_features = [] 
-    for col in data_id.columns:
-        if col not in ["id", "timestamp", "y"]:
-            nr_nans = pd.isnull(data_id[col]).sum()
-            if (nr_nans == 0):
-                no_nan_features.append(col)
-            elif (nr_nans == len(data_id[col])):
-                total_nan_features.append(col)
-            else:
-                partial_nan_features.append(col)
-    return no_nan_features, total_nan_features, partial_nan_features
-    
+sub = pd.DataFrame(preds)
+# Set column names to those generated by the one-hot encoding earlier
+col_names = one_hot.columns.values
+sub.columns = col_names
+# Insert the column id from the sample_submission at the start of the data frame
+sub.insert(0, 'id', df_test['id'])
+sub.head(5)
 
-
-# By playing around, I found out that id 711 belongs to a large group of ids that share the same features. 
-
-# In[ ]:
-
-
-no_nan, total_nan, partial_nan = find_nan_structure(711, df)
-
-
-# In[ ]:
-
-
-def find_id_group(instrument, data, lifetime_ids):
-    strong_cluster = []
-    soft_cluster = []
-    no_nan, total_nan, partial_nan = find_nan_structure(instrument, data)
-    no_nan_soft = set(no_nan).union(partial_nan)
-    for element_id in lifetime_ids:
-        no_nan_e, total_nan_e, partial_nan_e = find_nan_structure(element_id, data)
-        no_nan_soft_e = set(no_nan_e).union(partial_nan_e)
-        if set(no_nan_soft_e) == set(no_nan_soft):
-            soft_cluster.append(element_id)
-        if set(no_nan_e) == set(no_nan):
-            strong_cluster.append(element_id)
-    return strong_cluster, soft_cluster
-
-
-# In[ ]:
-
-
-strong_cluster, soft_cluster = find_id_group(711, df, long_lifetime_ids.id)
-
-
-# In[ ]:
-
-
-strong_cluster
-
-
-# I will proceed with the strong-cluster group of id 711. Let's create a dataframe which contains only these ids and let's try to find correlated features or do some other stuff. ;-) 
-
-# In[ ]:
-
-
-cluster_data = df[df["id"].isin(strong_cluster)]
-cluster_data.head()
-
-
-# Let's select a feature, which does not contain nan-values, for playing around: 
-
-# In[ ]:
-
-
-test_feature = no_nan[1]
-plt.figure()
-for instrument in strong_cluster:
-    plt.plot(cluster_data[cluster_data["id"]==instrument].timestamp, cluster_data[cluster_data["id"]==instrument][test_feature].values, '.-')
-plt.xlabel("timestamp")
-plt.ylabel(test_feature)
-
-
-# In[ ]:
-
-
-def find_id_groups(data, idlist, feature, limit):
-    groups = []
-    singles = []
-    for list_instrument in idlist:
-        group = []
-        for next_instrument in idlist:
-            coeff = np.corrcoef(data.ix[data.id==list_instrument, feature].values, data.ix[data.id==next_instrument, feature].values)[0,1]
-            coeff = np.round(coeff, decimals=2)
-            if coeff >= limit:
-                group.append(next_instrument)
-        for member in group:
-            while member in idlist:
-                idlist.remove(member)
-        if len(group) > 1:
-            groups.append(group)
-        elif len(group) == 1:
-            singles.append(list_instrument)
-    return groups, singles
-
-
-# In[ ]:
-
-
-id_list = strong_cluster[:]
-groups, singles = find_id_groups(cluster_data, id_list, test_feature, 0.80)
-groups
-
-
-# Yeah! Found a pattern again! :-) Just by looking at "stupid" linear correlations, we can find that different features of one id are correlated but also that values of a specific feature of different ids are correlated in some cases. Let's have a look at those groups:  
-
-# In[ ]:
-
-
-for group in groups:
-    plt.figure()
-    for instrument in group:
-        plt.plot(cluster_data[cluster_data.id==instrument]["timestamp"].values, cluster_data[cluster_data.id==instrument][test_feature].values, '.-')
-    plt.xlabel("timestamp")
-    plt.ylabel(test_feature)
-
-
-# :-D

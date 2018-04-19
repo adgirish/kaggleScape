@@ -1,179 +1,78 @@
 
 # coding: utf-8
 
-# This is a small notebook to display Unicode Scripts used in train and test comments.
-# 
-# It uses PCRE unicode script catgories you can find here in https://www.regular-expressions.info/unicode.html#category
-# 
-# The standard **re** python package does not support them, so that is where  **regex** package comes to the rescue PCRE compatibility
-# 
-# The intention is to show there are significant differences between train and test datatests in terms of script usage and occurences and that it may make a difference on the private LB. It also shows you how simple it is to find out which Script is used in a particular comment.
+# This script calculates the mean for each categorical value. It also bins the continuous features and then plots the mean loss per binned continuous feature.
 
-# In[1]:
+# In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from collections import defaultdict
-import regex
+# Supress unnecessary warnings so that presentation looks clean
+import warnings
+warnings.filterwarnings('ignore')
 
+# Read raw data from the file
 
-# Define supported Script Categories
-
-# In[2]:
-
-
-script_list = [
-    r'\p{Arabic}', r'\p{Armenian}', r'\p{Bengali}', r'\p{Bopomofo}', r'\p{Braille}',
-    r'\p{Buhid}', r'\p{Canadian_Aboriginal}', r'\p{Cherokee}', r'\p{Cyrillic}',
-    r'\p{Devanagari}', r'\p{Ethiopic}', r'\p{Georgian}', r'\p{Greek}', r'\p{Gujarati}',
-    r'\p{Gurmukhi}', r'\p{Han}', r'\p{Hangul}', r'\p{Hanunoo}', r'\p{Hebrew}', r'\p{Hiragana}',
-    r'\p{Inherited}', r'\p{Kannada}', r'\p{Katakana}', r'\p{Khmer}', r'\p{Lao}', r'\p{Latin}',
-    r'\p{Limbu}', r'\p{Malayalam}', r'\p{Mongolian}', r'\p{Myanmar}', r'\p{Ogham}', r'\p{Oriya}',
-    r'\p{Runic}', r'\p{Sinhala}', r'\p{Syriac}', r'\p{Tagalog}', r'\p{Tagbanwa}',
-    r'\p{TaiLe}', r'\p{Tamil}', r'\p{Telugu}', r'\p{Thaana}', r'\p{Thai}', r'\p{Tibetan}',
-    r'\p{Yi}', r'\p{Common}'
-]
-
-
-# Read train and test datasets
-
-# In[3]:
-
+import pandas as pd
+import numpy as np
+import random
+import matplotlib.pylab as plt
+from matplotlib.ticker import MaxNLocator
+import pylab as p
 
 train = pd.read_csv("../input/train.csv")
-test = pd.read_csv("../input/test.csv")
-"train and test read with shapes : ", train.shape, test.shape
+#plt.rcParams['figure.figsize'] = 8, 6 #[6.0, 4.0]
 
 
-# Get number of letters/characters in each language
-
-# In[13]:
+# In[ ]:
 
 
-script_occ = pd.DataFrame(
-    [regex.sub(r'\\p\{(.+)\}', r'\g<1>', reg) for reg in script_list],
-    columns=["script"]
-)
-script_occ["train"] = [
-    train["comment_text"].apply(lambda x: len(regex.findall(reg, x))).sum()
-    for reg in script_list
-]
-script_occ["test"] = [
-    test["comment_text"].apply(lambda x: len(regex.findall(reg, x))).sum()
-    for reg in script_list
-]
+features = train.columns
+cats = [feature for feature in features if feature.startswith('cat')]
+for feat in cats:
+    train[feat] = pd.factorize(train[feat], sort=True)[0]
 
 
-# Compute the number of documents impacted
-
-# In[14]:
+# In[ ]:
 
 
-script_occ["train_docs"] = [
-    (train["comment_text"].apply(lambda x: len(regex.findall(reg, x))) > 0).sum()
-    for reg in script_list
-]
-script_occ["test_docs"] = [
-    (test["comment_text"].apply(lambda x: len(regex.findall(reg, x))) > 0).sum()
-    for reg in script_list
-]
+def plot_feature_loss(input_df,feature_name = 'cont1',num_bins = 50):
+    if feature_name.startswith('cont'):
+        bins = np.linspace(0,1.0,num_bins)
+        feature_name_binned = feature_name + '_binned'
+        input_df[feature_name_binned] = np.digitize(input_df[feature_name],bins=bins,right=True)
+        input_df[feature_name_binned] = input_df[feature_name_binned] / num_bins
+        temp_dict = input_df.groupby(feature_name_binned)['loss'].mean().to_dict()
+        temp_err_dict = input_df.groupby(feature_name_binned)['loss'].sem().to_dict()
+    else:
+        temp_dict = input_df.groupby(feature_name)['loss'].mean().to_dict()
+        temp_err_dict = input_df.groupby(feature_name)['loss'].sem().to_dict()
+
+    lists = sorted(temp_dict.items())
+    x, y = zip(*lists)
+    lists_err = sorted(temp_err_dict.items())
+    x_err, y_error = zip(*lists_err)
+
+    p.figure()
+    plt.errorbar(x,y,fmt = 'o',yerr = y_error,label = feature_name)
+    p.xlabel(feature_name,fontsize=20)
+    p.ylabel('loss',fontsize=20)
+    plt.tick_params(axis='both', which='major', labelsize=15)
+    p.legend(prop={'size':20},numpoints=1,loc=(0.05,0.8))
+    p.xlim([input_df[feature_name].min() - 0.02, input_df[feature_name].max() + 0.02 ])
+    plt.grid()
+    ax = plt.gca()
+
+    plt.tick_params(axis='both', which='major', labelsize=15)
+    ax.yaxis.set_major_locator(MaxNLocator(prune='lower'))
+    ax.xaxis.set_major_locator(MaxNLocator(prune='lower'))
+    ax.ticklabel_format(axis='y', style='sci', scilimits=(-2,2))
 
 
-# Display distribution
-
-# In[15]:
-
-
-from bokeh.core.properties import value
-from bokeh.io import show, output_notebook
-from bokeh.models import ColumnDataSource, HoverTool
-from bokeh.plotting import figure
-from math import pi
-
-output_notebook()
-
-script_occ.sort_values(by="test", ascending=False, inplace=True)
-
-scripts = list(script_occ.script.values)
-dataset = ["test", "train"]
-
-colors = ["#c9d9d3", "#718dbf"]
-
-data = {
-    'scripts' : scripts,
-    'train': list(np.log1p(script_occ.train.values)),
-    'test': list(np.log1p(script_occ.test.values)),
-    'real_trn_occ': list(script_occ.train.values),
-    'real_sub_occ': list(script_occ.test.values)
-}
-
-source = ColumnDataSource(data=data)
-
-hover = HoverTool(tooltips=[
-    ("Script", "@scripts"),
-    ("Train occurence", "@real_trn_occ"),
-    ("Test occurence", "@real_sub_occ"),
-])
-p = figure(x_range=scripts, plot_height=500, plot_width=850, title="Unicode Script Categories Occurence",
-           toolbar_location=None, tools=[hover])
-
-p.vbar_stack(dataset, x='scripts', width=0.9, color=colors, source=source,
-             legend=[value(x) for x in dataset])
-
-p.y_range.start = 0
-p.x_range.range_padding = 0.1
-p.xgrid.grid_line_color = None
-p.axis.minor_tick_line_color = None
-p.xaxis.major_label_orientation = pi/3
-p.outline_line_color = None
-p.legend.location = "top_left"
-p.legend.orientation = "horizontal"
-show(p)
-
-
-# Latin Unicode Script has by far the biggest occurence, which makes it decisive for a good LB score. However all other scripts have higher frequency in test, which makes it hard to train/predict their associated comments accurately.. This may have an impact on private LB at a score close to 0.99 AUC!
-
-# Now let's look at the number of impacted comments
-
-# In[16]:
-
-
-script_occ.sort_values(by="test_docs", ascending=False, inplace=True)
-
-scripts = list(script_occ.script.values)
-dataset = ["test", "train"]
-
-colors = ["#c9d9d3", "#718dbf"]
-
-data = {
-    'scripts' : scripts,
-    'train': list(np.log1p(script_occ.train_docs.values)),
-    'test': list(np.log1p(script_occ.test_docs.values)),
-    'real_trn_occ': list(script_occ.train_docs.values),
-    'real_sub_occ': list(script_occ.test_docs.values)
-}
-
-source = ColumnDataSource(data=data)
-
-hover = HoverTool(tooltips=[
-    ("Script", "@scripts"),
-    ("Number of comments in train", "@real_trn_occ"),
-    ("Number of comments in test", "@real_sub_occ"),
-])
-p = figure(x_range=scripts, plot_height=500, plot_width=850, title="Comments impacted by each Unicode Script Category",
-           toolbar_location=None, tools=[hover])
-
-p.vbar_stack(dataset, x='scripts', width=0.9, color=colors, source=source,
-             legend=[value(x) for x in dataset])
-
-p.y_range.start = 0
-p.x_range.range_padding = 0.1
-p.xgrid.grid_line_color = None
-p.axis.minor_tick_line_color = None
-p.xaxis.major_label_orientation = pi/3
-p.outline_line_color = None
-p.legend.location = "top_left"
-p.legend.orientation = "horizontal"
-show(p)
+for name in train.columns:
+    if name.startswith('cont'):
+        plot_feature_loss(train,feature_name = name)
+    if name.startswith('cat'):
+        #limit number of pics made because of script limit on output files
+        if int(name[3:]) >= 100: 
+            plot_feature_loss(train,feature_name = name)
 

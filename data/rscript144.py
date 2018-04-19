@@ -1,401 +1,324 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-
-
-#The idea behind this script is to use the geometry files given in the data. It is based around the idea that for
-#individual element we will have variation on different axis i.e. X, Y and Z. And these variations are given multiple
-# number of times in a single geometry file, probably telling us about variations on different front. I have used
-# PCA to reduce that into teo features per axis(X, Y, Z).
-
-# PS: I have no background in chemistry so I can't back it up by solid theoretical proofs.
-
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-import lightgbm as lgb
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-import pandas as pd
 import numpy as np
-import re
-from sklearn.decomposition import PCA
+import sys
 
-train = pd.read_csv("../input/train.csv")
-test = pd.read_csv("../input/test.csv")
+sys.path.insert(0, '../input/wordbatch-133/wordbatch/')
+sys.path.insert(0, '../input/randomstate/randomstate/')
+import pandas as pd
+from contextlib import contextmanager
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import KFold
+from scipy.sparse import hstack
+import time
+import regex as re
+import string
+from scipy.sparse import csr_matrix
+from sklearn.preprocessing import MinMaxScaler, OneHotEncoder
+import wordbatch
+from wordbatch.extractors import WordBag
+from wordbatch.models import FTRL, FM_FTRL
 
-def get_xyz_data(filename):
-    pos_data = []
-    lat_data = []
-    with open(filename) as f:
-        for line in f.readlines():
-            x = line.split()
-            if x[0] == 'atom':
-                pos_data.append([np.array(x[1:4], dtype=np.float),x[4]])
-            elif x[0] == 'lattice_vector':
-                lat_data.append(np.array(x[1:4], dtype=np.float))
-    return pos_data, np.array(lat_data)
-    
-
-
-ga_cols = []
-al_cols = []
-o_cols = []
-in_cols = []
-
-import warnings
-warnings.filterwarnings("ignore")
-
-for i in range(6):
-    ga_cols.append("Ga_"+str(i))
-
-for i in range(6):
-    al_cols.append("Al_"+str(i))
-
-for i in range(6):
-    o_cols.append("O_"+str(i))
-
-for i in range(6):
-    in_cols.append("In_"+str(i))
+import gc
+from sklearn.metrics import roc_auc_score
 
 
-
-ga_df= pd.DataFrame(columns=ga_cols)
-al_df = pd.DataFrame(columns=al_cols)
-o_df = pd.DataFrame(columns= o_cols)
-in_df = pd.DataFrame(columns=in_cols)
-
-for i in train.id.values:
-    fn = "../input/train/{}/geometry.xyz".format(i)
-    train_xyz, train_lat = get_xyz_data(fn)
-    
-    ga_list = []
-    al_list = []
-    o_list = []
-    in_list = []
-    
-    for li in train_xyz:
-        try:
-            if li[1] == "Ga":
-                ga_list.append(li[0])
-        except:
-            pass
-        try:
-            if li[1] == "Al":
-                al_list.append(li[0])
-        except:
-            pass
-        try:
-            if li[1] == "In":
-                in_list.append(li[0])
-        except:
-            pass
-        try:
-            if li[1] == "O":
-                o_list.append(li[0])
-        except:
-            pass
-    
-#     ga_list = [item for sublist in ga_list for item in sublist]
-#     al_list = [item for sublist in al_list for item in sublist]
-#     o_list = [item for sublist in o_list for item in sublist]
-   
-    
-    try:
-        model = PCA(n_components=2)
-        ga_list = np.array(ga_list)
-        temp_ga = model.fit_transform(ga_list.transpose())
-        temp_ga = [item for sublist in temp_ga for item in sublist]
-       
-    except:
-        temp_ga = [0,0,0,0,0,0]
-#         print i
-    try:
-        model = PCA(n_components=2)
-        al_list = np.array(al_list)
-        temp_al = model.fit_transform(al_list.transpose())
-        temp_al = [item for sublist in temp_al for item in sublist]
-#         print i
-    except:
-        temp_al = [0,0,0,0,0,0]
-#         print i
-    try:
-        model = PCA(n_components=2)
-        o_list = np.array(o_list)
-        temp_o = model.fit_transform(o_list.transpose())
-        temp_o = [item for sublist in temp_o for item in sublist]
-#         print i
-    except:
-        temp_o = [0,0,0,0,0,0]
-#         print i
-    
-    try:
-        model = PCA(n_components=2)
-        in_list = np.array(in_list)
-        temp_in = model.fit_transform(in_list.transpose())
-        temp_in = [item for sublist in temp_in for item in sublist]
-#         print i
-    except:
-        temp_in = [0,0,0,0,0,0]
-#         print i
-
-    temp_ga = pd.DataFrame(temp_ga).transpose()
-    temp_ga.columns = ga_cols
-    temp_ga.index = np.array([i])
-
-    temp_al = pd.DataFrame(temp_al).transpose()
-    temp_al.columns = al_cols
-    temp_al.index = np.array([i])
-
-    temp_o = pd.DataFrame(temp_o).transpose()
-    temp_o.columns = o_cols
-    temp_o.index = np.array([i])
-    
-    temp_in = pd.DataFrame(temp_in).transpose()
-    temp_in.columns = in_cols
-    temp_in.index = np.array([i])
-    
-    
-
-    ga_df = pd.concat([ga_df,temp_ga])
-    al_df = pd.concat([al_df,temp_al])
-    o_df = pd.concat([o_df,temp_o])    
-    in_df = pd.concat([in_df,temp_in])
-    
-ga_df["id"] = ga_df.index
-al_df["id"] = al_df.index
-o_df["id"] = o_df.index
-in_df["id"] = in_df.index
-
-train = pd.merge(train,ga_df,on = ["id"],how = "left")
-train = pd.merge(train,al_df,on = ["id"],how = "left")
-train = pd.merge(train,o_df,on = ["id"],how = "left")
-train = pd.merge(train,in_df,on = ["id"],how = "left")
-    
-ga_df= pd.DataFrame(columns=ga_cols)
-al_df = pd.DataFrame(columns=al_cols)
-o_df = pd.DataFrame(columns= o_cols)
-in_df = pd.DataFrame(columns=in_cols)    
-
-for i in test.id.values:
-    fn = "../input/test/{}/geometry.xyz".format(i)
-    train_xyz, train_lat = get_xyz_data(fn)
-    
-    ga_list = []
-    al_list = []
-    o_list = []
-    in_list = []
-    
-    for li in train_xyz:
-        try:
-            if li[1] == "Ga":
-                ga_list.append(li[0])
-        except:
-            pass
-        try:
-            if li[1] == "Al":
-                al_list.append(li[0])
-        except:
-            pass
-        try:
-            if li[1] == "In":
-                in_list.append(li[0])
-        except:
-            pass
-        try:
-            if li[1] == "O":
-                o_list.append(li[0])
-        except:
-            pass
-    
-#     ga_list = [item for sublist in ga_list for item in sublist]
-#     al_list = [item for sublist in al_list for item in sublist]
-#     o_list = [item for sublist in o_list for item in sublist]
-   
-    
-    try:
-        model = PCA(n_components=2)
-        ga_list = np.array(ga_list)
-        temp_ga = model.fit_transform(ga_list.transpose())
-        temp_ga = [item for sublist in temp_ga for item in sublist]
-       
-    except:
-        temp_ga = [0,0,0,0,0,0]
-#         print i
-    try:
-        model = PCA(n_components=2)
-        al_list = np.array(al_list)
-        temp_al = model.fit_transform(al_list.transpose())
-        temp_al = [item for sublist in temp_al for item in sublist]
-#         print i
-    except:
-        temp_al = [0,0,0,0,0,0]
-#         print i
-    try:
-        model = PCA(n_components=2)
-        o_list = np.array(o_list)
-        temp_o = model.fit_transform(o_list.transpose())
-        temp_o = [item for sublist in temp_o for item in sublist]
-#         print i
-    except:
-        temp_o = [0,0,0,0,0,0]
-#         print i
-    
-    try:
-        model = PCA(n_components=2)
-        in_list = np.array(in_list)
-        temp_in = model.fit_transform(in_list.transpose())
-        temp_in = [item for sublist in temp_in for item in sublist]
-#         print i
-    except:
-        temp_in = [0,0,0,0,0,0]
-#         print i
-
-    temp_ga = pd.DataFrame(temp_ga).transpose()
-    temp_ga.columns = ga_cols
-    temp_ga.index = np.array([i])
-
-    temp_al = pd.DataFrame(temp_al).transpose()
-    temp_al.columns = al_cols
-    temp_al.index = np.array([i])
-
-    temp_o = pd.DataFrame(temp_o).transpose()
-    temp_o.columns = o_cols
-    temp_o.index = np.array([i])
-    
-    temp_in = pd.DataFrame(temp_in).transpose()
-    temp_in.columns = in_cols
-    temp_in.index = np.array([i])
-    
-    
-
-    ga_df = pd.concat([ga_df,temp_ga])
-    al_df = pd.concat([al_df,temp_al])
-    o_df = pd.concat([o_df,temp_o])    
-    in_df = pd.concat([in_df,temp_in])
-    
-
-ga_df["id"] = ga_df.index
-al_df["id"] = al_df.index
-o_df["id"] = o_df.index
-in_df["id"] = in_df.index
-
-test = pd.merge(test,ga_df,on = ["id"],how = "left")
-test = pd.merge(test,al_df,on = ["id"],how = "left")
-test = pd.merge(test,o_df,on = ["id"],how = "left")
-test = pd.merge(test,in_df,on = ["id"],how = "left")
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
 
 
-
-X_train = train.head(2200)
-
-X_val = train.tail(200)
-
-y_train_1 = X_train['formation_energy_ev_natom']
-y_train_2 = X_train["bandgap_energy_ev"]
-
-y_val_1 = X_val['formation_energy_ev_natom']
-y_val_2 = X_val["bandgap_energy_ev"]
-
-
-X_train = X_train.drop(["formation_energy_ev_natom","bandgap_energy_ev"],axis =1)
-X_val = X_val.drop(["formation_energy_ev_natom","bandgap_energy_ev"],axis =1)
-
-
-X_train.In_0 = X_train.In_0.astype("float")
-X_train.In_1 = X_train.In_1.astype("float")
-X_train.In_2 = X_train.In_2.astype("float")
-X_train.In_3 = X_train.In_3.astype("float")
-X_train.In_4 = X_train.In_4.astype("float")
-X_train.In_5 = X_train.In_5.astype("float")
-
-X_val.In_0 = X_val.In_0.astype("float")
-X_val.In_1 = X_val.In_1.astype("float")
-X_val.In_2 = X_val.In_2.astype("float")
-X_val.In_3 = X_val.In_3.astype("float")
-X_val.In_4 = X_val.In_4.astype("float")
-X_val.In_5 = X_val.In_5.astype("float")
+cont_patterns = [
+    (b'US', b'United States'),
+    (b'IT', b'Information Technology'),
+    (b'(W|w)on\'t', b'will not'),
+    (b'(C|c)an\'t', b'can not'),
+    (b'(I|i)\'m', b'i am'),
+    (b'(A|a)in\'t', b'is not'),
+    (b'(\w+)\'ll', b'\g<1> will'),
+    (b'(\w+)n\'t', b'\g<1> not'),
+    (b'(\w+)\'ve', b'\g<1> have'),
+    (b'(\w+)\'s', b'\g<1> is'),
+    (b'(\w+)\'re', b'\g<1> are'),
+    (b'(\w+)\'d', b'\g<1> would'),
+]
+patterns = [(re.compile(regex), repl) for (regex, repl) in cont_patterns]
 
 
-test.In_0 = test.In_0.astype("float")
-test.In_1 = test.In_1.astype("float")
-test.In_2 = test.In_2.astype("float")
-test.In_3 = test.In_3.astype("float")
-test.In_4 = test.In_4.astype("float")
-test.In_5 = test.In_5.astype("float")
+def prepare_for_char_n_gram(text):
+    """ Simple text clean up process"""
+    # 1. Go to lower case (only good for english)
+    # Go to bytes_strings as I had issues removing all \n in r""
+    clean = bytes(text.lower(), encoding="utf-8")
+    # 2. Drop \n and  \t
+    clean = clean.replace(b"\n", b" ")
+    clean = clean.replace(b"\t", b" ")
+    clean = clean.replace(b"\b", b" ")
+    clean = clean.replace(b"\r", b" ")
+    # 3. Replace english contractions
+    for (pattern, repl) in patterns:
+        clean = re.sub(pattern, repl, clean)
+    # 4. Drop puntuation
+    # I could have used regex package with regex.sub(b"\p{P}", " ")
+    exclude = re.compile(b'[%s]' % re.escape(bytes(string.punctuation, encoding='utf-8')))
+    clean = b" ".join([exclude.sub(b'', token) for token in clean.split()])
+    # 5. Drop numbers - as a scientist I don't think numbers are toxic ;-)
+    clean = re.sub(b"\d+", b" ", clean)
+    # 6. Remove extra spaces - At the end of previous operations we multiplied space accurences
+    clean = re.sub(b'\s+', b' ', clean)
+    # Remove ending space if any
+    clean = re.sub(b'\s+$', b'', clean)
+    # 7. Now replace words by words surrounded by # signs
+    # e.g. my name is bond would become #my# #name# #is# #bond#
+    # clean = re.sub(b"([a-z]+)", b"#\g<1>#", clean)
+    clean = re.sub(b" ", b"# #", clean)  # Replace space
+    clean = b"#" + clean + b"#"  # add leading and trailing #
+
+    return str(clean, 'utf-8')
 
 
-params = {
-    'num_leaves': 7,
-    'objective': 'regression',
-    'min_data_in_leaf': 18,
-    'learning_rate': 0.05,
-    'feature_fraction': 0.93,
-    'bagging_fraction': 0.93,
-    'bagging_freq': 1,
-    'metric': 'l2',
-    'num_threads': 1
-}
-
-MAX_ROUNDS = 1500
-val_pred = []
-test_pred_1 = []
-cate_vars = []
-
-dtrain = lgb.Dataset(X_train.drop("id",axis = 1), label=y_train_1,categorical_feature=cate_vars)
-
-dval = lgb.Dataset(X_val.drop("id",axis = 1), label=y_val_1, reference=dtrain,categorical_feature=cate_vars)
-
-bst = lgb.train(params, dtrain, num_boost_round=MAX_ROUNDS,valid_sets=[dtrain, dval], early_stopping_rounds=50, verbose_eval=100)
-
-print("\n".join(("%s: %.2f" % x) for x in sorted(zip(X_train.columns, bst.feature_importance("gain")),key=lambda x: x[1], reverse=True)))
-
-val_pred.append(bst.predict(X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
-
-test_pred_1.append(bst.predict(test.drop("id",axis =1), num_iteration=bst.best_iteration or MAX_ROUNDS))
+@contextmanager
+def timer(name):
+    """
+    Taken from Konstantin Lopuhin https://www.kaggle.com/lopuhin
+    in script named : Mercari Golf: 0.3875 CV in 75 LOC, 1900 s
+    https://www.kaggle.com/lopuhin/mercari-golf-0-3875-cv-in-75-loc-1900-s
+    """
+    t0 = time.time()
+    yield
+    print(f'[{name}] done in {time.time() - t0:.0f} s')
 
 
-
-params = {
-    'num_leaves': 8,
-    'objective': 'regression',
-    'min_data_in_leaf': 18,
-    'learning_rate': 0.05,
-    'feature_fraction': 0.93,
-    'bagging_fraction': 0.93,
-    'bagging_freq': 1,
-    'metric': 'l2',
-    'num_threads': 1
-}
-
-MAX_ROUNDS = 1500
-val_pred = []
-test_pred_2 = []
-cate_vars = []
-
-dtrain = lgb.Dataset(X_train.drop("id",axis = 1), label=y_train_2,categorical_feature=cate_vars)
-
-dval = lgb.Dataset(X_val.drop("id",axis = 1), label=y_val_2, reference=dtrain,categorical_feature=cate_vars)
-
-bst = lgb.train(params, dtrain, num_boost_round=MAX_ROUNDS,valid_sets=[dtrain, dval], early_stopping_rounds=50, verbose_eval=100)
-
-print("\n".join(("%s: %.2f" % x) for x in sorted(zip(X_train.columns, bst.feature_importance("gain")),key=lambda x: x[1], reverse=True)))
-
-val_pred.append(bst.predict(X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
-
-test_pred_2.append(bst.predict(test.drop("id",axis =1), num_iteration=bst.best_iteration or MAX_ROUNDS))
+def count_regexp_occ(regexp="", text=None):
+    """ Simple way to get the number of occurence of a regex"""
+    return len(re.findall(regexp, text))
 
 
-sample = pd.read_csv("../input/sample_submission.csv")
+def get_indicators_and_clean_comments(df):
+    """
+    Check all sorts of content as it may help find toxic comment
+    Though I'm not sure all of them improve scores
+    """
+    # Count number of \n
+    df["ant_slash_n"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\n", x))
+    # Get length in words and characters
+    df["raw_word_len"] = df["comment_text"].apply(lambda x: len(x.split()))
+    df["raw_char_len"] = df["comment_text"].apply(lambda x: len(x))
+    # Check number of upper case, if you're angry you may write in upper case
+    df["nb_upper"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[A-Z]", x))
+    # Number of F words - f..k contains folk, fork,
+    df["nb_fk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[Ff]\S{2}[Kk]", x))
+    # Number of S word
+    df["nb_sk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[Ss]\S{2}[Kk]", x))
+    # Number of D words
+    df["nb_dk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[dD]ick", x))
+    # Number of occurence of You, insulting someone usually needs someone called : you
+    df["nb_you"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\W[Yy]ou\W", x))
+    # Just to check you really refered to my mother ;-)
+    df["nb_mother"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\Wmother\W", x))
+    # Just checking for toxic 19th century vocabulary
+    df["nb_ng"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\Wnigger\W", x))
+    # Some Sentences start with a <:> so it may help
+    df["start_with_columns"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"^\:+", x))
+    # Check for time stamp
+    df["has_timestamp"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\d{2}|:\d{2}", x))
+    # Check for dates 18:44, 8 December 2010
+    df["has_date_long"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\D\d{2}:\d{2}, \d{1,2} \w+ \d{4}", x))
+    # Check for date short 8 December 2010
+    df["has_date_short"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\D\d{1,2} \w+ \d{4}", x))
+    # Check for http links
+    df["has_http"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"http[s]{0,1}://\S+", x))
+    # check for mail
+    df["has_mail"] = df["comment_text"].apply(
+        lambda x: count_regexp_occ(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', x)
+    )
+    # Looking for words surrounded by == word == or """" word """"
+    df["has_emphasize_equal"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\={2}.+\={2}", x))
+    df["has_emphasize_quotes"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\"{4}\S+\"{4}", x))
 
-sample["formation_energy_ev_natom"] = test_pred_1[0]
-sample["bandgap_energy_ev"] = test_pred_2[0]
+    df["chick_count"] = df["comment_text"].apply(lambda x: x.count("!"))
+    df["qmark_count"] = df["comment_text"].apply(lambda x: x.count("?"))
 
-sample.to_csv("sub.csv",index = False)
+    # Now clean comments
+    df["clean_comment"] = df["comment_text"].apply(lambda x: prepare_for_char_n_gram(x))
+
+    # Get the new length in words and characters
+    df["clean_word_len"] = df["clean_comment"].apply(lambda x: len(x.split()))
+    df["clean_char_len"] = df["clean_comment"].apply(lambda x: len(x))
+    # Number of different characters used in a comment
+    # Using the f word only will reduce the number of letters required in the comment
+    df["clean_chars"] = df["clean_comment"].apply(lambda x: len(set(x)))
+    df["clean_chars_ratio"] = df["clean_comment"].apply(lambda x: len(set(x))) / df["clean_comment"].apply(
+        lambda x: 1 + min(99, len(x)))
+
+
+def char_analyzer(text):
+    """
+    This is used to split strings in small lots
+    I saw this in an article (I can't find the link anymore)
+    so <talk> and <talking> would have <Tal> <alk> in common
+    """
+    tokens = text.split()
+    return [token[i: i + 3] for token in tokens for i in range(len(token) - 2)]
+
+def clean_csr(csr_trn, csr_sub, min_df):
+    trn_min = np.where(csr_trn.getnnz(axis=0) >= min_df)[0]
+    sub_min = {x for x in np.where(csr_sub.getnnz(axis=0) >= min_df)[0]}
+    mask= [x for x in trn_min if x in sub_min]
+    return csr_trn[:, mask], csr_sub[:, mask]
+
+def get_numerical_features(trn, sub):
+    """
+    As @bangda suggested FM_FTRL either needs to scaled output or dummies
+    So here we go for dummies
+    """
+    ohe = OneHotEncoder()
+    full_csr = ohe.fit_transform(np.vstack((trn.values, sub.values)))
+    csr_trn = full_csr[:trn.shape[0]]
+    csr_sub = full_csr[trn.shape[0]:]
+    del full_csr
+    gc.collect()
+    # Now remove features that don't have enough samples either in train or test
+    return clean_csr(csr_trn, csr_sub, 3)
+
+
+if __name__ == '__main__':
+
+    class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+
+    with timer("Reading input files"):
+        train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv').fillna(' ')
+        test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv').fillna(' ')
+
+    with timer("Performing basic NLP"):
+        for df in [train, test]:
+            get_indicators_and_clean_comments(df)
+
+    train_text = train['clean_comment'].fillna("")
+    test_text = test['clean_comment'].fillna("")
+    all_text = pd.concat([train_text, test_text])
+
+    with timer("Creating numerical features"):
+        num_features = [f_ for f_ in train.columns
+                        if f_ not in ["comment_text", "clean_comment", "id", "remaining_chars",
+                                      'has_ip_address'] + class_names]
+
+        # FM_FTRL likes categorical data
+        for f in num_features:
+            all_cut = pd.cut(pd.concat([train[f], test[f]], axis=0), bins=20, labels=False, retbins=False)
+            train[f] = all_cut.values[:train.shape[0]]
+            test[f] = all_cut.values[train.shape[0]:]
+
+        train_num_features, test_num_features = get_numerical_features(train[num_features], test[num_features])
+
+    with timer("Tfidf on word"):
+        word_vectorizer = TfidfVectorizer(
+            sublinear_tf=True,
+            strip_accents='unicode',
+            tokenizer=lambda x: re.findall(r'[^\p{P}\W]+', x),
+            analyzer='word',
+            token_pattern=None,
+            stop_words='english',
+            ngram_range=(1, 2), 
+            max_features=300000)
+        X = word_vectorizer.fit_transform(all_text)
+        train_word_features = X[:train.shape[0]]
+        test_word_features = X[train.shape[0]:]
+        del (X)
+
+    with timer("Tfidf on subword n_gram"):
+        subword_vectorizer = TfidfVectorizer(
+            sublinear_tf=True,
+            strip_accents='unicode',
+            tokenizer=char_analyzer,
+            analyzer='word',
+            ngram_range=(1, 3),
+            max_features=60000)
+        X = subword_vectorizer.fit_transform(all_text)
+        train_subword_features = X[:train.shape[0]]
+        test_subword_features = X[train.shape[0]:]
+        del (X)
+        
+    with timer("Tfidf on char n_gram"):
+        char_vectorizer = TfidfVectorizer(
+            sublinear_tf=True,
+            strip_accents='unicode',
+            analyzer='char',
+            ngram_range=(1, 3),
+            max_features=60000)
+        X = char_vectorizer.fit_transform(all_text)
+        train_char_features = X[:train.shape[0]]
+        test_char_features = X[train.shape[0]:]
+        del (X)
+
+    with timer("Stacking matrices"):
+        train_features = hstack(
+            [
+                train_char_features,
+                train_word_features,
+                train_num_features,
+                train_subword_features
+            ]
+        ).tocsr()
+        del train_word_features, train_num_features, train_char_features,  train_subword_features
+        gc.collect()
+
+        test_features = hstack(
+            [
+                test_char_features,
+                test_word_features,
+                test_num_features,
+                test_subword_features
+            ]
+        ).tocsr()
+        del test_word_features, test_num_features, test_char_features, test_subword_features
+        gc.collect()
+
+    print("Shapes just to be sure : ", train_features.shape, test_features.shape) 
+
+    #Correct for label imbalance with sample weights
+    class_weights= {'toxic':1.0, 'severe_toxic':0.2, 'obscene':1.0, 'threat':0.1, 'insult':0.8, 'identity_hate':0.2}
+    f_range = (1e-6, 1 - 1e-6)
+    with timer("Scoring LogisticRegression"):
+        folds = KFold(n_splits=4, shuffle=True, random_state=1)
+        losses = []
+        losses_per_folds = np.zeros(folds.n_splits)
+        submission = pd.DataFrame.from_dict({'id': test['id']})
+
+        for i_c, class_name in enumerate(class_names):
+            class_pred = np.zeros(len(train))
+            train_target = train[class_name].values
+            train_weight = np.array([1.0 if x==1 else class_weights[class_name] for x in train_target])
+            submission[class_name] = 0.0
+            cv_scores = []
+            for n_fold, (trn_idx, val_idx) in enumerate(folds.split(train_features)):
+                clf = FM_FTRL(
+                    alpha=0.02, beta=0.01, L1=0.00001, L2=30.0,
+                    D=train_features.shape[1], alpha_fm=0.1,
+                    L2_fm=0.5, init_fm=0.01, weight_fm= 50.0,
+                    D_fm=200, e_noise=0.0, iters=3,
+                    inv_link="identity", e_clip=1.0, threads=4, use_avx= 1, verbose=1
+                )
+                clf.fit(train_features[trn_idx], train_target[trn_idx], train_weight[trn_idx], reset=False)
+                class_pred[val_idx] = sigmoid(clf.predict(train_features[val_idx]))
+                score = roc_auc_score(train_target[val_idx], class_pred[val_idx])
+                cv_scores.append(score)
+                losses_per_folds[n_fold] += score / len(class_names)
+                submission[class_name] += sigmoid(clf.predict(test_features)) / folds.n_splits
+
+            #Classifier chain. Order of classes not optimized
+            train_features = csr_matrix(hstack([train_features, np.reshape(np.array(
+                [0 if x<0.5 else 1 for x in class_pred]), (train.shape[0], 1))]))
+            test_features = csr_matrix(hstack([test_features, np.reshape(np.array(
+                [0 if x<0.5 else 1 for x in submission[class_name]]), (test.shape[0], 1))]))
+
+            cv_score = roc_auc_score(train_target, class_pred)
+            losses.append(cv_score)
+            train[class_name] = class_pred
+            print('CV score for class %-15s is full %.6f | mean %.6f+%.6f'
+                  % (class_name, cv_score, np.mean(cv_scores), np.std(cv_scores)))
+        print('Total CV score is %.6f+%.6f' % (np.mean(losses), np.std(losses_per_folds)))
+
+        train[["id"] + class_names + [f for f in class_names]].to_csv("lvl0_wordbatch_clean_oof.csv",
+                                                                               index=False,
+                                                                               float_format="%.8f")
+
+submission.to_csv("lvl0_wordbatch_clean_sub.csv", index=False, float_format="%.8f")

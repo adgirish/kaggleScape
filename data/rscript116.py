@@ -1,203 +1,120 @@
-import pandas as pd # Used to open CSV files 
-import numpy as np # Used for matrix operations
-import cv2 # Used for image augmentation
+import itertools
+
+import numpy as np
+import pandas as pd
+
 from matplotlib import pyplot as plt
-np.random.seed(666)
+import seaborn as sns
+
+from sklearn.feature_selection import VarianceThreshold
+from sklearn.preprocessing import normalize
+from sklearn.decomposition import PCA
 
 
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Flatten, Activation
-from keras.layers import Conv2D, MaxPooling2D
-from keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
-from keras.layers.normalization import BatchNormalization
-from keras.optimizers import Adam
+def principal_component_analysis(x_train):
 
-df_train = pd.read_json('../input/train.json') # this is a dataframe
+    """
+    Principal Component Analysis (PCA) identifies the combination
+    of attributes (principal components, or directions in the feature space)
+    that account for the most variance in the data.
 
+    Let's calculate the 2 first principal components of the training data,
+    and then create a scatter plot visualizing the training data examples
+    projected on the calculated components.
+    """
 
-def get_scaled_imgs(df):
-    imgs = []
+    # Extract the variable to be predicted
+    y_train = x_train["TARGET"]
+    x_train = x_train.drop(labels="TARGET", axis=1)
+    classes = np.sort(np.unique(y_train))
+    labels = ["Satisfied customer", "Unsatisfied customer"]
+
+    # Normalize each feature to unit norm (vector length)
+    x_train_normalized = normalize(x_train, axis=0)
     
-    for i, row in df.iterrows():
-        #make 75x75 image
-        band_1 = np.array(row['band_1']).reshape(75, 75)
-        band_2 = np.array(row['band_2']).reshape(75, 75)
-        band_3 = band_1 + band_2 # plus since log(x*y) = log(x) + log(y)
-        
-        # Rescale
-        a = (band_1 - band_1.mean()) / (band_1.max() - band_1.min())
-        b = (band_2 - band_2.mean()) / (band_2.max() - band_2.min())
-        c = (band_3 - band_3.mean()) / (band_3.max() - band_3.min())
+    # Run PCA
+    pca = PCA(n_components=2)
+    x_train_projected = pca.fit_transform(x_train_normalized)
 
-        imgs.append(np.dstack((a, b, c)))
+    # Visualize
+    fig = plt.figure(figsize=(10, 7))
+    ax = fig.add_subplot(1, 1, 1)
+    colors = [(0.0, 0.63, 0.69), 'black']
+    markers = ["o", "D"]
+    for class_ix, marker, color, label in zip(
+            classes, markers, colors, labels):
+        ax.scatter(x_train_projected[np.where(y_train == class_ix), 0],
+                   x_train_projected[np.where(y_train == class_ix), 1],
+                   marker=marker, color=color, edgecolor='whitesmoke',
+                   linewidth='1', alpha=0.9, label=label)
+        ax.legend(loc='best')
+    plt.title(
+        "Scatter plot of the training data examples projected on the "
+        "2 first principal components")
+    plt.xlabel("Principal axis 1 - Explains %.1f %% of the variance" % (
+        pca.explained_variance_ratio_[0] * 100.0))
+    plt.ylabel("Principal axis 2 - Explains %.1f %% of the variance" % (
+        pca.explained_variance_ratio_[1] * 100.0))
+    plt.show()
 
-    return np.array(imgs)
-
-
-Xtrain = get_scaled_imgs(df_train)
-Ytrain = np.array(df_train['is_iceberg'])
-
-
-df_train.inc_angle = df_train.inc_angle.replace('na',0)
-idx_tr = np.where(df_train.inc_angle>0)
-
-
-Ytrain = Ytrain[idx_tr[0]]
-Xtrain = Xtrain[idx_tr[0],...]
-
-
-def get_more_images(imgs):
-    
-    more_images = []
-    vert_flip_imgs = []
-    hori_flip_imgs = []
-      
-    for i in range(0,imgs.shape[0]):
-        a=imgs[i,:,:,0]
-        b=imgs[i,:,:,1]
-        c=imgs[i,:,:,2]
-        
-        av=cv2.flip(a,1)
-        ah=cv2.flip(a,0)
-        bv=cv2.flip(b,1)
-        bh=cv2.flip(b,0)
-        cv=cv2.flip(c,1)
-        ch=cv2.flip(c,0)
-        
-        vert_flip_imgs.append(np.dstack((av, bv, cv)))
-        hori_flip_imgs.append(np.dstack((ah, bh, ch)))
-      
-    v = np.array(vert_flip_imgs)
-    h = np.array(hori_flip_imgs)
-       
-    more_images = np.concatenate((imgs,v,h))
-    
-    return more_images
+    plt.savefig("pca.pdf", format='pdf')
+    plt.savefig("pca.png", format='png')
 
 
-Xtr_more = get_more_images(Xtrain) 
-Ytr_more = np.concatenate((Ytrain,Ytrain,Ytrain))
+def remove_feat_constants(data_frame):
+    # Remove feature vectors containing one unique value,
+    # because such features do not have predictive value.
+    print("")
+    print("Deleting zero variance features...")
+    # Let's get the zero variance features by fitting VarianceThreshold
+    # selector to the data, but let's not transform the data with
+    # the selector because it will also transform our Pandas data frame into
+    # NumPy array and we would like to keep the Pandas data frame. Therefore,
+    # let's delete the zero variance features manually.
+    n_features_originally = data_frame.shape[1]
+    selector = VarianceThreshold()
+    selector.fit(data_frame)
+    # Get the indices of zero variance feats
+    feat_ix_keep = selector.get_support(indices=True)
+    orig_feat_ix = np.arange(data_frame.columns.size)
+    feat_ix_delete = np.delete(orig_feat_ix, feat_ix_keep)
+    # Delete zero variance feats from the original pandas data frame
+    data_frame = data_frame.drop(labels=data_frame.columns[feat_ix_delete],
+                                 axis=1)
+    # Print info
+    n_features_deleted = feat_ix_delete.size
+    print("  - Deleted %s / %s features (~= %.1f %%)" % (
+        n_features_deleted, n_features_originally,
+        100.0 * (np.float(n_features_deleted) / n_features_originally)))
+    return data_frame
 
 
-
-def get_more_images(imgs):
-    
-    more_images = []
-    vert_flip_imgs = []
-    hori_flip_imgs = []
-      
-    for i in range(0,imgs.shape[0]):
-        a=imgs[i,:,:,0]
-        b=imgs[i,:,:,1]
-        c=imgs[i,:,:,2]
-        
-        av=cv2.flip(a,1)
-        ah=cv2.flip(a,0)
-        bv=cv2.flip(b,1)
-        bh=cv2.flip(b,0)
-        cv=cv2.flip(c,1)
-        ch=cv2.flip(c,0)
-        
-        vert_flip_imgs.append(np.dstack((av, bv, cv)))
-        hori_flip_imgs.append(np.dstack((ah, bh, ch)))
-      
-    v = np.array(vert_flip_imgs)
-    h = np.array(hori_flip_imgs)
-       
-    more_images = np.concatenate((imgs,v,h))
-    
-    return more_images
-
-Ytr_more = np.concatenate((Ytrain,Ytrain,Ytrain))
+def remove_feat_identicals(data_frame):
+    # Find feature vectors having the same values in the same order and
+    # remove all but one of those redundant features.
+    print("")
+    print("Deleting identical features...")
+    n_features_originally = data_frame.shape[1]
+    # Find the names of identical features by going through all the
+    # combinations of features (each pair is compared only once).
+    feat_names_delete = []
+    for feat_1, feat_2 in itertools.combinations(
+            iterable=data_frame.columns, r=2):
+        if np.array_equal(data_frame[feat_1], data_frame[feat_2]):
+            feat_names_delete.append(feat_2)
+    feat_names_delete = np.unique(feat_names_delete)
+    # Delete the identical features
+    data_frame = data_frame.drop(labels=feat_names_delete, axis=1)
+    n_features_deleted = len(feat_names_delete)
+    print("  - Deleted %s / %s features (~= %.1f %%)" % (
+        n_features_deleted, n_features_originally,
+        100.0 * (np.float(n_features_deleted) / n_features_originally)))
+    return data_frame
 
 
-def getModel():
-    #Build keras model
-    
-    model=Sequential()
-    
-    # CNN 1
-    model.add(Conv2D(64, kernel_size=(3, 3),activation='relu', input_shape=(75, 75, 3)))
-    model.add(MaxPooling2D(pool_size=(3, 3), strides=(2, 2)))
-    model.add(Dropout(0.2))
-
-    # CNN 2
-    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu' ))
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    model.add(Dropout(0.2))
-
-    # CNN 3
-    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    model.add(Dropout(0.3))
-
-    #CNN 4
-    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
-    model.add(Dropout(0.3))
-
-    # You must flatten the data for the dense layers
-    model.add(Flatten())
-
-    #Dense 1
-    model.add(Dense(512, activation='relu'))
-    model.add(Dropout(0.2))
-
-    #Dense 2
-    model.add(Dense(256, activation='relu'))
-    model.add(Dropout(0.2))
-
-    # Output 
-    model.add(Dense(1, activation="sigmoid"))
-
-    optimizer = Adam(lr=0.001, decay=0.0)
-    model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy'])
-    
-    return model
-
-model = getModel()
-model.summary()
-
-batch_size = 32
-earlyStopping = EarlyStopping(monitor='val_loss', patience=10, verbose=0, mode='min')
-mcp_save = ModelCheckpoint('.mdl_wts.hdf5', save_best_only=True, monitor='val_loss', mode='min')
-reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='min')
-
-#------------------------------------------------------------------------------------------------------------------------------------------------------
-# Let's view progress 
-history = model.fit(Xtr_more, Ytr_more, batch_size=batch_size, epochs=50, verbose=1, callbacks=[earlyStopping, mcp_save, reduce_lr_loss], validation_split=0.25)
-
-print(history.history.keys())
-#
-fig = plt.figure()
-plt.plot(history.history['acc'])
-plt.plot(history.history['val_acc'])
-plt.title('model accuracy')
-plt.ylabel('accuracy')
-plt.xlabel('epoch')
-plt.legend(['train', 'test'], loc='upper left')
-plt.plot(history.history['loss'])
-plt.plot(history.history['val_loss'])
-plt.title('model loss')
-plt.ylabel('loss')
-plt.xlabel('epoch')
-plt.legend(['train', 'test'], loc='lower left')
-#
-fig.savefig('performance.png')
-#---------------------------------------------------------------------------------------
-
-model.load_weights(filepath = '.mdl_wts.hdf5')
-
-score = model.evaluate(Xtrain, Ytrain, verbose=1)
-print('Train score:', score[0])
-print('Train accuracy:', score[1])
-
-df_test = pd.read_json('../input/test.json')
-df_test.inc_angle = df_test.inc_angle.replace('na',0)
-Xtest = (get_scaled_imgs(df_test))
-pred_test = model.predict(Xtest)
-
-submission = pd.DataFrame({'id': df_test["id"], 'is_iceberg': pred_test.reshape((pred_test.shape[0]))})
-print(submission.head(10))
-
-submission.to_csv('submission.csv', index=False)
+if __name__ == "__main__":
+    x_train = pd.read_csv(filepath_or_buffer="../input/train.csv",
+                          index_col=0, sep=',')
+    x_train = remove_feat_constants(x_train)
+    x_train = remove_feat_identicals(x_train)
+    principal_component_analysis(x_train)

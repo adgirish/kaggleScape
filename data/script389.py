@@ -1,516 +1,836 @@
 
 # coding: utf-8
 
-# *Update: Added analysis for the 2017 data below comparing logerror to kde. *
-# <h1>The Parcel Density Hypothesis</h1>
-# This Notebook analyses the relationship between parcel density and logerror. For a given parcel, a high parcel density  indicates a high amount of data points in its geographical region. This 'density' around a parcel could be related to the logerror we are predicting, since model performance (i.e. logerror) is generally dependent on the amount of representative data it was trained on. Therefore, I will test the following hypothesis:
+# ## Introduction
 # 
-# <h3>Hypothesis: A higher parcel density is associated with a lower absolute logerror. </h3>
-# <p></p>
-# <p></p>
-# This notebook approaches this in the following order:
-# 1. Imports
-# 2. Method
-# 3. Results
-# 4. Conclusion
-# 5. Update on 2017 training data - the whole analysis again with logerror (not absolute logerror)
+# **_Poonam Ligade_**
 # 
-# Let's start!
+# *30th Jan 2017*
 # 
+# I am trying to predict for how much money each house can be sold??
+# 
+# In this mainly we will look at data exploration and visulisation part
+# 
+# EDA is often most tedious and boring job.
+# 
+# But the more time you spend here on understanding, cleaning and preparing data the better fruits your predictive model will bare!!
+# 
+# Lets start.
+# 
+# 1) **Introduction**
+# 
+#   1. Import Libraries
+#   2. Load data
+#   3. Variable Identification
+#   4. Run Statistical summaries
+#   5. Correlation with target variable
+# 
+#  
+# 2) **Missing values imputation**
+# 
+#   1. Figure out missing value columns
+#   2. Fill out missing values
+# 
+# 
+# 3) **Visualisations**
+# 
+#  1. Univariate Analysis
+#  2. Bivariate Analysis
 
-# <h1>1. Imports </h1>
-# First we import the packages we need.  Then we import data. Since we want to know the relationship between logerror and parcel density, we only need the rows from the training set that contain the x,y coordinates.
+# **Import libraries**
+# ====================
 
 # In[ ]:
 
 
-#  Packages
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import gc
-from matplotlib import pyplot as plt
-from sklearn.neighbors import KDTree
-from scipy.stats.stats import pearsonr
-from scipy.stats import rankdata
+import pandas as pd
+import numpy as np
+
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+import seaborn as sns
+sns.set(style="whitegrid", color_codes=True)
+sns.set(font_scale=1)
 
 
-# In[ ]:
-
-
-#  Data
-train = pd.read_csv('../input/train_2016_v2.csv')
-props = pd.read_csv('../input/properties_2016.csv',low_memory=False)
-train = train.merge(props,how='left',on='parcelid')
-train = train[['parcelid','longitude','latitude','logerror']]
-train.dropna(inplace=True)  #
-del props  # delete redundant data
-gc.collect()  # Free up memory
-print("DataFrame sample:")
-print("***************************************************")
-train.head()
-print("***************************************************")
-print("shape = ",train.shape)
-
-
-# <h1>2. Method: Kernel Density Estimation </h1>
-# Now that the data and packages are loaded, we continue with estimating parcel densities. This technique  is more generally referred to as** "Kernel Density Estimation", or KDE**. It estimates the probability density function (PDF) on given data points. In this case, these data points are the geographical coordinates of parcels. Therefore, I refer to KDE as **Parcel Density Estimation, or Parcel Density Estimate (PDE).**
-# 
-# *More info: https://en.wikipedia.org/wiki/Kernel_density_estimation *
-
-# <h3> 2.1 Parcel Density calculation</h3>
-# 
-# In this kernel, I use a** Gaussian kernel** because it seems the most intuitive method (other options are ‘gaussian’, ‘tophat’, ‘epanechnikov’, ‘exponential’, ‘linear’, ‘cosine’) . Here is 1D example from the sklearn documentation:
-# ![](http://scikit-learn.org/stable/_images/sphx_glr_plot_kde_1d_001.png)
-# 
-# The KDE depends on the **bandwidth (bw)**. If the bandwidth is high, the KDE is relatively sensitive to more distant parcels. When the bandwidth is low, the KDE is relatively senstive to local parcels. For now, I calculate the bandwidth on 5 arbitrarily chosen bandwidths: 30,000, 10,000, 3,000, 1,000 and 300. Here is an illustration of how bandwidth affects KDE from wikipedia:
-# ![](https://upload.wikimedia.org/wikipedia/commons/thumb/2/2a/Kernel_density.svg/250px-Kernel_density.svg.png)
-# 
-# For optimizing the **performance** of the function, I chose leafsize 20 and relative tolerance of 0.00001. Leafsize is essentially a memory-cpu tradeoff and relative tolerance is a precision-cpu tradeoff. Both can greatly influence the time it takes to calculate the KDE. A great article on this topic can be found here: https://jakevdp.github.io/blog/2013/12/01/kernel-density-estimation/  . 
+# **Load train & test data**
+# ====================
 
 # In[ ]:
 
 
-def get_pde(train,bw):
-    x = train['longitude'].values
-    y = train['latitude'].values
-    xy = np.vstack([x,y])
-    X = np.transpose(xy)
-    tree = KDTree(X,leaf_size = 20 )     
-    parcelDensity = tree.kernel_density(X, h=bw,kernel='gaussian',rtol=0.00001)
-    return parcelDensity
+houses=pd.read_csv("../input/train.csv")
+houses.head()
 
 
 # In[ ]:
 
 
-parcelDensity30000 = get_pde(train,30000)
-parcelDensity10000 = get_pde(train,10000)
-parcelDensity3000 = get_pde(train,3000)
-parcelDensity1000 = get_pde(train,1000)
-parcelDensity300 = get_pde(train,300)
-
-
-# <h3>2.1 Parcel Density visualization at bandwith 30,000</h3>
-# Let's visualize the results of our KDE in a scatter plot. We use the longitude and latitude of our parcels as x,y coordinates and color these points by their density. Below is the plot for a high bandwidth. It clearly shows the most dense area in bright yellow, the more semi-central locations in orange, the pheripheral locations in purple and the relatively isolated locations in black.
-# 
-# 
-
-# In[ ]:
-
-
-plt.figure(figsize=(14,14))
-plt.axis("off")
-plt.title("Gaussian Parcel Density Estimate at bandwidth 30,000")
-plt.scatter(train['longitude'].values, train['latitude'].values, c=parcelDensity30000,cmap='inferno', s=1, edgecolor='')
-
-
-# The bright yellow dense area on the map allignes almost perfectly with what google maps defines as the LA downtown. This means that the parcel density feature now contains informations about the centrality of a particular parcel. https://www.google.nl/maps/place/Downtown,+Los+Angeles,+CA,+USA/@33.9761623,-118.5305526,10z/data=!4m5!3m4!1s0x80c2c634253dfd01:0x26fe52df19a5a920!8m2!3d34.040713!4d-118.2467693 
-
-# <h3>2.2 Parcel Density visualization at bandwith 10,000, 3,000, 1,000 and 300</h3>
-# Now I plot the KDE's in four subplots for the remaining four bandwidths.  In smaller bandwidths, local fluctuations are relatively strong and that cann cause outliers that outscale the "normal" flucations in KDE in the plot image. To improve the visibility of the moderate fluctuations, I **rankscaled** the KDE's for these plots by their percentile. The script in the next box does this.
-
-# In[ ]:
-
-
-rankScaled30000 = 100*rankdata(parcelDensity30000)/len(parcelDensity30000)
-rankScaled10000 = 100*rankdata(parcelDensity10000)/len(parcelDensity10000)
-rankScaled3000 = 100*rankdata(parcelDensity3000)/len(parcelDensity3000)
-rankScaled1000 = 100*rankdata(parcelDensity1000)/len(parcelDensity1000)
-rankScaled300 = 100*rankdata(parcelDensity300)/len(parcelDensity300)
+houses_test = pd.read_csv("../input/test.csv")
+#transpose
+houses_test.head()
+#note their is no "SalePrice" column here which is our target varible.
 
 
 # In[ ]:
 
 
-fig = plt.figure(figsize=(15,15))
-
-ax1 = fig.add_subplot(221)
-ax1.set_title('bandwidth = 10,000')
-ax1.set_axis_off()
-ax1.scatter(train['longitude'].values, train['latitude'].values, c=rankScaled10000,cmap='inferno', s=1, edgecolor='')
-
-ax2 = fig.add_subplot(222)
-ax2.set_title('bandwidth = 3,000')
-ax2.set_axis_off()
-ax2.scatter(train['longitude'].values, train['latitude'].values, c=rankScaled3000,cmap='inferno', s=1, edgecolor='')
-
-ax3 = fig.add_subplot(223)
-ax3.set_title('bandwidth = 1,000')
-ax3.set_axis_off()
-ax3.scatter(train['longitude'].values, train['latitude'].values, c=rankScaled1000,cmap='inferno', s=1, edgecolor='')
-
-ax4 = fig.add_subplot(224)
-ax4.set_title('bandwidth = 300')
-ax4.set_axis_off()
-ax4.scatter(train['longitude'].values, train['latitude'].values, c=rankScaled300,cmap='inferno', s=1, edgecolor='')
+#shape command will give number of rows/samples/examples and number of columns/features/predictors in dataset
+#(rows,columns)
+houses.shape
 
 
-# <h1>3. Results </h1>
-# We want to test whether higher KDE's are associated with lower absolute errors. Therefore, we want to compare the KDE to the absolute logerror. We draw scatter plots and measure the Pearson correlation for all five bandwidths
-
-# <h3>3.1 Result for Bandwidth 30,000</h3>
-# First, we look at the results for bandwidth 30,000 in detail
+# There are total **1460 samples** which we can use to train model and **80 features** and **1 target variable.**
 
 # In[ ]:
 
 
-abs_logerrors = np.abs(train['logerror'].values)
-def moving_average(a, n=3) :
-    ret = np.cumsum(a, dtype=float)
-    ret[n:] = ret[n:] - ret[:-n]
-    return ret[n - 1:] / n
+houses_test.shape
+#1 column less because target variable isn't there in test set!
+
+
+# *Variable Identification*
+# -----------------------
+
+# In[ ]:
+
+
+#info method provides information about dataset like 
+#total values in each column, null/not null, datatype, memory occupied etc
+houses.info()
 
 
 # In[ ]:
 
 
-fig = plt.figure(figsize=(15,15))
-fig.suptitle("Parcel Density Vs. Logerror")
-ax1, ax2= fig.add_subplot(221),fig.add_subplot(222)
-x1,x2 = parcelDensity30000, rankScaled30000
-index1, index2 = x1.argsort(), x2.argsort()
-x1 = x1[index1[::-1]]
-x2 = x2[index2[::-1]]
-y = abs_logerrors
-y = y[index1[::-1]]
-y_av = moving_average(y,n=250)
-y_av = [0]*249 + list(y_av)
+#How many columns with different datatypes are there?
+houses.get_dtype_counts()
 
-m, b = np.polyfit(x1,y , 1)
-ax1.plot(x1, y, '.',alpha=0.5,color='skyblue')
-ax1.plot(x1,y_av,linewidth=6,color="steelblue")
-ax1.plot(x1, m*x1 + b, '--',linewidth=3,color='red')
-
-ax1.set_xlim([-0.000000001,0.00000025])
-ax1.set_ylim([-0.0,2])
-ax1.set_ylabel("logerror",fontsize='large')
-ax1.set_xlabel("PDE",fontsize='large')
-
-m, b = np.polyfit(x2,y , 1)
-ax2.plot(x2, y, '.',alpha=0.5,color='skyblue')
-ax2.plot(x2,y_av,linewidth=6,color="steelblue")
-ax2.plot(x2, m*x2 + b, '--',linewidth=3,color='red')
-ax2.set_xlabel("PDE - ranked",fontsize='large')
-ax2.set_ylabel("Logerror",fontsize='large')
-ax2.set_xlim([0,100])
-ax2.set_ylim([-0.0,2])
-
-
-
-#     > light blue dots: individual data points
-#     > dark blue line: moving average (window=250)
-#     > red dashed line: linear fit
-# **Analysis**
-# 
-# **Left **The red coefficient line indicates a weak positive relation between PDE and absolute logerror. Observering the scatter plot from the naked eye, there seems to be a stronger relationship between PDE and logerror than the coefficient line indicates. This is because some ranges for the PDE are relatively more common and therefore have more extreme values. I compensated for this on the** right** by putting the **ranked** PDE on the x-axis rather than the PDE itself.  Each percentile in the ranked PDE is (by definition) equally sized and therefore the **right  **provides  a  clearer view on the weak relationship between absolute logerror and PDE. 
-# 
-# **Now we'll check if the correlation is significant:**
 
 # In[ ]:
 
 
-corrCoef_30000_1, p_twoTailed_30000_1 = pearsonr(x1,y)
-corrCoef_30000_2, p_twoTailed_30000_2 = pearsonr(x2,y)
-p_oneTailed_30000_1 = 1 - (p_twoTailed_30000_1/2)
-
-print("Result for bandwidth 30,000:")
-print("*******************************************************************")
-print("Correlation Coefficient: ",corrCoef_30000_1)
-print("Two tailed_p: ",p_twoTailed_30000_1)
-print("One tailed p for negative correlation: ",p_oneTailed_30000_1)
-print("*******************************************************************")
+##Describe gives statistical information about numerical columns in the dataset
+houses.describe()
 
 
-# 
-# 
-# **Result: **The p-value indicates that **there is no significant negative correlation between PDE and absolute logerror at bandwidth 30,000**. 
-
-# <h3> 3.2 Results for bandwidths 10,000, 3,000, 1,000 and 300 </h3>
-# To avoid an overkill of plots and information, we'll ignore the ranked PDE and focus the normal PDE. 
+# **Correlation in Data**
+# ====================
 
 # In[ ]:
 
 
-fig = plt.figure(figsize=(15,15))
-x1,x2,x3,x4 = parcelDensity10000, parcelDensity3000, parcelDensity1000,parcelDensity300
-y = abs_logerrors
-
-index1, index2,index3,index4 = x1.argsort(), x2.argsort(), x3.argsort(), x4.argsort()
-x1, x2, x3, x4 = x1[index1[::-1]],  x2[index2[::-1]],  x3[index3[::-1]], x4[index4[::-1]]
-x1 = x1 - min(x1)
-x2 = x2 - min(x2)
-x3 = x3 - min(x3)
-x4 = x4 - min(x4)
-
-y1, y2, y3, y4 = y[index1[::-1]], y[index2[::-1]],y[index3[::-1]],y[index4[::-1]]
-y_av1 = moving_average(y1,n=100)
-y_av1 = [0]*99 + list(y_av1)
-y_av2 = moving_average(y2,n=100)
-y_av2 = [0]*99 + list(y_av2)
-y_av3 = moving_average(y3,n=100)
-y_av3 = [0]*99 + list(y_av3)
-y_av4 = moving_average(y4,n=100)
-y_av4 = [0]*99 + list(y_av4)
-
-ax1 = fig.add_subplot(221)
-m, b = np.polyfit(x1,y1 , 1)
-ax1.plot(x1, y1, '.',alpha=0.5,color='skyblue')
-ax1.plot(x1,y_av1,linewidth=6,color="steelblue")
-ax1.plot(x1, m*x1 + b, '--',linewidth=3,color='red')
-ax1.set_xlim([0,0.0000005])
-ax1.set_ylim([-0.0,2])
-ax1.set_ylabel("logerror",fontsize='large')
-ax1.set_xlabel("PDE",fontsize='large')
-
-ax2 = fig.add_subplot(222)
-m, b = np.polyfit(x2,y2 , 1)
-ax2.plot(x2, y2, '.',alpha=0.5,color='skyblue')
-ax2.plot(x2,y_av2,linewidth=4,color="steelblue")
-ax2.plot(x2, m*x2 + b, '--',linewidth=3,color='red')
-ax2.set_xlim([0,0.0000015])
-ax2.set_ylim([-0.0,2])
-ax2.set_ylabel("logerror",fontsize='large')
-ax2.set_xlabel("PDE",fontsize='large')
-
-ax3 = fig.add_subplot(223)
-m, b = np.polyfit(x3,y3 , 1)
-ax3.plot(x3, y3, '.',alpha=0.5,color='skyblue')
-ax3.plot(x3,y_av3,linewidth=4,color="steelblue")
-ax3.plot(x3, m*x3 + b, '--',linewidth=3,color='red')
-ax3.set_xlim([-0,0.000005])
-ax3.set_ylim([-0.0,2])
-ax3.set_ylabel("logerror",fontsize='large')
-ax3.set_xlabel("PDE",fontsize='large')
-
-ax4 = fig.add_subplot(224)
-m, b = np.polyfit(x4,y4 , 1)
-ax4.plot(x4, y, '.',alpha=0.5,color='skyblue')
-ax4.plot(x4,y_av4,linewidth=4,color="steelblue")
-ax4.plot(x4, m*x4 + b, '--',linewidth=3,color='red')
-ax4.set_xlim([-0.000000001,0.00004])
-ax4.set_ylim([-0.0,2])
-ax4.set_ylabel("logerror",fontsize='large')
-ax4.set_xlabel("PDE",fontsize='large')
+corr=houses.corr()["SalePrice"]
+corr[np.argsort(corr, axis=0)[::-1]]
 
 
-
-# **Analysis:** The plots vaguely suggest, for all four bandwidths,  that the mean absolute logerror declines as PDE increases. At the higher PDE's, the sparsity of datapoints causes some jumpy behavior in the moving average. These are probably result of the reduced precision I used when calculating the KDE (remains to be confirmed).
+# OverallQual ,GrLivArea ,GarageCars,GarageArea ,TotalBsmtSF, 1stFlrSF     ,FullBath,TotRmsAbvGrd,YearBuilt, YearRemodAdd have more than 0.5 correlation with SalePrice. 
 # 
-# ** Next I calculate if this correlation is significant**
+# EnclosedPorch and KitchenAbvGr  have little negative correlation with target variable.
+# 
+# These can prove to be important features to predict SalePrice.
 # 
 
 # In[ ]:
 
 
-corrCoef_10000, p_twoTailed_10000 = pearsonr(x1,y1)
-p_oneTailed_10000 = p_twoTailed_10000/2
-corrCoef_3000, p_twoTailed_3000 = pearsonr(x2,y2)
-p_oneTailed_3000 = p_twoTailed_3000/2
-corrCoef_1000, p_twoTailed_1000 = pearsonr(x3,y3)
-p_oneTailed_1000 = p_twoTailed_1000/2
-corrCoef_300, p_twoTailed_300 = pearsonr(x4,y4)
-p_oneTailed_300 = p_twoTailed_300/2
-
-print("For BW 10,000, Correlation Coefficient: ",corrCoef_10000)
-print("For BW 10,000, One tailed_p: ",p_oneTailed_10000)
-print("**********************************************************")
-print("For BW 3,000, Correlation Coefficient: ",corrCoef_3000)
-print("For BW 3,000, One tailed_p: ",p_oneTailed_3000)
-print("**********************************************************")
-print("For BW 1,000, Correlation Coefficient: ",corrCoef_1000)
-print("For BW 1,000, One tailed_p: ",p_oneTailed_1000)
-print("**********************************************************")
-print("For BW 500, Correlation Coefficient: ",corrCoef_300)
-print("For BW 500, One tailed_p: ",p_oneTailed_300)
+#plotting correlations
+num_feat=houses.columns[houses.dtypes!=object]
+num_feat=num_feat[1:-1] 
+labels = []
+values = []
+for col in num_feat:
+    labels.append(col)
+    values.append(np.corrcoef(houses[col].values, houses.SalePrice.values)[0,1])
+    
+ind = np.arange(len(labels))
+width = 0.9
+fig, ax = plt.subplots(figsize=(12,40))
+rects = ax.barh(ind, np.array(values), color='red')
+ax.set_yticks(ind+((width)/2.))
+ax.set_yticklabels(labels, rotation='horizontal')
+ax.set_xlabel("Correlation coefficient")
+ax.set_title("Correlation Coefficients w.r.t Sale Price");
 
 
-# **Result**: For bandwidths 10,000, 3,000, 1,000 and 300 there is a significant negative correlation between KDE and absolute logerror.
+# In[ ]:
 
-# <h1> 4. Conclusion </h1>
-# **The result indicate that higher parcel density is associated with lower absolute logerrors.** This hypothesis was confirmed in bandwidths 10,000, 3,000, 1,000 and 300. Suprisingly, the opposite relationship was observed for bandwidth 30,000. Overall, This means that parcel density could be a promising feature to use for the prediction of the Zestimate logerror.
+
+correlations=houses.corr()
+attrs = correlations.iloc[:-1,:-1] # all except target
+
+threshold = 0.5
+important_corrs = (attrs[abs(attrs) > threshold][attrs != 1.0])     .unstack().dropna().to_dict()
+
+unique_important_corrs = pd.DataFrame(
+    list(set([(tuple(sorted(key)), important_corrs[key]) \
+    for key in important_corrs])), 
+        columns=['Attribute Pair', 'Correlation'])
+
+    # sorted by absolute value
+unique_important_corrs = unique_important_corrs.ix[
+    abs(unique_important_corrs['Correlation']).argsort()[::-1]]
+
+unique_important_corrs
+
+
+# This shows multicollinearity.
+# In regression, "multicollinearity" refers to features that are correlated with other features.  Multicollinearity occurs when your model includes multiple factors that are correlated not just to your target variable, but also to each other.
 # 
-# **Thanks all for reading, hope you enjoyed!!**
+# Problem:
+# 
+# Multicollinearity increases the standard errors of the coefficients.
+# That means, multicollinearity makes some variables statistically insignificant when they should be significant.
+# 
+# To avoid this we can do 3 things:
+# 
+# 1. Completely remove those variables
+# 2. Make new feature by adding them or by some other operation.
+# 3. Use PCA, which will reduce feature set to small number of non-collinear features.
+# 
+# Reference:http://blog.minitab.com/blog/understanding-statistics/handling-multicollinearity-in-regression-analysis
 
-# <h1> 5. Update: repeated with 2017 data, but now I use logerror instead of abs logerror</h1>
-
-# **Load...**
-
-# In[ ]:
-
-
-#  Data
-train = pd.read_csv('../input/train_2017.csv')
-props = pd.read_csv('../input/properties_2017.csv',low_memory=False)
-train = train.merge(props,how='left',on='parcelid')
-train = train[['parcelid','longitude','latitude','logerror']]
-train.dropna(inplace=True)  #
-del props  # delete redundant data
-gc.collect()  # Free up memory
-
+# **Heatmap**
+# -----------
 
 # In[ ]:
 
 
-parcelDensity30000 = get_pde(train,30000)
-parcelDensity10000 = get_pde(train,10000)
-parcelDensity3000 = get_pde(train,3000)
-parcelDensity1000 = get_pde(train,1000)
-parcelDensity300 = get_pde(train,300)
+corrMatrix=houses[["SalePrice","OverallQual","GrLivArea","GarageCars",
+                  "GarageArea","GarageYrBlt","TotalBsmtSF","1stFlrSF","FullBath",
+                  "TotRmsAbvGrd","YearBuilt","YearRemodAdd"]].corr()
+
+sns.set(font_scale=1.10)
+plt.figure(figsize=(10, 10))
+
+sns.heatmap(corrMatrix, vmax=.8, linewidths=0.01,
+            square=True,annot=True,cmap='viridis',linecolor="white")
+plt.title('Correlation between features');
+
+
+# As we saw above there are few feature which shows high multicollinearity from heatmap.
+# Lets focus on yellow squares on diagonal line and few on the sides.
+# 
+# SalePrice and OverallQual
+# 
+# GarageArea and GarageCars
+# 
+# TotalBsmtSF and 1stFlrSF
+# 
+# GrLiveArea and TotRmsAbvGrd
+# 
+# YearBulit and GarageYrBlt
+# 
+# We have to create a single feature from them before we use them as predictors.
+# 
+
+# *Pivotal Features*
+# ------------------------
+
+# In[ ]:
+
+
+houses[['OverallQual','SalePrice']].groupby(['OverallQual'],
+as_index=False).mean().sort_values(by='OverallQual', ascending=False)
 
 
 # In[ ]:
 
 
-rankScaled30000 = 100*rankdata(parcelDensity30000)/len(parcelDensity30000)
-rankScaled10000 = 100*rankdata(parcelDensity10000)/len(parcelDensity10000)
-rankScaled3000 = 100*rankdata(parcelDensity3000)/len(parcelDensity3000)
-rankScaled1000 = 100*rankdata(parcelDensity1000)/len(parcelDensity1000)
-rankScaled300 = 100*rankdata(parcelDensity300)/len(parcelDensity300)
+houses[['GarageCars','SalePrice']].groupby(['GarageCars'],
+as_index=False).mean().sort_values(by='GarageCars', ascending=False)
 
 
 # In[ ]:
 
 
-logerrors = train['logerror'].values
-y = logerrors
+houses[['Fireplaces','SalePrice']].groupby(['Fireplaces'],
+as_index=False).mean().sort_values(by='Fireplaces', ascending=False)
 
 
-# **Result @30.000 BW**
+# *Visualising Target variable*
+# -----------------
 
-# In[ ]:
-
-
-fig = plt.figure(figsize=(15,15))
-fig.suptitle("Parcel Density Vs. Logerror")
-ax1, ax2= fig.add_subplot(221),fig.add_subplot(222)
-x1,x2 = parcelDensity30000, rankScaled30000
-index1, index2 = x1.argsort(), x2.argsort()
-x1 = x1[index1[::-1]]
-x2 = x2[index2[::-1]]
-y = y[index1[::-1]]
-y_av = moving_average(y,n=250)
-y_av = [0]*249 + list(y_av)
-
-m, b = np.polyfit(x1,y , 1)
-ax1.plot(x1, y, '.',alpha=0.5,color='skyblue')
-ax1.plot(x1,y_av,linewidth=6,color="steelblue")
-ax1.plot(x1, m*x1 + b, '--',linewidth=3,color='red')
-
-ax1.set_xlim([-0.000000001,0.00000025])
-ax1.set_ylim([-2.0,2])
-ax1.set_ylabel("logerror",fontsize='large')
-ax1.set_xlabel("PDE",fontsize='large')
-
-m, b = np.polyfit(x2,y , 1)
-ax2.plot(x2, y, '.',alpha=0.5,color='skyblue')
-ax2.plot(x2,y_av,linewidth=6,color="steelblue")
-ax2.plot(x2, m*x2 + b, '--',linewidth=3,color='red')
-ax2.set_xlabel("PDE - ranked",fontsize='large')
-ax2.set_ylabel("Logerror",fontsize='large')
-ax2.set_xlim([0,100])
-ax2.set_ylim([-2.0,2])
-
-
-
-# **significance level @ 30k bw, 2-tailed**
+# *Univariate Analysis*
+# --------------------
+# 
+# How 1 single variable is distributed in numeric range.
+# What is statistical summary of it.
+# Is it positively skewed or negatively.
 
 # In[ ]:
 
 
-corrCoef_30000_1, p_twoTailed_30000_1 = pearsonr(x1,y)
-
-print("Result for bandwidth 30,000:")
-print("*******************************************************************")
-print("Correlation Coefficient: ",corrCoef_30000_1)
-print("Two tailed_p: ",p_twoTailed_30000_1)
+sns.distplot(houses['SalePrice'], color="r", kde=False)
+plt.title("Distribution of Sale Price")
+plt.ylabel("Number of Occurences")
+plt.xlabel("Sale Price");
 
 
-# **Results at @ 10k, 3k, 1k and 300 BW, 2-tailed**
+# Prices are right skewed and  graph shows some peakedness.
 
 # In[ ]:
 
 
-fig = plt.figure(figsize=(15,15))
-x1,x2,x3,x4 = parcelDensity10000, parcelDensity3000, parcelDensity1000,parcelDensity300
-y = logerrors
+#skewness  
 
-index1, index2,index3,index4 = x1.argsort(), x2.argsort(), x3.argsort(), x4.argsort()
-x1, x2, x3, x4 = x1[index1[::-1]],  x2[index2[::-1]],  x3[index3[::-1]], x4[index4[::-1]]
-x1 = x1 - min(x1)
-x2 = x2 - min(x2)
-x3 = x3 - min(x3)
-x4 = x4 - min(x4)
+houses['SalePrice'].skew()
 
-y1, y2, y3, y4 = y[index1[::-1]], y[index2[::-1]],y[index3[::-1]],y[index4[::-1]]
-y_av1 = moving_average(y1,n=100)
-y_av1 = [0]*99 + list(y_av1)
-y_av2 = moving_average(y2,n=100)
-y_av2 = [0]*99 + list(y_av2)
-y_av3 = moving_average(y3,n=100)
-y_av3 = [0]*99 + list(y_av3)
-y_av4 = moving_average(y4,n=100)
-y_av4 = [0]*99 + list(y_av4)
-
-ax1 = fig.add_subplot(221)
-m, b = np.polyfit(x1,y1 , 1)
-ax1.plot(x1, y1, '.',alpha=0.5,color='skyblue')
-ax1.plot(x1,y_av1,linewidth=6,color="steelblue")
-ax1.plot(x1, m*x1 + b, '--',linewidth=3,color='red')
-ax1.set_xlim([0,0.0000005])
-ax1.set_ylim([-02.0,2])
-ax1.set_ylabel("logerror",fontsize='large')
-ax1.set_xlabel("PDE",fontsize='large')
-
-ax2 = fig.add_subplot(222)
-m, b = np.polyfit(x2,y2 , 1)
-ax2.plot(x2, y2, '.',alpha=0.5,color='skyblue')
-ax2.plot(x2,y_av2,linewidth=4,color="steelblue")
-ax2.plot(x2, m*x2 + b, '--',linewidth=3,color='red')
-ax2.set_xlim([0,0.0000015])
-ax2.set_ylim([-02.0,2])
-ax2.set_ylabel("logerror",fontsize='large')
-ax2.set_xlabel("PDE",fontsize='large')
-
-ax3 = fig.add_subplot(223)
-m, b = np.polyfit(x3,y3 , 1)
-ax3.plot(x3, y3, '.',alpha=0.5,color='skyblue')
-ax3.plot(x3,y_av3,linewidth=4,color="steelblue")
-ax3.plot(x3, m*x3 + b, '--',linewidth=3,color='red')
-ax3.set_xlim([-0,0.000005])
-ax3.set_ylim([-2.0,2])
-ax3.set_ylabel("logerror",fontsize='large')
-ax3.set_xlabel("PDE",fontsize='large')
-
-ax4 = fig.add_subplot(224)
-m, b = np.polyfit(x4,y4 , 1)
-ax4.plot(x4, y, '.',alpha=0.5,color='skyblue')
-ax4.plot(x4,y_av4,linewidth=4,color="steelblue")
-ax4.plot(x4, m*x4 + b, '--',linewidth=3,color='red')
-ax4.set_xlim([-0.000000001,0.00004])
-ax4.set_ylim([-02.0,2])
-ax4.set_ylabel("logerror",fontsize='large')
-ax4.set_xlabel("PDE",fontsize='large')
-
-
-
-# **significance level @ 30k bw, 2-tailed**
 
 # In[ ]:
 
 
-corrCoef_10000, p_twoTailed_10000 = pearsonr(x1,y1)
-corrCoef_3000, p_twoTailed_3000 = pearsonr(x2,y2)
-corrCoef_1000, p_twoTailed_1000 = pearsonr(x3,y3)
-corrCoef_300, p_twoTailed_300 = pearsonr(x4,y4)
-print("For BW 10,000, Correlation Coefficient: ",corrCoef_10000)
-print("For BW 10,000,  2-tailed_p: ",p_twoTailed_10000)
-print("**********************************************************")
-print("For BW 3,000, Correlation Coefficient: ",corrCoef_3000)
-print("For BW 3,000,  2-tailed_p: ",p_twoTailed_3000)
-print("**********************************************************")
-print("For BW 1,000, Correlation Coefficient: ",corrCoef_1000)
-print("For BW 1,000, 2-tailed_p: ",p_twoTailed_1000)
-print("**********************************************************")
-print("For BW 500, Correlation Coefficient: ",corrCoef_300)
-print("For BW 500, tailed_p: ",p_twoTailed_300)
+#kurtosis
 
+houses['SalePrice'].kurt()
+
+
+# In[ ]:
+
+
+#there are some outliers.lets remove them.
+upperlimit = np.percentile(houses.SalePrice.values, 99.5)
+houses['SalePrice'].ix[houses['SalePrice']>upperlimit] = upperlimit
+
+plt.scatter(range(houses.shape[0]), houses["SalePrice"].values,color='orange')
+plt.title("Distribution of Sale Price")
+plt.xlabel("Number of Occurences")
+plt.ylabel("Sale Price");
+
+
+# **Missing Value Imputation**
+# ====================
+# 
+# 
+# Missing values in the training data set can affect prediction or classification of a model negatively.
+# 
+# Also some machine learning algorithms can't accept missing data eg. SVM.
+# 
+# But filling missing values with mean/median/mode or using another predictive model to predict missing values is also a prediction which may not be 100% accurate, instead you can use models like Decision Trees and Random Forest which handle missing values very well.
+# 
+# Some of this part is based on this kernel:
+# https://www.kaggle.com/bisaria/house-prices-advanced-regression-techniques/handling-missing-data
+
+# In[ ]:
+
+
+#lets see if there are any columns with missing values 
+null_columns=houses.columns[houses.isnull().any()]
+houses[null_columns].isnull().sum()
+
+
+# In[ ]:
+
+
+labels = []
+values = []
+for col in null_columns:
+    labels.append(col)
+    values.append(houses[col].isnull().sum())
+ind = np.arange(len(labels))
+width = 0.9
+fig, ax = plt.subplots(figsize=(12,50))
+rects = ax.barh(ind, np.array(values), color='violet')
+ax.set_yticks(ind+((width)/2.))
+ax.set_yticklabels(labels, rotation='horizontal')
+ax.set_xlabel("Count of missing values")
+ax.set_ylabel("Column Names")
+ax.set_title("Variables with missing values");
+
+
+# *Multivariate Analysis*
+# --------------------
+# 
+# When we understand how 3 or more variables behave according to each other.
+
+# *LotFrontage*
+# -------------
+# 
+# We can see if there is some correlation between LotArea and LotFrontage
+
+# In[ ]:
+
+
+houses['LotFrontage'].corr(houses['LotArea'])
+
+
+# This is not great, we will try some polynomial expressions like squareroot 
+
+# In[ ]:
+
+
+houses['SqrtLotArea']=np.sqrt(houses['LotArea'])
+houses['LotFrontage'].corr(houses['SqrtLotArea'])
+
+
+# 0.60 looks good to go.
+
+# In[ ]:
+
+
+sns.jointplot(houses['LotFrontage'],houses['SqrtLotArea'],color='gold');
+
+
+# In[ ]:
+
+
+filter = houses['LotFrontage'].isnull()
+houses.LotFrontage[filter]=houses.SqrtLotArea[filter]
+
+
+# *MasVnrType and MasVnrArea*
+# ===========================
+
+# In[ ]:
+
+
+plt.scatter(houses["MasVnrArea"],houses["SalePrice"])
+plt.title("MasVnrArea Vs SalePrice ")
+plt.ylabel("SalePrice")
+plt.xlabel("Mas Vnr Area in sq feet");
+
+
+# In[ ]:
+
+
+sns.boxplot("MasVnrType","SalePrice",data=houses);
+
+
+# In[ ]:
+
+
+houses["MasVnrType"] = houses["MasVnrType"].fillna('None')
+houses["MasVnrArea"] = houses["MasVnrArea"].fillna(0.0)
+
+
+# *Bivariate Analysis*
+# --------------------
+# 
+# When we try to figure out how 2 parameters in dataset are related to each other. in the sense when one decreases, other also decreases or when one increases other also increases i.e Positive Correlation 
+# 
+# And  when one increases , other decreases or vice versa i .e Negative correlation.
+
+# *Electrical*
+# ------------
+
+# In[ ]:
+
+
+sns.boxplot("Electrical","SalePrice",data=houses)
+plt.title("Electrical Vs SalePrice ")
+plt.ylabel("SalePrice")
+plt.xlabel("Electrical");
+
+
+# In[ ]:
+
+
+#We can replace missing values with most frequent ones.
+houses["Electrical"] = houses["Electrical"].fillna('SBrkr')
+
+
+# *Alley*
+# -------
+
+# In[ ]:
+
+
+sns.stripplot(x=houses["Alley"], y=houses["SalePrice"],jitter=True);
+
+
+# All missing value indicate that particular house doesn't have an alley access.we can replace it with 'None'.
+
+# In[ ]:
+
+
+houses["Alley"] = houses["Alley"].fillna('None')
+
+
+# *Basement Features*
+# -------------------
+
+# In[ ]:
+
+
+plt.scatter(houses["TotalBsmtSF"],houses["SalePrice"])
+plt.title("Total Basement area in Square Feet Vs SalePrice ")
+plt.ylabel("SalePrice")
+plt.xlabel("Total Basement area in Square Feet");
+
+
+# In[ ]:
+
+
+#there are few outliers in total basement area lets remove them
+upperlimit = np.percentile(houses.TotalBsmtSF.values, 99.5)
+houses['TotalBsmtSF'].ix[houses['TotalBsmtSF']>upperlimit] = upperlimit
+
+plt.scatter(houses.TotalBsmtSF, houses["SalePrice"].values,color='orange')
+plt.title("TotalBsmtSF Vs SalePrice ")
+plt.ylabel("SalePrice")
+plt.xlabel("Total Basement in sq feet");
+
+
+# In[ ]:
+
+
+basement_cols=['BsmtQual','BsmtCond','BsmtExposure','BsmtFinType1','BsmtFinType2','BsmtFinSF1','BsmtFinSF2']
+houses[basement_cols][houses['BsmtQual'].isnull()==True]
+
+
+# All categorical variables contains NAN whereas continuous ones have 0.
+# So that means there is no basement for those houses.
+# we can replace it with 'None'.
+
+# In[ ]:
+
+
+for col in basement_cols:
+    if 'FinSF'not in col:
+        houses[col] = houses[col].fillna('None')
+
+
+# *Fireplaces*
+# ------------
+
+# In[ ]:
+
+
+sns.factorplot("Fireplaces","SalePrice",data=houses,hue="FireplaceQu");
+
+
+# Having 2 fireplaces increases house price and fireplace of Excellent quality is a big plus. 
+
+# In[ ]:
+
+
+#If fireplace quality is missing that means that house doesn't have a fireplace
+houses["FireplaceQu"] = houses["FireplaceQu"].fillna('None')
+pd.crosstab(houses.Fireplaces, houses.FireplaceQu)
+
+
+# *Garages*
+# ---------
+
+# In[ ]:
+
+
+sns.distplot(houses["GarageArea"],color='r', kde=False);
+
+
+# In[ ]:
+
+
+#GarageArea has got some outliers lets remove them.
+upperlimit = np.percentile(houses.GarageArea.values, 99.5)
+houses['GarageArea'].ix[houses['GarageArea']>upperlimit] = upperlimit
+
+plt.scatter(houses.GarageArea, houses["SalePrice"].values,color='violet')
+plt.title("Garage Area Vs SalePrice ")
+plt.ylabel("SalePrice")
+plt.xlabel("Garage Area in sq feet");
+
+
+# In[ ]:
+
+
+sns.violinplot(houses["GarageCars"],houses["SalePrice"])
+plt.title("Garage Cars Vs SalePrice ")
+plt.ylabel("SalePrice")
+plt.xlabel("Number of Garage cars");
+
+
+# In[ ]:
+
+
+garage_cols=['GarageType','GarageQual','GarageCond','GarageYrBlt','GarageFinish','GarageCars','GarageArea']
+houses[garage_cols][houses['GarageType'].isnull()==True]
+
+
+# All garage related features are missing values in same rows.
+# that means we can replace categorical variables with None and continuous ones with 0.
+
+# In[ ]:
+
+
+for col in garage_cols:
+    if houses[col].dtype==np.object:
+        houses[col] = houses[col].fillna('None')
+    else:
+        houses[col] = houses[col].fillna(0)
+
+
+# *Pool*
+# -----------------------
+
+# In[ ]:
+
+
+#If PoolArea is 0, that means that house doesn't have a pool.
+#So we can replace PoolQuality with None.
+houses["PoolQC"] = houses["PoolQC"].fillna('None')
+sns.factorplot("PoolArea","SalePrice",data=houses,hue="PoolQC",kind='bar')
+plt.title("Pool Area , Pool quality and SalePrice ")
+plt.ylabel("SalePrice")
+plt.xlabel("Pool Area in sq feet");
+
+
+# *Fence*
+# -----------------------
+
+# In[ ]:
+
+
+sns.violinplot(houses["Fence"],houses["SalePrice"])
+plt.title("Fence wrt SalePrice ")
+plt.ylabel("SalePrice")
+plt.xlabel("Type of Fence");
+
+
+# Fence has got 1179 null values.
+# We can safely assume that those houses doesn't have a Fence and replace those values with None.
+
+# In[ ]:
+
+
+houses["Fence"] = houses["Fence"].fillna('None')
+
+
+# *MiscFeature*
+# -----------------------
+
+# In[ ]:
+
+
+sns.barplot(houses["MiscFeature"],houses["SalePrice"])
+plt.title("Miscelleneous Features  Vs SalePrice ")
+plt.ylabel("SalePrice")
+plt.xlabel("Type of Miscelleneous Features");
+
+
+# In[ ]:
+
+
+#Some houses don't have miscellaneous features like shed, Tennis court etc..
+houses["MiscFeature"] = houses["MiscFeature"].fillna('None')
+
+
+# In[ ]:
+
+
+#Let's confirm that we have removed all missing values
+houses[null_columns].isnull().sum()
+
+
+# **Visualizations**
+# ==================
+
+# *MSZoning*
+# -----------
+
+# In[ ]:
+
+
+
+labels = houses["MSZoning"].unique()
+sizes = houses["MSZoning"].value_counts().values
+explode=[0.1,0,0,0,0]
+parcent = 100.*sizes/sizes.sum()
+labels = ['{0} - {1:1.1f} %'.format(i,j) for i,j in zip(labels, parcent)]
+
+colors = ['yellowgreen', 'gold', 'lightblue', 'lightcoral','blue']
+patches, texts= plt.pie(sizes, colors=colors,explode=explode,
+                        shadow=True,startangle=90)
+plt.legend(patches, labels, loc="best")
+
+plt.title("Zoning Classification")
+plt.show()
+
+
+
+sns.violinplot(houses.MSZoning,houses["SalePrice"])
+plt.title("MSZoning wrt Sale Price")
+plt.xlabel("MSZoning")
+plt.ylabel("Sale Price");
+
+
+# *1st Floor in square feet*
+# --------------------------
+
+# In[ ]:
+
+
+plt.scatter(houses["1stFlrSF"],houses.SalePrice, color='red')
+plt.title("Sale Price wrt 1st floor")
+plt.ylabel('Sale Price (in dollars)')
+plt.xlabel("1st Floor in square feet");
+
+
+# *Ground Living Area w.r.t SalePrice*
+# --------------------
+
+# In[ ]:
+
+
+plt.scatter( houses["GrLivArea"],houses["SalePrice"],color='purple')
+plt.title("Sale Price wrt Ground living area")
+plt.ylabel('Sale Price')
+plt.xlabel("Ground living area");
+
+
+# *SalePrice per square foot*
+# --------------------
+
+# In[ ]:
+
+
+houses['SalePriceSF'] = houses['SalePrice']/houses['GrLivArea']
+plt.hist(houses['SalePriceSF'], bins=15,color="gold")
+plt.title("Sale Price per Square Foot")
+plt.ylabel('Number of Sales')
+plt.xlabel('Price per square feet');
+
+
+# In[ ]:
+
+
+#Average Sale Price per square feet 
+print("$",houses.SalePriceSF.mean())
+
+
+# *Garage Area*
+# -------------
+
+# In[ ]:
+
+
+plt.scatter(houses["GarageArea"],houses.SalePrice, color='green')
+plt.title("Sale Price vs Garage Area")
+plt.ylabel('Sale Price(in dollars)')
+plt.xlabel("Garage Area in sq foot");
+
+
+# *Building , remodelling years and age of house*
+# ----------------------------------------
+
+# In[ ]:
+
+
+sns.distplot(houses["YearBuilt"],color='seagreen', kde=False);
+
+
+# In[ ]:
+
+
+sns.distplot(houses["YearRemodAdd"].astype(int),color='r', kde=False);
+
+
+# In[ ]:
+
+
+houses['ConstructionAge'] = houses['YrSold'] - houses['YearBuilt']
+plt.scatter(houses['ConstructionAge'], houses['SalePriceSF'])
+plt.ylabel('Price per square foot (in dollars)')
+plt.xlabel("Construction Age of house");
+
+
+# Price of house goes down with its age.
+
+# *Heating and AC arrangements*
+# -----------------------------
+
+# In[ ]:
+
+
+sns.stripplot(x="HeatingQC", y="SalePrice",data=houses,hue='CentralAir',jitter=True,split=True)
+plt.title("Sale Price vs Heating Quality");
+
+
+# Having AC definitely escalates price of house.
+
+# *Bathrooms in house*
+# --------------------------
+
+# In[ ]:
+
+
+sns.boxplot(houses["FullBath"],houses["SalePrice"])
+plt.title("Sale Price vs Full Bathrooms");
+
+
+# In[ ]:
+
+
+sns.violinplot( houses["HalfBath"],houses["SalePrice"])
+plt.title("Sale Price vs Half Bathrooms");
+
+
+# *Total rooms above grade*
+# -------------------------
+
+# In[ ]:
+
+
+sns.barplot(houses["TotRmsAbvGrd"],houses["SalePrice"],palette="Blues_d")
+plt.title("Sale Price vs Number of rooms");
+
+
+# *Kitchen Quality*
+# =================
+
+# In[ ]:
+
+
+sns.factorplot("KitchenAbvGr","SalePrice",data=houses,hue="KitchenQual")
+plt.title("Sale Price vs Kitchen");
+
+
+# Having 1 Kitchen of Excellent quality hikes house price like anything.
+
+# *Neighbourhood*
+# --------------
+
+# In[ ]:
+
+
+plt.xticks(rotation=45) 
+sns.barplot(houses["Neighborhood"],houses["SalePrice"])
+plt.title("Sale Price vs Neighborhood");
+
+
+# *Overall Quality*
+# -----------------
+
+# In[ ]:
+
+
+plt.barh(houses["OverallQual"],width=houses["SalePrice"],color="r")
+plt.title("Sale Price vs Overall Quality of house")
+plt.ylabel("Overall Quality of house")
+plt.xlabel("Sale Price");
+
+
+# *2nd Floor with SalePrice*
+# --------------------------
+
+# In[ ]:
+
+
+plt.scatter(houses["2ndFlrSF"],houses["SalePrice"],color="gold")
+plt.title("Sale Price vs 2nd floor in sq feet");
+plt.xlabel("2nd floor in sq feet")
+plt.ylabel("Sale Price");
+
+
+# *Street*
+# --------
+
+# In[ ]:
+
+
+#most streets are paved lets visulalize it
+sns.stripplot(x=houses["Street"], y=houses["SalePrice"],jitter=True)
+plt.title("Sale Price vs Streets");
+
+
+# More to come .. Watch this space.

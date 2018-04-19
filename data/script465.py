@@ -1,516 +1,229 @@
 
 # coding: utf-8
 
-# **Hey Kaggle, I'm new to Python and Data Science, so any comments or advice would help me a lot ! Thanks ! **
+# #INTRODUCTION
 # 
-# **The aim of this kernel is to get a better idea of what this dataset is made of and to explore the relations between variables.**
+# In a nutshell, I will be using a Principal Component Analysis (PCA) based approach to analysing the IMDB dataset and then implementing some KMeans clustering to provide visualisations of any related clusters I find in the dataset. Some caveats : I will not be attempting to run any predictive models ( XGBoosting, SVM, Regression... that sort of thing). This notebook will purely be an exploratory and hopefully concise enough attempt to explain the idea of PCA as well as using a clustering method (KMeans) to extract meaningful relations out of it. 
 # 
-# **This is only a first draft, I will add way more content later !**
-
-# In[1]:
-
-
-#Package importation
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib
-import matplotlib.pyplot as plt
-from wordcloud import WordCloud, STOPWORDS
-import squarify 
-
-
-# In[2]:
-
-
-#Data Importation
-train = pd.read_csv('../input/train.tsv',delimiter='\t', dtype={'item_description': str})
-
-
-# **Firstly, we'll check some general informations about our dataset :**
+# A very high-level description of PCA is that it serves as a dimensionality reduction method on the features of our original dataset by projecting these features onto a lower dimension. Therefore if our original dataset contains 72 columns ( i.e features) and we manage to reduce these 72 columns down to 9 columns image the gains in time and processing speeds! However the question is how do we get the new data out of the PCA-reduced 9 columns? Via a clustering method!! In this case, I will use KMeans - more to come below. This notebook is organised as follows : 
+# 
+#  1. Filtering the Dataset to remove Null values and get only numerical columns. Standardising the features 
+#  2. Using the measure of **Explained Variance** to motivate and inform our search on getting the right number of PCA projections. Refer to Sebastian Raschka's awesome piece on Explained variance ( and PCA in general) here : http://sebastianraschka.com/Articles/2015_pca_in_3_steps.html. My notebook heavily borrows from his article so I need to give it a shout-out.
+#  3. Implementing Principal Component Analysis 
+#  4. Using KMeans clustering to investigate relationships in the PCA projections (if there are any at all) and creating visualisations using the said clusters.
+#  5. Pseudo means of extracting KMeans clusters and use those as new features (meta features) in your predictions - STILL UNDER PROGRESS
 
 # In[ ]:
 
 
-train.shape
-train.info()
-train.isnull().sum()
-train.head(5)
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from sklearn.decomposition import PCA # Principal Component Analysis module
+from sklearn.cluster import KMeans # KMeans clustering 
+import matplotlib.pyplot as plt # Python defacto plotting library
+import seaborn as sns # More snazzy plotting library
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# So, we've very few variables (only 6 without ID) and relativly a lot of observations (1 482 535).
-# We've variables of different types (continuous, binary and caterorial).
-
-# **Do each item name is unique ? **
-
-# In[ ]:
-
-
-i = train.name.value_counts().size
-print ('Number of distinct items names : ', i)
-
-
-# The answer is no, several items share the same name.
-
-# **How many items categories do we have ?**
+# Let's import the movie dataset with imagination. The dataset will be called "movie" and let's inspect the first 5 rows of the dataframe with .head()
 
 # In[ ]:
 
 
-nb_cat = train.category_name.value_counts().size
-print ('We have', nb_cat, 'different items categories.')
+movie = pd.read_csv('../input/movie_metadata.csv') # reads the csv and creates the dataframe called movie
+movie.head()
 
 
-# **Top 10 categories by number of product :**
-
-# In[ ]:
-
-
-plt.figure(figsize=(17,10))
-sns.countplot(y = train.category_name,               order = train.category_name.value_counts().iloc[:10].index,                                                       orient = 'v')
-plt.title('Top 10 categories', fontsize = 25)
-plt.ylabel('Category name', fontsize = 20)
-plt.xlabel('Number of product in the category', fontsize = 20)
-
-
-# **Treemap of the categories :**
+# # 1. DATA FILTERING AND CLEANSING
+# **Filtering for Numerical values only**
+# 
+# As observed from the dataframe above, some columns contain numbers while others, words. Let's do some filtering to extract only the numbered columns and not the ones with words ( just for the purpose of this exercise). To do so I will create a Python list containing the numbered column names "num_list"
 
 # In[ ]:
 
 
-# Size of each category
-cats = pd.DataFrame(train.category_name.value_counts())
-cats.reset_index(level = 0, inplace=True)
-cats = cats.sort_values(by='category_name', ascending = False).head(20)
-cats.columns =('category_name', 'size')
-
-# Price by category
-group = train.groupby(train.category_name)
-mean_price = group.price.mean()
-mean_price = pd.DataFrame(mean_price)
-mean_price.reset_index(level = 0, inplace=True)
-
-# Merging
-cats = pd.merge(cats, mean_price, how='left', on = 'category_name')
-
-# Colors setting
-cmap = matplotlib.cm.viridis
-mini=min(cats['size'])
-maxi=max(cats['size'])
-norm = matplotlib.colors.Normalize(vmin=mini, vmax=maxi)
-colors = [cmap(norm(value)) for value in cats['size']]
-
-# Labels setting
-labels = ["%s\n%d items\n Mean price : %d$" % (label)           for label in zip(cats['category_name'], cats['size'], cats['price'])]
-
-# Plotting
-plt.figure(figsize=(30,20))
-plt.rc('font', size=15)
-squarify.plot(sizes = cats['size'], label = labels, alpha = .7, color=colors)
-plt.axis('off')
+str_list = [] # empty list to contain columns with strings (words)
+for colname, colvalue in movie.iteritems():
+    if type(colvalue[1]) == str:
+         str_list.append(colname)
+# Get to the numeric columns by inversion            
+num_list = movie.columns.difference(str_list)         
 
 
-# **Top 20 categories by average price :**
+# Using the magic of Pandas dataframe filtering, we can create a new dataframe (movie_num) containing just the numbers as such : 
 
 # In[ ]:
 
 
-group = train.groupby(train.category_name)
-mean_price = pd.DataFrame(group.price.mean())
-mean_price = mean_price.sort_values(by='price', ascending = False).head(20)
-mean_price.reset_index(level = 0, inplace=True)
-
-plt.figure(figsize=(17,20))
-sns.barplot(x = 'price', y = 'category_name', data = mean_price, orient = 'h')
-plt.title('Top 20 categories with higher mean price', fontsize = 30)
-plt.ylabel('Categories', fontsize = 25)
-plt.xlabel('Mean price', fontsize = 25)
+movie_num = movie[num_list]
+#del movie # Get rid of movie df as we won't need it now
+movie_num.head()
 
 
-# **So, some categories are expensive, but most are cheap ?**
+# **Removal of Null values**
+
+# Now since there still exists 'NaN' values in our dataframe, and these are Null values, we have to do something about them. In here, I will just do the naive thing of replacing these NaNs with zeros as such:
 
 # In[ ]:
 
 
-mean_price_2 = pd.DataFrame(group.price.mean())
-mean_price_2.reset_index(level = 0, inplace=True)
-
-plt.figure(figsize =(12,7))
-sns.kdeplot(mean_price_2.price, shade = True)
-plt.title('Mean price by category distribution', fontsize = 20)
-plt.xlabel('Mean price of each category', fontsize = 16)
+movie_num = movie_num.fillna(value=0, axis=1)
 
 
-# Our expectations seems right, the most of the categories are composed of cheap items (less than 50$). 
-
-# **Can we split those categories by level ?**
-# Items seems to be classify with an tree structure of 3 levels.
+# **Standardisation** 
+# 
+# Finally we mentioned that we have to find some sort of way to standardise the data and for this, we use sklearn's StandardScaler.
 
 # In[ ]:
 
 
-train['cat1'] = train.category_name.str.extract('([^/]+)/[^/]+/[^/]+')
-train['cat2'] = train.category_name.str.extract('([^/]+/[^/]+)/[^/]+')
-
-plt.figure(figsize = (10,12))
-train.name.groupby(train.cat1).count().plot(kind = 'pie')
-plt.title ('First levels of categories', fontsize = 20)
-plt.axis('equal')
-plt.ylabel('')
+X = movie_num.values
+# Data Normalization
+from sklearn.preprocessing import StandardScaler
+X_std = StandardScaler().fit_transform(X)
 
 
-# **Zoom on the second level :**
+# Let's look at some hexbin visualisations first to get a feel for how the correlations between the different features compare to one another. In the hexbin plots, the lighter in color the hexagonal pixels, the more correlated one feature is to another.
 
 # In[ ]:
 
 
-# We stock each variable's repartition into a dictionary
-alldf = {}
-for col in train.cat1[train.cat1.isnull() == False].unique() :
-
-    temp = train.cat2[train['cat1'] == col]
-    temp = pd.DataFrame(temp.value_counts().reset_index())
-    
-    alldf[col] = temp
-
-# Now we can plot it    
-i = 0
-fig, axs = plt.subplots(5,2, figsize=(20,20))   
-plt.suptitle('Zoom on the second level of categories', fontsize = 40) 
-
-for cat in alldf:
-    temp = alldf[cat]
-    sns.barplot('cat2', 'index', data = temp, ax = axs.flatten()[i])
-    axs.flatten()[i].set_ylabel('')
-    axs.flatten()[i].set_xlabel('Frequency')
-    i+=1    
+movie.plot(y= 'imdb_score', x ='duration',kind='hexbin',gridsize=35, sharex=False, colormap='cubehelix', title='Hexbin of Imdb_Score and Duration',figsize=(12,8))
+movie.plot(y= 'imdb_score', x ='gross',kind='hexbin',gridsize=45, sharex=False, colormap='cubehelix', title='Hexbin of Imdb_Score and Gross',figsize=(12,8))
 
 
-# So now we know what are the most popular second level categories and we already have the information about the third level (full category). It could be interessing to have a deeper look at the price of the subcategories.
+# From the Hexbin plots, one can tell see that the correlation between IMDB score and gross is one that is quite obvious to explain while an interesting result thrown up is that of the score and the duration. ( Interesting!)
 
-# **Prices of the first level of categories**
+# Anyway now - time for the customary heatmap per the tradition of most notebooks on Principal Component Analysis. The heatmap is generated to visually show how strongly correlated the values of the dataframe's columns are to one another. Therefore in this matrix the squares that are of a darker colour are more strongly correlated compared to the ones of lighter colour. 
 
 # In[ ]:
 
 
-plt.figure(figsize=(20,20))
-sns.boxplot( x = 'price' , y = 'cat1', data = train, orient = 'h')
-plt.title('Prices of the first level of categories', fontsize = 30)
-plt.ylabel ('First level categories', fontsize = 20)
-plt.xlabel ('Price', fontsize = 20)
+# Set up the matplotlib figure
+f, ax = plt.subplots(figsize=(12, 10))
+plt.title('Pearson Correlation of Movie Features')
+# Draw the heatmap using seaborn
+sns.heatmap(movie_num.astype(float).corr(),linewidths=0.25,vmax=1.0, square=True, cmap="YlGnBu", linecolor='black', annot=True)
 
 
-# Top 15 second levels categories with highest prices 
+# As we can see from the heatmap, there are regions (features) where we can see quite positive linear correlations amongst each other, given the darker shade of the colours - top left-hand corner and bottom right quarter. This is a good sign as it means we may be able to find linearly correlated features for which we can perform PCA projections on.
 
-# In[ ]:
-
-
-#Firstly, we create a ranking of our level 2 categories, by price
-level2 =  train.groupby('cat2')
-rank_level2 = pd.DataFrame(level2.mean()).sort_values(by='price')
-
-#Then, we stock the top 15 most expensive into a list
-top_cat2 = rank_level2.tail(15).reset_index()
-top_cat2_list = top_cat2.cat2.unique().tolist()
-#We don't only want mean price by category, but all basics statistics, so we need the full series
-top_cat2_full = train.loc[train['cat2'].isin(top_cat2_list)]
-
-#We can now plot it !
-plt.figure(figsize=(20,20))
-sns.boxplot(y ='cat2',x= 'price', data = top_cat2_full, orient = 'h')
-plt.title('Top 15 second levels categories with highest prices ', fontsize = 30)
-plt.ylabel ('Second level categories', fontsize = 20)
-plt.xlabel ('Price', fontsize = 20)
-
-
-# Top 15 second levels categories with lowest prices 
+# # 2. EXPLAINED VARIANCE MEASURE
+# As alluded to in the Introduction, I will be using a particular measure called Explained Variance which will be useful in this context to help us determine the number of PCA projection components we should be looking at. Again this section heavily borrows from Sebastian Raschka's article on Principal Component Analysis so please follow his link for a much more detailed explanation on explained variance than I can do justice to : http://sebastianraschka.com/Articles/2015_pca_in_3_steps.html
 
 # In[ ]:
 
 
-botom_cat2 = rank_level2.head(15).reset_index()
-botom_cat2_list = botom_cat2.cat2.unique().tolist()
-botom_cat2_full = train.loc[train['cat2'].isin(botom_cat2_list)]
-
-plt.figure(figsize=(20,20))
-sns.boxplot(y ='cat2',x= 'price', data = botom_cat2_full, orient = 'h')
-plt.title('Top 15 second levels categories with lowest prices ', fontsize = 30)
-plt.ylabel ('Second level categories', fontsize = 20)
-plt.xlabel ('Price', fontsize = 20)
+# Calculating Eigenvectors and eigenvalues of Cov matirx
+mean_vec = np.mean(X_std, axis=0)
+cov_mat = np.cov(X_std.T)
+eig_vals, eig_vecs = np.linalg.eig(cov_mat)
 
 
-# Any subcategories (either first or second level) is "always expensive". On the other side, some subcategories, espacialy handmade, look widely cheap.
-
-# **How many different brands do we have ?**
+# Now having obtained the eigenvalues and eigenvectors, we will group them together by creating a list of eigenvalue, eigenvector tuples (immutable Python data objects). Following on from this we will sort the list  in order of Highest eigenvalue to lowest eigenvalue and then use the eigenvalues to calculate both the individual explained variance and the cumulative explained variance for visualisation.
 
 # In[ ]:
 
 
-i = train.brand_name.value_counts().size
-print('We have', i, 'different brands.') 
+# Create a list of (eigenvalue, eigenvector) tuples
+eig_pairs = [ (np.abs(eig_vals[i]),eig_vecs[:,i]) for i in range(len(eig_vals))]
+
+# Sort from high to low
+eig_pairs.sort(key = lambda x: x[0], reverse= True)
+
+# Calculation of Explained Variance from the eigenvalues
+tot = sum(eig_vals)
+var_exp = [(i/tot)*100 for i in sorted(eig_vals, reverse=True)] # Individual explained variance
+cum_var_exp = np.cumsum(var_exp) # Cumulative explained variance
 
 
-# **Top 10 brands by number of products :**
-
-# In[ ]:
-
-
-plt.figure(figsize=(17,10))
-sns.countplot(y = train.brand_name,               order = train.brand_name.value_counts().iloc[:10].index,                                                       orient = 'v')
-plt.title('Top 10 brands', fontsize = 25)
-plt.ylabel('Brand name', fontsize = 20)
-plt.xlabel('Number of product of the brand', fontsize = 20)
-
-
-# **Which brands are most expensive ?**
+# Now time to plot the explained variance graphs to see how our contributions look like. The cumulative explained variance is visualised in a blue step-plot while the individual explained variance is plotted via green bar charts as follows: 
 
 # In[ ]:
 
 
-group = train.groupby (train.brand_name)
-ranking = pd.DataFrame(group.price.mean())
-ranking.reset_index(level = 0, inplace=True)
-ranking = ranking.sort_values(by='price', ascending = False).head(15)
-
-plt.figure(figsize=(14,12))
-sns.barplot(x = 'price', y = 'brand_name', data = ranking, orient = 'h')
-plt.title('Top 15 most expensive brands', fontsize = 30)
-plt.ylabel('Categories', fontsize = 25)
-plt.xlabel('Mean price', fontsize = 25)
+# PLOT OUT THE EXPLAINED VARIANCES SUPERIMPOSED 
+plt.figure(figsize=(10, 5))
+plt.bar(range(16), var_exp, alpha=0.3333, align='center', label='individual explained variance', color = 'g')
+plt.step(range(16), cum_var_exp, where='mid',label='cumulative explained variance')
+plt.ylabel('Explained variance ratio')
+plt.xlabel('Principal components')
+plt.legend(loc='best')
+plt.show()
 
 
-# **More details on brands with a treemap :**
+# From the plot above, it can be seen that approximately 90% of the variance can be explained with the 9 principal components. Therefore for the purposes of this notebook, let's implement PCA with 9 components ( although to ensure that we are not excluding useful information, one should really go for 95% or greater variance level which corresponds to about 12 components).
 
-# In[ ]:
-
-
-# Brands sorted by number of item
-brands = pd.DataFrame(train.brand_name.value_counts())
-brands.reset_index(level = 0, inplace=True)
-brands = brands.sort_values(by='brand_name', ascending = False).head(15)
-brands.columns = ('brand_name', 'number_of_item')
-
-# Brands by price
-group = train.groupby (train.brand_name)
-brands_prices = pd.DataFrame(group.price.mean())
-brands_prices.reset_index(level = 0, inplace=True)
-
-# Merging
-brands = pd.merge(brands, brands_prices, how = 'left', on = 'brand_name')
-
-# Labels setting
-labels = ["%s\n%d items\n Mean price : %d$" % (label)           for label in zip(brands['brand_name'], brands['number_of_item'], brands['price'])]
-
-# Plotting
-plt.figure(figsize=(22,13))
-plt.rc('font', size=18)
-squarify.plot(sizes = brands['number_of_item'], label = labels, alpha = .7, color=colors)
-plt.title('Brands treemap', fontsize = 35)
-plt.axis('off')
-
-
-# **What's about the variable 'item_condition_id' ?**
+# # 3. PRINCIPAL COMPONENT ANALYSIS 
+# Having roughly identified how many components/dimensions we would like to project on, let's now implement sklearn's PCA module. 
+# 
+# The first line of the code contains the parameters "n_components" which states how many PCA components we want to project the dataset onto. Since we are going implement PCA with 9 components, therefore we set n_components = 9.  
+# 
+# The second line of the code calls the "fit_transform" method, which fits the PCA model with the standardised movie data X_std and applies the dimensionality reduction on this dataset. 
 
 # In[ ]:
 
 
-total = float(len(train.item_condition_id))
-
-plt.figure(figsize=(17,10))
-ax = sns.countplot(train.item_condition_id)
-
-plt.title('Repartition of conditions', fontsize = 25)
-plt.ylabel('Number of items', fontsize = 20)
-plt.xlabel('Item condition ID', fontsize = 20)
-
-for p in ax.patches:
-    height = p.get_height()
-    ax.text(p.get_x()+p.get_width()/2.,
-            height + 3,
-            '{:.2f}%'.format((height/total)*100),
-            ha="center") 
+pca = PCA(n_components=9)
+x_9d = pca.fit_transform(X_std)
 
 
-# **Now let's analyze the price :**
+# Awesome. Having now applied our specific PCA model with the movie dataset, let's visualise the first 2 projection components as a 2D scatter plot to see if we can get a quick feel for the underlying data. 
 
 # In[ ]:
 
 
-pd.options.display.float_format = '{:.2f}'.format
-train.price.describe()
+plt.figure(figsize = (9,7))
+plt.scatter(x_9d[:,0],x_9d[:,1], c='goldenrod',alpha=0.5)
+plt.ylim(-10,30)
+plt.show()
+
+
+# As a quick aside, my aim (or hope) in carrying out this quick and dirty plotting is to see if we can observe distinct clusters already present within the plots which would be able to tell us if our PCA-transformed data can indeed be linearly separable into different groups for later use as our new features. 
+# 
+# However from the 2D plot above of the first 2 PCA projections, the first visual impression is that there does not seem to be any discernible clusters. However keeping in mind that our PCA projections contain another 7 components, perhaps looking at plots with the other components may be fruitful. For now, let us assume that will be trying a 3-cluster (just as a naive guess) KMeans to see if we are able to visualise any distinct clusters.
+
+# #4. VISUALISATIONS WITH KMEANS CLUSTERING
+# A simple KMeans will now be applied to the PCA projection data. Each cluster will be visualised with a different colour so hopefully we will be able to pick out clusters by eye. 
+# 
+# To start off, we set up a KMeans clustering with sklearn's KMeans() and call the "fit_predict" method to compute cluster centers and predict cluster indices for the first and third PCA projections (to see if we can observe any appreciable clusters). We then define our own colour scheme and plot the scatter diagram as follows:
+
+# In[ ]:
+
+
+# Set a 3 KMeans clustering
+kmeans = KMeans(n_clusters=3)
+# Compute cluster centers and predict cluster indices
+X_clustered = kmeans.fit_predict(x_9d)
+
+# Define our own color map
+LABEL_COLOR_MAP = {0 : 'r',1 : 'g',2 : 'b'}
+label_color = [LABEL_COLOR_MAP[l] for l in X_clustered]
+
+# Plot the scatter digram
+plt.figure(figsize = (7,7))
+plt.scatter(x_9d[:,0],x_9d[:,2], c= label_color, alpha=0.5) 
+plt.show()
+
+
+# This KMeans plot looks more promising now as if our simple clustering model assumption turns out to be right, we can observe 3 distinguishable clusters via this color visualisation scheme.
+# 
+# Now, the plot above was only for 2 PCA projections out of the 9 projections that we currently have. However I would also like to generate a KMeans visualisation for other possible combinations of the projections against one another. I will use Seaborn's convenient **pairplot** function to do the job. Basically pairplot automatically plots all the features in the dataframe (in this case our PCA projected movie data) in pairwise manner. I will pairplot the first 3 projections against one another and the resultant plot is given below:
+
+# In[ ]:
+
+
+# Create a temp dataframe from our PCA projection data "x_9d"
+df = pd.DataFrame(x_9d)
+df = df[[0,1,2]] # only want to visualise relationships between first 3 projections
+df['X_cluster'] = X_clustered
 
 
 # In[ ]:
 
 
-i = train.price.quantile(0.99)
-print ('The 99th quantile is :', i)
+# Call Seaborn's pairplot to visualize our KMeans clustering on the PCA projected data
+sns.pairplot(df, hue='X_cluster', palette= 'Dark2', diag_kind='kde',size=1.85)
 
 
-# In[ ]:
-
-
-plt.figure(figsize=(17,10))
-sns.kdeplot(train.price, shade = True)
-plt.title('Simple distribution plot of the price', fontsize =25)
-
-
-# Most of items have a low price (75% under 29$), but there are so very high extremum.
-# Strangely, a lot of items seems to have a price of 0.
-
-# **Let's count them :**
-
-# In[ ]:
-
-
-i = train.price[train.price == 0].count()
-print (i, 'items have a price of zero.')
-
-
-# **What are their top categories ?**
-
-# In[ ]:
-
-
-price_of_zero = train.loc[train.price == 0]
-
-plt.figure(figsize=(17,10))
-sns.countplot(y = price_of_zero.category_name,               order = price_of_zero.category_name.value_counts().iloc[:10].index,                                                       orient = 'v')
-plt.title('Top 10 categories of items with a price of 0', fontsize = 25)
-plt.ylabel('Category name',  fontsize = 20)
-plt.xlabel('Number of product in the category',  fontsize = 20)
-
-
-# It's actualy very similar to the top 10 categories of the whole dataset. So, having a price of zero is not specific to a category
-
-# **What are the most expensive items ?**
-
-# In[ ]:
-
-
-exp = train[train['price'] > 200]
-exp.name = exp.name.str.upper()
-
-wc = WordCloud(background_color="white", max_words=5000, 
-               stopwords=STOPWORDS, max_font_size= 50)
-
-wc.generate(" ".join(str(s) for s in exp.name.values))
-
-plt.figure(figsize=(20,12))
-plt.title('What are the most expensive items', fontsize = 30)
-plt.axis('off')
-plt.imshow(wc, interpolation='bilinear')
-
-
-# **What's about shipping ?**
-
-# In[ ]:
-
-
-total = float(len(train.shipping))
-
-plt.figure(figsize=(10,7))
-ax = sns.countplot(train.shipping)
-plt.title('Shipping fee paid by seller (1) or by buyer (0)', fontsize = 25)
-plt.ylabel('Number of products', fontsize = 20)
-plt.xlabel('')
-
-for p in ax.patches:
-    height = p.get_height()
-    ax.text(p.get_x()+p.get_width()/2.,
-            height + 3,
-            '{:.2f}%'.format((height/total)*100),
-            ha="center") 
-
-
-# **Does shipping depends of price ?**
-
-# In[ ]:
-
-
-plt.figure(figsize=(10,10))
-sns.boxplot(x=train.shipping, y = train.price, showfliers=False, orient = 'v')
-plt.title('Does shipping depend of prices ?', fontsize = 25)
-plt.xlabel('Shipping fee paid by seller (1) or by buyer (0)', fontsize = 20)
-plt.ylabel('Price without outliers', fontsize = 20)
-
-
-# We use the option "showfliers=False" to flat the graph (because of those few very high prices).
-# As expected, seller are paying shipping fees more often when a item is more expensive.
-
-# **Can we get some informations out of the item description ?**
-
-# In[ ]:
-
-
-train['no_descrip'] = 0
-train.loc[train.item_description=='No description yet', 'no_descrip'] = 1
-i = str(round(train['no_descrip'].value_counts(normalize=True).iloc[1] * 100,2)) + '%'
-
-print(i, 'of the items have no a description.')
-
-
-# **Does the lack of a description give an information on the price of an item ?**
-
-# In[ ]:
-
-
-train['no_descrip'] = 0
-train.loc[train.item_description=='No description yet', 'no_descrip'] = 1
-i = str(round(train['no_descrip'].value_counts(normalize=True).iloc[1] * 100,2)) + '%'
-print(i, 'of the items have no a description. \n')
-
-i1 = str(round((train.no_descrip[train.price > 100].sum() / len(train.no_descrip))*100,2)) + '%'
-i2 = str(round((train.no_descrip[train.price <= 100].sum() / len(train.no_descrip))*100,2)) + '%'
-
-print('While', i2, 'of the items with a price lower than 100$ have no description, \n only',      i1, 'of the items with a price higher than 100$ have no description.')
-
-
-# **What words do people use ?**
-
-# In[ ]:
-
-
-wc = WordCloud(background_color="white", max_words=5000, 
-               stopwords=STOPWORDS, max_font_size= 50)
-
-wc.generate(" ".join(str(s) for s in train.item_description.values))
-
-plt.figure(figsize=(20,12))
-plt.axis('off')
-plt.imshow(wc, interpolation='bilinear')
-
-
-# **Can the length of the description give us some informations ?**
-
-# In[ ]:
-
-
-train['coms_length'] = train['item_description'].str.len()
-
-# Some descriptive statistics
-pd.options.display.float_format = '{:.2f}'.format
-train['coms_length'].describe()
-
-
-# In[ ]:
-
-
-# The full distribution
-plt.figure(figsize=(10,10))
-sns.kdeplot(train['coms_length'], shade = True)
-plt.title ('Distribution of the description length', fontsize = 20)
-plt.xlabel('Description length', fontsize = 12)
-
-
-# **Is there a correlation between description length and price ?**
-
-# In[ ]:
-
-
-plt.figure(figsize=(20,20))
-sns.regplot(x ='coms_length',y='price', data = train, scatter_kws={'s':2})
-plt.title ('Description length VS price', fontsize = 20)
-plt.xlabel('Description length', fontsize = 20)
-plt.ylabel('Price', fontsize = 20)
-
+# # Conclusion

@@ -1,454 +1,542 @@
 
 # coding: utf-8
 
+# Hello,  
+# This is my first post on Kaggle. I am participating in this challenge as part of a course project on optimisation at Ohio State University. This kernel gets a 0.283 on LB. Any suggestions on how to improve further would be much appreciated. (Note: The public kernels claiming 0.284 did not give me any improvement over the score achieved using this kernel)
 # 
+# TL;DR
+# Basic idea - 3 significantly different LightGBM trees - 4x upsampling - bayesian encoding of categorical features - dropping calculated features - 10 fold CV  
+# Jump to last section to directly view the kernel
 # 
-# Version 24: Added Nikunj's features and retuned<br>
-# Version 25: Added more Nikunj features and retuned again. <br>
-# Version 26: Deleted some of Nikunj features and retuned again.<br>
-# Version 27: Remove Niknuj features and go to tuning that was optimal without them, as baseline<br>
-# Version 28: Same as version 27 but after having tested some Nikunj features individually<br>
-# Version 29: Add 2 best Nikunj features (zip_count, city_count)<br>
-# Version 30: Add 3rd feature (GarPoolAC), and some cleanup<br>
-# Version 32: Retune: colsample .7 -> .8<br>
-# Version 33: Retune: lambda=10, subsample=.55<br>
-# Version 34: Revert subsample=.5<br>
-# Version 35: Fine tune: lambda=9<br>
-# Version 36: Revert: colsample .7<br>
-# Version 37: Cleanup<br>
-# Version 38: Make boosting rounds and stopping rounds inversely proportional to learning rate<br>
-# Version 40: Add city_mean and zip_mean features<br>
-# Version 41: Fix comments (Previously mis-stated logerror as "sale price" in feature descriptions)<br>
-# Version 42: Fix bug in city_mean definition<br>
-# Version 43: Get rid of city_mean<br>
-# Version 44: Retune: alpha=0.5<br>
-# Version 45: fine tune: lambda=9.5<br>
-# Version 46: Roll back to version 39 model, because zip_mean had a data leak, and the corrected version doesn't help<br>
-# Version 47: Add additional aggregation features, including by neighborhood<br>
-# Verison 48: Put test set features in the correct order<br>
-# Version 49: Retune: lambda=5, colsample=.55<br>
-# Version 50: Retune: alpha=.65, colsample=.50<br>
-# Version 51: Retune: max_depth=7<br>
-# Version 52: Make it optional to generate submission file when running full notebook<br>
-# Version 53. Option to do validation only<br>
-# Version 54. Starting to clean up the code<br>
-# Version 55. Option to fit final model to full training set<br>
-# Version 56. Optimize fudge factor<br>
-# Version 57. Allow change to validation set cutoff date<br>
-# Version 59. Try September 15 as validation cutoff<br>
-# Version 62. Allow final fit on 2017 (no correction for data leak)<br>
-# Version 68. Add seasonal features<br>
-#  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(Turns out the seasonal features make the fudge factor largely irrelevant,<br>
-#  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;but that's partly because I chose the basedate to fit the fudge factors.)<br>
-#  Version 71. Make separate predictions for 2017 using 2017 properties data<br>
-#  Version 72. Run with FIT_2017_TRAIN_SET = False<br>
-#  Version 73. Remove outliers from 2017 data and set FIT_2017_TRAIN_SET = True<br>
-#  Version 74. Set FIT_2017_TRAIN_SET = False again<br>
-#   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(Removing outliers helps, but 2017 data still generate bad 2016 predictions.)<br>
-#   Version 76. Allow fitting combined training set<br>
-
-# In[ ]:
-
-
-MAKE_SUBMISSION = True          # Generate output file.
-CV_ONLY = False                 # Do validation only; do not generate predicitons.
-FIT_FULL_TRAIN_SET = True       # Fit model to full training set after doing validation.
-FIT_2017_TRAIN_SET = False      # Use 2017 training data for full fit (no leak correction)
-FIT_COMBINED_TRAIN_SET = True   # Fit combined 2016-2017 training set
-USE_SEASONAL_FEATURES = True
-VAL_SPLIT_DATE = '2016-09-15'   # Cutoff date for validation split
-LEARNING_RATE = 0.007           # shrinkage rate for boosting roudns
-ROUNDS_PER_ETA = 20             # maximum number of boosting rounds times learning rate
-OPTIMIZE_FUDGE_FACTOR = False   # Optimize factor by which to multiply predictions.
-FUDGE_FACTOR_SCALEDOWN = 0.3    # exponent to reduce optimized fudge factor for prediction
-
+# This code is based on [Oliver's kernel](https://www.kaggle.com/ogrellier/xgb-classifier-upsampling-lb-0-283/code) and many public contributors. Thanks to them
 
 # In[ ]:
 
 
 import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+mpl.rcParams['agg.path.chunksize'] = 10000 # Jupyter notebook backend restricts number of points in plot
 import pandas as pd
-import xgboost as xgb
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import mean_absolute_error
-import datetime as dt
-from datetime import datetime
-import gc
-import patsy
-import statsmodels.api as sm
-import statsmodels.formula.api as smf
-from statsmodels.regression.quantile_regression import QuantReg
+import scipy as scp
+import csv
+import seaborn as sns
+
+train_master = pd.read_csv('../input/train.csv')
+test_master = pd.read_csv('../input/test.csv')
+train_master.describe()
+
+
+# # Visual Data Exploration
+# 
+# There are 3 types of variables - Binary, Categorical and Continuous. Lets start with target variable by visualizing their distribution.
+
+# In[ ]:
+
+
+binary_columns = [s for s in list(train_master.columns.values) if '_bin' in s]
+categorical_columns = [s for s in list(train_master.columns.values) if '_cat' in s]
+non_continuous_feature_subs = ['_cat', '_bin', 'target', 'id']
+continuous_columns = [s for s in list(train_master.columns.values) 
+                      if all(x not in s for x in non_continuous_feature_subs)]
+target_column = 'target'
+
+ind_columns = [s for s in list(train_master.columns.values) if '_ind' in s]
+car_columns = [s for s in list(train_master.columns.values) if '_car' in s]
+calc_columns = [s for s in list(train_master.columns.values) if '_calc' in s]
+reg_columns = [s for s in list(train_master.columns.values) if '_reg' in s]
+
+
+# ## Target Variable
+# 
+# Lets check the distribution of target classes
+
+# In[ ]:
+
+
+from plotly.offline import init_notebook_mode, iplot
+import plotly.graph_objs as go
+
+init_notebook_mode()
+
+labels = ['1','0']
+values = [(train_master[target_column]==1).sum(),(train_master[target_column]==0).sum()]
+colors = ['#FEBFB3', '#E1396C']
+
+trace = go.Pie(labels=labels, values=values,
+               hoverinfo='label+percent', textinfo='value', 
+               textfont=dict(size=20),
+               marker=dict(colors=colors, 
+                           line=dict(color='#000000', width=2)))
+
+iplot([trace])
+
+
+# We see that the target is unevenly distributed such that the number of insurance claims are << non-claims. To overcome this problem, we will either upsample the data by duplicating rows with positive target values or downsample data by deleting rows with negative target values. Do note that upsampling has to be done DURING cross validation instead of BEFORE. Check out the upsampling section in ensemble and CV notebook to see why. Downsampling leads to loss of information and therefore we will use the upsampling technique.
+
+# # Binary Features
+# 
+# Lets check the distribution of 1s and 0s in binary features
+
+# In[ ]:
+
+
+zero_list = []
+one_list = []
+for col in binary_columns:
+    zero_list.append((train_master[col]==0).sum())
+    one_list.append((train_master[col]==1).sum())
+
+trace1 = go.Bar(
+    x=binary_columns,
+    y=zero_list ,
+    name='0s count'
+)
+trace2 = go.Bar(
+    x=binary_columns,
+    y=one_list,
+    name='1s count'
+)
+
+data = [trace1, trace2]
+layout = go.Layout(
+    barmode='stack',
+    title='Count of 1s and 0s in binary variables'
+)
+
+fig = go.Figure(data=data, layout=layout)
+iplot(fig, filename='stacked-bar')
+
+
+# We see that variables ```ps_ind_10_bin```, ```ps_ind_11_bin```, ```ps_ind_12_bin``` and ```ps_ind_13_bin``` have almost all 0s and therefore may not be of much use in prediction. A feature selection step in pipeline will determine whether to include them or not. It is important to note that feature selection should be performed DURING cross validation and not before. In short, feature selection should not use the data from validation set in CV. For more information check out the upsampling section in ensemble and CV notebook.
+# 
+# Still, to get a feel for data, lets check for similarity between features. To check similarity between 2 binary variables, we will XOR each's row element and count the percentage of 0s and 1s
+
+# In[ ]:
+
+
+binary_corr_data = []
+r = 0
+for i in binary_columns:
+    binary_corr_data.append([])
+    for j in binary_columns:
+        s = sum(train_master[i]^train_master[j])/float(len(train_master[i]))
+        binary_corr_data[r].append(s)
+    r+=1
 
 
 # In[ ]:
 
 
-properties16 = pd.read_csv('../input/properties_2016.csv', low_memory = False)
-properties17 = pd.read_csv('../input/properties_2017.csv', low_memory = False)
+trace = go.Heatmap(z=binary_corr_data, x=binary_columns, y=binary_columns, colorscale='Greys')
+data=[trace]
+iplot(data)
 
-# Number of properties in the zip
-zip_count = properties16['regionidzip'].value_counts().to_dict()
-# Number of properties in the city
-city_count = properties16['regionidcity'].value_counts().to_dict()
-# Median year of construction by neighborhood
-medyear = properties16.groupby('regionidneighborhood')['yearbuilt'].aggregate('median').to_dict()
-# Mean square feet by neighborhood
-meanarea = properties16.groupby('regionidneighborhood')['calculatedfinishedsquarefeet'].aggregate('mean').to_dict()
-# Neighborhood latitude and longitude
-medlat = properties16.groupby('regionidneighborhood')['latitude'].aggregate('median').to_dict()
-medlong = properties16.groupby('regionidneighborhood')['longitude'].aggregate('median').to_dict()
 
-train = pd.read_csv("../input/train_2016_v2.csv")
-for c in properties16.columns:
-    properties16[c]=properties16[c].fillna(-1)
-    if properties16[c].dtype == 'object':
-        lbl = LabelEncoder()
-        lbl.fit(list(properties16[c].values))
-        properties16[c] = lbl.transform(list(properties16[c].values))
+# The heatmap gives us some insights into the most important variables. For example, lightly colored columns are most uncorrelated fromall other variables. These are features like - ```ps_ind_06_bin```, ```ps_ind_16_bin```, ```ps_calc_16_bin```, ```ps_calc_17_bin```, ```ps_calc_19_bin```
+# 
+# In the same way, lets check similarity of each feature with the target variable to visualise each features prediction power.
+
+# In[ ]:
+
+
+binary_target_corr_data = []
+for i in binary_columns:
+    s = sum(train_master[i]^train_master[target_column])/float(len(train_master[i]))
+    binary_target_corr_data.append(s)
 
 
 # In[ ]:
 
 
-train_df = train.merge(properties16, how='left', on='parcelid')
-select_qtr4 = pd.to_datetime(train_df["transactiondate"]) >= VAL_SPLIT_DATE
-if USE_SEASONAL_FEATURES:
-    basedate = pd.to_datetime('2015-11-15').toordinal()
+binary_target_corr_chart = [go.Bar(
+    x=binary_columns,
+    y=binary_target_corr_data
+)]
+iplot(binary_target_corr_chart)
 
 
-# In[ ]:
+# We again observe that features -  ```ps_ind_06_bin```, ```ps_ind_16_bin```, ```ps_calc_16_bin```, ```ps_calc_17_bin```, ```ps_calc_19_bin``` are most insightful
+# 
+# We will perform a more formal feature selection during the cross validation stage.
 
-
-del train
-gc.collect()
-
-
-# In[ ]:
-
-
-# Inputs to features that depend on target variable
-# (Ideally these should be recalculated, and the dependent features recalculated,
-#  when fitting to the full training set.  But I haven't implemented that yet.)
-
-# Standard deviation of target value for properties in the city/zip/neighborhood
-citystd = train_df[~select_qtr4].groupby('regionidcity')['logerror'].aggregate("std").to_dict()
-zipstd = train_df[~select_qtr4].groupby('regionidzip')['logerror'].aggregate("std").to_dict()
-hoodstd = train_df[~select_qtr4].groupby('regionidneighborhood')['logerror'].aggregate("std").to_dict()
-
+# # Continuous Features
+# 
+# First lets check if there are missing values in the data set (For binary variables it was specified that it had no missing values).
 
 # In[ ]:
 
 
-def calculate_features(df):
-    # Nikunj's features
-    # Number of properties in the zip
-    df['N-zip_count'] = df['regionidzip'].map(zip_count)
-    # Number of properties in the city
-    df['N-city_count'] = df['regionidcity'].map(city_count)
-    # Does property have a garage, pool or hot tub and AC?
-    df['N-GarPoolAC'] = ((df['garagecarcnt']>0) &                          (df['pooltypeid10']>0) &                          (df['airconditioningtypeid']!=5))*1 
+value_list = []
+missing_list = []
+for col in continuous_columns:
+    value_list.append((train_master[col]!=-1).sum())
+    missing_list.append((train_master[col]==-1).sum())
 
-    # More features
-    # Mean square feet of neighborhood properties
-    df['mean_area'] = df['regionidneighborhood'].map(meanarea)
-    # Median year of construction of neighborhood properties
-    df['med_year'] = df['regionidneighborhood'].map(medyear)
-    # Neighborhood latitude and longitude
-    df['med_lat'] = df['regionidneighborhood'].map(medlat)
-    df['med_long'] = df['regionidneighborhood'].map(medlong)
+trace1 = go.Bar(
+    x=continuous_columns,
+    y=value_list ,
+    name='Actual Values'
+)
+trace2 = go.Bar(
+    x=continuous_columns,
+    y=missing_list,
+    name='Missing Values'
+)
 
-    df['zip_std'] = df['regionidzip'].map(zipstd)
-    df['city_std'] = df['regionidcity'].map(citystd)
-    df['hood_std'] = df['regionidneighborhood'].map(hoodstd)
+data = [trace1, trace2]
+layout = go.Layout(
+    barmode='stack',
+    title='Count of missing values in continuous variables'
+)
+
+fig = go.Figure(data=data, layout=layout)
+iplot(fig, filename='stacked-bar')
+
+
+# We see that only ```ps_reg_03``` and ```ps_car_14``` have significant number of missing values. Apart from that, ```ps_car_11``` has 5 and ```ps_car_12``` has 1 missing value. Lets evaluate the chi squared test between each of continuous variables and the target variable
+
+# In[ ]:
+
+
+from sklearn.feature_selection import chi2, mutual_info_classif
+
+minfo_target_to_continuous_features = mutual_info_classif(
+    train_master[continuous_columns],train_master[target_column])
+
+minfo_target_to_continuous_chart = [go.Bar(
+    x=continuous_columns,
+    y=minfo_target_to_continuous_features
+)]
+iplot(minfo_target_to_continuous_chart)
+
+
+# It seems like ```ps_reg_03``` and ```ps_car_14``` are fairly independant of the target variable. Again, a more formal feature selection will be performed during cross validation
+# 
+# Lets evaluate the pearson correlation between between each of continuous variables to see if two features are highly correlated and therefore present redundant information.
+
+# In[ ]:
+
+
+continuous_corr_data = train_master[continuous_columns].corr(method='pearson').as_matrix()
+
+trace = go.Heatmap(z=continuous_corr_data, x=continuous_columns, 
+                   y=continuous_columns, colorscale='Greys')
+data=[trace]
+iplot(data)
+
+
+# It seems like ```ps_reg_03``` and ```ps_reg_01``` maybe linearly related. Same for ```ps_car_12``` and ```ps_car_13```
+
+# # Categorical Features
+# 
+# Categorical features are a tricky business in classification, especially while using trees. Since tree algorithms use binary trees, they need to find an appropriate split. But categorical variables have no inherent order in them. Various techniques are used to overcome this problem. One such technique is encoding of categorical variables such that the encoded variables have an order. But what encoding scheme to follow?
+# 
+# A 2001 [paper](https://www.researchgate.net/publication/220520258_A_Preprocessing_Scheme_for_High-Cardinality_Categorical_Attributes_in_Classification_and_Prediction_Problems) by Daniele Micci-Barreca illustrates one approach.
+
+# # Evaluation Criteria for Predictions
+# 
+# According to competition details, the challenge uses normalized gini coefficient to evaluate the predictions. This is the same function we should be using for our cross validation step (Gini is linearly related to AUC-ROC so we will use AUC for evaluation). Lets define the function.
+
+# In[ ]:
+
+
+def gini(y, pred):
+    fpr, tpr, thr = metrics.roc_curve(y, pred, pos_label=1)
+    g = 2 * metrics.auc(fpr, tpr) -1
+    return g
+
+
+# # Cross Validation
+# 
+# To evaluate performance of our model and to ensure that our it generalizes well over new data, we do a 10 fold cross-validation. Folds will be stratified to ensure equal proportions of target variable in each. In each fold 
+# 1. We upsample the positive target data from training fold
+# 2. Choose best features using training fold
+# 3. Train the model over training fold and evaluate it over the hold out validation fold.
+
+# In[ ]:
+
+
+from sklearn.model_selection import StratifiedKFold
+
+n_splits = 10
+folds = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=7)
+
+
+# # Single Model
+# 
+# We will start with XgBoost. To evaluate optimal parameters for XgBoost would require a search like grid search. Parameter tuning is needed to avoid overfitting and there are two basic ways to do that -   
+# 1. By controlling complexity of tree (Regularization)
+# 2. By adding randomness via sub-sampling data and columns
+# 
+# Suppose we want to find the optimal values from - 
+# 
+# ```max_depth``` = {3, 4, 5} (Regularization)  
+# ```gamma``` = {1, 5, 9} (Regularization)  
+# ```colsample_bytree``` = {0.7, 0.8, 0.9}  
+# ```subsample``` = {0.7, 0.8, 0.9}  
+# ```learning_rate``` = {0.1, 0.05, 0.005}
+# 
+# A grid search over these parameters means evaluating model at 243 parameter combinations. And with 10-fold CV, it means that you train the model 2430 times. Training 1 model on one core of an c4.4xlarge EC2 instance takes anywhere between 10 to 15 minutes depending on the depth of the tree and learning rates. With 16 cores running parallely will take approximately 38 hours. c4.4xlarge charges ~ \$0.8/hr which leads to a total cost of $30 and two days of time. And this is just to evaluate XgBoost over a small set of parameter range.
+# 
+# If you want to do it yourself, I have listed the code in appendix notebook with details of setting up an EC2 instance with jupyter notebook interface.
+# 
+# Combining a short grid search costing me $10 and prior experience, I decided to use the following parameters - 
+# 
+# ```max_depth``` = 4  
+# ```gamma``` = 9  
+# ```colsample_bytree``` = 0.8  
+# ```subsample``` = 0.8  
+# ```learning_rate``` = 0.05
+# 
+# The objective function is (gives the probabilities)  
+# ```objective``` = ```"binary:logistic"```
+# 
+# The other option which gave equally good performance was evaluation of pair-wise ranks  
+# ```objective``` = ```"rank:pairwise"```
+# 
+# Parameters for cross validation -   
+# ```num_rounds``` = 1000 with early stopping window of 10 epochs (And use all trees to predict)  
+# ```folds``` = 10
+# 
+# (For brevity, I have excluded the code but the it gave a LB of 0.281)
+
+# # Average of 3 boostes trees with LightGBM
+# 
+# (Note: LightGBM proved to be extremely fast compared to XGBoost)
+# 
+# Trees have this property that when we change the training dataset, we may end up with drastically different trees. Averaging over all such different trees should better generalise our CV score over the test data. Look at it as a forest of gradient boosted trees.
+# 
+# Each tree is differentiated by its complexity and randomness. We will generate 3 trees as follows -
+# 1. A deeper tree (```max_depth``` = 5) that randomly chooses only a small (30%) subset of the available features and 0.7 bagging fraction
+# 2. An average tree (```max_depth``` = 4) that randomly chooses 90% of features and 0.9 bagging fraction
+# 2. An shallow tree (```max_depth``` = 3) that chooses all features and all rows
+# 
+# At each fold, we evaluate the arithmatic mean of predictions of the 3 trees on the validation set. The overall score over training data is then taken as the average score over all folds.
+# 
+# This model leads to 0.287 CV and 0.283 on LB (Seems like a drastic overfit!)
+# 
+# # Parameter Selection
+# 
+# The main parameter to control complexity of tree will be ```max_depth``` instead of ```num_leaves```. Since LightGBM grows tree leaf wise, for same number of leaves, LightGBM will give a much deeper tree than depth wise. ```max_depth``` is a much more intuitive limit on how deep the tree is going to grow.
+# 
+# We will use ```feature_fraction``` and ```bagging_fraction``` and ```bagging_freq``` to control randomness.
+# 
+# We will again experiment with LightGBM's internal handling of categorical features and our encoding scheme defined previously. For this model, we use our previous encoding scheme.
+# 
+# Lets first define the encoding scheme.
+# 
+
+# In[ ]:
+
+
+import numpy as np
+from sklearn import metrics
+
+def encode_cat_features(train_df, test_df, cat_cols, target_col_name, smoothing=1):
+    prior = train_df[target_col_name].mean()
+    probs_dict = {}
+    for c in cat_cols:
+        probs = train_df.groupby(c, as_index=False)[target_col_name].mean()
+        probs['counts'] = train_df.groupby(c, as_index=False)[target_col_name].count()[[target_col_name]]
+        probs['smoothing'] = 1 / (1 + np.exp(-(probs['counts'] - 1) / smoothing))
+        probs['enc'] = prior * (1 - probs['smoothing']) + probs['target'] * probs['smoothing']
+        probs_dict[c] = probs[[c,'enc']]
+    return probs_dict
+
+
+# Lets start building the model. Uncomment the code (commented because it exceeds time limit)
+
+# In[ ]:
+
+
+'''
+import lightgbm as lgb
+import numpy as np
+import pandas as pd
+
+np.random.seed(3)
+model_scores = {}
+
+# Drop binary columns with almost all zeros. 
+# Why now? Just follow along for now. We have a lot of experimentation to be done
+train = train_master.drop(['ps_ind_10_bin', 'ps_ind_11_bin', 'ps_ind_13_bin'],axis=1)
+test = test_master.drop(['ps_ind_10_bin', 'ps_ind_11_bin', 'ps_ind_13_bin'],axis=1)
+
+# Drop calculated features
+# But WHY??? 
+# Because we are assuming that tree can generate any complicated function 
+# of base features and calculated features add no more information
+# Is this assumption valid? Results will tell
+calc_columns = [s for s in list(train_master.columns.values) if '_calc' in s]
+train = train.drop(calc_columns, axis=1)  
+test = test.drop(calc_columns, axis=1)
+
+# Get categorical columns for encoding later
+categorical_columns = [s for s in list(train_master.columns.values) if '_cat' in s]
+target_column = 'target'
+
+# Replace missing values with NaN
+train = train.replace(-1, np.nan)
+test = test.replace(-1, np.nan)
+
+# Initialize DS to store validation fold predictions
+y_val_fold = np.empty(len(train))
+
+# Initialize DS to store test predictions with aggregate model and individual models
+y_test = np.zeros(len(test))
+y_test_model_1 = np.zeros(len(test))
+y_test_model_2 = np.zeros(len(test))
+y_test_model_3 = np.zeros(len(test))
+
+for fold_number, (train_ids, val_ids) in enumerate(
+    folds.split(train.drop(['id',target_column], axis=1), 
+                train[target_column])):
     
-    if USE_SEASONAL_FEATURES:
-        df['cos_season'] = ( (pd.to_datetime(df['transactiondate']).apply(lambda x: x.toordinal()-basedate)) *                              (2*np.pi/365.25) ).apply(np.cos)
-        df['sin_season'] = ( (pd.to_datetime(df['transactiondate']).apply(lambda x: x.toordinal()-basedate)) *                              (2*np.pi/365.25) ).apply(np.sin)
-
-
-# In[ ]:
-
-
-dropvars = ['airconditioningtypeid', 'buildingclasstypeid',
-            'buildingqualitytypeid', 'regionidcity']
-droptrain = ['parcelid', 'logerror', 'transactiondate']
-droptest = ['ParcelId']
-
-
-# In[ ]:
-
-
-calculate_features(train_df)
-
-x_valid = train_df.drop(dropvars+droptrain, axis=1)[select_qtr4]
-y_valid = train_df["logerror"].values.astype(np.float32)[select_qtr4]
-
-print('Shape full training set: {}'.format(train_df.shape))
-print('Dropped vars: {}'.format(len(dropvars+droptrain)))
-print('Shape valid X: {}'.format(x_valid.shape))
-print('Shape valid y: {}'.format(y_valid.shape))
-
-train_df=train_df[ train_df.logerror > -0.4 ]
-train_df=train_df[ train_df.logerror < 0.419 ]
-print('\nFull training set after removing outliers, before dropping vars:')     
-print('Shape training set: {}\n'.format(train_df.shape))
-
-if FIT_FULL_TRAIN_SET:
-    full_train = train_df.copy()
-
-train_df=train_df[~select_qtr4]
-x_train=train_df.drop(dropvars+droptrain, axis=1)
-y_train = train_df["logerror"].values.astype(np.float32)
-y_mean = np.mean(y_train)
-n_train = x_train.shape[0]
-print('Training subset after removing outliers:')     
-print('Shape train X: {}'.format(x_train.shape))
-print('Shape train y: {}'.format(y_train.shape))
-
-if FIT_FULL_TRAIN_SET:
-    x_full = full_train.drop(dropvars+droptrain, axis=1)
-    y_full = full_train["logerror"].values.astype(np.float32)
-    n_full = x_full.shape[0]
-    print('\nFull trainng set:')     
-    print('Shape train X: {}'.format(x_train.shape))
-    print('Shape train y: {}'.format(y_train.shape))
-
-
-# In[ ]:
-
-
-if not CV_ONLY:
-    # Generate test set data
+    X = train.iloc[train_ids]
+    X_val = train.iloc[val_ids]
+    X_test = test
     
-    sample_submission = pd.read_csv('../input/sample_submission.csv', low_memory = False)
+    # Encode categorical variables using training fold
+    encoding_dict = encode_cat_features(X, X_val, categorical_columns, target_column)
     
-    # Process properties for 2016
-    test_df = pd.merge( sample_submission[['ParcelId']], 
-                        properties16.rename(columns = {'parcelid': 'ParcelId'}), 
-                        how = 'left', on = 'ParcelId' )
-    if USE_SEASONAL_FEATURES:
-        test_df['transactiondate'] = '2016-10-31'
-        droptest += ['transactiondate']
-    calculate_features(test_df)
-    x_test = test_df.drop(dropvars+droptest, axis=1)
-    print('Shape test: {}'.format(x_test.shape))
-
-    # Process properties for 2017
-    for c in properties17.columns:
-        properties17[c]=properties17[c].fillna(-1)
-        if properties17[c].dtype == 'object':
-            lbl = LabelEncoder()
-            lbl.fit(list(properties17[c].values))
-            properties17[c] = lbl.transform(list(properties17[c].values))
-    zip_count = properties17['regionidzip'].value_counts().to_dict()
-    city_count = properties17['regionidcity'].value_counts().to_dict()
-    medyear = properties17.groupby('regionidneighborhood')['yearbuilt'].aggregate('median').to_dict()
-    meanarea = properties17.groupby('regionidneighborhood')['calculatedfinishedsquarefeet'].aggregate('mean').to_dict()
-    medlat = properties17.groupby('regionidneighborhood')['latitude'].aggregate('median').to_dict()
-    medlong = properties17.groupby('regionidneighborhood')['longitude'].aggregate('median').to_dict()
-
-    test_df = pd.merge( sample_submission[['ParcelId']], 
-                        properties17.rename(columns = {'parcelid': 'ParcelId'}), 
-                        how = 'left', on = 'ParcelId' )
-    if USE_SEASONAL_FEATURES:
-        test_df['transactiondate'] = '2017-10-31'
-    calculate_features(test_df)
-    x_test17 = test_df.drop(dropvars+droptest, axis=1)
-
-    del test_df
-
-
-# In[ ]:
-
-
-del train_df
-del select_qtr4
-gc.collect()
-
-
-# In[ ]:
-
-
-xgb_params = {  # best as of 2017-09-28 13:20 UTC
-    'eta': LEARNING_RATE,
-    'max_depth': 7, 
-    'subsample': 0.6,
-    'objective': 'reg:linear',
-    'eval_metric': 'mae',
-    'lambda': 5.0,
-    'alpha': 0.65,
-    'colsample_bytree': 0.5,
-    'base_score': y_mean,'taxdelinquencyyear'
-    'silent': 1
-}
-
-dtrain = xgb.DMatrix(x_train, y_train)
-dvalid_x = xgb.DMatrix(x_valid)
-dvalid_xy = xgb.DMatrix(x_valid, y_valid)
-if not CV_ONLY:
-    dtest = xgb.DMatrix(x_test)
-    dtest17 = xgb.DMatrix(x_test17)
-    del x_test
-
-
-# In[ ]:
-
-
-del x_train
-gc.collect()
-
-
-# In[ ]:
-
-
-num_boost_rounds = round( ROUNDS_PER_ETA / xgb_params['eta'] )
-early_stopping_rounds = round( num_boost_rounds / 20 )
-print('Boosting rounds: {}'.format(num_boost_rounds))
-print('Early stoping rounds: {}'.format(early_stopping_rounds))
-
-
-# In[ ]:
-
-
-evals = [(dtrain,'train'),(dvalid_xy,'eval')]
-model = xgb.train(xgb_params, dtrain, num_boost_round=num_boost_rounds,
-                  evals=evals, early_stopping_rounds=early_stopping_rounds, 
-                  verbose_eval=10)
-
-
-# In[ ]:
-
-
-valid_pred = model.predict(dvalid_x, ntree_limit=model.best_ntree_limit)
-print( "XGBoost validation set predictions:" )
-print( pd.DataFrame(valid_pred).head() )
-print("\nMean absolute validation error:")
-mean_absolute_error(y_valid, valid_pred)
-
-
-# In[ ]:
-
-
-if OPTIMIZE_FUDGE_FACTOR:
-    mod = QuantReg(y_valid, valid_pred)
-    res = mod.fit(q=.5)
-    print("\nLAD Fit for Fudge Factor:")
-    print(res.summary())
-
-    fudge = res.params[0]
-    print("Optimized fudge factor:", fudge)
-    print("\nMean absolute validation error with optimized fudge factor: ")
-    print(mean_absolute_error(y_valid, fudge*valid_pred))
-
-    fudge **= FUDGE_FACTOR_SCALEDOWN
-    print("Scaled down fudge factor:", fudge)
-    print("\nMean absolute validation error with scaled down fudge factor: ")
-    print(mean_absolute_error(y_valid, fudge*valid_pred))
-else:
-    fudge=1.0
-
-
-# In[ ]:
-
-
-if FIT_FULL_TRAIN_SET and not CV_ONLY:
-    if FIT_COMBINED_TRAIN_SET:
-        # Merge 2016 and 2017 data sets
-        train16 = pd.read_csv('../input/train_2016_v2.csv')
-        train17 = pd.read_csv('../input/train_2017.csv')
-        train16 = pd.merge(train16, properties16, how = 'left', on = 'parcelid')
-        train17 = pd.merge(train17, properties17, how = 'left', on = 'parcelid')
-        train17[['structuretaxvaluedollarcnt', 'landtaxvaluedollarcnt', 'taxvaluedollarcnt', 'taxamount']] = np.nan
-        train_df = pd.concat([train16, train17], axis = 0)
-        # Generate features
-        citystd = train_df.groupby('regionidcity')['logerror'].aggregate("std").to_dict()
-        zipstd = train_df.groupby('regionidzip')['logerror'].aggregate("std").to_dict()
-        hoodstd = train_df.groupby('regionidneighborhood')['logerror'].aggregate("std").to_dict()
-        calculate_features(train_df)
-        # Remove outliers
-        train_df=train_df[ train_df.logerror > -0.4 ]
-        train_df=train_df[ train_df.logerror < 0.419 ]
-        # Create final training data sets
-        x_full = train_df.drop(dropvars+droptrain, axis=1)
-        y_full = train_df["logerror"].values.astype(np.float32)
-        n_full = x_full.shape[0]     
-    elif FIT_2017_TRAIN_SET:
-        train = pd.read_csv('../input/train_2017.csv')
-        train_df = train.merge(properties17, how='left', on='parcelid')
-        # Generate features
-        citystd = train_df.groupby('regionidcity')['logerror'].aggregate("std").to_dict()
-        zipstd = train_df.groupby('regionidzip')['logerror'].aggregate("std").to_dict()
-        hoodstd = train_df.groupby('regionidneighborhood')['logerror'].aggregate("std").to_dict()
-        calculate_features(train_df)
-        # Remove outliers
-        train_df=train_df[ train_df.logerror > -0.4 ]
-        train_df=train_df[ train_df.logerror < 0.419 ]
-        # Create final training data sets
-        x_full = train_df.drop(dropvars+droptrain, axis=1)
-        y_full = train_df["logerror"].values.astype(np.float32)
-        n_full = x_full.shape[0]     
-    dtrain = xgb.DMatrix(x_full, y_full)
-    num_boost_rounds = int(model.best_ntree_limit*n_full/n_train)
-    full_model = xgb.train(xgb_params, dtrain, num_boost_round=num_boost_rounds, 
-                           evals=[(dtrain,'train')], verbose_eval=10)
-
-
-# In[ ]:
-
-
-del properties16
-del properties17
-gc.collect()
-
-
-# In[ ]:
-
-
-if not CV_ONLY:
-    if FIT_FULL_TRAIN_SET:
-        pred = fudge*full_model.predict(dtest)
-        pred17 = fudge*full_model.predict(dtest17)
-    else:
-        pred = fudge*model.predict(dtest, ntree_limit=model.best_ntree_limit)
-        pred17 = fudge*model.predict(dtest17, ntree_limit=model.best_ntree_limit)
+    for c, encoding in encoding_dict.items():
+        X = pd.merge(X, encoding[[c,'enc']], how='left', on=c, sort=False,suffixes=('', '_'+c))
+        X = X.drop(c, axis = 1)
+        X = X.rename(columns = {'enc':'enc_'+c})
         
-    print( "XGBoost test set predictions for 2016:" )
-    print( pd.DataFrame(pred).head() )
-    print( "XGBoost test set predictions for 2017:" )
-    print( pd.DataFrame(pred17).head() )    
+        X_test = pd.merge(X_test, encoding[[c,'enc']], how='left', on=c, sort=False,suffixes=('', '_'+c))
+        X_test = X_test.drop(c, axis = 1)
+        X_test = X_test.rename(columns = {'enc':'enc_'+c})
+        
+        X_val = pd.merge(X_val, encoding[[c,'enc']], how='left', on=c, sort=False,suffixes=('', '_'+c))
+        X_val = X_val.drop(c, axis = 1)
+        X_val = X_val.rename(columns = {'enc':'enc_'+c})
+        
+    # Seperate target column and remove id column from all
+    y = X[target_column]
+    X = X.drop(['id',target_column], axis=1)
+    X_test = X_test.drop('id', axis=1)
+    y_val = X_val[target_column]
+    X_val = X_val.drop(['id',target_column], axis=1)
+    
+    # Upsample data in training folds
+    ids_to_duplicate = pd.Series(y == 1)
+    X = pd.concat([X, X.loc[ids_to_duplicate]], axis=0)
+    y = pd.concat([y, y.loc[ids_to_duplicate]], axis=0)
+    # Again Upsample (total increase becomes 4 times)
+    X = pd.concat([X, X.loc[ids_to_duplicate]], axis=0)
+    y = pd.concat([y, y.loc[ids_to_duplicate]], axis=0)
+    
+    # Shuffle after concatenating duplicate rows
+    # We cannot use inbuilt shuffles since both dataframes have to be shuffled in sync
+    shuffled_ids = np.arange(len(X))
+    np.random.shuffle(shuffled_ids)
+    X = X.iloc[shuffled_ids]
+    y = y.iloc[shuffled_ids]
+    
+    # Feature Selection goes here
+    # TODO
+    
+    # Define parameters of GBM as explained before for 3 trees
+    params_1 = {
+        'task': 'train',
+        'boosting_type': 'gbdt',
+        'objective': 'binary',
+        'metric': 'auc',
+        'max_depth': 3,
+        'learning_rate': 0.05,
+        'feature_fraction': 1,
+        'bagging_fraction': 1,
+        'bagging_freq': 10,
+        'verbose': 0
+    }
+    params_2 = {
+        'task': 'train',
+        'boosting_type': 'gbdt',
+        'objective': 'binary',
+        'metric': 'auc',
+        'max_depth': 4,
+        'learning_rate': 0.05,
+        'feature_fraction': 0.9,
+        'bagging_fraction': 0.9,
+        'bagging_freq': 2,
+        'verbose': 0
+    }
+    params_3 = {
+        'task': 'train',
+        'boosting_type': 'gbdt',
+        'objective': 'binary',
+        'metric': 'auc',
+        'max_depth': 5,
+        'learning_rate': 0.05,
+        'feature_fraction': 0.3,
+        'bagging_fraction': 0.7,
+        'bagging_freq': 10,
+        'verbose': 0
+    }
+    
+    # Create appropriate format for training and evaluation data
+    lgb_train = lgb.Dataset(X, y)
+    lgb_eval = lgb.Dataset(X_val, y_val, reference=lgb_train)
+    
+    # Create the 3 classifiers with 1000 rounds and a window of 100 for early stopping
+    clf_1 = lgb.train(params_1,lgb_train, num_boost_round=1000,
+                      valid_sets=lgb_eval, early_stopping_rounds=100, verbose_eval=50)
+    clf_2 = lgb.train(params_2,lgb_train, num_boost_round=1000,
+                      valid_sets=lgb_eval, early_stopping_rounds=100, verbose_eval=50)
+    clf_3 = lgb.train(params_3,lgb_train, num_boost_round=1000,
+                      valid_sets=lgb_eval, early_stopping_rounds=100, verbose_eval=50)
+    
+    # Predict raw scores for validation ids
+    # At each fold, 1/10th of the training data get scores
+    y_val_fold[val_ids] = (clf_1.predict(X_val, raw_score=True)+
+                           clf_2.predict(X_val, raw_score=True)+
+                           clf_3.predict(X_val, raw_score=True)) / 3
 
+    # Predict and average over folds, raw scores for test data
+    y_test += (clf_1.predict(X_test, raw_score=True)+
+               clf_2.predict(X_test, raw_score=True)+
+               clf_3.predict(X_test, raw_score=True)) / (3*n_splits)
+    y_test_model_1 += clf_1.predict(X_test, raw_score=True) / n_splits
+    y_test_model_2 += clf_2.predict(X_test, raw_score=True) / n_splits
+    y_test_model_3 += clf_3.predict(X_test, raw_score=True) / n_splits
+    
+    # Display fold predictions
+    # Gini requires only order and therefore raw scores need not be scaled
+    print("Fold %2d : %.9f" % (fold_number + 1, gini(y_val, y_val_fold[val_ids])))
+    
+# Display aggregate predictions
+# Gini requires only order and therefore raw scores need not be scaled
+print("Average score over all folds: %.9f" % gini(train_master[target_column], y_val_fold))
+'''
+
+
+# Scale scores and save predictions for submission
 
 # In[ ]:
 
 
-if MAKE_SUBMISSION and not CV_ONLY:
-   y_pred=[]
-   y_pred17=[]
+'''
+temp = y_test
+# Scale the raw scores to range [0.0, 1.0]
+temp = np.add(temp,abs(min(temp)))/max(np.add(temp,abs(min(temp))))
 
-   for i,predict in enumerate(pred):
-       y_pred.append(str(round(predict,4)))
-   for i,predict in enumerate(pred17):
-       y_pred17.append(str(round(predict,4)))
-   y_pred=np.array(y_pred)
-   y_pred17=np.array(y_pred17)
-
-   output = pd.DataFrame({'ParcelId': sample_submission['ParcelId'].astype(np.int32),
-           '201610': y_pred, '201611': y_pred, '201612': y_pred,
-           '201710': y_pred17, '201711': y_pred17, '201712': y_pred17})
-   # set col 'ParceID' to first col
-   cols = output.columns.tolist()
-   cols = cols[-1:] + cols[:-1]
-   output = output[cols]
-
-   output.to_csv('sub{}.csv'.format(datetime.now().strftime('%Y%m%d_%H%M%S')), index=False)
+df = pd.DataFrame(columns=['id', 'target'])
+df['id']=test_master['id']
+df['target']=temp
+df.to_csv('benchmark__0_283.csv', index=False, float_format="%.9f")
+df.shape
+'''
 
 
-# In[ ]:
-
-
-print("Mean absolute validation error without fudge factor: ", )
-print( mean_absolute_error(y_valid, valid_pred) )
-if OPTIMIZE_FUDGE_FACTOR:
-    print("Mean absolute validation error with fudge factor:")
-    print( mean_absolute_error(y_valid, fudge*valid_pred) )
-
+# I have purposefully kept aside all extra analysis and messy experiments. I have tried most of the tricks mentioned in the discussions - using HM instead of AM or Logistic regression for ensembling, recursive feature selection, custom features like sum of binary variables, even downgrading LightGBM version, etc, but none has helped me improve the score. I guess I just have to experiment adding more classifiers and averaging them appropriately.
+# 
+# Some current known drawbacks - 
+# 1. Encoding is based on training set and there are some categories in hold out that do not occur in training. This results in NaN values on the join
+# 2. Literally no feature engineering
+# 3. Overfitting
+# 
+# Please do let me know your opinions and suggestions and thanks to public contributors for the invaluable help!
+# 
+# P.S. I know this is off topic but I will be shameless and ask - I am looking for internships for summer 2018. Any help in that direction will also be appreciated :)

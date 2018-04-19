@@ -1,320 +1,154 @@
-__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
+"""
+Attempt to find out if train and test set differ using Adversarial Validation approach. This kernel is inspired from below kernels
+- https://www.kaggle.com/ogrellier/adversarial-validation-and-lb-shakeup
+- https://www.kaggle.com/konradb/adversarial-validation-and-other-scary-terms
 
-import datetime
-import os
-from collections import defaultdict
-from operator import itemgetter
-import operator
-import random
-import itertools
-import heapq
-import math
-random.seed(2016)
+Whats Adversarial Validation?
+    Adversarial validation is a mean to check if train and test datasets have significant differences. 
+    The idea is to use the dataset features to try and separate train and test samples.
 
-
-def apk(actual, predicted, k=7):
-    if len(predicted) > k:
-        predicted = predicted[:k]
-
-    score = 0.0
-    num_hits = 0.0
-
-    for i, p in enumerate(predicted):
-        if p in actual and p not in predicted[:i]:
-            num_hits += 1.0
-            score += num_hits / (i+1.0)
-
-    if not actual:
-        return 0.0
-
-    return score / min(len(actual), k)
-
-
-hashes_important_indexes = list(range(2, 24))
-hashes_important_indexes.remove(6) # date type (fecha_alta)
-hashes_important_indexes.remove(22) # float type (renta)
-all = itertools.combinations(hashes_important_indexes, 5)
-hashes_indexes = random.sample(list(all), 2)
-# print('Current set of hash indexes: {}'.format(hashes_indexes))
-
-
-distrib = defaultdict(int)
-
-def get_hashes(arr):
-    global hashes_indexes, distrib
-
-    (fecha_dato, ncodpers, ind_empleado,
-    pais_residencia, sexo, age,
-    fecha_alta, ind_nuevo, antiguedad,
-    indrel, ult_fec_cli_1t, indrel_1mes,
-    tiprel_1mes, indresi, indext,
-    conyuemp, canal_entrada, indfall,
-    tipodom, cod_prov, nomprov,
-    ind_actividad_cliente, renta, segmento) = arr[:24]
-    renta_slice = [45542.97, 57629.67, 68211.78, 78852.39, 90461.97, 
-    103855.23, 120063.0, 141347.49, 173418.36, 234687.12, 28894396.51]
-
-    renta1 = -1
-    if renta != '' and renta != 'NA':
-        flrenta = float(renta)
-        for i in range(0, len(renta_slice)):
-            if flrenta < renta_slice[i]:
-                renta1 = i
-                break
-
-    distrib[renta1] += 1
-
-    sub = []
-    if 1:
-        sub = [
-            (1, pais_residencia, sexo, age, ind_nuevo, segmento, ind_empleado, ind_actividad_cliente, indresi, renta1),
-            # (2, segmento, nomprov),
-            (3, ncodpers),
-            (4, ind_empleado,ind_actividad_cliente,ind_nuevo,canal_entrada),
-            (5, pais_residencia, sexo, renta1, age, segmento),
-            (6, pais_residencia, sexo, antiguedad, segmento, ind_empleado),
-        ]
-    else:
-        # Random set
-        sub = [itemgetter(*h)(arr) for h in hashes_indexes]
-
-    return sub
-
-
-def date_is_important(date, d_type):
-    possible_dates = ['2015-01-28', '2015-02-28', '2015-03-28', '2015-04-28', '2015-05-28',
-    '2015-06-28', '2015-07-28', '2015-08-28', '2015-09-28', '2015-10-28',
-    '2015-11-28', '2015-12-28', '2016-01-28', '2016-02-28', '2016-03-28',
-    '2016-04-28', '2016-05-28']
+    So you would create a binary target that would be 1 for train samples and 0 for test samples and 
+    fit a classifier on the features to predict if a given sample is in train or test datasets!
     
-    koeff = 0
-    if d_type == 'valid':
-        if date == '2015-05-28':
-            koeff = 10
-        score = 1 + koeff*(possible_dates.index(date)-1)
-    else:
-        if date == '2015-06-28':
-            koeff = 10
-        score = 1 + koeff*possible_dates.index(date)
-    return score
-
-
-def add_data_to_main_arrays(arr, best, overallbest, customer, d_type):
-    date = arr[0]
-    ncodpers = arr[1]
-    hashes = get_hashes(arr)
-    importance = date_is_important(date, d_type)
-
-    part = arr[24:]
-    num_prod = 0
-    for i in range(24):
-        if part[i] == '1':
-            num_prod +=1
-    num_prod = num_prod % 3        
-    for i in range(24):
-        if part[i] == '1':
-            if ncodpers in customer:
-                if customer[ncodpers][i] == '0':
-                    for h in hashes:
-                        best[h][i] += (importance+num_prod)
-                    overallbest[i] += (importance+num_prod)
-            else:
-                for h in hashes:
-                    best[h][i] += (importance+num_prod)
-                overallbest[i] += (importance+num_prod)
-    customer[ncodpers] = part
-
-
-def sort_main_arrays(best, overallbest):
-    out = dict()
-    for b in best:
-        arr = best[b]
-        srtd = sorted(arr.items(), key=operator.itemgetter(1), reverse=True)
-        out[b] = srtd
-    best = out
-    overallbest = sorted(overallbest.items(), key=operator.itemgetter(1), reverse=True)
-    return best, overallbest
-
-
-def get_next_best_prediction(best, hashes, predicted, cst):
-
-    score = [0] * 24
-
-    for h in hashes:
-        if h in best:
-            for i in range(len(best[h])):
-                sc = 24-i + len(h)
-                index = best[h][i][0]
-                if cst is not None:
-                    if cst[index] == '1':
-                        continue
-                if index not in predicted:
-                    score[index] += sc
-
-    final = []
-    pred = heapq.nlargest(24, range(len(score)), score.__getitem__)
-    for i in range(len(pred)):
-        if score[pred[i]] > 0:
-            final.append(pred[i])
-        if len(final) >= 7:
-            break
-
-    return final
-
-
-def get_predictions(arr1, best, overallbest, customer):
-
-    predicted = []
-    hashes = get_hashes(arr1)
-    ncodpers = arr1[1]
-
-    customer_data = None
-    if ncodpers in customer:
-        customer_data = customer[ncodpers]
-
-    predicted = get_next_best_prediction(best, hashes, predicted, customer_data)
-
-    # overall
-    if len(predicted) < 7:
-        for a in overallbest:
-            # If user is not new
-            if ncodpers in customer:
-                if customer[ncodpers][a[0]] == '1':
-                    continue
-            if a[0] not in predicted:
-                predicted.append(a[0])
-                if len(predicted) == 7:
-                    break
-
-    return predicted
-
-
-def get_real_values(arr1, customer):
-    real = []
-    ncodpers = arr1[1]
-    arr2 = arr1[24:]
-
-    for i in range(len(arr2)):
-        if arr2[i] == '1':
-            if ncodpers in customer:
-                if customer[ncodpers][i] == '0':
-                    real.append(i)
-            else:
-                real.append(i)
-    return real
-
-
-def run_solution():
-
-    print('Preparing arrays...')
-    f = open("../input/train_ver2.csv", "r")
-    first_line = f.readline().strip()
-    first_line = first_line.replace("\"", "")
-    map_names = first_line.split(",")[24:]
-
-    # Normal variables
-    customer = dict()
-    best = defaultdict(lambda: defaultdict(int))
-    overallbest = defaultdict(int)
-
-    # Validation variables
-    customer_valid = dict()
-    best_valid = defaultdict(lambda: defaultdict(int))
-    overallbest_valid = defaultdict(int)
-
-    valid_part = []
-    # Calc counts
-    total = 0
-    while 1:
-        line = f.readline()[:-1]
-        total += 1
-
-        if line == '':
-            break
-
-        tmp1 = line.split("\"")
-        arr = tmp1[0][:-1].split(",") + [tmp1[1]] + tmp1[2][1:].split(',')
-        arr = [a.strip() for a in arr]
-
-        # Normal part
-        add_data_to_main_arrays(arr, best, overallbest, customer, 'train')
-
-        # Valid part
-        if arr[0] != '2016-05-28':
-            add_data_to_main_arrays(arr, best_valid, overallbest_valid, customer_valid, 'valid')
-        else:
-            valid_part.append(arr)
-
-        if total % 1000000 == 0:
-            print('Process {} lines ...'.format(total))
-            # break
-
-    f.close()
-
-    print(distrib)
-
-    print('Sort best arrays...')
-    print('Hashes num: ', len(best))
-    print('Valid part: ', len(valid_part))
-
-    # Normal
-    best, overallbest = sort_main_arrays(best, overallbest)
-    # print(best)
-
-    # Valid
-    best_valid, overallbest_valid = sort_main_arrays(best_valid, overallbest_valid)
-
-    map7 = 0.0
-    print('Validation...')
-    for arr1 in valid_part:
-        predicted = get_predictions(arr1, best_valid, overallbest_valid, customer_valid)
-        real = get_real_values(arr1, customer_valid)
-
-        score = apk(real, predicted)
-        map7 += score
-
-    if len(valid_part) > 0:
-        map7 /= len(valid_part)
-    print('Predicted score: {}'.format(map7))
-
-    print('Generate submission...')
-   
-    sub_file = os.path.join('submission_' + str(round(map7, 8)) + '.csv')
-    out = open(sub_file, "w")
-    f = open("../input/test_ver2.csv", "r")
-    f.readline()
-    total = 0
-    out.write("ncodpers,added_products\n")
-
-    while 1:
-        line = f.readline()[:-1]
-        total += 1
-
-        if line == '':
-            break
-
-        tmp1 = line.split("\"")
-        arr = tmp1[0][:-1].split(",") + [tmp1[1]] + tmp1[2][1:].split(',')
-        arr = [a.strip() for a in arr]
-        ncodpers = arr[1]
-        out.write(ncodpers + ',')
-
-        predicted = get_predictions(arr, best, overallbest, customer)
-
-        for p in predicted:
-            out.write(map_names[p] + ' ')
-
-        if total % 1000000 == 0:
-            print('Read {} lines ...'.format(total))
-            # break
-
-        out.write("\n")
-
-    print('Total cases:', str(total))
-    out.close()
-    f.close()
-
-
-if __name__ == "__main__":
-    run_solution()
+    If validation scores of folds are indistinguishable then we can agree that train and test set are similar but if 
+    validation score accross folds is distinguished easily then train and test set distribution may differ.
     
+    To read more about Adversarial validation visit below post:
+    - http://fastml.com/adversarial-validation-part-two/
+"""
+
+import pandas as pd 
+import numpy as np
+import time
+import gc
+
+import lightgbm as lgb
+from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import roc_auc_score
+from datetime import datetime
+
+
+#############################################################################
+#define important variables
+TRAIN_PATH = '../input/train.csv'
+TEST_PATH = '../input/test.csv'
+
+##LGB params
+BOOST_ROUNDS = 350
+EARLY_STOPPING = 30
+
+
+categorical = ['app','device',  'os', 'channel']
+predictors = ['app','device',  'os', 'channel']
+SKIP = range(1,144903891)
+NROWS=40000000
+RANDOM_SEED = 1001
+NUM_FOLDS = 5
+train_columns = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
+test_columns = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'click_id']
+
+dtypes = {
+        'ip'            : 'uint32',
+        'app'           : 'uint16',
+        'device'        : 'uint16',
+        'os'            : 'uint16',
+        'channel'       : 'uint16',
+        'is_attributed' : 'uint8',
+        }
+
+
+lgb_params = {
+        'boosting_type': 'gbdt',
+        'objective': 'binary',
+        'metric':'auc',
+        'learning_rate': 0.05,
+        #'is_unbalance': 'true',  #because training data is unbalance (replaced with scale_pos_weight)
+        'num_leaves': 35,  # we should let it be smaller than 2^(max_depth)
+        'max_depth': 4,  # -1 means no limit
+        'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
+        'max_bin': 255,  # Number of bucketed bin for feature values
+        'subsample': 0.8,  # Subsample ratio of the training instance.
+        'subsample_freq': 0,  # frequence of subsample, <=0 means no enable
+        'colsample_bytree': 0.8,  # Subsample ratio of columns when constructing each tree.
+        'min_child_weight': 7,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
+        'nthread': 4,
+        'verbose': -1  }
+        
+###################################
+#helper functions
+
+def timer(start_time=None):
+    """Prints time
+    __author__ = @Tilii
+    
+    Initiate a time object, and prints total time consumed when again initialized object is passed as argument
+    
+    Keyword Arguments:
+        start_time {[object]} -- initialized time object (default: {None})
+    
+    """
+    
+    if not start_time:
+        start_time = datetime.now()
+        return start_time
+    elif start_time:
+        thour, temp_sec = divmod((datetime.now() - start_time).total_seconds(), 3600)
+        tmin, tsec = divmod(temp_sec, 60)
+        print('Time taken: %i hours %i minutes and %s seconds.' % (thour, tmin, round(tsec, 2)))
+
+#############################################################################MAIN########################################
+
+t = timer(None)
+print("Loading train and test set")
+train = pd.read_csv(TRAIN_PATH,skiprows=SKIP, header=0,nrows=NROWS, usecols=train_columns, dtype=dtypes)
+test = pd.read_csv(TEST_PATH, dtype=dtypes, usecols=test_columns)
+timer(t)
+
+train.drop(['is_attributed', 'click_time'], axis=1, inplace=True)
+test.drop(['click_id', 'click_time'], axis=1, inplace=True)
+
+#assign target if set is test set or not
+train['is_test'] = 0
+test['is_test'] = 1
+
+adv_set = pd.concat([train, test])
+
+del train, test
+
+target = adv_set.is_test.values
+adv_set.drop(['is_test'], axis=1, inplace=True)
+
+train = adv_set[predictors].values
+
+fold_scores = []
+
+print("Starting adversarial validation")
+folds = list(StratifiedKFold(n_splits=NUM_FOLDS, shuffle=True, random_state=RANDOM_SEED).split(train, target))
+
+for i, (train_idx, val_idx) in enumerate(folds):
+    print("Seperating Val and train set")
+    X_train = train[train_idx]
+    y_train = target[train_idx]
+    
+    X_val = train[val_idx]
+    y_val = target[val_idx]
+    gc.collect()
+    #make lgb train and val
+    lgb_train = lgb.Dataset(X_train, label=y_train, feature_name=predictors, categorical_feature=categorical)
+    lgb_val = lgb.Dataset(X_val, label=y_val, feature_name=predictors, categorical_feature=categorical)
+    
+    gc.collect()
+    
+    print("Training Lgb")
+    #run lgb
+    lgb_model = lgb.train(lgb_params, lgb_train,valid_sets=[lgb_train, lgb_val], valid_names=['train', 'val'], num_boost_round=BOOST_ROUNDS, verbose_eval=5, early_stopping_rounds=EARLY_STOPPING)
+    fold_scores.append(lgb_model.best_score)
+    # print(lgb_model.best_score)
+
+
+for i, score in enumerate(fold_scores):
+    print("Fold {} Val Auc:{:.6f}".format(str(i), score['val']['auc']))
+
+print("\n")
+for i, score in enumerate(fold_scores):
+    print("Fold {} Train Auc:{:.6f}".format(str(i), score['train']['auc']))

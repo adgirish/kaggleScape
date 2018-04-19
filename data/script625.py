@@ -1,115 +1,387 @@
 
 # coding: utf-8
 
-# Just a simple XGB starter. Huge thanks to @the1owl for [the kernel](https://www.kaggle.com/the1owl/surprise-me/code) with all of the data wrangling.
+# # Predicting the Number of Daily Trips
+
+# After performing an exploratory analysis on the bike sharing services in San Francisco and Seattle (https://github.com/Currie32/Bike-Sharing-in-SF-and-Seattle), I wanted to follow this up by building a predictive model. The goal for this report is to create a model that can accurately predict the number of trips taken, on a given day, with San Francisco's bike sharing service. I will only be using information that the bike sharing company could know at the start of the day, i.e. weather report, number of bikes availble, type of day (business day vs holiday vs weekend). 
+
+# ### Load the Packages
 
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
-from sklearn import *
+import numpy as np
+from scipy.stats.stats import pearsonr  
+from pandas.tseries.holiday import USFederalHolidayCalendar
+from pandas.tseries.offsets import CustomBusinessDay
 from datetime import datetime
+from sklearn.model_selection import train_test_split
+import math
+import matplotlib.pyplot as plt
+from sklearn.feature_selection import SelectKBest
+from sklearn.pipeline import Pipeline
+from sklearn.decomposition import PCA
+from sklearn.grid_search import GridSearchCV
+from sklearn.pipeline import FeatureUnion
+from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor, AdaBoostRegressor
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import cross_val_score
+from sklearn.cross_validation import KFold
+from sklearn.metrics import mean_squared_error, median_absolute_error
 import xgboost as xgb
-import gc
+
+
+# ### Import the Data
+
+# In[ ]:
+
+
+df = pd.read_csv("../input/trip.csv")
+weather = pd.read_csv("../input/weather.csv")
+stations = pd.read_csv("../input/station.csv")
+
+
+# ## Explore the Trips data frame
+# 
+# If you would like to see a comprehensive exploration of this data, please visit my other report: https://github.com/Currie32/Bike-Sharing-in-SF-and-Seattle
+
+# In[ ]:
+
+
+df.head()
 
 
 # In[ ]:
 
 
-# Data wrangling brought to you by the1owl
-# https://www.kaggle.com/the1owl/surprise-me
-
-data = {
-    'tra': pd.read_csv('../input/air_visit_data.csv'),
-    'as': pd.read_csv('../input/air_store_info.csv'),
-    'hs': pd.read_csv('../input/hpg_store_info.csv'),
-    'ar': pd.read_csv('../input/air_reserve.csv'),
-    'hr': pd.read_csv('../input/hpg_reserve.csv'),
-    'id': pd.read_csv('../input/store_id_relation.csv'),
-    'tes': pd.read_csv('../input/sample_submission.csv'),
-    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
-    }
-
-data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
-
-for df in ['ar','hr']:
-    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
-    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
-    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
-    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
-    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
-    data[df] = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date'})
-    print(data[df].head())
-
-data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
-data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
-data['tra']['year'] = data['tra']['visit_date'].dt.year
-data['tra']['month'] = data['tra']['visit_date'].dt.month
-data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
-
-data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
-data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
-data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
-data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
-data['tes']['year'] = data['tes']['visit_date'].dt.year
-data['tes']['month'] = data['tes']['visit_date'].dt.month
-data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
-
-unique_stores = data['tes']['air_store_id'].unique()
-stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
-
-#sure it can be compressed...
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-
-stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
-lbl = preprocessing.LabelEncoder()
-stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
-stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
-
-data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
-data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
-data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
-
-data['tra'] = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date'])
-data['tes'] = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date'])
-
-train = pd.merge(data['tra'], stores, how='left', on=['air_store_id','dow']) 
-test = pd.merge(data['tes'], stores, how='left', on=['air_store_id','dow'])
-
-for df in ['ar','hr']:
-    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
-    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
-
-col = [c for c in train if c not in ['id', 'air_store_id','visit_date','visitors']]
-train = train.fillna(-1)
-test = test.fillna(-1)
+df.isnull().sum()
 
 
 # In[ ]:
 
 
-# XGB starter template borrowed from @anokas
-# https://www.kaggle.com/anokas/simple-xgboost-starter-0-0655
+df.duration.describe()
 
-print('Binding to float32')
 
-for c, dtype in zip(train.columns, train.dtypes):
-    if dtype == np.float64:
-        train[c] = train[c].astype(np.float32)
-        
-for c, dtype in zip(test.columns, test.dtypes):
-    if dtype == np.float64:
-        test[c] = test[c].astype(np.float32)
+# In[ ]:
+
+
+#Change duration from seconds to minutes
+df.duration /= 60
+
+
+# In[ ]:
+
+
+df.duration.describe()
+
+
+# In[ ]:
+
+
+#I want to remove major outliers from the data; trips longer than 6 hours. This will remove less than 0.5% of the data.
+df['duration'].quantile(0.995)
+df = df[df.duration <= 360]
+
+
+# In[ ]:
+
+
+df.shape
+
+
+# In[ ]:
+
+
+#Convert to datetime so that it can be manipulated more easily
+df.start_date = pd.to_datetime(df.start_date, format='%m/%d/%Y %H:%M')
+
+
+# In[ ]:
+
+
+#Extract the year, month, and day from start_date
+df['date'] = df.start_date.dt.date
+
+
+# In[ ]:
+
+
+#Each entry in the date feature is a trip. 
+#By finding the total number of times a date is listed, we know how many trips were taken on that date.
+dates = {}
+for d in df.date:
+    if d not in dates:
+        dates[d] = 1
+    else:
+        dates[d] += 1
+
+
+# In[ ]:
+
+
+#Create the data frame that will be used for training, with the dictionary we just created.
+df2 = pd.DataFrame.from_dict(dates, orient = "index")
+df2['date'] = df2.index
+df2['trips'] = df2.ix[:,0]
+train = df2.ix[:,1:3]
+train.reset_index(drop = True, inplace = True)
+
+
+# In[ ]:
+
+
+train
+
+
+# In[ ]:
+
+
+#All sorted now!
+train = train.sort('date')
+train.reset_index(drop=True, inplace=True)
+
+
+# ## Explore the Weather data frame
+
+# In[ ]:
+
+
+weather.head()
+
+
+# In[ ]:
+
+
+weather.isnull().sum()
+
+
+# In[ ]:
+
+
+weather.date = pd.to_datetime(weather.date, format='%m/%d/%Y')
+
+
+# In[ ]:
+
+
+#The weather data frame is 5 times as long as the train data frame, 
+#therefore there are 5 entries per date.
+print (train.shape)
+print (weather.shape)
+
+
+# In[ ]:
+
+
+#It seems we have one entry per zip code
+weather.zip_code.unique()
+
+
+# In[ ]:
+
+
+#Let's see which zip code has the cleanest date.
+for zc in weather.zip_code.unique():
+    print (weather[weather.zip_code == zc].isnull().sum())
+    print ()
+
+
+# In[ ]:
+
+
+#I used this zip code for my other report as well. It is missing only a bit of data and is formatted rather well.
+weather = weather[weather.zip_code == 94107]
+
+
+# In[ ]:
+
+
+weather.events.unique()
+
+
+# In[ ]:
+
+
+weather.loc[weather.events == 'rain', 'events'] = "Rain"
+weather.loc[weather.events.isnull(), 'events'] = "Normal"
+
+
+# In[ ]:
+
+
+weather.events
+
+
+# In[ ]:
+
+
+events = pd.get_dummies(weather.events)
+
+
+# In[ ]:
+
+
+weather = weather.merge(events, left_index = True, right_index = True)
+
+
+# In[ ]:
+
+
+#Remove features we don't need
+weather = weather.drop(['events','zip_code'],1)
+
+
+# In[ ]:
+
+
+#max_wind and max_gust are well correlated, so we can use max_wind to help fill the null values of max_gust
+print (pearsonr(weather.max_wind_Speed_mph[weather.max_gust_speed_mph >= 0], 
+               weather.max_gust_speed_mph[weather.max_gust_speed_mph >= 0]))
+
+
+# In[ ]:
+
+
+#For each value of max_wind, find the median max_gust and use that to fill the null values.
+weather.loc[weather.max_gust_speed_mph.isnull(), 'max_gust_speed_mph'] = weather.groupby('max_wind_Speed_mph').max_gust_speed_mph.apply(lambda x: x.fillna(x.median()))
+
+
+# In[ ]:
+
+
+weather.isnull().sum()
+
+
+# In[ ]:
+
+
+#Change this feature from a string to numeric.
+#Use errors = 'coerce' because some values currently equal 'T' and we want them to become NAs.
+weather.precipitation_inches = pd.to_numeric(weather.precipitation_inches, errors = 'coerce')
+
+
+# In[ ]:
+
+
+#Change null values to the median, of values > 0, because T, I think, means True. 
+#Therefore we want to find the median amount of precipitation on days when it rained.
+weather.loc[weather.precipitation_inches.isnull(), 
+            'precipitation_inches'] = weather[weather.precipitation_inches.notnull()].precipitation_inches.median()
+
+
+# In[ ]:
+
+
+train = train.merge(weather, on = train.date)
+
+
+# In[ ]:
+
+
+#Need to remove the extra date columns, otherwise good!
+train.head()
+
+
+# In[ ]:
+
+
+train['date'] = train['date_x']
+train.drop(['date_y','date_x'],1, inplace= True)
+
+
+# ## Explore the Stations data frame
+
+# In[ ]:
+
+
+stations.head()
+
+
+# In[ ]:
+
+
+#Good, each stations is only listed once
+print (len(stations.name.unique()))
+print (stations.shape)
+
+
+# In[ ]:
+
+
+stations.installation_date = pd.to_datetime(stations.installation_date, format = "%m/%d/%Y").dt.date
+
+
+# In[ ]:
+
+
+#The min date is before any in the train data frame, therefore stations were installed before the first trips (good).
+#The max date is before the end of the train data frame, therefore the service has not been adding new stations recently.
+print (stations.installation_date.min())
+print (stations.installation_date.max())
+
+
+# In[ ]:
+
+
+#For each day in train.date, find the number of docks (parking spots for individual bikes) that were installed 
+#on or before that day.
+total_docks = []
+for day in train.date:
+    total_docks.append(sum(stations[stations.installation_date <= day].dock_count))
+
+
+# In[ ]:
+
+
+train['total_docks'] = total_docks
+
+
+# ## Add Special Date Features
+
+# In[ ]:
+
+
+#Find all of the holidays during our time span
+calendar = USFederalHolidayCalendar()
+holidays = calendar.holidays(start=train.date.min(), end=train.date.max())
+
+
+# In[ ]:
+
+
+holidays
+
+
+# In[ ]:
+
+
+#Find all of the business days in our time span
+us_bd = CustomBusinessDay(calendar=USFederalHolidayCalendar())
+business_days = pd.DatetimeIndex(start=train.date.min(), end=train.date.max(), freq=us_bd)
+
+
+# In[ ]:
+
+
+business_days
+
+
+# In[ ]:
+
+
+business_days = pd.to_datetime(business_days, format='%Y/%m/%d').date
+holidays = pd.to_datetime(holidays, format='%Y/%m/%d').date
+
+
+# In[ ]:
+
+
+#A 'business_day' or 'holiday' is a date within either of the respected lists.
+train['business_day'] = train.date.isin(business_days)
+train['holiday'] = train.date.isin(holidays)
 
 
 # In[ ]:
@@ -121,79 +393,229 @@ train.head()
 # In[ ]:
 
 
-test.head()
+#Convert True to 1 and False to 0
+train.business_day = train.business_day.map(lambda x: 1 if x == True else 0)
+train.holiday = train.holiday.map(lambda x: 1 if x == True else 0)
 
 
 # In[ ]:
 
 
-x_train = train.drop(['air_store_id','visit_date','visitors'], axis=1)
-y_train = np.log1p(train['visitors'].values)
-print(x_train.shape, y_train.shape)
+#Convert date to the important features, year, month, weekday (0 = Monday, 1 = Tuesday...)
+#We don't need day because what it represents changes every year.
+train['year'] = pd.to_datetime(train['date']).dt.year
+train['month'] = pd.to_datetime(train['date']).dt.month
+train['weekday'] = pd.to_datetime(train['date']).dt.weekday
 
 
 # In[ ]:
 
 
-# Create training / validation split
-split = 200000
-x_train, y_train, x_valid, y_valid = x_train[:split], y_train[:split], x_train[split:], y_train[split:]
+labels = train.trips
+train = train.drop(['trips', 'date'], 1)
 
-print('Building DMatrix...')
 
-d_train = xgb.DMatrix(x_train, label=y_train)
-d_valid = xgb.DMatrix(x_valid, label=y_valid)
+# ## Train the Model
 
-del x_train, x_valid; gc.collect()
+# In[ ]:
+
+
+X_train, X_test, y_train, y_test = train_test_split(train, labels, test_size=0.2, random_state = 2)
 
 
 # In[ ]:
 
 
-print('Training ...')
+#15 fold cross validation. Multiply by -1 to make values positive.
+#Used median absolute error to learn how many trips my predictions are off by.
 
-params = {}
-params['objective'] = 'reg:linear'
-params['eval_metric'] = 'rmse'
-params['eta'] = 0.04
-params['max_depth'] = 7
-params['silent'] = 1
-
-watchlist = [(d_train, 'train'), (d_valid, 'valid')]
-clf = xgb.train(params, d_train, 10000, watchlist, early_stopping_rounds=100, verbose_eval=10)
-
-del d_train, d_valid
+def scoring(clf):
+    scores = cross_val_score(clf, X_train, y_train, cv=15, n_jobs=1, scoring = 'neg_median_absolute_error')
+    print (np.median(scores) * -1)
 
 
 # In[ ]:
 
 
-x_test = test.drop(['id','air_store_id','visit_date','visitors'], axis=1)
-d_test = xgb.DMatrix(x_test)
-
-del x_test; gc.collect()
-
-
-# In[ ]:
-
-
-print('Predicting on test ...')
-
-p_test = clf.predict(d_test)
-
-del d_test; gc.collect()
+rfr = RandomForestRegressor(n_estimators = 55,
+                            min_samples_leaf = 3,
+                            random_state = 2)
+scoring(rfr)
 
 
 # In[ ]:
 
 
-np.expm1(p_test)
+gbr = GradientBoostingRegressor(learning_rate = 0.12,
+                                n_estimators = 150,
+                                max_depth = 8,
+                                min_samples_leaf = 1,
+                                random_state = 2)
+scoring(gbr)
 
 
 # In[ ]:
 
 
-test['visitors'] = np.expm1(p_test)
+dtr = DecisionTreeRegressor(min_samples_leaf = 3,
+                            max_depth = 8,
+                            random_state = 2)
+scoring(dtr)
 
-test[['id','visitors']].to_csv('xgb_submission.csv', index=False, float_format='%.3f')
 
+# In[ ]:
+
+
+abr = AdaBoostRegressor(n_estimators = 100,
+                        learning_rate = 0.1,
+                        loss = 'linear',
+                        random_state = 2)
+scoring(abr)
+
+
+# In[ ]:
+
+
+import warnings
+warnings.filterwarnings("ignore")
+
+random_state = 2
+params = {
+        'eta': 0.15,
+        'max_depth': 6,
+        'min_child_weight': 2,
+        'subsample': 1,
+        'colsample_bytree': 1,
+        'verbose_eval': True,
+        'seed': random_state,
+    }
+
+n_folds = 15 #number of Kfolds
+cv_scores = [] #The sum of the mean_absolute_error for each fold.
+early_stopping_rounds = 100
+iterations = 10000
+printN = 50
+fpred = [] #stores the sums of predicted values for each fold.
+
+testFinal = xgb.DMatrix(X_test)
+
+kf = KFold(len(X_train), n_folds=n_folds)
+
+for i, (train_index, test_index) in enumerate(kf):
+    print('\n Fold %d' % (i+1))
+    Xtrain, Xval = X_train.iloc[train_index], X_train.iloc[test_index]
+    Ytrain, Yval = y_train.iloc[train_index], y_train.iloc[test_index]
+    
+    xgtrain = xgb.DMatrix(Xtrain, label = Ytrain)
+    xgtest = xgb.DMatrix(Xval, label = Yval)
+    watchlist = [(xgtrain, 'train'), (xgtest, 'eval')] 
+    
+    xgbModel = xgb.train(params, 
+                         xgtrain, 
+                         iterations, 
+                         watchlist,
+                         verbose_eval = printN,
+                         early_stopping_rounds=early_stopping_rounds
+                        )
+    
+    scores_val = xgbModel.predict(xgtest, ntree_limit=xgbModel.best_ntree_limit)
+    cv_score = median_absolute_error(Yval, scores_val)
+    print('eval-MSE: %.6f' % cv_score)
+    y_pred = xgbModel.predict(testFinal, ntree_limit=xgbModel.best_ntree_limit)
+    print(xgbModel.best_ntree_limit)
+
+    if i > 0:
+        fpred = pred + y_pred #sum predictions
+    else:
+        fpred = y_pred
+    pred = fpred
+    cv_scores.append(cv_score)
+
+xgb_preds = pred / n_folds #find the average values for the predictions
+score = np.median(cv_scores)
+print('Median error: %.6f' % score)
+
+
+# In[ ]:
+
+
+#Train and make predictions with the best models.
+rfr = rfr.fit(X_train, y_train)
+gbr = gbr.fit(X_train, y_train)
+
+rfr_preds = rfr.predict(X_test)
+gbr_preds = gbr.predict(X_test)
+
+#Weight the top models to find the best prediction
+final_preds = rfr_preds*0.32 + gbr_preds*0.38 + xgb_preds*0.3
+print ("Daily error of trip count:", median_absolute_error(y_test, final_preds))
+
+
+# In[ ]:
+
+
+#A reminder of the range of values in number of daily trips.
+labels.describe()
+
+
+# In[ ]:
+
+
+y_test.reset_index(drop = True, inplace = True)
+
+
+# In[ ]:
+
+
+fs = 16
+plt.figure(figsize=(8,5))
+plt.plot(final_preds)
+plt.plot(y_test)
+plt.legend(['Prediction', 'Acutal'])
+plt.ylabel("Number of Trips", fontsize = fs)
+plt.xlabel("Predicted Date", fontsize = fs)
+plt.title("Predicted Values vs Actual Values", fontsize = fs)
+plt.show()
+
+
+# In[ ]:
+
+
+#Create a plot that ranks the features by importance.
+def plot_importances(model, model_name):
+    importances = model.feature_importances_
+    std = np.std([model.feature_importances_ for feature in model.estimators_],
+                 axis=0)
+    indices = np.argsort(importances)[::-1]    
+
+    # Plot the feature importances of the forest
+    plt.figure(figsize = (8,5))
+    plt.title("Feature importances of " + model_name)
+    plt.bar(range(X_train.shape[1]), importances[indices], color="r", align="center")
+    plt.xticks(range(X_train.shape[1]), indices)
+    plt.xlim([-1, X_train.shape[1]])
+    plt.show()
+
+
+# In[ ]:
+
+
+# Print the feature ranking
+print("Feature ranking:")
+
+i = 0
+for feature in X_train:
+    print (i, feature)
+    i += 1
+    
+plot_importances(rfr, "Random Forest Regressor")
+plot_importances(gbr, "Gradient Boosting Regressor")
+
+
+# The feature importance ranking for the random forest regressor makes more sense to me than for the gradient boosting regressor. Features, such as 'business_day', 'total_docks', and 'month' match better with my exploratory analysis than 'wind_dir_degrees' and 'max_sea_level_pressure_inches.' Although I have not looked at the data yet, perhaps wind from a particular direction correlates with worse weather/cycling conditions.
+
+# ## Summary
+
+# I believe that I have made a good model to predict how many trips will occur with San Francisco's bike sharing service. My model has a median absolute error of almost 47 trips per day. This should give the company operating this service a good, general estimate of the traffic that will occur each day. 
+# 
+# I like how my model can provide a good estimate while only using information that is available to the company at the start of the day, i.e. weather forecast, type of day (business day, holiday, etc), and number of bikes that are available. There are a number of ways to make this model, or a similar model, more practical/useful, including: predicting the number of daily trips to/from each station, using the number of trips in the morning to predict the number of trips in the afternoon, and predicting when a station will run out of bikes.

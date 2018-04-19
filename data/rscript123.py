@@ -1,188 +1,223 @@
-# Based on Bojan's -> https://www.kaggle.com/tunguz/more-effective-ridge-lgbm-script-lb-0-44944
-# Changes:
-# 1. Split category_name into sub-categories
-# 2. Parallelize LGBM to 4 cores
-# 3. Increase the number of rounds in 1st LGBM
-# 4. Another LGBM with different seed for model and training split, slightly different hyper-parametes.
-# 5. Weights on ensemble
-# 6. SGDRegressor doesn't improve the result, going with only 1 Ridge and 2 LGBM
-
-import pyximport; pyximport.install()
+#dpcnn http://ai.tencent.com/ailab/media/publications/ACL3-Brady.pdf
+#dpcnn with conv1d, model architecture and all parameters copied from neptune-ml since it's publicly available
+#https://github.com/neptune-ml/kaggle-toxic-starter/blob/master/best_configs/fasttext_dpcnn.yaml
+#Got it to PLB 0.984 with 10fold cv on local computer after playing with parameters
+#Try to improve score on your own local pc or throw it in the blender with the rest of them :)
+import os
 import gc
-import time
 import numpy as np
 import pandas as pd
+import tensorflow as tf
+import warnings
+warnings.filterwarnings('ignore')
 
-from joblib import Parallel, delayed
+from keras import backend as K
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import KFold
+from keras.models import Model
+from keras.layers import Input, Dense, Embedding, MaxPooling1D, Conv1D, SpatialDropout1D
+from keras.layers import add, Dropout, PReLU, BatchNormalization, GlobalMaxPooling1D
+from keras.preprocessing import text, sequence
+from keras.callbacks import Callback
+from keras import optimizers
+from keras import initializers, regularizers, constraints, callbacks
 
-from scipy.sparse import csr_matrix, hstack
+class RocAucEvaluation(Callback):
+    def __init__(self, validation_data=(), interval=1):
+        super(Callback, self).__init__()
 
-from sklearn.linear_model import Ridge
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.preprocessing import LabelBinarizer
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.linear_model import SGDRegressor
-import lightgbm as lgb
+        self.interval = interval
+        self.X_val, self.y_val = validation_data
 
-NUM_BRANDS = 4000
-NUM_CATEGORIES = 1000
-NAME_MIN_DF = 10
-MAX_FEATURES_ITEM_DESCRIPTION = 50000
+    def on_epoch_end(self, epoch, logs={}):
+        if epoch % self.interval == 0:
+            y_pred = self.model.predict(self.X_val, verbose=0)
+            score = roc_auc_score(self.y_val, y_pred)
+            print("\n ROC-AUC - epoch: %d - score: %.6f \n" % (epoch+1, score))
+
+def schedule(ind):
+    a = [0.001, 0.0005, 0.0001, 0.0001]
+    return a[ind] 
+
+#straightfoward preprocess
+
+EMBEDDING_FILE = '../input/fasttext-crawl-300d-2m/crawl-300d-2M.vec'
+
+train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
+test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
+
+X_train = train["comment_text"].fillna("fillna").values
+y_train = train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]].values
+X_test = test["comment_text"].fillna("fillna").values
 
 
-def rmsle(y, y0):
-     assert len(y) == len(y0)
-     return np.sqrt(np.mean(np.power(np.log1p(y)-np.log1p(y0), 2)))
+max_features = 100000
+maxlen = 200
+embed_size = 300
+
+           
+print('preprocessing start')
+
+tokenizer = text.Tokenizer(num_words=max_features)
+tokenizer.fit_on_texts(list(X_train) + list(X_test))
+X_train = tokenizer.texts_to_sequences(X_train)
+X_test = tokenizer.texts_to_sequences(X_test)
+x_train = sequence.pad_sequences(X_train, maxlen=maxlen)
+x_test = sequence.pad_sequences(X_test, maxlen=maxlen)
+
+def get_coefs(word, *arr): return word, np.asarray(arr, dtype='float32')
+embeddings_index = dict(get_coefs(*o.rstrip().rsplit(' ')) for o in open(EMBEDDING_FILE, encoding="utf8"))
+
+all_embs = np.stack(embeddings_index.values())
+emb_mean, emb_std = all_embs.mean(), all_embs.std()
+
+del all_embs, X_train, X_test, train, test
+gc.collect()
+
+word_index = tokenizer.word_index
+nb_words = min(max_features, len(word_index))
+embedding_matrix = np.random.normal(emb_mean, emb_std, (nb_words, embed_size))
+for word, i in word_index.items():
+    if i >= max_features: continue
+    embedding_vector = embeddings_index.get(word)
+    if embedding_vector is not None: embedding_matrix[i] = embedding_vector
     
-def split_cat(text):
-    try: return text.split("/")
-    except: return ("No Label", "No Label", "No Label")
+print('preprocessing done')
+
+session_conf = tf.ConfigProto(intra_op_parallelism_threads=4, inter_op_parallelism_threads=4)
+K.set_session(tf.Session(graph=tf.get_default_graph(), config=session_conf))
+
+#model
+#wrote out all the blocks instead of looping for simplicity
+filter_nr = 64
+filter_size = 3
+max_pool_size = 3
+max_pool_strides = 2
+dense_nr = 256
+spatial_dropout = 0.2
+dense_dropout = 0.5
+train_embed = False
+conv_kern_reg = regularizers.l2(0.00001)
+conv_bias_reg = regularizers.l2(0.00001)
+
+comment = Input(shape=(maxlen,))
+emb_comment = Embedding(max_features, embed_size, weights=[embedding_matrix], trainable=train_embed)(comment)
+emb_comment = SpatialDropout1D(spatial_dropout)(emb_comment)
+
+block1 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(emb_comment)
+block1 = BatchNormalization()(block1)
+block1 = PReLU()(block1)
+block1 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block1)
+block1 = BatchNormalization()(block1)
+block1 = PReLU()(block1)
+
+#we pass embedded comment through conv1d with filter size 1 because it needs to have the same shape as block output
+#if you choose filter_nr = embed_size (300 in this case) you don't have to do this part and can add emb_comment directly to block1_output
+resize_emb = Conv1D(filter_nr, kernel_size=1, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(emb_comment)
+resize_emb = PReLU()(resize_emb)
     
-def handle_missing_inplace(dataset):
-    dataset['general_cat'].fillna(value='missing', inplace=True)
-    dataset['subcat_1'].fillna(value='missing', inplace=True)
-    dataset['subcat_2'].fillna(value='missing', inplace=True)
-    dataset['brand_name'].fillna(value='missing', inplace=True)
-    dataset['item_description'].fillna(value='missing', inplace=True)
+block1_output = add([block1, resize_emb])
+block1_output = MaxPooling1D(pool_size=max_pool_size, strides=max_pool_strides)(block1_output)
 
-
-def cutting(dataset):
-    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
-    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
-    pop_category1 = dataset['general_cat'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    pop_category2 = dataset['subcat_1'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    pop_category3 = dataset['subcat_2'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
-    dataset.loc[~dataset['general_cat'].isin(pop_category1), 'general_cat'] = 'missing'
-    dataset.loc[~dataset['subcat_1'].isin(pop_category2), 'subcat_1'] = 'missing'
-    dataset.loc[~dataset['subcat_2'].isin(pop_category3), 'subcat_2'] = 'missing'
-
-
-def to_categorical(dataset):
-    dataset['general_cat'] = dataset['general_cat'].astype('category')
-    dataset['subcat_1'] = dataset['subcat_1'].astype('category')
-    dataset['subcat_2'] = dataset['subcat_2'].astype('category')
-    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
-
-
-def main():
-    start_time = time.time()
-
-    train = pd.read_table('../input/train.tsv', engine='c')
-    test = pd.read_table('../input/test.tsv', engine='c')
-    print('[{}] Finished to load data'.format(time.time() - start_time))
-    print('Train shape: ', train.shape)
-    print('Test shape: ', test.shape)
-
-    nrow_train = train.shape[0]
-    y = np.log1p(train["price"])
-    merge: pd.DataFrame = pd.concat([train, test])
-    submission: pd.DataFrame = test[['test_id']]
-
-    del train
-    del test
-    gc.collect()
+block2 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block1_output)
+block2 = BatchNormalization()(block2)
+block2 = PReLU()(block2)
+block2 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block2)
+block2 = BatchNormalization()(block2)
+block2 = PReLU()(block2)
     
-    merge['general_cat'], merge['subcat_1'], merge['subcat_2'] = \
-    zip(*merge['category_name'].apply(lambda x: split_cat(x)))
-    merge.drop('category_name', axis=1, inplace=True)
-    print('[{}] Split categories completed.'.format(time.time() - start_time))
+block2_output = add([block2, block1_output])
+block2_output = MaxPooling1D(pool_size=max_pool_size, strides=max_pool_strides)(block2_output)
 
-    handle_missing_inplace(merge)
-    print('[{}] Handle missing completed.'.format(time.time() - start_time))
-
-    cutting(merge)
-    print('[{}] Cut completed.'.format(time.time() - start_time))
-
-    to_categorical(merge)
-    print('[{}] Convert categorical completed'.format(time.time() - start_time))
-
-    cv = CountVectorizer(min_df=NAME_MIN_DF)
-    X_name = cv.fit_transform(merge['name'])
-    print('[{}] Count vectorize `name` completed.'.format(time.time() - start_time))
-
-    cv = CountVectorizer()
-    X_category1 = cv.fit_transform(merge['general_cat'])
-    X_category2 = cv.fit_transform(merge['subcat_1'])
-    X_category3 = cv.fit_transform(merge['subcat_2'])
-    print('[{}] Count vectorize `categories` completed.'.format(time.time() - start_time))
-
-    tv = TfidfVectorizer(max_features=MAX_FEATURES_ITEM_DESCRIPTION,
-                         ngram_range=(1, 3),
-                         stop_words='english')
-    X_description = tv.fit_transform(merge['item_description'])
-    print('[{}] TFIDF vectorize `item_description` completed.'.format(time.time() - start_time))
-
-    lb = LabelBinarizer(sparse_output=True)
-    X_brand = lb.fit_transform(merge['brand_name'])
-    print('[{}] Label binarize `brand_name` completed.'.format(time.time() - start_time))
-
-    X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
-                                          sparse=True).values)
-    print('[{}] Get dummies on `item_condition_id` and `shipping` completed.'.format(time.time() - start_time))
-
-    sparse_merge = hstack((X_dummies, X_description, X_brand, X_category1, X_category2, X_category3, X_name)).tocsr()
-    print('[{}] Create sparse merge completed'.format(time.time() - start_time))
-
-    X = sparse_merge[:nrow_train]
-    X_test = sparse_merge[nrow_train:]
+block3 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block2_output)
+block3 = BatchNormalization()(block3)
+block3 = PReLU()(block3)
+block3 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block3)
+block3 = BatchNormalization()(block3)
+block3 = PReLU()(block3)
     
-    model = Ridge(alpha=.05, copy_X=True, fit_intercept=True, max_iter=100,
-      normalize=False, random_state=101, solver='auto', tol=0.001)
-    model.fit(X, y)
-    print('[{}] Train ridge completed'.format(time.time() - start_time))
-    predsR = model.predict(X=X_test)
-    print('[{}] Predict ridge completed'.format(time.time() - start_time))
+block3_output = add([block3, block2_output])
+block3_output = MaxPooling1D(pool_size=max_pool_size, strides=max_pool_strides)(block3_output)
 
-    train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size = 0.15, random_state = 144) 
-    d_train = lgb.Dataset(train_X, label=train_y, max_bin=8192)
-    d_valid = lgb.Dataset(valid_X, label=valid_y, max_bin=8192)
-    watchlist = [d_train, d_valid]
-    
-    params = {
-        'learning_rate': 0.5,
-        'application': 'regression',
-        'max_depth': 3,
-        'num_leaves': 60,
-        'verbosity': -1,
-        'metric': 'RMSE',
-        'data_random_seed': 1,
-        'bagging_fraction': 0.5,
-        'nthread': 4
-    }
+block4 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block3_output)
+block4 = BatchNormalization()(block4)
+block4 = PReLU()(block4)
+block4 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block4)
+block4 = BatchNormalization()(block4)
+block4 = PReLU()(block4)
 
-    params2 = {
-        'learning_rate': 1,
-        'application': 'regression',
-        'max_depth': 3,
-        'num_leaves': 140,
-        'verbosity': -1,
-        'metric': 'RMSE',
-        'data_random_seed': 2,
-        'bagging_fraction': 1,
-        'nthread': 4
-    }
+block4_output = add([block4, block3_output])
+block4_output = MaxPooling1D(pool_size=max_pool_size, strides=max_pool_strides)(block4_output)
 
-    model = lgb.train(params, train_set=d_train, num_boost_round=8000, valid_sets=watchlist, \
-    early_stopping_rounds=250, verbose_eval=1000) 
-    predsL = model.predict(X_test)
-    
-    print('[{}] Predict lgb 1 completed.'.format(time.time() - start_time))
-    
-    train_X2, valid_X2, train_y2, valid_y2 = train_test_split(X, y, test_size = 0.1, random_state = 101) 
-    d_train2 = lgb.Dataset(train_X2, label=train_y2, max_bin=8192)
-    d_valid2 = lgb.Dataset(valid_X2, label=valid_y2, max_bin=8192)
-    watchlist2 = [d_train2, d_valid2]
+block5 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block4_output)
+block5 = BatchNormalization()(block5)
+block5 = PReLU()(block5)
+block5 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block5)
+block5 = BatchNormalization()(block5)
+block5 = PReLU()(block5)
 
-    model = lgb.train(params2, train_set=d_train2, num_boost_round=8000, valid_sets=watchlist2, \
-    early_stopping_rounds=250, verbose_eval=1000) 
-    predsL2 = model.predict(X_test)
+block5_output = add([block5, block4_output])
+block5_output = MaxPooling1D(pool_size=max_pool_size, strides=max_pool_strides)(block5_output)
 
-    print('[{}] Predict lgb 2 completed.'.format(time.time() - start_time))
+block6 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block5_output)
+block6 = BatchNormalization()(block6)
+block6 = PReLU()(block6)
+block6 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block6)
+block6 = BatchNormalization()(block6)
+block6 = PReLU()(block6)
 
-    preds = predsR*0.35 + predsL*0.35 + predsL2*0.3
+block6_output = add([block6, block5_output])
+block6_output = MaxPooling1D(pool_size=max_pool_size, strides=max_pool_strides)(block6_output)
 
-    submission['price'] = np.expm1(preds)
-    submission.to_csv("submission_ridge_2xlgbm.csv", index=False)
+block7 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block6_output)
+block7 = BatchNormalization()(block7)
+block7 = PReLU()(block7)
+block7 = Conv1D(filter_nr, kernel_size=filter_size, padding='same', activation='linear', 
+            kernel_regularizer=conv_kern_reg, bias_regularizer=conv_bias_reg)(block7)
+block7 = BatchNormalization()(block7)
+block7 = PReLU()(block7)
 
-if __name__ == '__main__':
-    main()
+block7_output = add([block7, block6_output])
+output = GlobalMaxPooling1D()(block7_output)
+
+output = Dense(dense_nr, activation='linear')(output)
+output = BatchNormalization()(output)
+output = PReLU()(output)
+output = Dropout(dense_dropout)(output)
+output = Dense(6, activation='sigmoid')(output)
+
+model = Model(comment, output)
+
+
+model.compile(loss='binary_crossentropy', 
+            optimizer=optimizers.Adam(),
+            metrics=['accuracy'])
+            
+batch_size = 128
+epochs = 4
+
+Xtrain, Xval, ytrain, yval = train_test_split(x_train, y_train, train_size=0.95, random_state=233)
+
+lr = callbacks.LearningRateScheduler(schedule)
+ra_val = RocAucEvaluation(validation_data=(Xval, yval), interval = 1)
+model.fit(Xtrain, ytrain, batch_size=batch_size, epochs=epochs, validation_data=(Xval, yval), callbacks = [lr, ra_val] ,verbose=1)
+
+y_pred = model.predict(x_test)
+submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
+submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_pred
+submission.to_csv('dpcnn_test_preds.csv', index=False)

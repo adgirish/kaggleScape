@@ -1,318 +1,381 @@
-"""
-A non-blending lightGBM model that incorporates portions and ideas from various public kernels.
-"""
-WHERE = 'kaggle'
-
-if WHERE=='kaggle':
-	inpath = '../input/'
-	suffix = ''
-	outpath = ''
-	savepath = ''
-elif WHERE=='gcloud':
-	inpath = '../.kaggle/competitions/talkingdata-adtracking-fraud-detection/'
-	suffix = '.zip'
-	outpath = '../sub/'
-	savepath = '../data/'
-
-import pandas as pd
-import time
+import kagglegym
 import numpy as np
+import pandas as pd
+import random
+from sklearn import ensemble, linear_model, metrics
 from sklearn.model_selection import train_test_split
 import lightgbm as lgb
+from sklearn.linear_model import HuberRegressor
+from itertools import combinations
 import gc
-import matplotlib.pyplot as plt
-import os
+from threading import Thread
+import multiprocessing
+from multiprocessing import Manager
+from sklearn import preprocessing as pp
+from numpy.fft import fft
+from sklearn.naive_bayes import GaussianNB
 
-def do_count( df, group_cols, agg_name, agg_type='uint32', show_max=False, show_agg=True ):
-    if show_agg:
-        print( "Aggregating by ", group_cols , '...' )
-    gp = df[group_cols][group_cols].groupby(group_cols).size().rename(agg_name).to_frame().reset_index()
-    df = df.merge(gp, on=group_cols, how='left')
-    del gp
-    if show_max:
-        print( agg_name + " max value = ", df[agg_name].max() )
-    df[agg_name] = df[agg_name].astype(agg_type)
-    gc.collect()
-    return( df )
 
-def do_countuniq( df, group_cols, counted, agg_name, agg_type='uint32', show_max=False, show_agg=True ):
-    if show_agg:
-        print( "Counting unqiue ", counted, " by ", group_cols , '...' )
-    gp = df[group_cols+[counted]].groupby(group_cols)[counted].nunique().reset_index().rename(columns={counted:agg_name})
-    df = df.merge(gp, on=group_cols, how='left')
-    del gp
-    if show_max:
-        print( agg_name + " max value = ", df[agg_name].max() )
-    df[agg_name] = df[agg_name].astype(agg_type)
-    gc.collect()
-    return( df )
+env = kagglegym.make()
+o = env.reset()
+train = o.train
+print(train.shape)
+d_mean= train.median(axis=0)
+
+
+low_y_cut = -0.075
+high_y_cut = 0.075
+y_is_above_cut = (train.y > high_y_cut)
+y_is_below_cut = (train.y < low_y_cut)
+y_is_within_cut = (~y_is_above_cut & ~y_is_below_cut)  
+
+train["nbnulls"]=train.isnull().sum(axis=1)
+col=[x for x in train.columns if x not in ['id', 'timestamp', 'y']]
+
+rnd=17
+
+#keeping na information on some columns (best selected by the tree algorithms)
+add_nas_ft=True
+nas_cols=['technical_9', 'technical_0', 'technical_32', 'technical_16', 'technical_38', 
+'technical_44', 'technical_20', 'technical_30', 'technical_13']
+
+#columns kept for evolution from one month to another (best selected by the tree algorithms)
+add_diff_ft=True
+diff_cols=['technical_22','technical_20', 'technical_30', 'technical_13', 'technical_34']
+
+class createLinearFeatures:
     
-def do_cumcount( df, group_cols, counted, agg_name, agg_type='uint32', show_max=False, show_agg=True ):
-    if show_agg:
-        print( "Cumulative count by ", group_cols , '...' )
-    gp = df[group_cols+[counted]].groupby(group_cols)[counted].cumcount()
-    df[agg_name]=gp.values
-    del gp
-    if show_max:
-        print( agg_name + " max value = ", df[agg_name].max() )
-    df[agg_name] = df[agg_name].astype(agg_type)
-    gc.collect()
-    return( df )
+    def __init__(self, n_neighbours=1, max_elts=None, verbose=True, random_state=None):
+        self.rnd=random_state
+        self.n=n_neighbours
+        self.max_elts=max_elts
+        self.verbose=verbose
+        self.neighbours=[]
+        self.clfs=[]
+        
+    def fit(self,train,y):
+        if self.rnd!=None:
+            random.seed(self.rnd)
+        if self.max_elts==None:
+            self.max_elts=len(train.columns)
+        list_vars=list(train.columns)
+        random.shuffle(list_vars)
+        
+        lastscores=np.zeros(self.n)+1e15
 
-def do_mean( df, group_cols, counted, agg_name, agg_type='float32', show_max=False, show_agg=True ):
-    if show_agg:
-        print( "Calculating mean of ", counted, " by ", group_cols , '...' )
-    gp = df[group_cols+[counted]].groupby(group_cols)[counted].mean().reset_index().rename(columns={counted:agg_name})
-    df = df.merge(gp, on=group_cols, how='left')
-    del gp
-    if show_max:
-        print( agg_name + " max value = ", df[agg_name].max() )
-    df[agg_name] = df[agg_name].astype(agg_type)
-    gc.collect()
-    return( df )
+        for elt in list_vars[:self.n]:
+            self.neighbours.append([elt])
+        list_vars=list_vars[self.n:]
+        
+        for elt in list_vars:
+            indice=0
+            scores=[]
+            for elt2 in self.neighbours:
+                if len(elt2)<self.max_elts:
+                    clf=linear_model.LinearRegression(fit_intercept=False, normalize=True, copy_X=True, n_jobs=-1) 
+                    clf.fit(train[elt2+[elt]], y)
+                    scores.append(metrics.mean_squared_error(y,clf.predict(train[elt2 + [elt]])))
+                    indice=indice+1
+                else:
+                    scores.append(lastscores[indice])
+                    indice=indice+1
+            gains=lastscores-scores
+            if gains.max()>0:
+                temp=gains.argmax()
+                lastscores[temp]=scores[temp]
+                self.neighbours[temp].append(elt)
 
-def do_var( df, group_cols, counted, agg_name, agg_type='float32', show_max=False, show_agg=True ):
-    if show_agg:
-        print( "Calculating variance of ", counted, " by ", group_cols , '...' )
-    gp = df[group_cols+[counted]].groupby(group_cols)[counted].var().reset_index().rename(columns={counted:agg_name})
-    df = df.merge(gp, on=group_cols, how='left')
-    del gp
-    if show_max:
-        print( agg_name + " max value = ", df[agg_name].max() )
-    df[agg_name] = df[agg_name].astype(agg_type)
-    gc.collect()
-    return( df )
+        indice=0
+        for elt in self.neighbours:
+            clf=linear_model.LinearRegression(fit_intercept=False, normalize=True, copy_X=True, n_jobs=-1) 
+            clf.fit(train[elt], y)
+            self.clfs.append(clf)
+            if self.verbose:
+                print(indice, lastscores[indice], elt)
+            indice=indice+1
+                    
+    def transform(self, train):
+        indice=0
+        for elt in self.neighbours:
+            #this line generates a warning. Could be avoided by working and returning
+            #with a copy of train.
+            #kept this way for memory management
+            train['neighbour'+str(indice)]=self.clfs[indice].predict(train[elt])
+            indice=indice+1
+        return train
+    
+    def fit_transform(self, train, y):
+        self.fit(train, y)
+        return self.transform(train)
 
-debug=0 
-if debug:
-    print('*** debug parameter set: this is a test run for debugging purposes ***')
+class huber_linear_model():
+    def __init__(self):
 
-def lgb_modelfit_nocv(params, dtrain, dvalid, predictors, target='target', objective='binary', metrics='auc',
-                 feval=None, early_stopping_rounds=20, num_boost_round=3000, verbose_eval=10, categorical_features=None):
-    lgb_params = {
-        'boosting_type': 'gbdt',
-        'objective': objective,
-        'metric':metrics,
-        'learning_rate': 0.2,
-        #'is_unbalance': 'true',  #because training data is unbalance (replaced with scale_pos_weight)
-        'num_leaves': 31,  # we should let it be smaller than 2^(max_depth)
-        'max_depth': -1,  # -1 means no limit
-        'min_child_samples': 20,  # Minimum number of data need in a child(min_data_in_leaf)
-        'max_bin': 255,  # Number of bucketed bin for feature values
-        'subsample': 0.6,  # Subsample ratio of the training instance.
-        'subsample_freq': 0,  # frequence of subsample, <=0 means no enable
-        'colsample_bytree': 0.3,  # Subsample ratio of columns when constructing each tree.
-        'min_child_weight': 5,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-        'subsample_for_bin': 200000,  # Number of samples for constructing bin
-        'min_split_gain': 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
-        'reg_alpha': 0,  # L1 regularization term on weights
-        'reg_lambda': 0,  # L2 regularization term on weights
-        'nthread': 4,
-        'verbose': 0,
-        'metric':metrics
-    }
+        self.bestmodel=None
+        self.scaler = pp.MinMaxScaler()
+       
+    def fit(self, train, y):
 
-    lgb_params.update(params)
+        indextrain=train.dropna().index
+        tr = self.scaler.fit_transform(train.ix[indextrain])
+        self.bestmodel = HuberRegressor().fit(tr, y.ix[indextrain])
+        
 
-    print("preparing validation datasets")
+    def predict(self, test):
+        te = self.scaler.transform(test)
+        return self.bestmodel.predict(te)
 
-    xgtrain = lgb.Dataset(dtrain[predictors].values, label=dtrain[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical_features
-                          )
-    xgvalid = lgb.Dataset(dvalid[predictors].values, label=dvalid[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical_features
-                          )
-
-    evals_results = {}
-
-    bst1 = lgb.train(lgb_params, 
-                     xgtrain, 
-                     valid_sets=[xgtrain, xgvalid], 
-                     valid_names=['train','valid'], 
-                     evals_result=evals_results, 
-                     num_boost_round=num_boost_round,
-                     early_stopping_rounds=early_stopping_rounds,
-                     verbose_eval=10, 
-                     feval=feval)
-
-    print("\nModel Report")
-    print("bst1.best_iteration: ", bst1.best_iteration)
-    print(metrics+":", evals_results['valid'][metrics][bst1.best_iteration-1])
-
-    return (bst1,bst1.best_iteration)
-
-def DO(frm,to,fileno):
-    dtypes = {
-            'ip'            : 'uint32',
-            'app'           : 'uint16',
-            'device'        : 'uint16',
-            'os'            : 'uint16',
-            'channel'       : 'uint16',
-            'is_attributed' : 'uint8',
-            'click_id'      : 'uint32',
+class LGB_model():
+    def __init__(self, num_leaves=25, feature_fraction=0.6, bagging_fraction=0.6):
+        self.lgb_params = {
+                'task': 'train',
+                'boosting_type': 'gbdt',
+                'objective': 'regression',
+                'metric': {'l2'},
+                'learning_rate': 0.05,
+                'bagging_freq': 5,
+                'num_thread':4,
+                'verbose': 0
             }
+        
+        self.lgb_params['feature_fraction'] = feature_fraction
+        self.lgb_params['bagging_fraction'] = bagging_fraction
+        self.lgb_params['num_leaves'] = num_leaves
+        
 
-    print('loading train data...',frm,to)
-    train_df = pd.read_csv("../input/train.csv", parse_dates=['click_time'], skiprows=range(1,frm), nrows=to-frm, dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'is_attributed'])
+        self.bestmodel=None
+       
+    def fit(self, train, y):
+        
+        X_train, X_val, y_train, y_val = train_test_split(train, y, test_size=0.2, random_state=343)
+        
+        lgtrain = lgb.Dataset(X_train, y_train)
+        lgval = lgb.Dataset(X_val, y_val, reference=lgtrain)
+                
+        self.bestmodel = lgb.train(self.lgb_params,
+                                    lgtrain,
+                                    num_boost_round=100,
+                                    valid_sets=lgval,
+                                    verbose_eval=False,
+                                    early_stopping_rounds=5)
 
-    print('loading test data...')
-    if debug:
-        test_df = pd.read_csv("../input/test.csv", nrows=100000, parse_dates=['click_time'], dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'click_id'])
-    else:
-        test_df = pd.read_csv("../input/test.csv", parse_dates=['click_time'], dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'click_id'])
 
-    len_train = len(train_df)
-    train_df=train_df.append(test_df)
+    def predict(self, test):
+        return self.bestmodel.predict(test, num_iteration=self.bestmodel.best_iteration)
+
+def calcHuberParallel(df_train, train_cols, result):
+    model=huber_linear_model()
+    model.fit(df_train.loc[:,train_cols], df_train.loc[:, 'y'])
+    residual = abs(model.predict(df_train[train_cols].fillna(d_mean))-df_train.y)
     
-    del test_df
-    gc.collect()
+    result.append([model, train_cols, residual])
     
-    print('Extracting new features...')
-    train_df['hour'] = pd.to_datetime(train_df.click_time).dt.hour.astype('uint8')
-    train_df['day'] = pd.to_datetime(train_df.click_time).dt.day.astype('uint8')
+    return 0
+
+
+if add_nas_ft:
+    for elt in nas_cols:
+        train[elt + '_na'] = pd.isnull(train[elt]).apply(lambda x: 1 if x else 0)
+        #no need to keep columns with no information
+        if len(train[elt + '_na'].unique())==1:
+            print("removed:", elt, '_na')
+            del train[elt + '_na']
+            nas_cols.remove(elt)
+
+
+if add_diff_ft:
+    train=train.sort_values(by=['id','timestamp'])
+    for elt in diff_cols:
+        #a quick way to obtain deltas from one month to another but it is false on the first
+        #month of each id
+        train[elt+"_d"]= train[elt].rolling(2).apply(lambda x:x[1]-x[0]).fillna(0)
+    #removing month 0 to reduce the impact of erroneous deltas
+    train=train[train.timestamp!=0]
+
+print(train.shape)
+cols=[x for x in train.columns if x not in ['id', 'timestamp', 'y']]
+
+
+cols2fit=['technical_22','technical_20', 'technical_30_d', 'technical_20_d', 'technical_30', 
+          'technical_13', 'technical_34']
+
+models=[]
+columns=[]
+residuals=[]
+
+num_threads = 4
+result = Manager().list()
+threads = []
+
+for (col1, col2) in combinations(cols2fit, 2):
+    print("fitting Huber model on ", [col1, col2])
+    threads.append(multiprocessing.Process(target=calcHuberParallel, args=(train, [col1, col2], result)))
+
+    if (len(threads) == num_threads):
+        for thread in threads:
+            thread.start()
     
-    gc.collect()
-    train_df = do_countuniq( train_df, ['ip'], 'channel', 'X0', 'uint8', show_max=True ); gc.collect()
-    train_df = do_cumcount( train_df, ['ip', 'device', 'os'], 'app', 'X1', show_max=True ); gc.collect()
-    train_df = do_countuniq( train_df, ['ip', 'day'], 'hour', 'X2', 'uint8', show_max=True ); gc.collect()
-    train_df = do_countuniq( train_df, ['ip'], 'app', 'X3', 'uint8', show_max=True ); gc.collect()
-    train_df = do_countuniq( train_df, ['ip', 'app'], 'os', 'X4', 'uint8', show_max=True ); gc.collect()
-    train_df = do_countuniq( train_df, ['ip'], 'device', 'X5', 'uint16', show_max=True ); gc.collect()
-    train_df = do_countuniq( train_df, ['app'], 'channel', 'X6', show_max=True ); gc.collect()
-    train_df = do_cumcount( train_df, ['ip'], 'os', 'X7', show_max=True ); gc.collect()
-    train_df = do_countuniq( train_df, ['ip', 'device', 'os'], 'app', 'X8', show_max=True ); gc.collect()
-    train_df = do_count( train_df, ['ip', 'day', 'hour'], 'ip_tcount', show_max=True ); gc.collect()
-    train_df = do_count( train_df, ['ip', 'app'], 'ip_app_count', show_max=True ); gc.collect()
-    train_df = do_count( train_df, ['ip', 'app', 'os'], 'ip_app_os_count', 'uint16', show_max=True ); gc.collect()
-    train_df = do_var( train_df, ['ip', 'day', 'channel'], 'hour', 'ip_tchan_count', show_max=True ); gc.collect()
-    train_df = do_var( train_df, ['ip', 'app', 'os'], 'hour', 'ip_app_os_var', show_max=True ); gc.collect()
-    train_df = do_var( train_df, ['ip', 'app', 'channel'], 'day', 'ip_app_channel_var_day', show_max=True ); gc.collect()
-    train_df = do_mean( train_df, ['ip', 'app', 'channel'], 'hour', 'ip_app_channel_mean_hour', show_max=True ); gc.collect()
+        for thread in threads:
+            thread.join()
+        
+        print(len(result))
+        
+        threads = []
+        
+        
+''' Last bit '''
+print("running last threads ..")
+if (len(threads)>0):
+    for thread in threads:
+        thread.start()
 
-    print('doing nextClick')
-    predictors=[]
+    for thread in threads:
+        thread.join()
+    print(len(result))
     
-    new_feature = 'nextClick'
-    filename='nextClick_%d_%d.csv'%(frm,to)
+    threads = []
 
-    if os.path.exists(filename):
-        print('loading from save file')
-        QQ=pd.read_csv(filename).values
-    else:
-        D=2**26
-        train_df['category'] = (train_df['ip'].astype(str) + "_" + train_df['app'].astype(str) + "_" + train_df['device'].astype(str) \
-            + "_" + train_df['os'].astype(str)).apply(hash) % D
-        click_buffer= np.full(D, 3000000000, dtype=np.uint32)
 
-        train_df['epochtime']= train_df['click_time'].astype(np.int64) // 10 ** 9
-        next_clicks= []
-        for category, t in zip(reversed(train_df['category'].values), reversed(train_df['epochtime'].values)):
-            next_clicks.append(click_buffer[category]-t)
-            click_buffer[category]= t
-        del(click_buffer)
-        QQ= list(reversed(next_clicks))
+for data in result:
+    model, train_cols, residual = data
+    models.append(model)
+    columns.append(train_cols)
+    residuals.append(residual) 
 
-        if not debug:
-            print('saving')
-            pd.DataFrame(QQ).to_csv(filename,index=False)
-            
-    train_df.drop(['epochtime','category','click_time'], axis=1, inplace=True)
+del result, threads
+gc.collect()
 
-    train_df[new_feature] = pd.Series(QQ).astype('float32')
-    predictors.append(new_feature)
 
-    train_df[new_feature+'_shift'] = train_df[new_feature].shift(+1).values
-    predictors.append(new_feature+'_shift')
+
+train=train.fillna(d_mean)
+
+print("adding new features")
+featureexpander=createLinearFeatures(n_neighbours=20, max_elts=2, verbose=True, random_state=rnd)
+index2use=train[abs(train.y)<0.086].index
+featureexpander.fit(train.ix[index2use,cols],train.ix[index2use,'y'])
+trainer=featureexpander.transform(train[cols])
+
+treecols=trainer.columns
+
+print("training LGB model ")
+num_leaves = [70]
+feature_fractions = [0.2, 0.6]
+bagging_fractions = [0.7]
+
+#with Timer("running LGB models "):
+for num_leaf in num_leaves:
+    for feature_fraction in feature_fractions:
+        for bagging_fraction in bagging_fractions:
+            print("fitting LGB tree model with ", num_leaf, feature_fraction, bagging_fraction)
+            model = LGB_model(num_leaves=num_leaf, feature_fraction=feature_fraction, bagging_fraction=bagging_fraction)
+            model.fit(trainer,train.y)
+            models.append(model)
+            columns.append(treecols)
+            residuals.append(abs(model.predict(trainer)-train.y))
+
+print("training trees")
+model = ensemble.ExtraTreesRegressor(n_estimators=100, max_depth=4, n_jobs=-1, random_state=rnd, verbose=0)
+model.fit(trainer,train.y)
+print(pd.DataFrame(model.feature_importances_,index=treecols).sort_values(by=[0]).tail(30))
+for elt in model.estimators_:
+    models.append(elt)
+    columns.append(treecols)
+    residuals.append(abs(elt.predict(trainer)-train.y))
+
+num_to_keep=7
+targetselector=np.array(residuals).T
+targetselector=np.argmin(targetselector, axis=1)
+print("selecting best models:")
+print(pd.Series(targetselector).value_counts().head(num_to_keep))
+
+tokeep=pd.Series(targetselector).value_counts().head(num_to_keep).index
+tokeepmodels=[]
+tokeepcolumns=[]
+tokeepresiduals=[]
+for elt in tokeep:
+    tokeepmodels.append(models[elt])
+    tokeepcolumns.append(columns[elt])
+    tokeepresiduals.append(residuals[elt])
+
+
+for modelp in tokeepmodels:
+    print("")
+    print(modelp)
+
+
+#creating a new target for a model in charge of predicting which model is best for the current line
+targetselector=np.array(tokeepresiduals).T
+targetselector=np.argmin(targetselector, axis=1)
+
+#with Timer("Training ET selection model "):
+print("training selection model")
+modelselector = ensemble.ExtraTreesClassifier(n_estimators= 120, max_depth=4, n_jobs=-1, random_state=rnd, verbose=0)
+modelselector.fit(trainer, targetselector)
+
+model2 = GaussianNB()
+model2.fit(trainer,targetselector)
+
+print(pd.DataFrame(modelselector.feature_importances_,index=treecols).sort_values(by=[0]).tail(30))
+
+
+lastvalues=train[train.timestamp==max(train.timestamp)][['id']+diff_cols].copy()
+
+print("end of training, now predicting")
+indice=0
+countplus=0
+rewards=[]
+
+
+del models
+del columns
+del residuals
+del tokeepresiduals
+gc.collect()
+
+while True:
+    indice+=1
+    test = o.features
+    test["nbnulls"]=test.isnull().sum(axis=1)
+    if add_nas_ft:
+        for elt in nas_cols:
+            test[elt + '_na'] = pd.isnull(test[elt]).apply(lambda x: 1 if x else 0)
+    test=test.fillna(d_mean)
     
-    del QQ
-    gc.collect()
+    timestamp = o.features.timestamp[0]
 
-    print("vars and data type: ")
-    train_df.info()
-    train_df['ip_tcount'] = train_df['ip_tcount'].astype('uint16')
-    train_df['ip_app_count'] = train_df['ip_app_count'].astype('uint16')
-    train_df['ip_app_os_count'] = train_df['ip_app_os_count'].astype('uint16')
+    pred = o.target
+    if add_diff_ft:
+        #creating deltas from lastvalues
+        indexcommun=list(set(lastvalues.id) & set(test.id))
+        lastvalues=pd.concat([test[test.id.isin(indexcommun)]['id'],
+            pd.DataFrame(test[diff_cols][test.id.isin(indexcommun)].values-lastvalues[diff_cols][lastvalues.id.isin(indexcommun)].values,
+            columns=diff_cols, index=test[test.id.isin(indexcommun)].index)],
+            axis=1)
+        #adding them to test data    
+        test=test.merge(right=lastvalues, how='left', on='id', suffixes=('','_d')).fillna(0)
+        #storing new lastvalues
+        lastvalues=test[['id']+diff_cols].copy()
+    
+    testid=test.id
+    test=featureexpander.transform(test[cols])
+    #prediction using modelselector and models list
+    selected_prediction = modelselector.predict_proba(test.loc[: ,treecols])
+    selected_prediction2 = model2.predict_proba(test.loc[: ,treecols])
+    for ind,elt in enumerate(tokeepmodels):
+        pred['y']+= (selected_prediction[:,ind]*elt.predict(test[tokeepcolumns[ind]])*1.00) +  (selected_prediction2[:,ind]*elt.predict(test[tokeepcolumns[ind]])*0.05)
+    
+    
+    pred['y'] = pred['y'].clip(low_y_cut, high_y_cut)
 
-    target = 'is_attributed'
-    predictors.extend(['app','device','os', 'channel', 'hour', 'day', 
-                  'ip_tcount', 'ip_tchan_count', 'ip_app_count',
-                  'ip_app_os_count', 'ip_app_os_var',
-                  'ip_app_channel_var_day','ip_app_channel_mean_hour',
-                  'X0', 'X1', 'X2', 'X3', 'X4', 'X5', 'X6', 'X7', 'X8'])
-    categorical = ['app', 'device', 'os', 'channel', 'hour', 'day']
-    print('predictors',predictors)
+    o, reward, done, info = env.step(pred)
 
-    test_df = train_df[len_train:]
-    val_df = train_df[(len_train-val_size):len_train]
-    train_df = train_df[:(len_train-val_size)]
-
-    print("train size: ", len(train_df))
-    print("valid size: ", len(val_df))
-    print("test size : ", len(test_df))
-
-    sub = pd.DataFrame()
-    sub['click_id'] = test_df['click_id'].astype('int')
-
-    gc.collect()
-
-    print("Training...")
-    start_time = time.time()
-
-    params = {
-        'learning_rate': 0.20,
-        #'is_unbalance': 'true', # replaced with scale_pos_weight argument
-        'num_leaves': 7,  # 2^max_depth - 1
-        'max_depth': 3,  # -1 means no limit
-        'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
-        'max_bin': 100,  # Number of bucketed bin for feature values
-        'subsample': 0.7,  # Subsample ratio of the training instance.
-        'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
-        'colsample_bytree': 0.9,  # Subsample ratio of columns when constructing each tree.
-        'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-        'scale_pos_weight':200 # because training data is extremely unbalanced 
-    }
-    (bst,best_iteration) = lgb_modelfit_nocv(params, 
-                            train_df, 
-                            val_df, 
-                            predictors, 
-                            target, 
-                            objective='binary', 
-                            metrics='auc',
-                            early_stopping_rounds=30, 
-                            verbose_eval=True, 
-                            num_boost_round=1000, 
-                            categorical_features=categorical)
-
-    print('[{}]: model training time'.format(time.time() - start_time))
-    del train_df
-    del val_df
-    gc.collect()
-
-    if WHERE!='gcloud':
-        print('Plot feature importances...')
-        ax = lgb.plot_importance(bst, max_num_features=100)
-        plt.show()
-
-    print("Predicting...")
-    sub['is_attributed'] = bst.predict(test_df[predictors],num_iteration=best_iteration)
-    if not debug:
-        print("writing...")
-        sub.to_csv('sub_it%d.csv'%(fileno),index=False,float_format='%.9f')
-    print("done...")
-    return sub
-
-nrows=184903891-1
-nchunk=25000000
-val_size=2500000
-
-frm=nrows-75000000
-if debug:
-    frm=0
-    nchunk=100000
-    val_size=10000
-
-to=frm+nchunk
-
-sub=DO(frm,to,0)
+    rewards.append(reward)
+    if reward>0:
+        countplus+=1
+    
+    if indice%100==0:
+        print(indice, countplus, reward, np.mean(rewards), info)
+        
+    if done:
+        print(info["public_score"])
+        break

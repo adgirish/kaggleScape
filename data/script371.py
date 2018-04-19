@@ -1,218 +1,679 @@
 
 # coding: utf-8
 
-# <img src="https://lh3.googleusercontent.com/-tNe1vwwd_w4/VZ_m9E44C7I/AAAAAAAAABM/5yqhpSyYcCUzwHi-ti13MwovCb_AUD_zgCJkCGAYYCw/w256-h86-n-no/Submarineering.png">
+# In[ ]:
 
-# This is the **best public score** kernel in the competition until now. 
-# I hpoe it be useful for those than pre-train and make knowledge tranfer to the model. 
-# If it waas useful for you, **please VOTE me UP.**
 
-# In[1]:
+#Importing Libraries
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
 
-import os
-import numpy as np 
-import pandas as pd 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+# In[ ]:
 
 
-# First thing first@
-# # Credits to the following awesome authors and kernels
-# 
-# Author: QuantScientist    
-# File: sub_200_ens_densenet.csv     
-# Link: https://www.kaggle.com/solomonk/pytorch-cnn-densenet-ensemble-lb-0-1538     
-# 
-# 
-# Author: wvadim     
-# File: sub_TF_keras.csv     
-# Link: https://www.kaggle.com/wvadim/keras-tf-lb-0-18     
-# 
-# 
-# Author: Ed Miller    
-# File: sub_fcn.csv    
-# Link: https://www.kaggle.com/bluevalhalla/fully-convolutional-network-lb-0-193     
-# 
-# 
-# Author: Chia-Ta Tsai    
-# File: sub_blend009.csv    
-# Link: https://www.kaggle.com/cttsai/ensembling-gbms-lb-203    
-# 
-# 
-# Author: DeveshMaheshwari    
-# File: sub_keras_beginner.csv    
-# Link: https://www.kaggle.com/devm2024/keras-model-for-beginners-0-210-on-lb-eda-r-d       
-# 
-# Author: Submarineering    
-# 
-# File: submission38.csv
-# 
-# Link : https://www.kaggle.com/submarineering/submission38-lb01448
-# 
-# ### Without their truly dedicated efforts, this notebook will not be possible.     
+#Importing dataset
+train = pd.read_csv('../input/train_1.csv').fillna(0)
+page = train['Page']
+train.head()
 
-# # Data Load
 
-# In[2]:
+# In[ ]:
 
 
-sub_path = "../input/statoil-iceberg-submissions"
-all_files = os.listdir(sub_path)
-all_files = all_files[1:3]
-all_files.append('submission38.csv')
-all_files
+#Dropping Page Column
+train = train.drop('Page',axis = 1)
 
 
-# In[3]:
+# In[ ]:
 
 
-# Read and concatenate submissions
-out1 = pd.read_csv("../input/statoil-iceberg-submissions/sub_200_ens_densenet.csv", index_col=0)
-out2 = pd.read_csv("../input/statoil-iceberg-submissions/sub_TF_keras.csv", index_col=0)
-out3 = pd.read_csv("../input/submission38-lb01448/submission38.csv", index_col=0)
-concat_sub = pd.concat([out1, out2, out3], axis=1)
-cols = list(map(lambda x: "is_iceberg_" + str(x), range(len(concat_sub.columns))))
-concat_sub.columns = cols
-concat_sub.reset_index(inplace=True)
-concat_sub.head()
+#Using Data From Random Row for Training and Testing
 
+row = train.iloc[90000,:].values
+X = row[0:549]
+y = row[1:550]
 
-# In[4]:
+# Splitting the dataset into the Training set and Test set
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state = 0)
 
 
-# check correlation
-concat_sub.corr()
 
+# Feature Scaling
+from sklearn.preprocessing import MinMaxScaler
+sc = MinMaxScaler()
+X_train = np.reshape(X_train,(-1,1))
+y_train = np.reshape(y_train,(-1,1))
+X_train = sc.fit_transform(X_train)
+y_train = sc.fit_transform(y_train)
 
-# In[5]:
 
+# In[ ]:
 
-# get the data fields ready for stacking
-concat_sub['is_iceberg_max'] = concat_sub.iloc[:, 1:6].max(axis=1)
-concat_sub['is_iceberg_min'] = concat_sub.iloc[:, 1:6].min(axis=1)
-concat_sub['is_iceberg_mean'] = concat_sub.iloc[:, 1:6].mean(axis=1)
-concat_sub['is_iceberg_median'] = concat_sub.iloc[:, 1:6].median(axis=1)
 
+#Training LSTM
 
-# In[6]:
+#Reshaping Array
+X_train = np.reshape(X_train, (384,1,1))
 
 
-# set up cutoff threshold for lower and upper bounds, easy to twist 
-cutoff_lo = 0.7
-cutoff_hi = 0.3
+# Importing the Keras libraries and packages for LSTM
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
 
+# Initialising the RNN
+regressor = Sequential()
 
-# # Mean Stacking
+# Adding the input layerand the LSTM layer
+regressor.add(LSTM(units = 8, activation = 'relu', input_shape = (None, 1)))
 
-# In[7]:
 
+# Adding the output layer
+regressor.add(Dense(units = 1))
 
-#concat_sub['is_iceberg'] = concat_sub['is_iceberg_mean']
-#concat_sub[['id', 'is_iceberg']].to_csv('stack_mean.csv', index=False, float_format='%.6f')
+# Compiling the RNN
+regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
 
+# Fitting the RNN to the Training set
+regressor.fit(X_train, y_train, batch_size = 10, epochs = 100, verbose = 0)
 
-# **LB 0.1698** , decent first try - still some gap comparing with our top-line model performance in stack.
 
-# # Median Stacking
+# In[ ]:
 
-# In[8]:
 
+# Getting the predicted Web View
+inputs = X_test
+inputs = np.reshape(inputs,(-1,1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (165, 1, 1))
+y_pred = regressor.predict(inputs)
+y_pred = sc.inverse_transform(y_pred)
 
-#concat_sub['is_iceberg'] = concat_sub['is_iceberg_median']
-#concat_sub[['id', 'is_iceberg']].to_csv('stack_median.csv', index=False, float_format='%.6f')
 
+# In[ ]:
 
-# **LB 0.1575**, very close with our top-line model performance, but we want to see some improvement at least.
 
-# # PushOut + Median Stacking 
-# 
-# Pushout strategy is a bit agressive given what it does...
+#Visualising Result
+plt.figure
+plt.plot(y_test, color = 'red', label = 'Real Web View')
+plt.plot(y_pred, color = 'blue', label = 'Predicted Web View')
+plt.title('Web View Forecasting')
+plt.xlabel('Number of Days from Start')
+plt.ylabel('Web View')
+plt.legend()
+plt.show()
 
-# In[9]:
 
+# In[ ]:
 
-#concat_sub['is_iceberg'] = np.where(np.all(concat_sub.iloc[:,1:6] > cutoff_lo, axis=1), 1, 
-#                                    np.where(np.all(concat_sub.iloc[:,1:6] < cutoff_hi, axis=1),
-#                                             0, concat_sub['is_iceberg_median']))
-#concat_sub[['id', 'is_iceberg']].to_csv('stack_pushout_median.csv', 
-#                                        index=False, float_format='%.6f')
 
+#As you can see the prediction is quite accurate for a test set. Now repeat this for some other rows
 
-# **LB 0.1940**, not very impressive results given the base models in the pipeline...
 
-# # MinMax + Mean Stacking
-# 
-# MinMax seems more gentle and it outperforms the previous one given its peformance score.
+# In[ ]:
 
-# In[10]:
 
+row = train.iloc[0,:].values
+X = row[0:549]
+y = row[1:550]
 
-#concat_sub['is_iceberg'] = np.where(np.all(concat_sub.iloc[:,1:6] > cutoff_lo, axis=1), 
-#                                    concat_sub['is_iceberg_max'], 
-#                                    np.where(np.all(concat_sub.iloc[:,1:6] < cutoff_hi, axis=1),
-#                                             concat_sub['is_iceberg_min'], 
-#                                             concat_sub['is_iceberg_mean']))
-#concat_sub[['id', 'is_iceberg']].to_csv('stack_minmax_mean.csv', 
-#                                        index=False, float_format='%.6f')
+# Splitting the dataset into the Training set and Test set
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state = 0)
 
 
-# **LB 0.1622**, need to stack with Median to see the results.
 
-# # MinMax + Median Stacking 
+# Feature Scaling
+from sklearn.preprocessing import MinMaxScaler
+sc = MinMaxScaler()
+X_train = np.reshape(X_train,(-1,1))
+y_train = np.reshape(y_train,(-1,1))
+X_train = sc.fit_transform(X_train)
+y_train = sc.fit_transform(y_train)
 
-# In[11]:
+#Training LSTM
 
+#Reshaping Array
+X_train = np.reshape(X_train, (384,1,1))
 
-#concat_sub['is_iceberg'] = np.where(np.all(concat_sub.iloc[:,1:6] > cutoff_lo, axis=1), 
-#                                    concat_sub['is_iceberg_max'], 
-#                                    np.where(np.all(concat_sub.iloc[:,1:6] < cutoff_hi, axis=1),
-#                                             concat_sub['is_iceberg_min'], 
-#                                             concat_sub['is_iceberg_median']))
-#concat_sub['is_iceberg'] = np.clip(concat_sub['is_iceberg'].values, 0.001, 0.999)
-#concat_sub[['id', 'is_iceberg']].to_csv('stack_minmax_median.csv', 
-#                                       index=False, float_format='%.6f')
 
+# Importing the Keras libraries and packages for LSTM
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
 
-# **LB 0.1488** - **Great!** This is an improvement to our top-line model performance (LB 0.1538). But can we do better?
+# Initialising the RNN
+regressor = Sequential()
 
-# # MinMax + BestBase Stacking
+# Adding the input layerand the LSTM layer
+regressor.add(LSTM(units = 8, activation = 'relu', input_shape = (None, 1)))
 
-# In[12]:
 
+# Adding the output layer
+regressor.add(Dense(units = 1))
 
-# load the model with best base performance
-sub_base = pd.read_csv('../input/submission38-lb01448/submission38.csv')
+# Compiling the RNN
+regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
 
+# Fitting the RNN to the Training set
+regressor.fit(X_train, y_train, batch_size = 10, epochs = 100, verbose = 0)
 
-# In[13]:
+# Getting the predicted Web View
+inputs = X_test
+inputs = np.reshape(inputs,(-1,1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (165, 1, 1))
+y_pred = regressor.predict(inputs)
+y_pred = sc.inverse_transform(y_pred)
 
+#Visualising Result
+plt.figure
+plt.plot(y_test, color = 'red', label = 'Real Web View')
+plt.plot(y_pred, color = 'blue', label = 'Predicted Web View')
+plt.title('Web View Forecasting')
+plt.xlabel('Number of Days from Start')
+plt.ylabel('Web View')
+plt.legend()
+plt.show()
 
-concat_sub['is_iceberg_base'] = sub_base['is_iceberg']
-concat_sub['is_iceberg'] = np.where(np.all(concat_sub.iloc[:,1:6] > cutoff_lo, axis=1), 
-                                    concat_sub['is_iceberg_max'], 
-                                    np.where(np.all(concat_sub.iloc[:,1:6] < cutoff_hi, axis=1),
-                                             concat_sub['is_iceberg_min'], 
-                                             concat_sub['is_iceberg_base']))
-concat_sub['is_iceberg'] = np.clip(concat_sub['is_iceberg'].values, 0.001, 0.999)
-concat_sub[['id', 'is_iceberg']].to_csv('submission39.csv', 
-                                        index=False, float_format='%.6f')
 
+# In[ ]:
 
-# 
-# Roboust model is always the key component, stacking only comes last with the promise to surprise, sometimes, in an unpleasant direction@. 
-# 
-# For more efficient models I highly recommend my engineering features extraction kernels: 
-# 
-# https://www.kaggle.com/submarineering/submarineering-size-matters-0-75-lb
-# 
-# https://www.kaggle.com/submarineering/submarineering-objects-isolation-0-75-lb
-# 
-# https://www.kaggle.com/submarineering/submarineering-what-about-volume-lb-0-45
-# 
-# Greeting, Subamrineering.
-# 
-# 
-# 
 
-# I hope these lines be useful for your. **Please vote up.**
+row = train.iloc[10,:].values
+X = row[0:549]
+y = row[1:550]
+
+# Splitting the dataset into the Training set and Test set
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state = 0)
+
+
+
+# Feature Scaling
+from sklearn.preprocessing import MinMaxScaler
+sc = MinMaxScaler()
+X_train = np.reshape(X_train,(-1,1))
+y_train = np.reshape(y_train,(-1,1))
+X_train = sc.fit_transform(X_train)
+y_train = sc.fit_transform(y_train)
+
+#Training LSTM
+
+#Reshaping Array
+X_train = np.reshape(X_train, (384,1,1))
+
+
+# Importing the Keras libraries and packages for LSTM
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+
+# Initialising the RNN
+regressor = Sequential()
+
+# Adding the input layerand the LSTM layer
+regressor.add(LSTM(units = 8, activation = 'relu', input_shape = (None, 1)))
+
+
+# Adding the output layer
+regressor.add(Dense(units = 1))
+
+# Compiling the RNN
+regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
+
+# Fitting the RNN to the Training set
+regressor.fit(X_train, y_train, batch_size = 10, epochs = 100, verbose = 0)
+
+# Getting the predicted Web View
+inputs = X_test
+inputs = np.reshape(inputs,(-1,1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (165, 1, 1))
+y_pred = regressor.predict(inputs)
+y_pred = sc.inverse_transform(y_pred)
+
+#Visualising Result
+plt.figure
+plt.plot(y_test, color = 'red', label = 'Real Web View')
+plt.plot(y_pred, color = 'blue', label = 'Predicted Web View')
+plt.title('Web View Forecasting')
+plt.xlabel('Number of Days from Start')
+plt.ylabel('Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+row = train.iloc[100,:].values
+X = row[0:549]
+y = row[1:550]
+
+# Splitting the dataset into the Training set and Test set
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state = 0)
+
+
+
+# Feature Scaling
+from sklearn.preprocessing import MinMaxScaler
+sc = MinMaxScaler()
+X_train = np.reshape(X_train,(-1,1))
+y_train = np.reshape(y_train,(-1,1))
+X_train = sc.fit_transform(X_train)
+y_train = sc.fit_transform(y_train)
+
+#Training LSTM
+
+#Reshaping Array
+X_train = np.reshape(X_train, (384,1,1))
+
+
+# Importing the Keras libraries and packages for LSTM
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+
+# Initialising the RNN
+regressor = Sequential()
+
+# Adding the input layerand the LSTM layer
+regressor.add(LSTM(units = 8, activation = 'relu', input_shape = (None, 1)))
+
+
+# Adding the output layer
+regressor.add(Dense(units = 1))
+
+# Compiling the RNN
+regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
+
+# Fitting the RNN to the Training set
+regressor.fit(X_train, y_train, batch_size = 10, epochs = 100, verbose = 0)
+
+# Getting the predicted Web View
+inputs = X_test
+inputs = np.reshape(inputs,(-1,1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (165, 1, 1))
+y_pred = regressor.predict(inputs)
+y_pred = sc.inverse_transform(y_pred)
+
+#Visualising Result
+plt.figure
+plt.plot(y_test, color = 'red', label = 'Real Web View')
+plt.plot(y_pred, color = 'blue', label = 'Predicted Web View')
+plt.title('Web View Forecasting')
+plt.xlabel('Number of Days from Start')
+plt.ylabel('Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+row = train.iloc[1000,:].values
+X = row[0:549]
+y = row[1:550]
+
+# Splitting the dataset into the Training set and Test set
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.3, random_state = 0)
+
+
+
+# Feature Scaling
+from sklearn.preprocessing import MinMaxScaler
+sc = MinMaxScaler()
+X_train = np.reshape(X_train,(-1,1))
+y_train = np.reshape(y_train,(-1,1))
+X_train = sc.fit_transform(X_train)
+y_train = sc.fit_transform(y_train)
+
+#Training LSTM
+
+#Reshaping Array
+X_train = np.reshape(X_train, (384,1,1))
+
+
+# Importing the Keras libraries and packages for LSTM
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+
+# Initialising the RNN
+regressor = Sequential()
+
+# Adding the input layerand the LSTM layer
+regressor.add(LSTM(units = 8, activation = 'relu', input_shape = (None, 1)))
+
+
+# Adding the output layer
+regressor.add(Dense(units = 1))
+
+# Compiling the RNN
+regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
+
+# Fitting the RNN to the Training set
+regressor.fit(X_train, y_train, batch_size = 10, epochs = 100, verbose = 0)
+
+# Getting the predicted Web View
+inputs = X_test
+inputs = np.reshape(inputs,(-1,1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (165, 1, 1))
+y_pred = regressor.predict(inputs)
+y_pred = sc.inverse_transform(y_pred)
+
+#Visualising Result
+plt.figure
+plt.plot(y_test, color = 'red', label = 'Real Web View')
+plt.plot(y_pred, color = 'blue', label = 'Predicted Web View')
+plt.title('Web View Forecasting')
+plt.xlabel('Number of Days from Start')
+plt.ylabel('Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+#Now lets train on one page and test on another page
+train_row = train.iloc[90000,:].values
+X = train_row[0:549]
+y = train_row[1:550]
+
+
+# Feature Scaling
+from sklearn.preprocessing import MinMaxScaler
+sc = MinMaxScaler()
+X_train = np.reshape(X,(-1,1))
+y_train = np.reshape(y,(-1,1))
+X_train = sc.fit_transform(X_train)
+y_train = sc.fit_transform(y_train)
+
+#Training LSTM
+
+#Reshaping Array
+X_train = np.reshape(X_train, (549,1,1))
+
+
+# Importing the Keras libraries and packages for LSTM
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import LSTM
+
+# Initialising the RNN
+regressor = Sequential()
+
+# Adding the input layerand the LSTM layer
+regressor.add(LSTM(units = 8, activation = 'relu', input_shape = (None, 1)))
+
+
+# Adding the output layer
+regressor.add(Dense(units = 1))
+
+# Compiling the RNN
+regressor.compile(optimizer = 'adam', loss = 'mean_squared_error')
+
+# Fitting the RNN to the Training set
+regressor.fit(X_train, y_train, batch_size = 10, epochs = 100, verbose = 0)
+
+# Getting the predicted Web View
+test_row = train.iloc[10000,:].values
+X_test = test_row[0:549]
+y_test = test_row[1:550]
+inputs = X_test
+inputs = np.reshape(inputs,(-1,1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (549, 1, 1))
+y_pred = regressor.predict(inputs)
+y_pred = sc.inverse_transform(y_pred)
+
+#Visualising Result
+plt.figure
+plt.plot(y_test, color = 'red', label = 'Real Web View')
+plt.plot(y_pred, color = 'blue', label = 'Predicted Web View')
+plt.title('Web View Forecasting')
+plt.xlabel('Number of Days from Start')
+plt.ylabel('Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+#Repeating on another page
+# Getting the predicted Web View
+test_row = train.iloc[5000,:].values
+X_test = test_row[0:549]
+y_test = test_row[1:550]
+inputs = X_test
+inputs = np.reshape(inputs,(-1,1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (549, 1, 1))
+y_pred = regressor.predict(inputs)
+y_pred = sc.inverse_transform(y_pred)
+
+#Visualising Result
+plt.figure
+plt.plot(y_test, color = 'red', label = 'Real Web View')
+plt.plot(y_pred, color = 'blue', label = 'Predicted Web View')
+plt.title('Web View Forecasting')
+plt.xlabel('Number of Days from Start')
+plt.ylabel('Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+# Getting the predicted Web View
+import random
+X_value = random.randint(0,train.shape[0])
+test_row = train.iloc[X_value,:].values
+X_test = test_row[0:549]
+y_test = test_row[1:550]
+inputs = X_test
+inputs = np.reshape(inputs,(-1,1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (549, 1, 1))
+y_pred = regressor.predict(inputs)
+y_pred = sc.inverse_transform(y_pred)
+
+#Visualising Result
+plt.figure
+plt.plot(y_test, color = 'red', label = 'Real Web View')
+plt.plot(y_pred, color = 'blue', label = 'Predicted Web View')
+plt.title('Web View Forecasting for')
+plt.xlabel('Number of Days from Start')
+plt.ylabel('Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+# Getting the predicted Web View
+import random
+X_value = random.randint(0,train.shape[0])
+test_row = train.iloc[X_value,:].values
+X_test = test_row[0:549]
+y_test = test_row[1:550]
+inputs = X_test
+inputs = np.reshape(inputs,(-1,1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (549, 1, 1))
+y_pred = regressor.predict(inputs)
+y_pred = sc.inverse_transform(y_pred)
+
+#Visualising Result
+plt.figure
+plt.plot(y_test, color = 'red', label = 'Real Web View')
+plt.plot(y_pred, color = 'blue', label = 'Predicted Web View')
+plt.title('Web View Forecasting for')
+plt.xlabel('Number of Days from Start')
+plt.ylabel('Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+# Getting the predicted Web View
+import random
+X_value = random.randint(0,train.shape[0])
+test_row = train.iloc[X_value,:].values
+X_test = test_row[0:549]
+y_test = test_row[1:550]
+inputs = X_test
+inputs = np.reshape(inputs,(-1,1))
+inputs = sc.transform(inputs)
+inputs = np.reshape(inputs, (549, 1, 1))
+y_pred = regressor.predict(inputs)
+y_pred = sc.inverse_transform(y_pred)
+
+#Visualising Result
+plt.figure
+plt.plot(y_test, color = 'red', label = 'Real Web View')
+plt.plot(y_pred, color = 'blue', label = 'Predicted Web View')
+plt.title('Web View Forecasting for')
+plt.xlabel('Number of Days from Start')
+plt.ylabel('Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+# Getting the Mean Web View - 1000 Pages
+y_test_mean = []
+y_pred_mean = []
+for X_value in range(0,1000):
+    test_row = train.iloc[X_value,:].values
+    X_test = test_row[0:549]
+    y_test = test_row[1:550]
+    y_test_mean.append(np.mean(y_test))
+    inputs = X_test
+    inputs = np.reshape(inputs,(-1,1))
+    inputs = sc.transform(inputs)
+    inputs = np.reshape(inputs, (549, 1, 1))
+    y_pred = regressor.predict(inputs)
+    y_pred = sc.inverse_transform(y_pred)
+    y_pred_mean.append(np.mean(y_pred))
+
+
+# In[ ]:
+
+
+#Visualising mean
+plt.figure
+plt.plot(y_test_mean, color = 'red', label = 'Mean Real Web View')
+plt.plot(y_pred_mean, color = 'blue', label = 'Mean Predicted Web View')
+plt.title('Mean Web View Forecasting')
+plt.xlabel('Index of Page')
+plt.ylabel('Mean Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+# Getting the Mean Web View - 100 Pages
+y_test_mean = []
+y_pred_mean = []
+for X_value in range(0,100):
+    test_row = train.iloc[X_value,:].values
+    X_test = test_row[0:549]
+    y_test = test_row[1:550]
+    y_test_mean.append(np.mean(y_test))
+    inputs = X_test
+    inputs = np.reshape(inputs,(-1,1))
+    inputs = sc.transform(inputs)
+    inputs = np.reshape(inputs, (549, 1, 1))
+    y_pred = regressor.predict(inputs)
+    y_pred = sc.inverse_transform(y_pred)
+    y_pred_mean.append(np.mean(y_pred))
+    
+#Visualising mean
+plt.figure
+plt.plot(y_test_mean, color = 'red', label = 'Mean Real Web View')
+plt.plot(y_pred_mean, color = 'blue', label = 'Mean Predicted Web View')
+plt.title('Mean Web View Forecasting')
+plt.xlabel('Index of Page')
+plt.ylabel('Mean Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+# Getting the Mean Web View - random 100 Pages in between
+pages = np.random.randint(0,train.shape[0],100)
+y_test_mean = []
+y_pred_mean = []
+for X_value in pages:
+    test_row = train.iloc[X_value,:].values
+    X_test = test_row[0:549]
+    y_test = test_row[1:550]
+    y_test_mean.append(np.mean(y_test))
+    inputs = X_test
+    inputs = np.reshape(inputs,(-1,1))
+    inputs = sc.transform(inputs)
+    inputs = np.reshape(inputs, (549, 1, 1))
+    y_pred = regressor.predict(inputs)
+    y_pred = sc.inverse_transform(y_pred)
+    y_pred_mean.append(np.mean(y_pred))
+    
+#Visualising mean
+plt.figure
+plt.plot(y_test_mean, color = 'red', label = 'Mean Real Web View')
+plt.plot(y_pred_mean, color = 'blue', label = 'Mean Predicted Web View')
+plt.title('Mean Web View Forecasting')
+plt.ylabel('Mean Web View')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+# Getting the Mean Web View - random 100 Pages in between
+pages = np.random.randint(0,train.shape[0],100)
+y_test_mean = []
+y_pred_mean = []
+for X_value in pages:
+    test_row = train.iloc[X_value,:].values
+    X_test = test_row[0:549]
+    y_test = test_row[1:550]
+    y_test_mean.append(np.mean(y_test))
+    inputs = X_test
+    inputs = np.reshape(inputs,(-1,1))
+    inputs = sc.transform(inputs)
+    inputs = np.reshape(inputs, (549, 1, 1))
+    y_pred = regressor.predict(inputs)
+    y_pred = sc.inverse_transform(y_pred)
+    y_pred_mean.append(np.mean(y_pred))
+    
+#Visualising mean
+plt.figure
+plt.plot(y_test_mean, color = 'red', label = 'Mean Real Web View')
+plt.plot(y_pred_mean, color = 'blue', label = 'Mean Predicted Web View')
+plt.title('Mean Web View Forecasting')
+plt.ylabel('Mean Web View')
+plt.legend()
+plt.show()
+

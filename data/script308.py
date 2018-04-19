@@ -1,255 +1,182 @@
 
 # coding: utf-8
 
-# This script intends to be a starter script for Keras using pre-trained word embeddings.
+# # Aim
+# This is a small yet useful kernel for providing an introduction to **Artificial Neural Networks** for people who want to begin their journey into the field of **deep learning**. For this, I have used Keras which is a high-level Neural Networks API built on top of low level neural networks APIs like Tensorflow and Theano. As it is high-level, many things are already taken care of therefore it is easy to work with and a great tool to start with. [Here's the documentation for keras](https://keras.io/)
 # 
-# **Word embedding:**
-# 
-# [Word embedding][1] is the collective name for a set of language modeling and feature learning techniques in natural language processing (NLP) where words or phrases from the vocabulary are mapped to vectors of real numbers. They are also called as word vectors.
-# 
-# Two commonly used word embeddings are:
-# 
-# 1.  [Google word2vec][2]
-# 2. [Stanford Glove][3]
-# 
-# In this notebook, we will use the GloVe word vector which is downloaded from [this link][4] 
-# 
-# Let us first import the necessary packages.
+# # What is Deep learning?
+# Deep Learning is a subfield of machine learning concerned with algorithms inspired by the structure and function of the brain called artificial neural networks. Deep learning is a machine learning technique that teaches computers to do what comes naturally to humans: learn by example. Deep learning is a key technology behind driverless cars, enabling them to recognize a stop sign, or to distinguish a pedestrian from a lamppost. It is the key to voice control in consumer devices like phones, tablets, TVs, and hands-free speakers. Deep learning is getting lots of attention lately and for good reason. It’s achieving results that were not possible before.
 # 
 # 
-#   [1]: https://en.wikipedia.org/wiki/Word_embedding
-#   [2]: https://code.google.com/archive/p/word2vec/
-#   [3]: https://nlp.stanford.edu/projects/glove/
-#   [4]: http://nlp.stanford.edu/data/glove.6B.zip
+# # What are artificial neural networks?
+# An artificial neuron network (ANN) is a computational model based on the structure and functions of biological neural networks. Information that flows through the network affects the structure of the ANN because a neural network changes - or learns, in a sense - based on that input and output. ANNs are considered nonlinear statistical data modeling tools where the complex relationships between inputs and outputs are modeled or patterns are found. ANN is also known as a neural network.
+# 
+
+# <img src="https://cdn-images-1.medium.com/max/1000/1*ZX05x1xYgaVoa4Vn2kKS9g.png">
+
+# A single neuron is known as a perceptron. It consists of a layer of inputs(corresponds to columns of a dataframe). Each input has a weight which controls the magnitude of an input.
+# The summation of the products of these input values and weights is fed to the activation function. Activation functions are really important for a Artificial Neural Network to learn and make sense of something really complicated and Non-linear complex functional mappings between the inputs and response variable. 
+# 
+# They introduce non-linear properties to our Network.Their main purpose is to convert a input signal of a node in a A-NN to an output signal. That output signal now is used as a input in the next layer in the stack.  Specifically in A-NN we do the sum of products of inputs(X) and their corresponding Weights(W) and apply a Activation function f(x) to it to get the output of that layer and feed it as an input to the next layer. [Refer to this article for more info.](https://towardsdatascience.com/activation-functions-and-its-types-which-is-better-a9a5310cc8f)
+# <img src="https://cdnpythonmachinelearning.azureedge.net/wp-content/uploads/2017/09/Single-Perceptron.png">
+# **Concept of backpropagation** - Backpropagation, short for "backward propagation of errors," is an algorithm for supervised learning of artificial neural networks using gradient descent. Given an artificial neural network and an error function, the method calculates the gradient of the error function with respect to the neural network's weights. It is a generalization of the delta rule for perceptrons to multilayer feedforward neural networks.
+# <img src="https://www.researchgate.net/profile/Hassan_Al-Haj_Ibrahim/publication/235338024/figure/fig6/AS:299794191929349@1448487913220/Flow-chart-for-the-back-propagation-BP-learning-algorithm.png">
+# **Gradient Descent** - To explain Gradient Descent I’ll use the classic mountaineering example. Suppose you are at the top of a mountain, and you have to reach a lake which is at the lowest point of the mountain (a.k.a valley). A twist is that you are blindfolded and you have zero visibility to see where you are headed. So, what approach will you take to reach the lake? The best way is to check the ground near you and observe where the land tends to descend. This will give an idea in what direction you should take your first step. If you follow the descending path, it is very likely you would reach the lake. [Refer to this article for more information.](https://www.analyticsvidhya.com/blog/2017/03/introduction-to-gradient-descent-algorithm-along-its-variants/)
+
+# About Breast Cancer Wisconsin (Diagnostic) Data Set
+# Features are computed from a digitized image of a fine needle aspirate (FNA) of a breast mass. They describe characteristics of the cell nuclei present in the image. n the 3-dimensional space is that described in: [K. P. Bennett and O. L. Mangasarian: "Robust Linear Programming Discrimination of Two Linearly Inseparable Sets", Optimization Methods and Software 1, 1992, 23-34].
+# 
+# This database is also available through the UW CS ftp server: ftp ftp.cs.wisc.edu cd math-prog/cpo-dataset/machine-learn/WDBC/
+# 
+# Also can be found on UCI Machine Learning Repository: https://archive.ics.uci.edu/ml/datasets/Breast+Cancer+Wisconsin+%28Diagnostic%29
+# 
+# Attribute Information:
+# 
+# 1) ID number 2) Diagnosis (M = malignant, B = benign) 3-32)
+# 
+# Ten real-valued features are computed for each cell nucleus:
+# 
+# a) radius (mean of distances from center to points on the perimeter) b) texture (standard deviation of gray-scale values) c) perimeter d) area e) smoothness (local variation in radius lengths) f) compactness (perimeter^2 / area - 1.0) g) concavity (severity of concave portions of the contour) h) concave points (number of concave portions of the contour) i) symmetry j) fractal dimension ("coastline approximation" - 1)
+# 
+# The mean, standard error and "worst" or largest (mean of the three largest values) of these features were computed for each image, resulting in 30 features. For instance, field 3 is Mean Radius, field 13 is Radius SE, field 23 is Worst Radius.
+# 
+# All feature values are recoded with four significant digits.
+# 
+# Missing attribute values: none
+# 
+# Class distribution: 357 benign, 212 malignant
 
 # In[ ]:
 
 
-import os
-import csv
-import codecs
-import numpy as np
+# Importing libraries
 import pandas as pd
-np.random.seed(1337)
+import numpy as np
 
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.utils.np_utils import to_categorical
-from keras.layers import Dense, Input, Flatten, merge, LSTM, Lambda, Dropout
-from keras.layers import Conv1D, MaxPooling1D, Embedding
-from keras.models import Model
-from keras.layers.wrappers import TimeDistributed, Bidirectional
-from keras.layers.normalization import BatchNormalization
-from keras import backend as K
-import sys
+# Importing data
+data = pd.read_csv('../input/data.csv')
+del data['Unnamed: 32']
 
-
-# Let us specify the constants that are needed for the model.
-# 
-#  1. MAX_SEQUENCE_LENGTH : number of words from the question to be used
-#  2. MAX_NB_WORDS : maximum size of the vocabulary
-#  3. EMBEDDING_DIM : dimension of the word embeddings
 
 # In[ ]:
 
 
-BASE_DIR = '../input/'
-GLOVE_DIR = BASE_DIR + '/WordEmbeddings/Glove/'
-TRAIN_DATA_FILE = BASE_DIR + 'train.csv'
-TEST_DATA_FILE = BASE_DIR + 'test.csv'
-MAX_SEQUENCE_LENGTH = 30
-MAX_NB_WORDS = 200000
-EMBEDDING_DIM = 300
-VALIDATION_SPLIT = 0.01
+X = data.iloc[:, 2:].values
+y = data.iloc[:, 1].values
+
+# Encoding categorical data
+from sklearn.preprocessing import LabelEncoder
+labelencoder_X_1 = LabelEncoder()
+y = labelencoder_X_1.fit_transform(y)
+
+# Splitting the dataset into the Training set and Test set
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = 0.1, random_state = 0)
 
 
-# As the first step, let us read the word vectors text file into a dictionary where the word is the key and the 300 dimensional vector is its corresponding value.
-# 
-# Note : This will throw an error here since the word vectors are not here in Kaggle environment.
-
-# In[ ]:
-
-
-print('Indexing word vectors.')
-embeddings_index = {}
-f = codecs.open(os.path.join(GLOVE_DIR, 'glove.6B.300d.txt'), encoding='utf-8')
-for line in f:
-    values = line.split(' ')
-    word = values[0]
-    coefs = np.asarray(values[1:], dtype='float32')
-    embeddings_index[word] = coefs
-f.close()
-print('Found %s word vectors.' % len(embeddings_index))
-
-
-# Now read the train and test questions into list of questions.
+# **Now that we have prepared data, we will import Keras and its packages.**
 
 # In[ ]:
 
 
-print('Processing text dataset')
-texts_1 = [] 
-texts_2 = []
-labels = []  # list of label ids
-with codecs.open(TRAIN_DATA_FILE, encoding='utf-8') as f:
-    reader = csv.reader(f, delimiter=',')
-    header = next(reader)
-    for values in reader:
-        texts_1.append(values[3])
-        texts_2.append(values[4])
-        labels.append(int(values[5]))
-print('Found %s texts.' % len(texts_1))
+import keras
+from keras.models import Sequential
+from keras.layers import Dense
 
-test_texts_1 = []
-test_texts_2 = []
-test_labels = []  # list of label ids
-with codecs.open(TEST_DATA_FILE, encoding='utf-8') as f:
-    reader = csv.reader(f, delimiter=',')
-    header = next(reader)
-    for values in reader:
-        test_texts_1.append(values[1])
-        test_texts_2.append(values[2])
-        test_labels.append(values[0])
-print('Found %s texts.' % len(test_texts_1))
-
-
-# Using keras tokenizer to tokenize the text and then do padding the sentences to 30 words
 
 # In[ ]:
 
 
-tokenizer = Tokenizer(nb_words=MAX_NB_WORDS)
-tokenizer.fit_on_texts(texts_1 + texts_2 + test_texts_1 + test_texts_2)
-sequences_1 = tokenizer.texts_to_sequences(texts_1)
-sequences_2 = tokenizer.texts_to_sequences(texts_2)
-word_index = tokenizer.word_index
-print('Found %s unique tokens.' % len(word_index))
+# Initialising the ANN
+classifier = Sequential()
 
-test_sequences_1 = tokenizer.texts_to_sequences(test_texts_1)
-test_sequences_2 = tokenizer.texts_to_sequences(test_texts_2)
-
-data_1 = pad_sequences(sequences_1, maxlen=MAX_SEQUENCE_LENGTH)
-data_2 = pad_sequences(sequences_2, maxlen=MAX_SEQUENCE_LENGTH)
-labels = np.array(labels)
-print('Shape of data tensor:', data_1.shape)
-print('Shape of label tensor:', labels.shape)
-
-test_data_1 = pad_sequences(test_sequences_1, maxlen=MAX_SEQUENCE_LENGTH)
-test_data_2 = pad_sequences(test_sequences_2, maxlen=MAX_SEQUENCE_LENGTH)
-test_labels = np.array(test_labels)
-del test_sequences_1
-del test_sequences_2
-del sequences_1
-del sequences_2
-import gc
-gc.collect()
-
-
-# Now let us create the embedding matrix where each row corresponds to a word.
 
 # In[ ]:
 
 
-print('Preparing embedding matrix.')
-# prepare embedding matrix
-nb_words = min(MAX_NB_WORDS, len(word_index))
-
-embedding_matrix = np.zeros((nb_words, EMBEDDING_DIM))
-for word, i in word_index.items():
-    if i >= nb_words:
-        continue
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None:
-        # words not found in embedding index will be all-zeros.
-        embedding_matrix[i] = embedding_vector
-print('Null word embeddings: %d' % np.sum(np.sum(embedding_matrix, axis=1) == 0))
+# Adding the input layer and the first hidden layer
+classifier.add(Dense(output_dim=16, init='uniform', activation='relu', input_dim=30))
 
 
-# Now its time to build the model. Let us specify the model architecture. First layer is the embedding layer.
+# input_dim - number of columns of the dataset 
+# 
+# output_dim - number of outputs to be fed to the next layer, if any
+# 
+# activation - activation function which is ReLU in this case
+# 
+# init - the way in which weights should be provided to an ANN
+#  
+# The **ReLU** function is f(x)=max(0,x). Usually this is applied element-wise to the output of some other function, such as a matrix-vector product. In MLP usages, rectifier units replace all other activation functions except perhaps the readout layer. But I suppose you could mix-and-match them if you'd like. One way ReLUs improve neural networks is by speeding up training. The gradient computation is very simple (either 0 or 1 depending on the sign of x). Also, the computational step of a ReLU is easy: any negative elements are set to 0.0 -- no exponentials, no multiplication or division operations. Gradients of logistic and hyperbolic tangent networks are smaller than the positive portion of the ReLU. This means that the positive portion is updated more rapidly as training progresses. However, this comes at a cost. The 0 gradient on the left-hand side is has its own problem, called "dead neurons," in which a gradient update sets the incoming values to a ReLU such that the output is always zero; modified ReLU units such as ELU (or Leaky ReLU etc.) can minimize this. Source : [StackExchange](https://stats.stackexchange.com/questions/226923/why-do-we-use-relu-in-neural-networks-and-how-do-we-use-it)
 
 # In[ ]:
 
 
-embedding_layer = Embedding(nb_words,
-                            EMBEDDING_DIM,
-                            weights=[embedding_matrix],
-                            input_length=MAX_SEQUENCE_LENGTH,
-                            trainable=False)
+# Adding the second hidden layer
+classifier.add(Dense(output_dim=16, init='uniform', activation='relu'))
 
-
-# In embedding layer, 'trainable' is set to False so as to not train the word embeddings during the back propogation.
-# 
-# The neural net architecture is as follows:
-# 
-# 1. Word embeddings of each question is passed to a 1-dimensional convolution layer followed by max pooling.
-# 2. It is followed by one dense layer for each of the two questions
-# 3. The outputs from both the dense layers are merged together
-# 4. It is followed by a dense layer
-# 5. Final layer is a sigmoid layer
 
 # In[ ]:
 
 
-# Model Architecture #
-sequence_1_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
-embedded_sequences_1 = embedding_layer(sequence_1_input)
-x1 = Conv1D(128, 3, activation='relu')(embedded_sequences_1)
-x1 = MaxPooling1D(10)(x1)
-x1 = Flatten()(x1)
-x1 = Dense(64, activation='relu')(x1)
-x1 = Dropout(0.2)(x1)
-
-sequence_2_input = Input(shape=(MAX_SEQUENCE_LENGTH,), dtype='int32')
-embedded_sequences_2 = embedding_layer(sequence_2_input)
-y1 = Conv1D(128, 3, activation='relu')(embedded_sequences_2)
-y1 = MaxPooling1D(10)(y1)
-y1 = Flatten()(y1)
-y1 = Dense(64, activation='relu')(y1)
-y1 = Dropout(0.2)(y1)
-
-merged = merge([x1,y1], mode='concat')
-merged = BatchNormalization()(merged)
-merged = Dense(64, activation='relu')(merged)
-merged = Dropout(0.2)(merged)
-merged = BatchNormalization()(merged)
-preds = Dense(1, activation='sigmoid')(merged)
-model = Model(input=[sequence_1_input,sequence_2_input], output=preds)
-model.compile(loss='binary_crossentropy',
-              optimizer='adam',
-              metrics=['acc'])
+# Adding the output layer
+classifier.add(Dense(output_dim=1, init='uniform', activation='sigmoid'))
 
 
-# **Model training and predictions :**
+# output_dim is 1 as we want only 1 output from the final layer.
 # 
-# Uncomment the below cell and run it in local as it is exceeding the time limits here.
+# Sigmoid function is used when dealing with classfication problems with 2 types of results.(Submax function is used for 3 or more classification results)
+# <img src="https://cdn-images-1.medium.com/max/1000/1*Xu7B5y9gp0iL5ooBj7LtWw.png">
 
 # In[ ]:
 
 
-pass
-#model.fit([data_1,data_2], labels, validation_split=VALIDATION_SPLIT, nb_epoch=1, batch_size=1024, shuffle=True)
-#preds = model.predict([test_data_1, test_data_2])
-#print(preds.shape)
-
-#out_df = pd.DataFrame({"test_id":test_labels, "is_duplicate":preds.ravel()})
-#out_df.to_csv("test_predictions.csv", index=False)
+# Compiling the ANN
+classifier.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
 
 
-# This scores about 0.55 when run locally using the word embedding. Got better scores using LSTM and Time Distributed layer.
+# Optimizer is chosen as adam for gradient descent.
 # 
-# Try different architectures and have a happy learning.
+# Binary_crossentropy is the loss function used. 
+# 
+# Cross-entropy loss, or log loss, measures the performance of a classification model whose output is a probability value between 0 and 1. Cross-entropy loss increases as the predicted probability diverges from the actual label. So predicting a probability of .012 when the actual observation label is 1 would be bad and result in a high loss value. A perfect model would have a log loss of 0. [More about this](http://ml-cheatsheet.readthedocs.io/en/latest/loss_functions.html)
 
-# Hope this helps to get started with keras and word embeddings in this competition.
+# In[ ]:
 
-# **References :**
+
+# Fitting the ANN to the Training set
+classifier.fit(X_train, y_train, batch_size=400, nb_epoch=400)
+# Long scroll ahead but worth
+# The batch size and number of epochs have been set using trial and error. Still looking for more efficient ways. Open to suggestions. 
+
+
+# Batch size defines number of samples that going to be propagated through the network.
 # 
-#  1. [On word embeddings - part 1][1] by Sebastian Ruder
-#  2. [Blog post][2] by fchollet
-#  3. [Code][3] by Abhishek Thakur
-#  4. [Code][4] by Bradley Pallen
+# An Epoch is a complete pass through all the training data.
 # 
+# # So, we get more than 94% accuracy
 # 
-#   [1]: http://sebastianruder.com/word-embeddings-1/
-#   [2]: https://blog.keras.io/using-pre-trained-word-embeddings-in-a-keras-model.html
-#   [3]: https://github.com/abhishekkrthakur/is_that_a_duplicate_quora_question
-#   [4]: https://github.com/bradleypallen/keras-quora-question-pairs
+# You can manipulate the above algorithm to get even better results.
+
+# In[ ]:
+
+
+# Predicting the Test set results
+y_pred = classifier.predict(X_test)
+y_pred = (y_pred > 0.5)
+
+
+# In[ ]:
+
+
+# Making the Confusion Matrix
+from sklearn.metrics import confusion_matrix
+cm = confusion_matrix(y_test, y_pred)
+
+
+# In[ ]:
+
+
+print("Our accuracy is {}".format((cm[0][0] + cm[1][1])/57))
+
+
+# Thanks for reading this. May this help you on your "deep" journey into machine learning.

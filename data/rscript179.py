@@ -1,563 +1,199 @@
-import warnings; warnings.filterwarnings("ignore");
-import time
-start_time = time.time()
+"""
+Contributions from:
+DSEverything - Mean Mix - Math, Geo, Harmonic (LB 0.493) 
+https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-493
+JdPaletto - Surprised Yet? - Part2 - (LB: 0.503)
+https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503
+hklee - weighted mean comparisons, LB 0.497, 1ST
+https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
 
+Also all comments for changes, encouragement, and forked scripts rock
+
+Keep the Surprise Going
+"""
+
+import glob, re
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
-#from sklearn import pipeline, model_selection
-from sklearn import pipeline, grid_search
-#from sklearn.feature_extraction import DictVectorizer
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.pipeline import FeatureUnion
-from sklearn.decomposition import TruncatedSVD
-#from sklearn.feature_extraction.text import CountVectorizer, TfidfTransformer
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import mean_squared_error, make_scorer
-#from nltk.metrics import edit_distance
-from nltk.stem.porter import *
-stemmer = PorterStemmer()
-#from nltk.stem.snowball import SnowballStemmer #0.003 improvement but takes twice as long as PorterStemmer
-#stemmer = SnowballStemmer('english')
-import re
-#import enchant
-import random
-random.seed(2016)
+from sklearn import *
+from datetime import datetime
+from xgboost import XGBRegressor
 
-df_train = pd.read_csv('../input/train.csv', encoding="ISO-8859-1")[:1000] #update here
-df_test = pd.read_csv('../input/test.csv', encoding="ISO-8859-1")[:1000] #update here
-df_pro_desc = pd.read_csv('../input/product_descriptions.csv')[:1000] #update here
-df_attr = pd.read_csv('../input/attributes.csv')
-df_brand = df_attr[df_attr.name == "MFG Brand Name"][["product_uid", "value"]].rename(columns={"value": "brand"})
-num_train = df_train.shape[0]
-df_all = pd.concat((df_train, df_test), axis=0, ignore_index=True)
-df_all = pd.merge(df_all, df_pro_desc, how='left', on='product_uid')
-df_all = pd.merge(df_all, df_brand, how='left', on='product_uid')
-print("--- Files Loaded: %s minutes ---" % round(((time.time() - start_time)/60),2))
+data = {
+    'tra': pd.read_csv('../input/air_visit_data.csv'),
+    'as': pd.read_csv('../input/air_store_info.csv'),
+    'hs': pd.read_csv('../input/hpg_store_info.csv'),
+    'ar': pd.read_csv('../input/air_reserve.csv'),
+    'hr': pd.read_csv('../input/hpg_reserve.csv'),
+    'id': pd.read_csv('../input/store_id_relation.csv'),
+    'tes': pd.read_csv('../input/sample_submission.csv'),
+    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
+    }
 
-stop_w = ['for', 'xbi', 'and', 'in', 'th','on','sku','with','what','from','that','less','er','ing'] #'electr','paint','pipe','light','kitchen','wood','outdoor','door','bathroom'
-strNum = {'zero':0,'one':1,'two':2,'three':3,'four':4,'five':5,'six':6,'seven':7,'eight':8,'nine':9}
+data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
 
-def str_stem(s): 
-    if isinstance(s, str):
-        s = re.sub(r"(\w)\.([A-Z])", r"\1 \2", s) #Split words with a.A
-        s = s.lower()
-        s = s.replace("  "," ")
-        s = s.replace(",","") #could be number / segment later
-        s = s.replace("$"," ")
-        s = s.replace("?"," ")
-        s = s.replace("-"," ")
-        s = s.replace("//","/")
-        s = s.replace("..",".")
-        s = s.replace(" / "," ")
-        s = s.replace(" \\ "," ")
-        s = s.replace("."," . ")
-        s = re.sub(r"(^\.|/)", r"", s)
-        s = re.sub(r"(\.|/)$", r"", s)
-        s = re.sub(r"([0-9])([a-z])", r"\1 \2", s)
-        s = re.sub(r"([a-z])([0-9])", r"\1 \2", s)
-        s = s.replace(" x "," xbi ")
-        s = re.sub(r"([a-z])( *)\.( *)([a-z])", r"\1 \4", s)
-        s = re.sub(r"([a-z])( *)/( *)([a-z])", r"\1 \4", s)
-        s = s.replace("*"," xbi ")
-        s = s.replace(" by "," xbi ")
-        s = re.sub(r"([0-9])( *)\.( *)([0-9])", r"\1.\4", s)
-        s = re.sub(r"([0-9]+)( *)(inches|inch|in|')\.?", r"\1in. ", s)
-        s = re.sub(r"([0-9]+)( *)(foot|feet|ft|'')\.?", r"\1ft. ", s)
-        s = re.sub(r"([0-9]+)( *)(pounds|pound|lbs|lb)\.?", r"\1lb. ", s)
-        s = re.sub(r"([0-9]+)( *)(square|sq) ?\.?(feet|foot|ft)\.?", r"\1sq.ft. ", s)
-        s = re.sub(r"([0-9]+)( *)(cubic|cu) ?\.?(feet|foot|ft)\.?", r"\1cu.ft. ", s)
-        s = re.sub(r"([0-9]+)( *)(gallons|gallon|gal)\.?", r"\1gal. ", s)
-        s = re.sub(r"([0-9]+)( *)(ounces|ounce|oz)\.?", r"\1oz. ", s)
-        s = re.sub(r"([0-9]+)( *)(centimeters|cm)\.?", r"\1cm. ", s)
-        s = re.sub(r"([0-9]+)( *)(milimeters|mm)\.?", r"\1mm. ", s)
-        s = s.replace("°"," degrees ")
-        s = re.sub(r"([0-9]+)( *)(degrees|degree)\.?", r"\1deg. ", s)
-        s = s.replace(" v "," volts ")
-        s = re.sub(r"([0-9]+)( *)(volts|volt)\.?", r"\1volt. ", s)
-        s = re.sub(r"([0-9]+)( *)(watts|watt)\.?", r"\1watt. ", s)
-        s = re.sub(r"([0-9]+)( *)(amperes|ampere|amps|amp)\.?", r"\1amp. ", s)
-        s = s.replace("  "," ")
-        s = s.replace(" . "," ")
-        #s = (" ").join([z for z in s.split(" ") if z not in stop_w])
-        s = (" ").join([str(strNum[z]) if z in strNum else z for z in s.split(" ")])
-        s = (" ").join([stemmer.stem(z) for z in s.split(" ")])
-        
-        s = s.lower()
-        s = s.replace("toliet","toilet")
-        s = s.replace("airconditioner","air conditioner")
-        s = s.replace("vinal","vinyl")
-        s = s.replace("vynal","vinyl")
-        s = s.replace("skill","skil")
-        s = s.replace("snowbl","snow bl")
-        s = s.replace("plexigla","plexi gla")
-        s = s.replace("rustoleum","rust-oleum")
-        s = s.replace("whirpool","whirlpool")
-        s = s.replace("whirlpoolga", "whirlpool ga")
-        s = s.replace("whirlpoolstainless","whirlpool stainless")
-        return s
-    else:
-        return "null"
+for df in ['ar','hr']:
+    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
+    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
+    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
+    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
+    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
+    tmp1 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
+    tmp2 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
+    data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
 
-def seg_words(str1, str2):
-    str2 = str2.lower()
-    str2 = re.sub("[^a-z0-9./]"," ", str2)
-    str2 = [z for z in set(str2.split()) if len(z)>2]
-    words = str1.lower().split(" ")
-    s = []
-    for word in words:
-        if len(word)>3:
-            s1 = []
-            s1 += segmentit(word,str2,True)
-            if len(s)>1:
-                s += [z for z in s1 if z not in ['er','ing','s','less'] and len(z)>1]
-            else:
-                s.append(word)
-        else:
-            s.append(word)
-    return (" ".join(s))
+data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
+data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
+data['tra']['year'] = data['tra']['visit_date'].dt.year
+data['tra']['month'] = data['tra']['visit_date'].dt.month
+data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
 
-def segmentit(s, txt_arr, t):
-    st = s
-    r = []
-    for j in range(len(s)):
-        for word in txt_arr:
-            if word == s[:-j]:
-                r.append(s[:-j])
-                #print(s[:-j],s[len(s)-j:])
-                s=s[len(s)-j:]
-                r += segmentit(s, txt_arr, False)
-    if t:
-        i = len(("").join(r))
-        if not i==len(st):
-            r.append(st[i:])
-    return r
+data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
+data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
+data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
+data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
+data['tes']['year'] = data['tes']['visit_date'].dt.year
+data['tes']['month'] = data['tes']['visit_date'].dt.month
+data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
 
-def str_common_word(str1, str2):
-    words, cnt = str1.split(), 0
-    for word in words:
-        if str2.find(word)>=0:
-            cnt+=1
-    return cnt
+unique_stores = data['tes']['air_store_id'].unique()
+stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
 
-def str_whole_word(str1, str2, i_):
-    cnt = 0
-    while i_ < len(str2):
-        i_ = str2.find(str1, i_)
-        if i_ == -1:
-            return cnt
-        else:
-            cnt += 1
-            i_ += len(str1)
-    return cnt
+#sure it can be compressed...
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
 
-def fmean_squared_error(ground_truth, predictions):
-    fmean_squared_error_ = mean_squared_error(ground_truth, predictions)**0.5
-    return fmean_squared_error_
+stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
+# NEW FEATURES FROM Georgii Vyshnia
+stores['air_genre_name'] = stores['air_genre_name'].map(lambda x: str(str(x).replace('/',' ')))
+stores['air_area_name'] = stores['air_area_name'].map(lambda x: str(str(x).replace('-',' ')))
+lbl = preprocessing.LabelEncoder()
+for i in range(10):
+    stores['air_genre_name'+str(i)] = lbl.fit_transform(stores['air_genre_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+    stores['air_area_name'+str(i)] = lbl.fit_transform(stores['air_area_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
+stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
 
-RMSE  = make_scorer(fmean_squared_error, greater_is_better=False)
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
+train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
+test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
 
-class cust_regression_vals(BaseEstimator, TransformerMixin):
-    def fit(self, x, y=None):
-        return self
-    def transform(self, hd_searches):
-        d_col_drops=['id','relevance','search_term','product_title','product_description','product_info','attr','brand']
-        hd_searches = hd_searches.drop(d_col_drops,axis=1).values
-        return hd_searches
+train = pd.merge(train, stores, how='left', on=['air_store_id','dow']) 
+test = pd.merge(test, stores, how='left', on=['air_store_id','dow'])
 
-class cust_txt_col(BaseEstimator, TransformerMixin):
-    def __init__(self, key):
-        self.key = key
-    def fit(self, x, y=None):
-        return self
-    def transform(self, data_dict):
-        return data_dict[self.key].apply(str)
+for df in ['ar','hr']:
+    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
+    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
 
-#comment out the lines below use df_all.csv for further grid search testing
-#if adding features consider any drops on the 'cust_regression_vals' class
-#*** would be nice to have a file reuse option or script chaining option on Kaggle Scripts ***
-df_all['search_term'] = df_all['search_term'].map(lambda x:str_stem(x))
-df_all['product_title'] = df_all['product_title'].map(lambda x:str_stem(x))
-df_all['product_description'] = df_all['product_description'].map(lambda x:str_stem(x))
-df_all['brand'] = df_all['brand'].map(lambda x:str_stem(x))
-print("--- Stemming: %s minutes ---" % round(((time.time() - start_time)/60),2))
-df_all['product_info'] = df_all['search_term']+"\t"+df_all['product_title'] +"\t"+df_all['product_description']
-print("--- Prod Info: %s minutes ---" % round(((time.time() - start_time)/60),2))
-df_all['len_of_query'] = df_all['search_term'].map(lambda x:len(x.split())).astype(np.int64)
-df_all['len_of_title'] = df_all['product_title'].map(lambda x:len(x.split())).astype(np.int64)
-df_all['len_of_description'] = df_all['product_description'].map(lambda x:len(x.split())).astype(np.int64)
-df_all['len_of_brand'] = df_all['brand'].map(lambda x:len(x.split())).astype(np.int64)
-print("--- Len of: %s minutes ---" % round(((time.time() - start_time)/60),2))
-df_all['search_term'] = df_all['product_info'].map(lambda x:seg_words(x.split('\t')[0],x.split('\t')[1]))
-#print("--- Search Term Segment: %s minutes ---" % round(((time.time() - start_time)/60),2))
-df_all['query_in_title'] = df_all['product_info'].map(lambda x:str_whole_word(x.split('\t')[0],x.split('\t')[1],0))
-df_all['query_in_description'] = df_all['product_info'].map(lambda x:str_whole_word(x.split('\t')[0],x.split('\t')[2],0))
-print("--- Query In: %s minutes ---" % round(((time.time() - start_time)/60),2))
-df_all['query_last_word_in_title'] = df_all['product_info'].map(lambda x:str_common_word(x.split('\t')[0].split(" ")[-1],x.split('\t')[1]))
-df_all['query_last_word_in_description'] = df_all['product_info'].map(lambda x:str_common_word(x.split('\t')[0].split(" ")[-1],x.split('\t')[2]))
-print("--- Query Last Word In: %s minutes ---" % round(((time.time() - start_time)/60),2))
-df_all['word_in_title'] = df_all['product_info'].map(lambda x:str_common_word(x.split('\t')[0],x.split('\t')[1]))
-df_all['word_in_description'] = df_all['product_info'].map(lambda x:str_common_word(x.split('\t')[0],x.split('\t')[2]))
-df_all['ratio_title'] = df_all['word_in_title']/df_all['len_of_query']
-df_all['ratio_description'] = df_all['word_in_description']/df_all['len_of_query']
-df_all['attr'] = df_all['search_term']+"\t"+df_all['brand']
-df_all['word_in_brand'] = df_all['attr'].map(lambda x:str_common_word(x.split('\t')[0],x.split('\t')[1]))
-df_all['ratio_brand'] = df_all['word_in_brand']/df_all['len_of_brand']
-df_brand = pd.unique(df_all.brand.ravel())
-d={}
-i = 1000
-for s in df_brand:
-    d[s]=i
-    i+=3
-df_all['brand_feature'] = df_all['brand'].map(lambda x:d[x])
-df_all['search_term_feature'] = df_all['search_term'].map(lambda x:len(x))
-df_all.to_csv('df_all.csv')
-#df_all = pd.read_csv('df_all.csv', encoding="ISO-8859-1", index_col=0)
-df_train = df_all.iloc[:num_train]
-df_test = df_all.iloc[num_train:]
-id_test = df_test['id']
-y_train = df_train['relevance'].values
-X_train =df_train[:]
-X_test = df_test[:]
-print("--- Features Set: %s minutes ---" % round(((time.time() - start_time)/60),2))
+train['id'] = train.apply(lambda r: '_'.join([str(r['air_store_id']), str(r['visit_date'])]), axis=1)
 
-rfr = RandomForestRegressor(n_estimators = 500, n_jobs = -1, random_state = 2016, verbose = 1)
-tfidf = TfidfVectorizer(ngram_range=(1, 1), stop_words='english')
-tsvd = TruncatedSVD(n_components=10, random_state = 2016)
-clf = pipeline.Pipeline([
-        ('union', FeatureUnion(
-                    transformer_list = [
-                        ('cst',  cust_regression_vals()),  
-                        ('txt1', pipeline.Pipeline([('s1', cust_txt_col(key='search_term')), ('tfidf1', tfidf), ('tsvd1', tsvd)])),
-                        ('txt2', pipeline.Pipeline([('s2', cust_txt_col(key='product_title')), ('tfidf2', tfidf), ('tsvd2', tsvd)])),
-                        ('txt3', pipeline.Pipeline([('s3', cust_txt_col(key='product_description')), ('tfidf3', tfidf), ('tsvd3', tsvd)])),
-                        ('txt4', pipeline.Pipeline([('s4', cust_txt_col(key='brand')), ('tfidf4', tfidf), ('tsvd4', tsvd)]))
-                        ],
-                    transformer_weights = {
-                        'cst': 1.0,
-                        'txt1': 0.5,
-                        'txt2': 0.25,
-                        'txt3': 0.0,
-                        'txt4': 0.5
-                        },
-                #n_jobs = -1
-                )), 
-        ('rfr', rfr)])
-param_grid = {'rfr__max_features': [10], 'rfr__max_depth': [20]}
-model = grid_search.GridSearchCV(estimator = clf, param_grid = param_grid, n_jobs = -1, cv = 2, verbose = 20, scoring=RMSE)
-model.fit(X_train, y_train)
+train['total_reserv_sum'] = train['rv1_x'] + train['rv1_y']
+train['total_reserv_mean'] = (train['rv2_x'] + train['rv2_y']) / 2
+train['total_reserv_dt_diff_mean'] = (train['rs2_x'] + train['rs2_y']) / 2
 
-print("Best parameters found by grid search:")
-print(model.best_params_)
-print("Best CV score:")
-print(model.best_score_)
-print(model.best_score_ + 0.47003199274)
+test['total_reserv_sum'] = test['rv1_x'] + test['rv1_y']
+test['total_reserv_mean'] = (test['rv2_x'] + test['rv2_y']) / 2
+test['total_reserv_dt_diff_mean'] = (test['rs2_x'] + test['rs2_y']) / 2
 
-y_pred = model.predict(X_test)
-pd.DataFrame({"id": id_test, "relevance": y_pred}).to_csv('submission.csv',index=False)
-print("--- Training & Testing: %s minutes ---" % round(((time.time() - start_time)/60),2))
+# NEW FEATURES FROM JMBULL
+train['date_int'] = train['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
+test['date_int'] = test['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
+train['var_max_lat'] = train['latitude'].max() - train['latitude']
+train['var_max_long'] = train['longitude'].max() - train['longitude']
+test['var_max_lat'] = test['latitude'].max() - test['latitude']
+test['var_max_long'] = test['longitude'].max() - test['longitude']
 
-from sklearn.feature_extraction import text
-import nltk
+# NEW FEATURES FROM Georgii Vyshnia
+train['lon_plus_lat'] = train['longitude'] + train['latitude'] 
+test['lon_plus_lat'] = test['longitude'] + test['latitude']
 
-df_outliers = pd.read_csv('df_all.csv', encoding="ISO-8859-1", index_col=0)
-#stop_ = list(text.ENGLISH_STOP_WORDS)
-stop_ = []
-d={}
-for i in range(len(df_outliers)):
-    s = str(df_outliers['search_term'][i]).lower()
-    #s = s.replace("\n"," ")
-    #s = re.sub("[^a-z]"," ", s)
-    #s = s.replace("  "," ")
-    a = set(s.split(" "))
-    for b_ in a:
-        if b_ not in stop_ and len(b_)>0:
-            if b_ not in d:
-                d[b_] = [1,str_common_word(b_, df_outliers['product_title'][i]),str_common_word(b_, df_outliers['brand'][i]),str_common_word(b_, df_outliers['product_description'][i])]
-            else:
-                d[b_][0] += 1
-                d[b_][1] += str_common_word(b_, df_outliers['product_title'][i])
-                d[b_][2] += str_common_word(b_, df_outliers['brand'][i])
-                d[b_][3] += str_common_word(b_, df_outliers['product_description'][i])
-ds2 = pd.DataFrame.from_dict(d,orient='index')
-ds2.columns = ['count','in title','in brand','in prod']
-ds2 = ds2.sort_values(by=['count'], ascending=[False])
+lbl = preprocessing.LabelEncoder()
+train['air_store_id2'] = lbl.fit_transform(train['air_store_id'])
+test['air_store_id2'] = lbl.transform(test['air_store_id'])
 
-f = open("word_review.csv", "w")
-f.write("word|count|in title|in brand|in description\n")
-for i in range(len(ds2)):
-    f.write(ds2.index[i] + "|" + str(ds2["count"][i]) + "|" + str(ds2["in title"][i]) + "|" + str(ds2["in brand"][i]) + "|" + str(ds2["in prod"][i]) + "\n")
-f.close()
-print("--- Word List Created: %s minutes ---" % round(((time.time() - start_time)/60),2))
+col = [c for c in train if c not in ['id', 'air_store_id', 'visit_date','visitors']]
+train = train.fillna(-1)
+test = test.fillna(-1)
 
-
-
-"""
-Python 2.7 version dies at training without error for me but generates the required data
-
-#!/usr/bin/python
-# -*- coding: ISO-8859-1 -*-
-# vim: set fileencoding=ISO-8859-1 :
-
-import time
-start_time = time.time()
-import numpy as np
-import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
-from sklearn import grid_search
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.pipeline import FeatureUnion, Pipeline
-from sklearn.decomposition import TruncatedSVD
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics import mean_squared_error, make_scorer
-from nltk.stem.porter import *
-stemmer = PorterStemmer()
-import re
-#import enchant
-import random
-random.seed(2016)
-import unicodedata
-
-strNum = {'zero':0, 'one':1, 'two':2, 'three':3, 'four':4, 'five':5, 'six':6, 'seven':7, 'eight':8, 'nine':9}
-
-def str_stem(s):
-    #if isinstance(s, str):
-    s = unicodedata.normalize('NFD', unicode(s)).encode('ascii', 'ignore')
-    s = re.sub(r"(\w)\.([A-Z])", r"\1 \2", s) #Split words with a.A
-    s = s.lower()
-    s = s.replace("  ", " ")
-    s = s.replace(",", "") #could be number / segment later
-    s = s.replace("$", " ")
-    s = s.replace("?", " ")
-    s = s.replace("-", " ")
-    s = s.replace("//", "/")
-    s = s.replace("..", ".")
-    s = s.replace(" / ", " ")
-    s = s.replace(" \\ ", " ")
-    s = s.replace(".", " . ")
-    s = re.sub(r"(^\.|/)", r"", s)
-    s = re.sub(r"(\.|/)$", r"", s)
-    s = re.sub(r"([0-9])([a-z])", r"\1 \2", s)
-    s = re.sub(r"([a-z])([0-9])", r"\1 \2", s)
-    s = s.replace(" x ", " xbi ")
-    s = re.sub(r"([a-z])( *)\.( *)([a-z])", r"\1 \4", s)
-    s = re.sub(r"([a-z])( *)/( *)([a-z])", r"\1 \4", s)
-    s = s.replace("*", " xbi ")
-    s = s.replace(" by ", " xbi ")
-    s = re.sub(r"([0-9])( *)\.( *)([0-9])", r"\1.\4", s)
-    s = re.sub(r"([0-9]+)( *)(inches|inch|in|')\.?", r"\1in. ", s)
-    s = re.sub(r"([0-9]+)( *)(foot|feet|ft|'')\.?", r"\1ft. ", s)
-    s = re.sub(r"([0-9]+)( *)(pounds|pound|lbs|lb)\.?", r"\1lb. ", s)
-    s = re.sub(r"([0-9]+)( *)(square|sq) ?\.?(feet|foot|ft)\.?", r"\1sq.ft. ", s)
-    s = re.sub(r"([0-9]+)( *)(cubic|cu) ?\.?(feet|foot|ft)\.?", r"\1cu.ft. ", s)
-    s = re.sub(r"([0-9]+)( *)(gallons|gallon|gal)\.?", r"\1gal. ", s)
-    s = re.sub(r"([0-9]+)( *)(ounces|ounce|oz)\.?", r"\1oz. ", s)
-    s = re.sub(r"([0-9]+)( *)(centimeters|cm)\.?", r"\1cm. ", s)
-    s = re.sub(r"([0-9]+)( *)(milimeters|mm)\.?", r"\1mm. ", s)
-    s = s.replace("°", " degrees ")
-    s = re.sub(r"([0-9]+)( *)(degrees|degree)\.?", r"\1deg. ", s)
-    s = s.replace(" v ", " volts ")
-    s = re.sub(r"([0-9]+)( *)(volts|volt)\.?", r"\1volt. ", s)
-    s = re.sub(r"([0-9]+)( *)(watts|watt)\.?", r"\1watt. ", s)
-    s = re.sub(r"([0-9]+)( *)(amperes|ampere|amps|amp)\.?", r"\1amp. ", s)
-    s = s.replace("  ", " ")
-    s = s.replace(" . ", " ")
-    s = (" ").join([str(strNum[z]) if z in strNum else z for z in s.split(" ")])
-    s = (" ").join([stemmer.stem(z) for z in s.split(" ")])
-    s = s.lower()
-    s = s.replace("toliet", "toilet")
-    s = s.replace("airconditioner", "air conditioner")
-    s = s.replace("vinal", "vinyl")
-    s = s.replace("vynal", "vinyl")
-    s = s.replace("skill", "skil")
-    s = s.replace("snowbl", "snow bl")
-    s = s.replace("plexigla", "plexi gla")
-    s = s.replace("rustoleum", "rust oleum")
-    s = s.replace("whirpool", "whirlpool")
-    s = s.replace("whirlpoolga", "whirlpool ga")
-    s = s.replace("whirlpoolstainless", "whirlpool stainless")
-    return s
-    #else:
-    #    return "null"
-
-def seg_words(str1, str2):
-    str2 = str2.lower()
-    str2 = re.sub("[^a-z0-9./]", " ", str2)
-    str2 = [z for z in set(str2.split()) if len(z) > 2]
-    words = str1.lower().split(" ")
-    s9 = []
-    for word in words:
-        if len(word) > 3:
-            s1 = []
-            s1 += segmentit(word, str2, True)
-            if len(s9) > 1:
-                s9 += [z for z in s1 if z not in ['er', 'ing', 's', 'less'] and len(z) > 1]
-            else:
-                s9.append(word)
-        else:
-            s9.append(word)
-    return (" ".join(s9))
-
-def segmentit(s, txt_arr, t):
-    st = s
-    r = []
-    for j in xrange(len(s)):
-        for word in txt_arr:
-            if word == s[:-j]:
-                r.append(s[:-j])
-                #print(s[:-j],s[len(s)-j:])
-                s = s[len(s)-j:]
-                r += segmentit(s, txt_arr, False)
-    if t:
-        i = len(("").join(r))
-        if not i == len(st):
-            r.append(st[i:])
-    return r
-
-def str_common_word(str1, str2):
-    words, cnt = str1.split(), 0
-    for word in words:
-        if str2.find(word) >= 0:
-            cnt += 1
-    return cnt
-
-def str_whole_word(str1, str2, i_):
-    cnt = 0
-    while i_ < len(str2):
-        i_ = str2.find(str1, i_)
-        if i_ == -1:
-            return cnt
-        else:
-            cnt += 1
-            i_ += len(str1)
-    return cnt
-
-def fmean_squared_error(ground_truth, predictions):
-    fmean_squared_error_ = mean_squared_error(ground_truth, predictions)**0.5
-    return fmean_squared_error_
-
-RMSE = make_scorer(fmean_squared_error, greater_is_better=False)
+def RMSLE(y, pred):
+    return metrics.mean_squared_error(y, pred)**0.5
     
-class cust_regression_vals(BaseEstimator, TransformerMixin):
-    def fit(self, x, y=None):
-        return self
-    def transform(self, hd_searches):
-        d_col_drops = ['id', 'relevance', 'search_term', 'product_title', 'product_description', 'product_info', 'attr', 'brand']
-        hd_searches = hd_searches.drop(d_col_drops, axis=1).values
-        return hd_searches
+model1 = ensemble.GradientBoostingRegressor(learning_rate=0.2, random_state=3, n_estimators=200, subsample=0.8, 
+                      max_depth =10)
+model2 = neighbors.KNeighborsRegressor(n_jobs=-1, n_neighbors=4)
+model3 = XGBRegressor(learning_rate=0.2, random_state=3, n_estimators=280, subsample=0.8, 
+                      colsample_bytree=0.8, max_depth =12)
 
-class cust_txt_col(BaseEstimator, TransformerMixin):
-    def __init__(self, key):
-        self.key = key
-    def fit(self, x, y=None):
-        return self
-    def transform(self, data_dict):
-        return data_dict[self.key].apply(str)
+model1.fit(train[col], np.log1p(train['visitors'].values))
+model2.fit(train[col], np.log1p(train['visitors'].values))
+model3.fit(train[col], np.log1p(train['visitors'].values))
 
-if __name__ == '__main__':
-    df_train = pd.read_csv('../input/train.csv', encoding="ISO-8859-1")[:1000] #update here
-    df_test = pd.read_csv('../input/test.csv', encoding="ISO-8859-1")[:1000] #update here
-    df_pro_desc = pd.read_csv('../input/product_descriptions.csv')[:1000] #update here
-    df_attr = pd.read_csv('../input/attributes.csv')
-    df_brand = df_attr[df_attr["name"] == "MFG Brand Name"][["product_uid", "value"]].rename(columns={"value": "brand"})
-    num_train = df_train.shape[0]
-    df_all = pd.concat((df_train, df_test), axis=0, ignore_index=True)
-    df_all = pd.merge(df_all, df_pro_desc, how='left', on='product_uid')
-    df_all = pd.merge(df_all, df_brand, how='left', on='product_uid')
-    print("--- Files Loaded: %s minutes ---" % round(((time.time() - start_time)/60), 2))
-    
-    #comment out the lines below use df_all.csv for further grid search testing
-    #if adding features consider any drops on the 'cust_regression_vals' class
-    #*** would be nice to have a file reuse option or script chaining option on Kaggle Scripts ***
-    df_all['search_term'] = df_all['search_term'].map(lambda x: str_stem(x))
-    df_all['product_title'] = df_all['product_title'].map(lambda x: str_stem(x))
-    df_all['product_description'] = df_all['product_description'].map(lambda x: str_stem(x))
-    df_all['brand'] = df_all['brand'].map(lambda x: str_stem(x))
-    print("--- Stemming: %s minutes ---" % round(((time.time() - start_time)/60), 2))
-    df_all['product_info'] = df_all['search_term']+"|"+df_all['product_title'] +"|"+df_all['product_description']
-    print("--- Prod Info: %s minutes ---" % round(((time.time() - start_time)/60), 2))
-    df_all['len_of_query'] = df_all['search_term'].map(lambda x: len(x.split())).astype(int)
-    df_all['len_of_title'] = df_all['product_title'].map(lambda x: len(x.split())).astype(int)
-    df_all['len_of_description'] = df_all['product_description'].map(lambda x: len(x.split())).astype(int)
-    df_all['len_of_brand'] = df_all['brand'].map(lambda x: len(x.split())).astype(int)
-    print("--- Len of: %s minutes ---" % round(((time.time() - start_time)/60), 2))
-    df_all['search_term'] = df_all['product_info'].map(lambda x: seg_words(x.split('|')[0], x.split('|')[1]))
-    #print("--- Search Term Segment: %s minutes ---" % round(((time.time() - start_time)/60),2))
-    df_all['query_in_title'] = df_all['product_info'].map(lambda x: str_whole_word(x.split('|')[0], x.split('|')[1], 0))
-    df_all['query_in_description'] = df_all['product_info'].map(lambda x: str_whole_word(x.split('|')[0], x.split('|')[2], 0))
-    print("--- Query In: %s minutes ---" % round(((time.time() - start_time)/60), 2))
-    df_all['query_last_word_in_title'] = df_all['product_info'].map(lambda x: str_common_word(x.split('|')[0].split(" ")[-1], x.split('|')[1]))
-    df_all['query_last_word_in_description'] = df_all['product_info'].map(lambda x: str_common_word(x.split('|')[0].split(" ")[-1], x.split('|')[2]))
-    print("--- Query Last Word In: %s minutes ---" % round(((time.time() - start_time)/60), 2))
-    df_all['word_in_title'] = df_all['product_info'].map(lambda x: str_common_word(x.split('|')[0], x.split('|')[1]))
-    df_all['word_in_description'] = df_all['product_info'].map(lambda x: str_common_word(x.split('|')[0], x.split('|')[2]))
-    df_all['ratio_title'] = df_all['word_in_title']/df_all['len_of_query']
-    df_all['ratio_description'] = df_all['word_in_description']/df_all['len_of_query']
-    df_all['attr'] = df_all['search_term']+"|"+df_all['brand']
-    df_all['word_in_brand'] = df_all['attr'].map(lambda x: str_common_word(x.split('|')[0], x.split('|')[1]))
-    df_all['ratio_brand'] = df_all['word_in_brand']/df_all['len_of_brand']
-    df_brand = pd.unique(df_all.brand.ravel())
-    d = {}
-    i = 1000
-    for s8 in df_brand:
-        d[s8] = i
-        i += 3
-    df_all['brand_feature'] = df_all['brand'].map(lambda x: d[x])
-    df_all['search_term_feature'] = df_all['search_term'].map(lambda x: len(x))
-    df_all.to_csv('df_all.csv')
-    #df_all = pd.read_csv('df_all.csv', encoding="ISO-8859-1", index_col=0)
-    df_train = df_all.iloc[:num_train]
-    df_test = df_all.iloc[num_train:]
-    id_test = df_test['id']
-    y_train = df_train['relevance'].values
-    X_train = df_train[:]
-    X_test = df_test[:]
-    print("--- Features Set: %s minutes ---" % round(((time.time() - start_time)/60), 2))
-    
-    rfr = RandomForestRegressor(n_estimators=25, n_jobs=1, random_state=2016, verbose=1)
-    tfidf = TfidfVectorizer(ngram_range=(1, 1), stop_words='english')
-    tsvd = TruncatedSVD(n_components=10, random_state=2016)
-    clf = Pipeline([('union', FeatureUnion(transformer_list=[('cst', cust_regression_vals()), ('txt1', Pipeline([('s1', cust_txt_col(key='search_term')), ('tfidf1', tfidf), ('tsvd1', tsvd)])), ('txt2', Pipeline([('s2', cust_txt_col(key='product_title')), ('tfidf2', tfidf), ('tsvd2', tsvd)])), ('txt3', Pipeline([('s3', cust_txt_col(key='product_description')), ('tfidf3', tfidf), ('tsvd3', tsvd)])), ('txt4', Pipeline([('s4', cust_txt_col(key='brand')), ('tfidf4', tfidf), ('tsvd4', tsvd)]))], transformer_weights={'cst':1.0, 'txt1':0.5, 'txt2':0.25, 'txt3': 0.0, 'txt4':0.5})), ('rfr', rfr)])
-    param_grid = {'rfr__max_features': [10], 'rfr__max_depth': [20]}
-    model = grid_search.GridSearchCV(estimator = clf, param_grid = param_grid, n_jobs = -1, cv = 2, verbose = 20, scoring=RMSE)
-    model.fit(X_train, y_train)
-    
-    print("Best parameters found by grid search:")
-    print(model.best_params_)
-    print("Best CV score:")
-    print(model.best_score_)
-    print(model.best_score_ + 0.47003199274)
-    
-    y_pred = model.predict(X_test)
-    pd.DataFrame({"id": id_test, "relevance": y_pred}).to_csv('submission.csv', index=False)
-    print("--- Training & Testing: %s minutes ---" % round(((time.time() - start_time)/60), 2))
-    
-    df_outliers = pd.read_csv('df_all.csv', encoding="ISO-8859-1", index_col=0)
-    stop_ = []
-    d = {}
-    for i in xrange(len(df_outliers)):
-        s = str(df_outliers['search_term'][i]).lower()
-        #s = s.replace("\n"," ")
-        #s = re.sub("[^a-z]"," ", s)
-        #s = s.replace("  "," ")
-        a = set(s.split(" "))
-        for b_ in a:
-            if b_ not in stop_ and len(b_) > 0:
-                if b_ not in d:
-                    d[b_] = [1, str_common_word(b_, df_outliers['product_title'][i]), str_common_word(b_, df_outliers['brand'][i]), str_common_word(b_, df_outliers['product_description'][i])]
-                else:
-                    d[b_][0] += 1
-                    d[b_][1] += str_common_word(b_, df_outliers['product_title'][i])
-                    d[b_][2] += str_common_word(b_, df_outliers['brand'][i])
-                    d[b_][3] += str_common_word(b_, df_outliers['product_description'][i])
-    ds2 = pd.DataFrame.from_dict(d, orient='index')
-    ds2.columns = ['count', 'in title', 'in brand', 'in prod']
-    ds2 = ds2.sort_values(by=['count'], ascending=[False])
-    
-    f = open("word_review.csv", "w")
-    f.write("word|count|in title|in brand|in description\n")
-    for i in xrange(len(ds2)):
-        f.write(ds2.index[i] + "|" + str(ds2["count"][i]) + "|" + str(ds2["in title"][i]) + "|" + str(ds2["in brand"][i]) + "|" + str(ds2["in prod"][i]) + "\n")
-    f.close()
-    print("--- Word List Created: %s minutes ---" % round(((time.time() - start_time)/60), 2))
-"""
+preds1 = model1.predict(train[col])
+preds2 = model2.predict(train[col])
+preds3 = model3.predict(train[col])
+
+print('RMSE GradientBoostingRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds1))
+print('RMSE KNeighborsRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds2))
+print('RMSE XGBRegressor: ', RMSLE(np.log1p(train['visitors'].values), preds3))
+preds1 = model1.predict(test[col])
+preds2 = model2.predict(test[col])
+preds3 = model3.predict(test[col])
+
+test['visitors'] = 0.3*preds1+0.3*preds2+0.4*preds3
+test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
+sub1 = test[['id','visitors']].copy()
+del train; del data;
+
+# from hklee
+# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
+dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
+    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
+
+for k, v in dfs.items(): locals()[k] = v
+
+wkend_holidays = date_info.apply(
+    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
+date_info.loc[wkend_holidays, 'holiday_flg'] = 0
+date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
+
+visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
+visit_data.drop('calendar_date', axis=1, inplace=True)
+visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
+
+wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
+visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
+visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
+
+sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
+sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
+sample_submission.drop('visitors', axis=1, inplace=True)
+sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
+sample_submission = sample_submission.merge(visitors, on=[
+    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
+
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), 
+    how='left')['visitors_y'].values
+
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), 
+    on='air_store_id', how='left')['visitors_y'].values
+
+sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
+sub2 = sample_submission[['id', 'visitors']].copy()
+sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
+
+sub_merge['visitors'] = 0.7*sub_merge['visitors_x'] + 0.3*sub_merge['visitors_y']* 1.1
+sub_merge[['id', 'visitors']].to_csv('submission.csv', index=False)

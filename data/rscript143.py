@@ -1,312 +1,465 @@
-"""
-This is an upgraded version of Ceshine's and Linzhi and Andy Harless starter script, simply adding more
-average features and weekly average features on it.
-"""
-from datetime import date, timedelta
-import pandas as pd
+from __future__ import division
+import cv2
 import numpy as np
-from sklearn.preprocessing import LabelEncoder
-from sklearn.metrics import mean_squared_error
-from sklearn.preprocessing import StandardScaler
-from keras.models import Sequential
-from keras.layers.core import Dense, Dropout, Activation
-from keras.layers.advanced_activations import PReLU
+import pandas as pd
+from tqdm import tqdm
+from keras.models import Sequential, Model
+from keras.layers import Dense, Dropout, Flatten, Merge, merge
+from keras.layers import Input, Activation, Dense, Flatten
+from keras.layers.convolutional import Conv2D, MaxPooling2D, AveragePooling2D
+from multi_gpu import make_parallel #Available here https://github.com/kuza55/keras-extras/blob/master/utils/multi_gpu.py
 from keras.layers.normalization import BatchNormalization
-from keras.layers import LSTM
-from keras import callbacks
-from keras import optimizers
-from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
-import gc
+from keras import backend as K
+import os
+from sklearn.utils import shuffle
+import random
+from keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+from sklearn.metrics import fbeta_score
+from keras.optimizers import Adam, SGD
 
-df_train = pd.read_csv(
-    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
-    dtype={'onpromotion': bool},
-    converters={'unit_sales': lambda u: np.log1p(
-        float(u)) if float(u) > 0 else 0},
-    parse_dates=["date"],
-    skiprows=range(1, 66458909)  # 2016-01-01
-)
+os.environ["CUDA_VISIBLE_DEVICES"] = "0, 1"
 
-df_test = pd.read_csv(
-    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
-    dtype={'onpromotion': bool},
-    parse_dates=["date"]  # , date_parser=parser
-).set_index(
-    ['store_nbr', 'item_nbr', 'date']
-)
+def fbeta_loss(y_true, y_pred):
+    beta_squared = 4
 
-items = pd.read_csv(
-    "../input/items.csv",
-).set_index("item_nbr")
+    tp = K.sum(y_true * y_pred) + K.epsilon()
+    fp = K.sum(y_pred) - tp
+    fn = K.sum(y_true) - tp
 
-stores = pd.read_csv(
-    "../input/stores.csv",
-).set_index("store_nbr")
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
 
-le = LabelEncoder()
-items['family'] = le.fit_transform(items['family'].values)
+    result = 1 - (beta_squared + 1) * (precision * recall) / (beta_squared * precision + recall + K.epsilon())
 
-stores['city'] = le.fit_transform(stores['city'].values)
-stores['state'] = le.fit_transform(stores['state'].values)
-stores['type'] = le.fit_transform(stores['type'].values)
+    return result
 
-df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
-del df_train
+def fbeta_score_K(y_true, y_pred):
+    beta_squared = 4
 
-promo_2017_train = df_2017.set_index(
-    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
-        level=-1).fillna(False)
-promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
-promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
-promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
-promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
-promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
-del promo_2017_test, promo_2017_train
+    tp = K.sum(y_true * y_pred) + K.epsilon()
+    fp = K.sum(y_pred) - tp
+    fn = K.sum(y_true) - tp
 
-df_2017 = df_2017.set_index(
-    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
-        level=-1).fillna(0)
-df_2017.columns = df_2017.columns.get_level_values(1)
+    precision = tp / (tp + fp)
+    recall = tp / (tp + fn)
 
-items = items.reindex(df_2017.index.get_level_values(1))
-stores = stores.reindex(df_2017.index.get_level_values(0))
+    result = (beta_squared + 1) * (precision * recall) / (beta_squared * precision + recall + K.epsilon())
+
+    return result
+
+def rotate(img):
+    rows = img.shape[0]
+    cols = img.shape[1]
+    angle = np.random.choice((10, 20, 30))#, 40, 50, 60, 70, 80, 90))
+    rotation_M = cv2.getRotationMatrix2D((cols / 2, rows / 2), angle, 1)
+    img = cv2.warpAffine(img, rotation_M, (cols, rows))
+    return img
+
+def rotate_bound(image, size):
+    #credits http://www.pyimagesearch.com/2017/01/02/rotate-images-correctly-with-opencv-and-python/
+    (h, w) = image.shape[:2]
+    (cX, cY) = (w // 2, h // 2)
+
+    angle = np.random.randint(10,180)
+
+    M = cv2.getRotationMatrix2D((cX, cY), -angle, 1.0)
+    cos = np.abs(M[0, 0])
+    sin = np.abs(M[0, 1])
+
+    # compute the new bounding dimensions of the image
+    nW = int((h * sin) + (w * cos))
+    nH = int((h * cos) + (w * sin))
+
+    # adjust the rotation matrix to take into account translation
+    M[0, 2] += (nW / 2) - cX
+    M[1, 2] += (nH / 2) - cY
+
+    output = cv2.resize(cv2.warpAffine(image, M, (nW, nH)), (size, size))
+    return output
+
+def perspective(img):
+    rows = img.shape[0]
+    cols = img.shape[1]
+
+    shrink_ratio1 = np.random.randint(low=85, high=110, dtype=int) / 100
+    shrink_ratio2 = np.random.randint(low=85, high=110, dtype=int) / 100
+
+    zero_point = rows - np.round(rows * shrink_ratio1, 0)
+    max_point_row = np.round(rows * shrink_ratio1, 0)
+    max_point_col = np.round(cols * shrink_ratio2, 0)
+
+    src = np.float32([[zero_point, zero_point], [max_point_row-1, zero_point], [zero_point, max_point_col+1], [max_point_row-1, max_point_col+1]])
+    dst = np.float32([[0, 0], [rows, 0], [0, cols], [rows, cols]])
+
+    perspective_M = cv2.getPerspectiveTransform(src, dst)
+
+    img = cv2.warpPerspective(img, perspective_M, (cols,rows))#, borderValue=mean_pix)
+    return img
+
+def shift(img):
+    rows = img.shape[0]
+    cols = img.shape[1]
+
+    shift_ratio1 = (random.random() * 2 - 1) * np.random.randint(low=3, high=15, dtype=int)
+    shift_ratio2 = (random.random() * 2 - 1) * np.random.randint(low=3, high=15, dtype=int)
+
+    shift_M = np.float32([[1,0,shift_ratio1], [0,1,shift_ratio2]])
+    img = cv2.warpAffine(img, shift_M, (cols, rows))#, borderValue=mean_pix)
+    return img
+
+def batch_generator_train(zip_list, img_size, batch_size, is_train=True, shuffle=True):
+    number_of_batches = np.ceil(len(zip_list) / batch_size)
+    if shuffle == True:
+        random.shuffle(zip_list)
+    counter = 0
+    while True:
+        if shuffle == True:
+            random.shuffle(zip_list)
+
+        batch_files = zip_list[batch_size*counter:batch_size*(counter+1)]
+        image_list = []
+        mask_list = []
+
+        for file, mask in batch_files:
+
+            image = cv2.imread(file) #cv2.resize(cv2.imread(file), (img_size,img_size)) / 255.
+            image = image[:, :, [2, 1, 0]] - mean_pix
+
+            rnd_flip = np.random.randint(2, dtype=int)
+            rnd_rotate = np.random.randint(2, dtype=int)
+            rnd_zoom = np.random.randint(2, dtype=int)
+            rnd_shift = np.random.randint(2, dtype=int)
+
+            if (rnd_flip == 1) & (is_train == True):
+                rnd_flip = np.random.randint(3, dtype=int) - 1
+                image = cv2.flip(image, rnd_flip)
+
+            if (rnd_rotate == 1) & (is_train == True):
+                image = rotate_bound(image, img_size)
+
+            if (rnd_zoom == 1) & (is_train == True):
+                image = perspective(image)
+
+            if (rnd_shift == 1) & (is_train == True):
+                image = shift(image)
+
+            image_list.append(image)
+            mask_list.append(mask)
+
+        counter += 1
+        image_list = np.array(image_list)
+        mask_list = np.array(mask_list)
+
+        yield (image_list, mask_list)
+
+        if counter == number_of_batches:
+            if shuffle == True:
+                random.shuffle(zip_list)
+            counter = 0
+
+def batch_generator_test(zip_list, img_size, batch_size, shuffle=True):
+    number_of_batches = np.ceil(len(zip_list)/batch_size)
+    print(len(zip_list), number_of_batches)
+    counter = 0
+    if shuffle:
+        random.shuffle(zip_list)
+    while True:
+        batch_files = zip_list[batch_size*counter:batch_size*(counter+1)]
+        image_list = []
+        mask_list = []
+
+        for file, mask in batch_files:
+
+            image = cv2.resize(cv2.imread(file), (img_size, img_size))
+            image = image[:, :, [2, 1, 0]] - mean_pix
+            image_list.append(image)
+            mask_list.append(mask)
+
+        counter += 1
+        image_list = np.array(image_list)
+        mask_list = np.array(mask_list)
+
+        yield (image_list, mask_list)
+
+        if counter == number_of_batches:
+            random.shuffle(zip_list)
+            counter = 0
+
+def predict_generator(files, img_size, batch_size):
+    number_of_batches = np.ceil(len(files) / batch_size)
+    print(len(files), number_of_batches)
+    counter = 0
+    int_counter = 0
+
+    while True:
+            beg = batch_size * counter
+            end = batch_size * (counter + 1)
+            batch_files = files[beg:end]
+            image_list = []
+
+            for file in batch_files:
+                int_counter += 1
+                image = cv2.resize(cv2.imread(file), (img_size, img_size))
+                image = image[:, :, [2, 1, 0]] - mean_pix
+
+                rnd_flip = np.random.randint(2, dtype=int)
+                rnd_rotate = np.random.randint(2, dtype=int)
+                rnd_zoom = np.random.randint(2, dtype=int)
+                rnd_shift = np.random.randint(2, dtype=int)
+
+                if rnd_flip == 1:
+                    rnd_flip = np.random.randint(3, dtype=int) - 1
+                    image = cv2.flip(image, rnd_flip)
+
+                if rnd_rotate == 1:
+                    image = rotate_bound(image, img_size)
+
+                if rnd_zoom == 1:
+                    image = perspective(image)
+
+                if rnd_shift == 1:
+                    image = shift(image)
+
+                image_list.append(image)
+
+            counter += 1
+
+            image_list = np.array(image_list)
+
+            yield (image_list)
 
 
-df_2017_item = df_2017.groupby('item_nbr')[df_2017.columns].sum()
-promo_2017_item = promo_2017.groupby('item_nbr')[promo_2017.columns].sum()
+def f2_score(y_true, y_pred):
+    y_true, y_pred, = np.array(y_true), np.array(y_pred)
+    score = fbeta_score(y_true, y_pred, beta=2, average='samples')
+    return score
 
-df_2017_store_class = df_2017.reset_index()
-df_2017_store_class['class'] = items['class'].values
-df_2017_store_class_index = df_2017_store_class[['class', 'store_nbr']]
-df_2017_store_class = df_2017_store_class.groupby(['class', 'store_nbr'])[df_2017.columns].sum()
+GLOBAL_PATH = 'D:/G/Amazon/'
+TRAIN_FOLDER = 'D:/g/amazon/train-jpg-res/' #All train files resized to 224*224
+TEST_FOLDER = 'D:/G/Amazon/test-jpg/' #All test files in one folder
+F_CLASSES = GLOBAL_PATH + 'train_v2.csv'
 
-df_2017_promo_store_class = promo_2017.reset_index()
-df_2017_promo_store_class['class'] = items['class'].values
-df_2017_promo_store_class_index = df_2017_promo_store_class[['class', 'store_nbr']]
-df_2017_promo_store_class = df_2017_promo_store_class.groupby(['class', 'store_nbr'])[promo_2017.columns].sum()
+df_train = pd.read_csv(F_CLASSES)
+df_test = pd.read_csv(GLOBAL_PATH + 'sample_submission_v4.csv')
 
-def get_timespan(df, dt, minus, periods, freq='D'):
-    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
+labels = ['blow_down',
+          'bare_ground',
+          'conventional_mine',
+          'blooming',
+          'cultivation',
+          'artisinal_mine',
+          'haze',
+          'primary',
+          'slash_burn',
+          'habitation',
+          'clear',
+          'road',
+          'selective_logging',
+          'partly_cloudy',
+          'agriculture',
+          'water',
+          'cloudy']
+label_map = {'agriculture': 14,
+             'artisinal_mine': 5,
+             'bare_ground': 1,
+             'blooming': 3,
+             'blow_down': 0,
+             'clear': 10,
+             'cloudy': 16,
+             'conventional_mine': 2,
+             'cultivation': 4,
+             'habitation': 9,
+             'haze': 6,
+             'partly_cloudy': 13,
+             'primary': 7,
+             'road': 11,
+             'selective_logging': 12,
+             'slash_burn': 8,
+             'water': 15}
 
-def prepare_dataset(df, promo_df, t2017, is_train=True, name_prefix=None):
-    X = {
-        "promo_14_2017": get_timespan(promo_df, t2017, 14, 14).sum(axis=1).values,
-        "promo_60_2017": get_timespan(promo_df, t2017, 60, 60).sum(axis=1).values,
-        "promo_140_2017": get_timespan(promo_df, t2017, 140, 140).sum(axis=1).values,
-        "promo_3_2017_aft": get_timespan(promo_df, t2017 + timedelta(days=16), 15, 3).sum(axis=1).values,
-        "promo_7_2017_aft": get_timespan(promo_df, t2017 + timedelta(days=16), 15, 7).sum(axis=1).values,
-        "promo_14_2017_aft": get_timespan(promo_df, t2017 + timedelta(days=16), 15, 14).sum(axis=1).values,
-    }
+flatten = lambda l: [item for sublist in l for item in sublist]
 
-    for i in [3, 7, 14, 30, 60, 140]:
-        tmp = get_timespan(df, t2017, i, i)
-        X['diff_%s_mean' % i] = tmp.diff(axis=1).mean(axis=1).values
-        X['mean_%s_decay' % i] = (tmp * np.power(0.9, np.arange(i)[::-1])).sum(axis=1).values
-        X['mean_%s' % i] = tmp.mean(axis=1).values
-        X['median_%s' % i] = tmp.median(axis=1).values
-        X['min_%s' % i] = tmp.min(axis=1).values
-        X['max_%s' % i] = tmp.max(axis=1).values
-        X['std_%s' % i] = tmp.std(axis=1).values
+x_train = []
+x_test = []
+y_train = []
 
-    for i in [3, 7, 14, 30, 60, 140]:
-        tmp = get_timespan(df, t2017 + timedelta(days=-7), i, i)
-        X['diff_%s_mean_2' % i] = tmp.diff(axis=1).mean(axis=1).values
-        X['mean_%s_decay_2' % i] = (tmp * np.power(0.9, np.arange(i)[::-1])).sum(axis=1).values
-        X['mean_%s_2' % i] = tmp.mean(axis=1).values
-        X['median_%s_2' % i] = tmp.median(axis=1).values
-        X['min_%s_2' % i] = tmp.min(axis=1).values
-        X['max_%s_2' % i] = tmp.max(axis=1).values
-        X['std_%s_2' % i] = tmp.std(axis=1).values
 
-    for i in [7, 14, 30, 60, 140]:
-        tmp = get_timespan(df, t2017, i, i)
-        X['has_sales_days_in_last_%s' % i] = (tmp > 0).sum(axis=1).values
-        X['last_has_sales_day_in_last_%s' % i] = i - ((tmp > 0) * np.arange(i)).max(axis=1).values
-        X['first_has_sales_day_in_last_%s' % i] = ((tmp > 0) * np.arange(i, 0, -1)).max(axis=1).values
+for f, tags in tqdm(df_train.values, miniters=1000):
+    img = TRAIN_FOLDER + '{}.jpg'.format(f)
+    targets = np.zeros(17)
+    for t in tags.split(' '):
+        targets[label_map[t]] = 1
+    x_train.append(img)
+    y_train.append(targets)
 
-        tmp = get_timespan(promo_df, t2017, i, i)
-        X['has_promo_days_in_last_%s' % i] = (tmp > 0).sum(axis=1).values
-        X['last_has_promo_day_in_last_%s' % i] = i - ((tmp > 0) * np.arange(i)).max(axis=1).values
-        X['first_has_promo_day_in_last_%s' % i] = ((tmp > 0) * np.arange(i, 0, -1)).max(axis=1).values
 
-    tmp = get_timespan(promo_df, t2017 + timedelta(days=16), 15, 15)
-    X['has_promo_days_in_after_15_days'] = (tmp > 0).sum(axis=1).values
-    X['last_has_promo_day_in_after_15_days'] = i - ((tmp > 0) * np.arange(15)).max(axis=1).values
-    X['first_has_promo_day_in_after_15_days'] = ((tmp > 0) * np.arange(15, 0, -1)).max(axis=1).values
+x_train, x_holdout, y_train, y_holdout = x_train[3000:-1], x_train[:3000], y_train[3000:-1], y_train[:3000]
 
-    for i in range(1, 16):
-        X['day_%s_2017' % i] = get_timespan(df, t2017, i, 1).values.ravel()
+x_train, y_train = shuffle(x_train, y_train, random_state = 24)
 
-    for i in range(7):
-        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df, t2017, 28-i, 4, freq='7D').mean(axis=1).values
-        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df, t2017, 140-i, 20, freq='7D').mean(axis=1).values
+part = 0.85
+split = int(round(part*len(y_train)))
+x_train, x_valid, y_train, y_valid = x_train[:split], x_train[split:], y_train[:split], y_train[split:]
+print('x tr: ', len(x_train))
 
-    for i in range(-16, 16):
-        X["promo_{}".format(i)] = promo_df[t2017 + timedelta(days=i)].values.astype(np.uint8)
+#define callbacks
+callbacks = [ModelCheckpoint('amazon_2007.hdf5', monitor='val_loss', save_best_only=True, verbose=2, save_weights_only=False),
+             ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=2, verbose=1, mode='auto', epsilon=0.0001, cooldown=0, min_lr=0.0000001),
+             EarlyStopping(monitor='val_loss', patience=5, verbose=0)]
 
-    X = pd.DataFrame(X)
+BATCH = 128
+IMG_SIZE = 224
+mean_pix = np.array([102.9801, 115.9465, 122.7717]) #It is BGR
 
-    if is_train:
-        y = df[
-            pd.date_range(t2017, periods=16)
-        ].values
-        return X, y
-    if name_prefix is not None:
-        X.columns = ['%s_%s' % (name_prefix, c) for c in X.columns]
-    return X
+from keras.applications import ResNet50
 
-print("Preparing dataset...")
-num_days = 8
-t2017 = date(2017, 5, 31)
-X_l, y_l = [], []
-for i in range(num_days):
-    delta = timedelta(days=7 * i)
-    X_tmp, y_tmp = prepare_dataset(df_2017, promo_2017, t2017 + delta)
+#Compile model and set non-top layets non-trainable (warm-up)
+base_model = ResNet50(include_top=False, input_shape=(IMG_SIZE,IMG_SIZE,3), pooling='avg', weights='imagenet')
+for layer in base_model.layers:
+    layer.trainable = False
 
-    X_tmp2 = prepare_dataset(df_2017_item, promo_2017_item, t2017 + delta, is_train=False, name_prefix='item')
-    X_tmp2.index = df_2017_item.index
-    X_tmp2 = X_tmp2.reindex(df_2017.index.get_level_values(1)).reset_index(drop=True)
+x = base_model.output
+x = Dense(2048, activation='relu')(x)
+x = Dropout(0.25)(x)
+output = Dense(17, activation='sigmoid')(x)
 
-    X_tmp3 = prepare_dataset(df_2017_store_class, df_2017_promo_store_class, t2017 + delta, is_train=False, name_prefix='store_class')
-    X_tmp3.index = df_2017_store_class.index
-    X_tmp3 = X_tmp3.reindex(df_2017_store_class_index).reset_index(drop=True)
+optimizer = Adam(0.001, decay=0.0003)
+model = Model(inputs=base_model.inputs, outputs=output)
+model = make_parallel(model, 2)
 
-    X_tmp = pd.concat([X_tmp, X_tmp2, X_tmp3, items.reset_index(), stores.reset_index()], axis=1)
+model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy', fbeta_score_K])
 
-    X_l.append(X_tmp)
-    y_l.append(y_tmp)
+model.fit_generator(generator=batch_generator_train(list(zip(x_train, y_train)), IMG_SIZE, BATCH),
+                          steps_per_epoch=np.ceil(len(x_train)/BATCH),
+                          epochs=1,
+                          verbose=1,
+                          validation_data=batch_generator_train(list(zip(x_valid, y_valid)), IMG_SIZE, 16),
+                          validation_steps=np.ceil(len(x_valid)/16),
+                          callbacks=callbacks,
+                          initial_epoch=0)
 
-X_train = pd.concat(X_l, axis=0)
-y_train = np.concatenate(y_l, axis=0)
 
-del X_l, y_l
-X_val, y_val = prepare_dataset(df_2017, promo_2017, date(2017, 7, 26))
-X_val2 = prepare_dataset(df_2017_item, promo_2017_item, date(2017, 7, 26), is_train=False, name_prefix='item')
-X_val2.index = df_2017_item.index
-X_val2 = X_val2.reindex(df_2017.index.get_level_values(1)).reset_index(drop=True)
+#Compile model and set all layers trainable
+optimizer = Adam(0.0001, decay=0.00000001)
+model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy', fbeta_score_K])
+model.load_weights('amazon_2007.hdf5', by_name=True)
+for layer in base_model.layers:
+    layer.trainable = True
 
-X_val3 = prepare_dataset(df_2017_store_class, df_2017_promo_store_class, date(2017, 7, 26), is_train=False, name_prefix='store_class')
-X_val3.index = df_2017_store_class.index
-X_val3 = X_val3.reindex(df_2017_store_class_index).reset_index(drop=True)
+BATCH = 32
+model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy', fbeta_score_K])
+model.fit_generator(generator=batch_generator_train(list(zip(x_train, y_train)), IMG_SIZE, BATCH),
+                          steps_per_epoch=np.ceil(len(x_train)/BATCH),
+                          epochs=50,
+                          verbose=1,
+                          validation_data=batch_generator_train(list(zip(x_valid, y_valid)), IMG_SIZE, 16),
+                          validation_steps=np.ceil(len(x_valid)/16),
+                          callbacks=callbacks,
+                          initial_epoch=0)
 
-X_val = pd.concat([X_val, X_val2, X_val3, items.reset_index(), stores.reset_index()], axis=1)
+model.load_weights('amazon_2007.hdf5')
 
-X_test = prepare_dataset(df_2017, promo_2017, date(2017, 8, 16), is_train=False)
-X_test2 = prepare_dataset(df_2017_item, promo_2017_item, date(2017, 8, 16), is_train=False, name_prefix='item')
-X_test2.index = df_2017_item.index
-X_test2 = X_test2.reindex(df_2017.index.get_level_values(1)).reset_index(drop=True)
 
-X_test3 = prepare_dataset(df_2017_store_class, df_2017_promo_store_class, date(2017, 8, 16), is_train=False, name_prefix='store_class')
-X_test3.index = df_2017_store_class.index
-X_test3 = X_test3.reindex(df_2017_store_class_index).reset_index(drop=True)
+x_val = []
+y_val = []
+x_hld = []
+y_hld = []
+x_test = []
+y_test = []
 
-X_test = pd.concat([X_test, X_test2, X_test3, items.reset_index(), stores.reset_index()], axis=1)
-del df_2017_item, promo_2017_item, df_2017_store_class, df_2017_promo_store_class, df_2017_store_class_index
-gc.collect()
 
-scaler = StandardScaler()
-scaler.fit(pd.concat([X_train, X_val, X_test]))
-X_train[:] = scaler.transform(X_train)
-X_val[:] = scaler.transform(X_val)
-X_test[:] = scaler.transform(X_test)
+#====================== validation set est =================================
+for f, tags in tqdm(list(zip(x_valid, y_valid)), miniters=1000):
+    y_val.append(tags)
 
-X_train = X_train.as_matrix()
-X_test = X_test.as_matrix()
-X_val = X_val.as_matrix()
-X_train = X_train.reshape((X_train.shape[0], 1, X_train.shape[1]))
-X_test = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
-X_val = X_val.reshape((X_val.shape[0], 1, X_val.shape[1]))
+p_valid = model.predict_generator(batch_generator_test(list(zip(x_valid, y_valid)), IMG_SIZE, 8, shuffle=False), steps=np.ceil(len(x_valid)/8))
 
-def build_model():
-    model = Sequential()
-    model.add(LSTM(512, input_shape=(X_train.shape[1],X_train.shape[2])))
-    model.add(BatchNormalization())
-    model.add(Dropout(.2))
+print('val_set: ', fbeta_score(np.array(y_val), np.array(p_valid) > 0.2, beta=2, average='samples'))
+#===========================================================================
 
-    model.add(Dense(256))
-    model.add(PReLU())
-    model.add(BatchNormalization())
-    model.add(Dropout(.1))
+def optimise_f2_thresholds(y, p, verbose=True, resolution=100):
+    #credits https://www.kaggle.com/c/planet-understanding-the-amazon-from-space/discussion/32475
+  def mf(x):
+    p2 = np.zeros_like(p)
+    for i in range(17):
+      p2[:, i] = (p[:, i] > x[i]).astype(np.int)
+    score = fbeta_score(y, p2, beta=2, average='samples')
+    return score
 
-    model.add(Dense(256))
-    model.add(PReLU())
-    model.add(BatchNormalization())
-    model.add(Dropout(.1))
+  x = [0.2]*17
+  for i in range(17):
+    best_i2 = 0
+    best_score = 0
+    for i2 in range(resolution):
+      i2 /= resolution
+      x[i] = i2
+      score = mf(x)
+      if score > best_score:
+        best_i2 = i2
+        best_score = score
+    x[i] = best_i2
+    if verbose:
+      print(i, best_i2, best_score)
 
-    model.add(Dense(128))
-    model.add(PReLU())
-    model.add(BatchNormalization())
-    model.add(Dropout(.05))
+  return x
 
-    model.add(Dense(64))
-    model.add(PReLU())
-    model.add(BatchNormalization())
-    model.add(Dropout(.05))
+X = optimise_f2_thresholds(np.array(y_val), np.array(p_valid))
 
-    model.add(Dense(32))
-    model.add(PReLU())
-    model.add(BatchNormalization())
-    model.add(Dropout(.05))
+#====================== holdout set est =================================
+for f, tags in tqdm(list(zip(x_holdout, y_holdout)), miniters=1000):
+    img = cv2.resize(cv2.imread(f), (IMG_SIZE, IMG_SIZE))
+    x_hld.append(img)
+    y_hld.append(tags)
 
-    model.add(Dense(16))
-    model.add(PReLU())
-    model.add(BatchNormalization())
-    model.add(Dropout(.05))
+if len(x_holdout) % 2 > 0:
+    x_hld.append(x_hld[0])
+    y_hld.append(y_hld[0])
 
-    model.add(Dense(1))
+x_hld = np.array(x_hld, np.float16)
 
-    return model
+p_valid = model.predict(x_hld, batch_size=28, verbose=2)
+print('holdout set: ', f2_score(np.array(y_hld), np.array(p_valid) > 0.2))
+print('holdout set w/ thresh: ', f2_score(np.array(y_hld), np.array(p_valid) > 0.19))
+#===========================================================================
 
-N_EPOCHS = 2000
 
-val_pred = []
-test_pred = []
-# wtpath = 'weights.hdf5'  # To save best epoch. But need Keras bug to be fixed first.
-sample_weights=np.array( pd.concat([items["perishable"]] * num_days) * 0.25 + 1 )
-for i in range(16):
-    print("=" * 50)
-    print("Step %d" % (i+1))
-    print("=" * 50)
-    y = y_train[:, i]
-    y_mean = y.mean()
-    xv = X_val
-    yv = y_val[:, i]
-    model = build_model()
-    opt = optimizers.Adam(lr=0.001)
-    model.compile(loss='mse', optimizer=opt, metrics=['mse'])
+for f, tags in tqdm(df_test.values, miniters=1000):
+    img = TEST_FOLDER + '{}.jpg'.format(f)
+    x_test.append(img)
 
-    callbacks = [
-        EarlyStopping(monitor='val_loss', patience=10, verbose=0),
-        ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='min')
-        ]
-    model.fit(X_train, y - y_mean, batch_size = 65536, epochs = N_EPOCHS, verbose=2,
-               sample_weight=sample_weights, validation_data=(xv,yv-y_mean), callbacks=callbacks )
-    val_pred.append(model.predict(X_val)+y_mean)
-    test_pred.append(model.predict(X_test)+y_mean)
+batch_size_test = 32
+len_test = len(x_test)
+x_tst = []
+yfull_test = []
 
-weight = items["perishable"] * 0.25 + 1
-err = (y_val - np.array(val_pred).squeeze(axis=2).transpose())**2
-err = err.sum(axis=1) * weight
-err = np.sqrt(err.sum() / weight.sum() / 16)
-print('nwrmsle = {}'.format(err))
 
-y_val = np.array(val_pred).squeeze(axis=2).transpose()
-df_preds = pd.DataFrame(
-    y_val, index=df_2017.index,
-    columns=pd.date_range("2017-07-26", periods=16)
-).stack().to_frame("unit_sales")
-df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
-df_preds["unit_sales"] = np.clip(np.expm1(df_preds["unit_sales"]), 0, 1000)
-df_preds.reset_index().to_csv('nn_cv.csv', index=False)
+TTA_steps = 30
 
-print("Making submission...")
-y_test = np.array(test_pred).squeeze(axis=2).transpose()
-df_preds = pd.DataFrame(
-    y_test, index=df_2017.index,
-    columns=pd.date_range("2017-08-16", periods=16)
-).stack().to_frame("unit_sales")
-df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
+for k in range(0, TTA_steps):
+    print(k)
+    probs = model.predict_generator(predict_generator(x_test,IMG_SIZE,batch_size_test), steps=np.ceil(len(x_test)/batch_size_test),verbose=1)
+    yfull_test.append(probs)
+    k += 1
 
-submission = df_test[["id"]].join(df_preds, how="left").fillna(0)
-submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 1000)
-submission.to_csv('nn_sub.csv', float_format='%.4f', index=None)
+result = np.array(yfull_test[0])
+
+for i in range(1, TTA_steps):
+    result += np.array(yfull_test[i])
+result /= TTA_steps
+
+res = pd.DataFrame(result, columns=labels)
+preds = []
+
+for i in tqdm(range(res.shape[0]), miniters=1000):
+    a = res.ix[[i]]
+    a = a.apply(lambda x: x > X, axis=1)
+    a = a.transpose()
+    a = a.loc[a[i] == True]
+    ' '.join(list(a.index))
+    preds.append(' '.join(list(a.index)))
+
+print(len(preds))
+
+df_test['tags'] = preds
+df_test = df_test[:-57]
+df_test.to_csv('submission.csv', index=False)

@@ -1,92 +1,199 @@
-import pandas as pd
+# coding: utf-8
+__author__ = 'Sandro Vega Pons : https://www.kaggle.com/svpons'
+
 import numpy as np
-from sklearn import *
-import glob
+import pandas as pd
+from sklearn.preprocessing import LabelEncoder
+from sklearn.linear_model import SGDClassifier
 
-datafiles = sorted(glob.glob('../input/**.csv'))
-datafiles = {file.split('/')[-1].split('.')[0]: pd.read_csv(file, encoding='latin-1') for file in datafiles}
-print([k for k in datafiles])
-datafiles['WNCAATourneyCompactResults_PrelimData2018']['SecondaryTourney'] = 'NCAA'
-datafiles['WRegularSeasonCompactResults_PrelimData2018']['SecondaryTourney'] = 'Regular'
 
-#Presets
-WLoc = {'A': 1, 'H': 2, 'N': 3}
-SecondaryTourney = {'NIT': 1, 'CBI': 2, 'CIT': 3, 'V16': 4, 'Regular': 5 ,'NCAA': 6}
+def prepare_data(df_train, df_test, n_cell_x, n_cell_y):
+    """
+    Some feature engineering (mainly with the time feature) + normalization 
+    of all features (substracting the mean and dividing by std) +  
+    computation of a grid (size = n_cell_x * n_cell_y), which is included
+    as a new column (grid_cell) in the dataframes.
+    
+    Parameters:
+    ----------    
+    df_train: pandas DataFrame
+              Training data
+    df_test : pandas DataFrame
+              Test data
+    n_cell_x: int
+              Number of grid cells on the x axis
+    n_cell_y: int
+              Number of grid cells on the y axis
+    
+    Returns:
+    -------    
+    df_train, df_test: pandas DataFrame
+                       Modified training and test datasets.
+    """  
+    print('Feature engineering...')
+    print('    Computing some features from x and y ...')
+    ##x, y, and accuracy remain the same
+        ##New feature x/y
+    eps = 0.00001  #required to avoid some divisions by zero.
+    df_train['x_d_y'] = df_train.x.values / (df_train.y.values + eps) 
+    df_test['x_d_y'] = df_test.x.values / (df_test.y.values + eps) 
+        ##New feature x*y
+    df_train['x_t_y'] = df_train.x.values * df_train.y.values  
+    df_test['x_t_y'] = df_test.x.values * df_test.y.values
+    
+    print('    Creating datetime features ...')
+    ##time related features (assuming the time = minutes)
+    initial_date = np.datetime64('2014-01-01T01:01',   #Arbitrary decision
+                                 dtype='datetime64[m]') 
+        #working on df_train  
+    d_times = pd.DatetimeIndex(initial_date + np.timedelta64(int(mn), 'm') 
+                               for mn in df_train.time.values)    
+    df_train['hour'] = d_times.hour
+    df_train['weekday'] = d_times.weekday
+    df_train['day'] = d_times.day
+    df_train['month'] = d_times.month
+    df_train['year'] = d_times.year
+    df_train = df_train.drop(['time'], axis=1)
+        #working on df_test    
+    d_times = pd.DatetimeIndex(initial_date + np.timedelta64(int(mn), 'm') 
+                               for mn in df_test.time.values)    
+    df_test['hour'] = d_times.hour
+    df_test['weekday'] = d_times.weekday
+    df_test['day'] = d_times.day
+    df_test['month'] = d_times.month
+    df_test['year'] = d_times.year
+    df_test = df_test.drop(['time'], axis=1)
+    
+    print('Computing the grid ...')
+    #Creating a new colum with grid_cell id  (there will be 
+    #n = (n_cell_x * n_cell_y) cells enumerated from 0 to n-1)
+    size_x = 10. / n_cell_x
+    size_y = 10. / n_cell_y
+        #df_train
+    xs = np.where(df_train.x.values < eps, 0, df_train.x.values - eps)
+    ys = np.where(df_train.y.values < eps, 0, df_train.y.values - eps)
+    pos_x = (xs / size_x).astype(np.int)
+    pos_y = (ys / size_y).astype(np.int)
+    df_train['grid_cell'] = pos_y * n_cell_x + pos_x
+            #df_test
+    xs = np.where(df_test.x.values < eps, 0, df_test.x.values - eps)
+    ys = np.where(df_test.y.values < eps, 0, df_test.y.values - eps)
+    pos_x = (xs / size_x).astype(np.int)
+    pos_y = (ys / size_y).astype(np.int)
+    df_test['grid_cell'] = pos_y * n_cell_x + pos_x 
+    
+    ##Normalization
+    print('Normalizing the data: (X - mean(X)) / std(X) ...')
+    cols = ['x', 'y', 'accuracy', 'x_d_y', 'x_t_y', 'hour', 
+            'weekday', 'day', 'month', 'year']
+    for cl in cols:
+        ave = df_train[cl].mean()
+        std = df_train[cl].std()
+        df_train[cl] = (df_train[cl].values - ave ) / std
+        df_test[cl] = (df_test[cl].values - ave ) / std
+        
+    #Returning the modified dataframes
+    return df_train, df_test
 
-games = pd.concat((datafiles['WNCAATourneyCompactResults_PrelimData2018'],datafiles['WRegularSeasonCompactResults_PrelimData2018']), axis=0, ignore_index=True)
-games.reset_index(drop=True, inplace=True)
-games['WLoc'] = games['WLoc'].map(WLoc)
-games['SecondaryTourney'] = games['SecondaryTourney'].map(SecondaryTourney)
-games.head()
 
-#Add Ids
-games['ID'] = games.apply(lambda r: '_'.join(map(str, [r['Season']]+sorted([r['WTeamID'],r['LTeamID']]))), axis=1)
-games['IDTeams'] = games.apply(lambda r: '_'.join(map(str, sorted([r['WTeamID'],r['LTeamID']]))), axis=1)
-games['Team1'] = games.apply(lambda r: sorted([r['WTeamID'],r['LTeamID']])[0], axis=1)
-games['Team2'] = games.apply(lambda r: sorted([r['WTeamID'],r['LTeamID']])[1], axis=1)
-games['IDTeam1'] = games.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team1']])), axis=1)
-games['IDTeam2'] = games.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team2']])), axis=1)
+def process_one_cell(df_train, df_test, grid_id, th):
+    """
+    Does all the processing inside a single grid cell: Computes the training
+    and test sets inside the cell. Fits a classifier to the training data
+    and predicts on the test data. Selects the top 3 predictions.
+    
+    Parameters:
+    ----------    
+    df_train: pandas DataFrame
+              Training set
+    df_test: pandas DataFrame
+             Test set
+    grid_id: int
+             The id of the grid to be analyzed
+    th: int
+       Threshold for place_id. Only samples with place_id with at least th
+       occurrences are kept in the training set.
+    
+    Return:
+    ------    
+    pred_labels: numpy ndarray
+                 Array with the prediction of the top 3 labels for each sample
+    row_ids: IDs of the samples in the submission dataframe 
+    """   
+    #Working on df_train
+    df_cell_train = df_train.loc[df_train.grid_cell == grid_id]
+    place_counts = df_cell_train.place_id.value_counts()
+    mask = place_counts[df_cell_train.place_id.values] >= th
+    df_cell_train = df_cell_train.loc[mask.values]
+    
+    #Working on df_test
+    df_cell_test = df_test.loc[df_test.grid_cell == grid_id]
+    row_ids = df_cell_test.index
+    
+    le = LabelEncoder()
+    y = le.fit_transform(df_cell_train.place_id.values)
+    X = df_cell_train.drop(['place_id', 'grid_cell'], axis = 1).values
 
-#Add Seeds
-seeds = {'_'.join(map(str,[int(k1),k2])):int(v[1:3]) for k1, v, k2 in datafiles['WNCAATourneySeeds_SampleTourney2018'].values}
-#Add 2018
-if 2018 not in datafiles['WNCAATourneySeeds']['Season'].unique():
-    seeds = {**seeds, **{k.replace('2017_','2018_'):seeds[k] for k in seeds if '2017_' in k}}
+    #Training Classifier
+    clf = SGDClassifier(loss='modified_huber', n_iter=1, random_state=0, n_jobs=-1)  
+    clf.fit(X, y)
+    X_test = df_cell_test.drop(['grid_cell'], axis = 1).values
+    y_pred = clf.predict_proba(X_test)
 
-games['Team1Seed'] = games['IDTeam1'].map(seeds).fillna(0)
-games['Team2Seed'] = games['IDTeam2'].map(seeds).fillna(0)
+    pred_labels = le.inverse_transform(np.argsort(y_pred, axis=1)[:,::-1][:,:3])    
+    return pred_labels, row_ids
+   
+   
+def process_grid(df_train, df_test, df_sub, th, n_cells):
+    """
+    Iterates over all grid cells and aggregates the results of individual cells
+    """    
+    for g_id in range(n_cells):
+        if g_id % 10 == 0:
+            print('iteration: %s' %(g_id))
+        
+        #Applying classifier to one grid cell
+        pred_labels, row_ids = process_one_cell(df_train, df_test, g_id, th)
+        #Converting the prediction to the submission format
+        str_labels = np.apply_along_axis(lambda x: ' '.join(x.astype(str)), 
+                                         1, pred_labels)
+        #Updating submission file
+        df_sub.loc[row_ids] = str_labels.reshape(-1,1)
+        
+    return df_sub       
+                 
 
-#Additional Features & Clean Up
-games['ScoreDiff'] = games['WScore'] - games['LScore'] 
-games['Pred'] = games.apply(lambda r: 1. if sorted([r['WTeamID'],r['LTeamID']])[0]==r['WTeamID'] else 0., axis=1)
-games['ScoreDiffNorm'] = games.apply(lambda r: r['ScoreDiff'] * -1 if r['Pred'] == 0. else r['ScoreDiff'], axis=1)
-games['SeedDiff'] = games['Team1Seed'] - games['Team2Seed'] 
-games = games.fillna(-1)
+if __name__ == '__main__':
 
-#Test Set
-sub = datafiles['WSampleSubmissionStage1']
-#sub = datafiles['WSampleSubmissionStage2_SampleTourney2018']
-sub['WLoc'] = 3 #N
-sub['SecondaryTourney'] = 6 #NCAA
-sub['Season'] = sub['ID'].map(lambda x: x.split('_')[0])
-sub['Season'] = sub['ID'].map(lambda x: x.split('_')[0])
-sub['Team1'] = sub['ID'].map(lambda x: x.split('_')[1])
-sub['Team2'] = sub['ID'].map(lambda x: x.split('_')[2])
-sub['IDTeams'] = sub.apply(lambda r: '_'.join(map(str, [r['Team1'], r['Team2']])), axis=1)
-sub['IDTeam1'] = sub.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team1']])), axis=1)
-sub['IDTeam2'] = sub.apply(lambda r: '_'.join(map(str, [r['Season'], r['Team2']])), axis=1)
-sub['Team1Seed'] = sub['IDTeam1'].map(seeds).fillna(0)
-sub['Team2Seed'] = sub['IDTeam2'].map(seeds).fillna(0)
-sub['SeedDiff'] = sub['Team1Seed'] - sub['Team2Seed'] 
-
-#Leaky (No Validation)
-sdn = games.groupby(['IDTeams'], as_index=False)[['ScoreDiffNorm']].mean()
-sub = pd.merge(sub, sdn, how='left', on=['IDTeams'])
-sub['ScoreDiffNorm'] = sub['ScoreDiffNorm'].fillna(0.)
-
-#Interactions
-inter = games[['IDTeam2','IDTeam1','Season','Pred']].rename(columns={'IDTeam2':'Target','IDTeam1':'Common'})
-inter['Pred'] = inter['Pred'] * -1
-inter = pd.concat((inter,games[['IDTeam1','IDTeam2','Season','Pred']].rename(columns={'IDTeam1':'Target','IDTeam2':'Common'})), axis=0, ignore_index=True).reset_index(drop=True)
-inter = inter[inter['Season']>2013] #Limit
-inter = pd.merge(inter, inter, how='inner', on=['Common','Season'])
-inter = inter[inter['Target_x'] != inter['Target_y']]
-inter['IDTeams'] = inter.apply(lambda r: '_'.join(map(str, [r['Target_x'].split('_')[1],r['Target_y'].split('_')[1]])), axis=1)
-inter = inter[['IDTeams','Pred_x']]
-inter = inter.groupby(['IDTeams'], as_index=False)[['Pred_x']].sum()
-inter = {k:int(v) for k, v in inter.values}
-
-games['Inter'] = games['IDTeams'].map(inter).fillna(0)
-sub['Inter'] = sub['IDTeams'].map(inter).fillna(0)
-col = [c for c in games.columns if c not in ['ID', 'Team1','Team2', 'IDTeams','IDTeam1','IDTeam2','Pred','DayNum', 'WTeamID', 'WScore', 'LTeamID', 'LScore', 'NumOT', 'ScoreDiff']]
-
-reg = linear_model.HuberRegressor()
-reg.fit(games[col], games['Pred'])
-sub['Pred'] = reg.predict(sub[col]).clip(0.05, 0.95)
-sub[['ID','Pred']].to_csv('rh3p_submission.csv', index=False)
-
-reg = ensemble.ExtraTreesClassifier(n_jobs=-1, random_state=18, n_estimators=100)
-reg.fit(games[col], games['Pred'])
-sub['Pred'] = reg.predict_proba(sub[col])[:,1]
-sub['Pred'] = sub['Pred'].clip(0.05, 0.95)
-sub[['ID','Pred']].to_csv('rh3p_etr_submission.csv', index=False)
+    print('Loading data ...')
+    df_train = pd.read_csv('../input/train.csv', dtype={'x':np.float32, 
+                                               'y':np.float32, 
+                                               'accuracy':np.int16,
+                                               'time':np.int,
+                                               'place_id':np.int}, 
+                                               index_col = 0)
+    df_test = pd.read_csv('../input/test.csv', dtype={'x':np.float32,
+                                              'y':np.float32, 
+                                              'accuracy':np.int16,
+                                              'time':np.int,
+                                              'place_id':np.int}, 
+                                              index_col = 0)
+    df_sub = pd.read_csv('../input/sample_submission.csv', index_col = 0)   
+    
+    #Defining the size of the grid
+    n_cell_x = 10
+    n_cell_y = 10 
+    df_train, df_test = prepare_data(df_train, df_test, n_cell_x, n_cell_y)
+    
+    #Solving classification problems inside each grid cell
+    th = 500 #Threshold on place_id inside each cell. Only place_ids with at 
+            #least th occurrences inside each grid_cell are considered. This
+            #is to avoid classes with very few samples and speed-up the 
+            #computation.
+    
+    df_submission  = process_grid(df_train, df_test, df_sub, th, 
+                                  n_cell_x * n_cell_y)                                 
+    #creating the submission
+    print('Generating submission file ...')
+    df_submission.to_csv("sub.csv", index=True)  
+    

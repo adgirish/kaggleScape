@@ -1,116 +1,159 @@
 
 # coding: utf-8
 
-# This is a basic LogisticRegression model trained using the data from https://www.kaggle.com/eoveson/convai-datasets-baseline-models
-# 
-# The baseline model in that kernal is tuned a little to get the data for this kernal This kernal scored 0.044 in the LB
+# Let's start by importing the database. 
+# The row factory setting allows to use column names instead of integer when exploring a resultset.
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import sqlite3
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+database = '../input/database.sqlite'
+conn = sqlite3.connect(database)
+conn.row_factory = sqlite3.Row
+cur = conn.cursor()
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.linear_model import LogisticRegression
-from sklearn.pipeline import Pipeline
-from scipy import sparse
-# set stopwords
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
+# Next we query a match. I chose a home game of my favourite team: Olympique Lyonnais!
 
 # In[ ]:
 
 
-train = pd.read_csv('../input/dataset/train_with_convai.csv')
-test = pd.read_csv('../input/dataset/test_with_convai.csv')
+match_api_id = 1989903
+sql = 'SELECT * From MATCH WHERE match_api_id=?'
+cur.execute(sql, (match_api_id,))
+match = cur.fetchone()
 
 
-# In[ ]:
-
-
-feats_to_concat = ['comment_text', 'toxic_level', 'attack', 'aggression']
-# combining test and train
-alldata = pd.concat([train[feats_to_concat], test[feats_to_concat]], axis=0)
-alldata.comment_text.fillna('unknown', inplace=True)
-
+# We retrieve the x,y coordinates and players api
 
 # In[ ]:
 
 
-vect_words = TfidfVectorizer(max_features=50000, analyzer='word', ngram_range=(1, 1))
-vect_chars = TfidfVectorizer(max_features=20000, analyzer='char', ngram_range=(1, 3))
+home_players_api_id = list()
+away_players_api_id = list()
+home_players_x = list()
+away_players_x = list()
+home_players_y = list()
+away_players_y = list()
+
+for i in range(1,12):
+    home_players_api_id.append(match['home_player_%d' % i])
+    away_players_api_id.append(match['away_player_%d' % i])
+    home_players_x.append(match['home_player_X%d' % i])
+    away_players_x.append(match['away_player_X%d' % i])
+    home_players_y.append(match['home_player_Y%d' % i])
+    away_players_y.append(match['away_player_Y%d' % i])
+
+print('Example, home players api id: ')
+print(home_players_api_id)
 
 
-# In[ ]:
-
-
-all_words = vect_words.fit_transform(alldata.comment_text)
-all_chars = vect_chars.fit_transform(alldata.comment_text)
-
-
-# In[ ]:
-
-
-train_new = train
-test_new = test
-
-
-# In[ ]:
-
-
-train_words = all_words[:len(train_new)]
-test_words = all_words[len(train_new):]
-
-train_chars = all_chars[:len(train_new)]
-test_chars = all_chars[len(train_new):]
-
+# Next, we get the players last names from the table Player. I filter out the None values (if any) from the query and add them back later to the players_names list.
+# I try to keep the name in the same order as the other lists, so as to later map the names to the x,y coordinates
 
 # In[ ]:
 
 
-feats = ['toxic_level', 'attack']
-# make sparse matrix with needed data for train and test
-train_feats = sparse.hstack([train_words, train_chars, alldata[feats][:len(train_new)]])
-test_feats = sparse.hstack([test_words, test_chars, alldata[feats][len(train_new):]])
+#Fetch players'names 
+players_api_id = [home_players_api_id,away_players_api_id]
+players_api_id.append(home_players_api_id) # Home
+players_api_id.append(away_players_api_id) # Away
+players_names = [[None]*11,[None]*11]
 
+for i in range(2):
+    players_api_id_not_none = [x for x in players_api_id[i] if x is not None]
+    sql = 'SELECT player_api_id,player_name FROM Player'
+    sql += ' WHERE player_api_id IN (' + ','.join(map(str, players_api_id_not_none)) + ')'
+    cur.execute(sql)
+    players = cur.fetchall()
+    for player in players:
+        idx = players_api_id[i].index(player['player_api_id'])
+        name = player['player_name'].split()[-1] # keep only the last name
+        players_names[i][idx] = name
+
+print('Home team players names:')
+print(players_names[0])
+print('Away team players names:')
+print(players_names[1])
+
+
+# Next we need to rework the x coordinate a little bit, replacing 1 (the goal keeper) with 5. You will understand why when we do the plot.
 
 # In[ ]:
 
 
-col = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+home_players_x = [5 if x==1 else x for x in home_players_x]
+away_players_x = [5 if x==1 else x for x in away_players_x]
 
-only_col = ['toxic']
 
-preds = np.zeros((test_new.shape[0], len(col)))
-
-for i, j in enumerate(col):
-    print('===Fit '+j)
-    
-    model = LogisticRegression(C=4.0, solver='sag')
-    print('Fitting model')
-    model.fit(train_feats, train_new[j])
-      
-    print('Predicting on test')
-    preds[:,i] = model.predict_proba(test_feats)[:,1]
-
+# Finally let's plot the lineup with a top-down view of the pitch. 
+# You should clearly see the differences between the two squad formations.
+# Lyon plays in 4-3-1-2 shape while St Etienne (the away team) uses a 4-2-3-1 formation.
 
 # In[ ]:
 
 
-subm = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
+import matplotlib.pyplot as plt
 
-submid = pd.DataFrame({'id': subm["id"]})
-submission = pd.concat([submid, pd.DataFrame(preds, columns = col)], axis=1)
-submission.to_csv('feat_lr_2cols.csv', index=False)
+# Home team (in blue)
+plt.subplot(2, 1, 1)
+plt.rc('grid', linestyle="-", color='black')
+plt.rc('figure', figsize=(12,20))
+plt.gca().invert_yaxis() # Invert y axis to start with the goalkeeper at the top
+for label, x, y in zip(players_names[0], home_players_x, home_players_y):
+    plt.annotate(
+        label, 
+        xy = (x, y), xytext = (-20, 20),
+        textcoords = 'offset points', va = 'bottom')
+plt.scatter(home_players_x, home_players_y,s=480,c='blue')
+plt.grid(True)
+
+# Away team (in red)
+plt.subplot(2, 1, 2)
+plt.rc('grid', linestyle="-", color='black')
+plt.rc('figure', figsize=(12,20))
+plt.gca().invert_xaxis() # Invert x axis to have right wingers on the right
+for label, x, y in zip(players_names[1], away_players_x, away_players_y):
+    plt.annotate(
+        label, 
+        xy = (x, y), xytext = (-20, 20),
+        textcoords = 'offset points', va = 'bottom')
+plt.scatter(away_players_x, away_players_y,s=480,c='red')
+plt.grid(True)
+
+
+ax = [plt.subplot(2,2,i+1) for i in range(0)]
+for a in ax:
+    a.set_xticklabels([])
+    a.set_yticklabels([])
+plt.subplots_adjust(wspace=0, hspace=0)
+
+
+plt.show()
+
+
+# We can also buil a string with the formations and print it:
+
+# In[ ]:
+
+
+from collections import Counter
+
+players_y = [home_players_y,away_players_y]
+formations = [None] * 2
+for i in range(2):
+    formation_dict=Counter(players_y[i]);
+    sorted_keys = sorted(formation_dict)
+    formation = ''
+    for key in sorted_keys[1:-1]:
+        y = formation_dict[key]
+        formation += '%d-' % y
+    formation += '%d' % formation_dict[sorted_keys[-1]] 
+    formations[i] = formation
+
+
+print('Home team formation: ' + formations[0])
+print('Away team formation: ' + formations[1])
 

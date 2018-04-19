@@ -1,1156 +1,332 @@
 
 # coding: utf-8
 
-# Thank you for opening this script!
+# #Looking at Global Inequality. 
+# Investigating global inequality based on GNI per capita and wealth distributions over time.
 # 
-# I have made all efforts to document each and every step involved in the prediction process so that this notebook acts as a good starting point for new Kagglers and new machine learning enthusiasts.
 # 
-# Please **upvote** this kernel so that it reaches the top of the chart and is easily locatable by new users. Your comments on how we can improve this kernel is welcome. Thanks.
-# 
-# My other exploratory studies can be accessed here :
-# https://www.kaggle.com/sharmasanthosh/kernels
-# ***
-# ## Data statistics
-# * Shape
-# * Peek
-# * Description
-# * Skew
-# 
-# ## Transformation
-# * Correction of skew
-# 
-# ## Data Interaction
-# * Correlation
-# * Scatter plot
-# 
-# ## Data Visualization
-# * Box and density plots
-# * Grouping of one hot encoded attributes
-# 
-# ## Data Preparation
-# * One hot encoding of categorical data
-# * Test-train split
-# 
-# ## Evaluation, prediction, and analysis
-# * Linear Regression (Linear algo)
-# * Ridge Regression (Linear algo)
-# * LASSO Linear Regression (Linear algo)
-# * Elastic Net Regression (Linear algo)
-# * KNN (non-linear algo)
-# * CART (non-linear algo)
-# * SVM (Non-linear algo)
-# * Bagged Decision Trees (Bagging)
-# * Random Forest (Bagging)
-# * Extra Trees (Bagging)
-# * AdaBoost (Boosting)
-# * Stochastic Gradient Boosting (Boosting)
-# * MLP (Deep Learning)
-# * XGBoost
-# 
-# ## Make Predictions
-# ***
 
-# ## Load raw data:
-# 
-# Information about all the attributes can be found here:
-# 
-# https://www.kaggle.com/c/allstate-claims-severity/data
-# 
-# Learning: 
-# We need to predict the 'loss' based on the other attributes. Hence, this is a regression problem.
-
-# In[ ]:
+# In[2]:
 
 
-# Supress unnecessary warnings so that presentation looks clean
-import warnings
-warnings.filterwarnings('ignore')
-
-# Read raw data from the file
-
-import pandas #provides data structures to quickly analyze data
-#Since this code runs on Kaggle server, data can be accessed directly in the 'input' folder
-#Read the train dataset
-dataset = pandas.read_csv("../input/train.csv") 
-
-#Read test dataset
-dataset_test = pandas.read_csv("../input/test.csv")
-#Save the id's for submission file
-ID = dataset_test['id']
-#Drop unnecessary columns
-dataset_test.drop('id',axis=1,inplace=True)
-
-#Print all rows and columns. Dont hide any
-pandas.set_option('display.max_rows', None)
-pandas.set_option('display.max_columns', None)
-
-#Display the first five rows to get a feel of the data
-print(dataset.head(5))
-
-#Learning : cat1 to cat116 contain alphabets
-
-
-# ## Data statistics
-# * Shape
-
-# In[ ]:
-
-
-# Size of the dataframe
-
-print(dataset.shape)
-
-# We can see that there are 188318 instances having 132 attributes
-
-#Drop the first column 'id' since it just has serial numbers. Not useful in the prediction process.
-dataset = dataset.iloc[:,1:]
-
-#Learning : Data is loaded successfully as dimensions match the data description
-
-
-# ## Data statistics
-# * Description
-
-# In[ ]:
-
-
-# Statistical description
-
-print(dataset.describe())
-
-# Learning :
-# No attribute in continuous columns is missing as count is 188318 for all, all rows can be used
-# No negative values are present. Tests such as chi2 can be used
-# Statistics not displayed for categorical data
-
-
-# ## Data statistics
-# * Skew
-
-# In[ ]:
-
-
-# Skewness of the distribution
-
-print(dataset.skew())
-
-# Values close to 0 show less ske
-# loss shows the highest skew. Let us visualize it
-
-
-# ## Data Visualization
-# * Box and density plots
-
-# In[ ]:
-
-
-# We will visualize all the continuous attributes using Violin Plot - a combination of box and density plots
-
-import numpy
-
-#import plotting libraries
-import seaborn as sns
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
-
-#range of features considered
-split = 116 
-
-#number of features considered
-size = 15
-
-#create a dataframe with only continuous features
-data=dataset.iloc[:,split:] 
-
-#get the names of all the columns
-cols=data.columns 
-
-#Plot violin for all attributes in a 7x2 grid
-n_cols = 2
-n_rows = 7
-
-for i in range(n_rows):
-    fg,ax = plt.subplots(nrows=1,ncols=n_cols,figsize=(12, 8))
-    for j in range(n_cols):
-        sns.violinplot(y=cols[i*n_cols+j], data=dataset, ax=ax[j])
+import seaborn as sns
 
 
-#cont1 has many values close to 0.5
-#cont2 has a pattern where there a several spikes at specific points
-#cont5 has many values near 0.3
-#cont14 has a distinct pattern. 0.22 and 0.82 have a lot of concentration
-#loss distribution must be converted to normal
+
+pd.set_option('display.max_rows', 50)
+pd.set_option('display.max_columns', 50)
+pd.set_option('display.width', 1000)
+
+document = pd.read_csv('../input/Indicators.csv')
+
+#want to see all the countries listed in the document  
+document['CountryName'].unique()
+
+#get rid of indicators that aren't countries 
+list = ['Arab World', 'Caribbean small states', 'Central Europe and the Baltics',
+ 'East Asia & Pacific (all income levels)',
+ 'East Asia & Pacific (developing only)', 'Euro area',
+ 'Europe & Central Asia (all income levels)',
+ 'Europe & Central Asia (developing only)', 'European Union',
+ 'Fragile and conflict affected situations',
+ 'Heavily indebted poor countries (HIPC)', 'High income',
+ 'High income: nonOECD', 'High income: OECD',
+ 'Latin America & Caribbean (all income levels)',
+ 'Latin America & Caribbean (developing only)',
+ 'Least developed countries: UN classification', 'Low & middle income',
+ 'Low income', 'Lower middle income',
+ 'Middle East & North Africa (all income levels)',
+ 'Middle East & North Africa (developing only)', 'Middle income',
+ 'North America' 'OECD members' ,'Other small states',
+ 'Pacific island small states', 'Small states', 'South Asia',
+ 'Sub-Saharan Africa (all income levels)',
+ 'Sub-Saharan Africa (developing only)' ,'Upper middle income' ,'World', 'North America', 'OECD members']
 
 
-# ## Data Transformation
-# * Skew correction
-
-# In[ ]:
 
 
-#log1p function applies log(1+x) to all elements of the column
-dataset["loss"] = numpy.log1p(dataset["loss"])
-#visualize the transformed column
-sns.violinplot(data=dataset,y="loss")  
-plt.show()
-
-#Plot shows that skew is corrected to a large extent
 
 
-# ## Data Interaction
-# * Correlation
+# ##Identifying the "poor" countries
+# What are the 15 countries that had the lowest average incomes from 1960-2014?
 
-# In[ ]:
-
-
-# Correlation tells relation between two attributes.
-# Correlation requires continous data. Hence, ignore categorical data
-
-# Calculates pearson co-efficient for all combinations
-data_corr = data.corr()
-
-# Set the threshold to select only highly correlated attributes
-threshold = 0.5
-
-# List of pairs along with correlation above threshold
-corr_list = []
-
-#Search for the highly correlated pairs
-for i in range(0,size): #for 'size' features
-    for j in range(i+1,size): #avoid repetition
-        if (data_corr.iloc[i,j] >= threshold and data_corr.iloc[i,j] < 1) or (data_corr.iloc[i,j] < 0 and data_corr.iloc[i,j] <= -threshold):
-            corr_list.append([data_corr.iloc[i,j],i,j]) #store correlation and columns index
-
-#Sort to show higher ones first            
-s_corr_list = sorted(corr_list,key=lambda x: -abs(x[0]))
-
-#Print correlations and column names
-for v,i,j in s_corr_list:
-    print ("%s and %s = %.2f" % (cols[i],cols[j],v))
-
-# Strong correlation is observed between the following pairs
-# This represents an opportunity to reduce the feature set through transformations such as PCA
+# In[8]:
 
 
-# ## Data Interaction
-# * Scatter plot
+document.head(10)
+
+
+# In[22]:
+
+
+
+years = document.loc[document['IndicatorCode'] == 'NY.GNP.PCAP.CD',['Year']].Year.unique()
+
+
 
 # In[ ]:
 
 
-# Scatter plot of only the highly correlated pairs
-for v,i,j in s_corr_list:
-    sns.pairplot(dataset, size=6, x_vars=cols[i],y_vars=cols[j] )
-    plt.show()
+lowestGNI_2014 = document.query("IndicatorCode == 'NY.GNP.PCAP.CD' & CountryName != list & Year == 2014").sort_values(by = 'Value', ascending = True)[:15]
+lowestGNI_1960 = document.query("IndicatorCode == 'NY.GNP.PCAP.CD' & CountryName != list & Year == 1962").sort_values(by = 'Value', ascending = True)[:15]
+    
 
-#cont11 and cont12 give an almost linear pattern...one must be removed
-#cont1 and cont9 are highly correlated ...either of them could be safely removed 
-#cont6 and cont10 show very good correlation too
+fig = plt.subplots()
+
+graph1 = sns.barplot(x = "Value", y = "CountryName", palette = "PuBu", data = lowestGNI_1960)
+plt.xlabel('Average Income ($)', fontsize = 14)
+plt.ylabel('Country',  fontsize=14)
+plt.title('The 15 Countries with Lowest Average Income in 1962', fontsize = 14)
 
 
-# ## Data Visualization
-# * Categorical attributes
+
+
+
 
 # In[ ]:
 
 
-# Count of each label in each category
+fig2 = plt.subplots()
 
-#names of all the columns
-cols = dataset.columns
-
-#Plot count plot for all attributes in a 29x4 grid
-n_cols = 4
-n_rows = 29
-for i in range(n_rows):
-    fg,ax = plt.subplots(nrows=1,ncols=n_cols,sharey=True,figsize=(12, 8))
-    for j in range(n_cols):
-        sns.countplot(x=cols[i*n_cols+j], data=dataset, ax=ax[j])
-
-#cat1 to cat72 have only two labels A and B. In most of the cases, B has very few entries
-#cat73 to cat 108 have more than two labels
-#cat109 to cat116 have many labels
+graph2 = sns.barplot(x = "Value", y = "CountryName", palette = "PuBu", data = lowestGNI_2014)
+plt.xlabel('Average Income($)', fontsize = 14)
+plt.ylabel('Country', fontsize = 14)
+plt.title('The 15 Countries with Lowest Average Income in 2014', fontsize = 14)
 
 
-# ##Data Preparation
-# * One Hot Encoding of categorical data
+
+# ###Which countries have consistently been 'poor'?
 
 # In[ ]:
 
 
-import pandas
+for key,group in lowestGNI_1960.groupby(['CountryName']):
+    for key2, group2 in lowestGNI_2014.groupby(['CountryName']):
+        if key == key2:
+            print (key)
 
-#cat1 to cat116 have strings. The ML algorithms we are going to study require numberical data
-#One-hot encoding converts an attribute to a binary vector
 
-#Variable to hold the list of variables for an attribute in the train and test data
+# It is interesting to note the geographic differences of low income countries in 1962 and 2014. In 1962, 5 of the 15 countries (China, India, Korea, Pakistan, Nepal) with lowest average income in the world were located in Asia. Switch to 2014 and it is interesting to note that every single one of the countries with lowest income in the world are all African with the exception of Afghanistan. 
+# 
+# By running a simple for loop after visualizing the data, it can be seen that 4 countries- Burundi, Central African Republic, Malawi, and Togo- have been in the poorest 15 in both the past (1960s) and the present.
+
+# ##Identifying the "rich" countries
+# What countries had the highest average incomes in both 1960 and 2014?
+
+# In[ ]:
+
+
+rich_1960 = document.query("IndicatorCode == 'NY.GNP.PCAP.CD' & CountryName != list & Year == 1962").sort_values(by = 'Value')[-15:]
+rich_2014 = document.query("IndicatorCode == 'NY.GNP.PCAP.CD' & CountryName != list & Year == 2014").sort_values(by= 'Value')[-15:]
+
+
+# In[ ]:
+
+
+fig = plt.subplots()
+
+graph_rich = sns.barplot(x = "Value", y = "CountryName", palette = "BuGn", data = rich_1960)
+plt.xlabel('Average Income ($)', fontsize = 14)
+plt.ylabel('Country',  fontsize=14)
+plt.title('The 15 Countries with Highest Average Income in 1960', fontsize = 14)
+
+
+
+
+# In[ ]:
+
+
+fig = plt.subplots()
+
+graph_rich2 = sns.barplot(x = "Value", y = "CountryName", palette = "BuGn", data = rich_2014)
+plt.xlabel('Average Income ($)', fontsize = 14)
+plt.ylabel('Country',  fontsize=14)
+plt.title('The 15 Countries with Highest Average Income in 2014', fontsize = 14)
+
+
+
+# ###Which countries have consistently been 'rich'?
+
+# In[ ]:
+
+
+for key, group in rich_1960.groupby(['CountryName']):
+    for key2, group2 in rich_2014.groupby(['CountryName']):
+        if key == key2:
+            print (key)
+
+
+# There are a lot of unique attributes to note about the 'rich' countries. For they most part, they are located in the Western world- particularly in W. Europe, Scandinavia, and N.America. 9 of the 15 countries were wealthy in both the past (1960s) and the present- suggesting that having wealth in the past is a big indicator of having wealth in the present. 
+# Another interesting thing to note is the appearance of newer 'rich' countries from the Middle East (Qatar, Kuwait) and East Asia (Macao, Singapore). 
+# Furthermore, it can also be seen that transitioning from 1960s to the present, the average incomes increased significantly in the developed world- suggesting that wealth has been accumulating much quicker in only certain pockets of the planet.
+
+# ##Comparing 'rich', 'emerging', and 'poor' countries
+
+# ###Tracking Average Income from 1960-2014 
+
+# In[ ]:
+
+
+fig8, ax8 = plt.subplots(figsize = [15,8], ncols = 2)
+ax6, ax7 = ax8
+
 labels = []
+GNP_revised = document.query("IndicatorCode == 'NY.GNP.PCAP.CD' & CountryName == ['Australia','Austria','Canada', 'Luxembourg', 'Netherlands','Norway','United States']").groupby(['CountryName'])
+for key, group in GNP_revised:
+    ax6 = group.plot(ax = ax6, kind = "line", x = "Year", y = "Value", title = "Average Income from 1960-2014 in 'Rich' Countries")
+    labels.append(key)
 
-for i in range(0,split):
-    train = dataset[cols[i]].unique()
-    test = dataset_test[cols[i]].unique()
-    labels.append(list(set(train) | set(test)))    
+lines, _ = ax6.get_legend_handles_labels()
+ax6.legend(lines, labels, loc='best')
 
-del dataset_test
+labels2 = []
+GNP_revised = document.query("IndicatorCode == 'NY.GNP.PCAP.CD' & CountryName == ['Burundi', 'Togo', 'Malawi', 'Central African Republic']").groupby(['CountryName'])
+for key, group in GNP_revised:
+    ax7 = group.plot(ax = ax7, kind = "line", x = "Year", y = "Value", title = "Average Income from 1960-2014 in 'Poor' Countries")
+    labels2.append(key)
 
-#Import OneHotEncoder
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import OneHotEncoder
-
-#One hot encode all categorical attributes
-cats = []
-for i in range(0, split):
-    #Label encode
-    label_encoder = LabelEncoder()
-    label_encoder.fit(labels[i])
-    feature = label_encoder.transform(dataset.iloc[:,i])
-    feature = feature.reshape(dataset.shape[0], 1)
-    #One hot encode
-    onehot_encoder = OneHotEncoder(sparse=False,n_values=len(labels[i]))
-    feature = onehot_encoder.fit_transform(feature)
-    cats.append(feature)
-
-# Make a 2D array from a list of 1D arrays
-encoded_cats = numpy.column_stack(cats)
-
-# Print the shape of the encoded data
-print(encoded_cats.shape)
-
-#Concatenate encoded attributes with continuous attributes
-dataset_encoded = numpy.concatenate((encoded_cats,dataset.iloc[:,split:].values),axis=1)
-del cats
-del feature
-del dataset
-del encoded_cats
-print(dataset_encoded.shape)
+lines, _ = ax7.get_legend_handles_labels()
+ax7.legend(lines, labels2, loc='best')
 
 
-# ##Data Preparation
-# * Split into train and validation
+# There are some noticeable observations here:
+# 
+# 1) Growth in income for "rich" countries is much greater than the growth in income for the "poorer" countries.
+# 
+# 2) In "poor" countries, we see that growth in income is not as steady as in "rich" countries. Since change in income is so much smaller overtime, even slight income changes appear very dramatic for "poor" countries.
+# 
+
+# ###Wealth is acculumating faster in certain countries than others
 
 # In[ ]:
 
 
-#get the number of rows and columns
-r, c = dataset_encoded.shape
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize = [15,8], sharex = True)
+income_query = document.query("IndicatorCode == 'NY.GNP.PCAP.CD' & Year == 1962 & CountryName == ['Malawi', 'China', 'Luxembourg', 'United States']")
+income_query_graph = sns.barplot(x = 'CountryName', y = 'Value', order = ['Malawi', 'China', 'Luxembourg', 'United States'], ax = ax1, data = income_query)
+ax1.set_title("Average Income in 1962", fontsize = 14)
+ax1.set_xlabel('Country', fontsize = 14)
+ax1.set_ylabel('Average Income ($)', fontsize = 14)
 
-#create an array which has indexes of columns
-i_cols = []
-for i in range(0,c-1):
-    i_cols.append(i)
+for p in income_query_graph.patches:
+    height = p.get_height()
+    income_query_graph.text(p.get_x() + p.get_width()/2., 1.05*height,
+                '%d' % int(height), ha='center', va='bottom')
+    
+income_query_now=document.query("IndicatorCode == 'NY.GNP.PCAP.CD' & Year == 2014 & CountryName == ['Malawi', 'China', 'Luxembourg', 'United States']")
+income_query_now_graph = sns.barplot(x = 'CountryName', y = 'Value', order = ['Malawi', 'China', 'Luxembourg', 'United States'], ax = ax2, data = income_query_now)
+ax2.set_title("Average Income in 2014", fontsize = 14)
+ax2.set_xlabel('Country', fontsize = 14)
+ax2.set_ylabel('Average Income ($)', fontsize = 14)
+plt.ylim([0,90000])
 
-#Y is the target column, X has the rest
-X = dataset_encoded[:,0:(c-1)]
-Y = dataset_encoded[:,(c-1)]
-del dataset_encoded
-
-#Validation chunk size
-val_size = 0.1
-
-#Use a common seed in all experiments so that same chunk is used for validation
-seed = 0
-
-#Split the data into chunks
-from sklearn import cross_validation
-X_train, X_val, Y_train, Y_val = cross_validation.train_test_split(X, Y, test_size=val_size, random_state=seed)
-del X
-del Y
-
-#All features
-X_all = []
-
-#List of combinations
-comb = []
-
-#Dictionary to store the MAE for all algorithms 
-mae = []
-
-#Scoring parameter
-from sklearn.metrics import mean_absolute_error
-
-#Add this version of X to the list 
-n = "All"
-#X_all.append([n, X_train,X_val,i_cols])
-X_all.append([n, i_cols])
+for p in income_query_now_graph.patches:
+    height = p.get_height()
+    income_query_now_graph.text(p.get_x() + p.get_width()/2., 1.05*height,
+                '%d' % int(height), ha='center', va='bottom')
 
 
-# ## Evaluation, prediction, and analysis
-# * Linear Regression (Linear algo)
+# It turns out that compared to Luxembourg and United States, citizens of both Malawi and China had substantially lower incomes in 1962. The average citizen in Malawi only made $50/yr in 1962! The average American citizen made almost 7x's the average Malawian citizen!
+# 
+# So yes, the "rich" countries had a higher leg up compared to the "poor" countries!
+# 
+# It is also interesting to note that at $250 per year, the average income of a Malawian in 2014 is still substantially less than the average income of $3280 per yer of an American citizen in 1962. 
+# 
+# In fact, this is an interesting trend to note for several of the current 'poor' countries. The average incomes of these 'poor' countries is still considerably less compared to the incomes of 'rich' countries 40 years ago. This suggests that not only did 'poor' countries start off on an uneven foot, economic growth is affecting 'rich' countries significantly more than they are the 'poor' countries. This phenomena is occurring to the point that the poorest countries could not even achieve the incomes of the 'rich' countries 40 years ago before the 'rich' countries enormous growth in income.  
 
 # In[ ]:
 
 
-#Evaluation of various combinations of LinearRegression
+a = pd.Series(income_query_now['Value'].reset_index(drop = True))
+b = pd.Series(income_query['Value'].reset_index(drop = True))
+ratio = a/b
 
-#Import the library
-from sklearn.linear_model import LinearRegression
+income_ratio = sns.barplot(x = ['China', 'Luxembourg', 'Malawi', 'United States'], y = ratio, order = ['China', 'Luxembourg', 'United States', 'Malawi'])
+plt.title('Measuring Income Growth- Which countries have seen the most change in incomes?', fontsize = 11)
+plt.xlabel('Country', fontsize = 10)
+plt.ylabel('Income Ratio (2014 Income/1962 Income)', fontsize = 10)
 
-#uncomment the below lines if you want to run the algo
-##Set the base model
-#model = LinearRegression(n_jobs=-1)
-#algo = "LR"
-#
-##Accuracy of the model using all features
-#for name,i_cols_list in X_all:
-#    model.fit(X_train[:,i_cols_list],Y_train)
-#    result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-#    mae.append(result)
-#    print(name + " %s" % result)
-#comb.append(algo)
-
-#Result obtained after running the algo. Comment the below two lines if you want to run the algo
-mae.append(1278)
-comb.append("LR" )    
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#MAE achieved is 1278
+for p in income_ratio.patches:
+    height = p.get_height()
+    income_ratio.text(p.get_x() + p.get_width()/2., 1.05*height,
+                '%d' % int(height), ha='center', va='bottom')
 
 
-# ## Evaluation, prediction, and analysis
-# * Ridge Regression (Linear algo)
+# Change in income has been the most radical for China. The average income of a Chinese citizen has increased by over 100x's. China's insane growth makes Luxembourg and US considerable growth look miniscule. While in absolute numbers, China still lags behind 'rich' coutries in absolute income numbers, China's actual growth measured in terms of ratios is incredible.
+# 
+# Indeed, China has done a good itself lifting itself out of poverty going from being one of the poorest countries in the world in the 60s to garnering itself in the ranks of being a middle income economy. 
+# 
+# That is the good news. 
+# 
+# The bad news is that 'poor' countries such as Malawi have not encountered much income growth. Not only did these countries make less compared to other countries in the 60s, they have also not been able to keep up with other countries in terms of growth. 
+
+# ###China vs Malawi-- how do their average incomes compare overtime?
 
 # In[ ]:
 
 
-#Evaluation of various combinations of Ridge LinearRegression
+fig11, ax21 = plt.subplots(figsize = [15,8])
+labels_cGNP = []
+for key, group in document.query("IndicatorCode == 'NY.GNP.PCAP.CD' & CountryName == ['China', 'Malawi']").groupby(['CountryName']):
+    ax21 = group.plot(ax=ax21, kind = "line", x = "Year", y = "Value", title = "Comparing average incomes- China vs Malawi")
+    labels_cGNP.append(key)
 
-#Import the library
-from sklearn.linear_model import Ridge
-
-#Add the alpha value to the below list if you want to run the algo
-a_list = numpy.array([])
-
-for alpha in a_list:
-    #Set the base model
-    model = Ridge(alpha=alpha,random_state=seed)
-    
-    algo = "Ridge"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % alpha )
-
-#Result obtained by running the algo for alpha=1.0    
-if (len(a_list)==0):
-    mae.append(1267.5)
-    comb.append("Ridge" + " %s" % 1.0 )    
-    
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is 1267 with alpha=1
+lines, _ = ax21.get_legend_handles_labels()
+ax21.legend(lines, labels_cGNP, loc = 'best')
 
 
-# ## Evaluation, prediction, and analysis
-# * LASSO Linear Regression (Linear algo)
+# China is truly the miracle economy of the world. It's growth is literally exponential. 
+
+# ###China vs Malawi vs Luxembourg vs United States-- how their average incomes compare overtime
 
 # In[ ]:
 
 
-#Evaluation of various combinations of Lasso LinearRegression
+fig12, axs12 = plt.subplots(figsize = [15,8])
+labels_cross3pt2 = []
+for key, group in document.query("IndicatorCode == 'NY.GNP.PCAP.CD' & CountryName == ['China', 'Malawi', 'Luxembourg', 'United States']").groupby(['CountryName']):
+    axs12 = group.plot(ax = axs12, kind = "line", x = "Year", y = "Value", title = "Comparing average income- China vs Malawi vs Luxembourg vs US")
+    labels_cross3pt2.append(key)
 
-#Import the library
-from sklearn.linear_model import Lasso
-
-#Add the alpha value to the below list if you want to run the algo
-a_list = numpy.array([])
-
-for alpha in a_list:
-    #Set the base model
-    model = Lasso(alpha=alpha,random_state=seed)
-    
-    algo = "Lasso"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % alpha )
-
-#Result obtained by running the algo for alpha=0.001    
-if (len(a_list)==0):
-    mae.append(1262.5)
-    comb.append("Lasso" + " %s" % 0.001 )
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#High computation time
-#Best estimated performance is 1262.5 for alpha = 0.001
+lines,_ = axs12.get_legend_handles_labels()
+axs12.legend(lines, labels_cross3pt2, loc = 'best')
 
 
-# ## Evaluation, prediction, and analysis
-# * Elastic Net Regression (Linear algo)
+# Even though China has showed extraordinary growth, it by no mean has an average income that compares to those of the 'rich' countries. China's growth is most definitely explosive, but it still has a long way to go to achieve the average income of a 'rich' country. While it's growth curve is by far the most impressive out of the 4 countries, there is still an obvious divide in income with China and Malawi belonging on one side and Luxembourg and the US on another.
+
+# ##Wealth Distributions - Malawi vs China vs United States vs Luxembourg
 
 # In[ ]:
 
 
-#Evaluation of various combinations of ElasticNet LinearRegression
-
-#Import the library
-from sklearn.linear_model import ElasticNet
-
-#Add the alpha value to the below list if you want to run the algo
-a_list = numpy.array([])
-
-for alpha in a_list:
-    #Set the base model
-    model = ElasticNet(alpha=alpha,random_state=seed)
-    
-    algo = "Elastic"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % alpha )
-
-if (len(a_list)==0):
-    mae.append(1260)
-    comb.append("Elastic" + " %s" % 0.001 )
-    
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#High computation time
-#Best estimated performance is 1260 for alpha = 0.001
-
-
-# ## Evaluation, prediction, and analysis
-# * KNN (non-linear algo)
-
-# In[ ]:
-
-
-#Evaluation of various combinations of KNN
-
-#Import the library
-from sklearn.neighbors import KNeighborsRegressor
-
-#Add the N value to the below list if you want to run the algo
-n_list = numpy.array([])
-
-for n_neighbors in n_list:
-    #Set the base model
-    model = KNeighborsRegressor(n_neighbors=n_neighbors,n_jobs=-1)
-    
-    algo = "KNN"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % n_neighbors )
-
-if (len(n_list)==0):
-    mae.append(1745)
-    comb.append("KNN" + " %s" % 1 )
-    
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Very high computation time
-#Best estimated performance is 1745 for n=1
-
-
-# ## Evaluation, prediction, and analysis
-# * CART (non-linear algo)
-
-# In[ ]:
-
-
-#Evaluation of various combinations of CART
-
-#Import the library
-from sklearn.tree import DecisionTreeRegressor
-
-#Add the max_depth value to the below list if you want to run the algo
-d_list = numpy.array([])
-
-for max_depth in d_list:
-    #Set the base model
-    model = DecisionTreeRegressor(max_depth=max_depth,random_state=seed)
-    
-    algo = "CART"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % max_depth )
-
-if (len(a_list)==0):
-    mae.append(1741)
-    comb.append("CART" + " %s" % 5 )    
-    
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#High computation time
-#Best estimated performance is 1741 for depth=5
-
-
-# ## Evaluation, prediction, and analysis
-# * SVM (Non-linear algo)
-
-# In[ ]:
-
-
-#Evaluation of various combinations of SVM
-
-#Import the library
-from sklearn.svm import SVR
-
-#Add the C value to the below list if you want to run the algo
-c_list = numpy.array([])
-
-for C in c_list:
-    #Set the base model
-    model = SVR(C=C)
-    
-    algo = "SVM"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % C )
-
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#very very high computation time
-
-
-# ## Evaluation, prediction, and analysis
-# * Bagged Decision Trees (Bagging)
-
-# In[ ]:
-
-
-#Evaluation of various combinations of Bagged Decision Trees
-
-#Import the library
-from sklearn.ensemble import BaggingRegressor
-from sklearn.tree import DecisionTreeRegressor
-
-#Add the n_estimators value to the below list if you want to run the algo
-n_list = numpy.array([])
-
-for n_estimators in n_list:
-    #Set the base model
-    model = BaggingRegressor(n_jobs=-1,n_estimators=n_estimators)
-    
-    algo = "Bag"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % n_estimators )
-
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#very high computation time
-
-
-# ## Evaluation, prediction, and analysis
-# * Random Forest (Bagging)
-
-# In[ ]:
-
-
-#Evaluation of various combinations of RandomForest
-
-#Import the library
-from sklearn.ensemble import RandomForestRegressor
-
-#Add the n_estimators value to the below list if you want to run the algo
-n_list = numpy.array([])
-
-for n_estimators in n_list:
-    #Set the base model
-    model = RandomForestRegressor(n_jobs=-1,n_estimators=n_estimators,random_state=seed)
-    
-    algo = "RF"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % n_estimators )
-
-if (len(n_list)==0):
-    mae.append(1213)
-    comb.append("RF" + " %s" % 50 )    
-    
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is 1213 when the number of estimators is 50
-
-
-# ## Evaluation, prediction, and analysis
-# * Extra Trees (Bagging)
-
-# In[ ]:
-
-
-#Evaluation of various combinations of ExtraTrees
-
-#Import the library
-from sklearn.ensemble import ExtraTreesRegressor
-
-#Add the n_estimators value to the below list if you want to run the algo
-n_list = numpy.array([])
-
-for n_estimators in n_list:
-    #Set the base model
-    model = ExtraTreesRegressor(n_jobs=-1,n_estimators=n_estimators,random_state=seed)
-    
-    algo = "ET"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % n_estimators )
-
-if (len(n_list)==0):
-    mae.append(1254)
-    comb.append("ET" + " %s" % 100 )    
-    
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is 1254 for 100 estimators
-
-
-# ## Evaluation, prediction, and analysis
-# * AdaBoost (Boosting)
-
-# In[ ]:
-
-
-#Evaluation of various combinations of AdaBoost
-
-#Import the library
-from sklearn.ensemble import AdaBoostRegressor
-
-#Add the n_estimators value to the below list if you want to run the algo
-n_list = numpy.array([])
-
-for n_estimators in n_list:
-    #Set the base model
-    model = AdaBoostRegressor(n_estimators=n_estimators,random_state=seed)
-    
-    algo = "Ada"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % n_estimators )
-
-if (len(n_list)==0):
-    mae.append(1678)
-    comb.append("Ada" + " %s" % 100 )    
-    
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is 1678 with n=100
-
-
-# ## Evaluation, prediction, and analysis
-# * Stochastic Gradient Boosting (Boosting)
-
-# In[ ]:
-
-
-#Evaluation of various combinations of SGB
-
-#Import the library
-from sklearn.ensemble import GradientBoostingRegressor
-
-#Add the n_estimators value to the below list if you want to run the algo
-n_list = numpy.array([])
-
-for n_estimators in n_list:
-    #Set the base model
-    model = GradientBoostingRegressor(n_estimators=n_estimators,random_state=seed)
-    
-    algo = "SGB"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % n_estimators )
-
-if (len(n_list)==0):
-    mae.append(1278)
-    comb.append("SGB" + " %s" % 50 )    
-    
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is ?
-
-
-# ## Evaluation, prediction, and analysis
-# * XGBoost
-
-# In[ ]:
-
-
-#Evaluation of various combinations of XGB
-
-#Import the library
-from xgboost import XGBRegressor
-
-#Add the n_estimators value to the below list if you want to run the algo
-n_list = numpy.array([])
-
-for n_estimators in n_list:
-    #Set the base model
-    model = XGBRegressor(n_estimators=n_estimators,seed=seed)
-    
-    algo = "XGB"
-
-    #Accuracy of the model using all features
-    for name,i_cols_list in X_all:
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo + " %s" % n_estimators )
-
-if (len(n_list)==0):
-    mae.append(1169)
-    comb.append("XGB" + " %s" % 1000 )    
-    
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-##Plot the MAE of all combinations
-#fig, ax = plt.subplots()
-#plt.plot(mae)
-##Set the tick names to names of combinations
-#ax.set_xticks(range(len(comb)))
-#ax.set_xticklabels(comb,rotation='vertical')
-##Plot the accuracy for all combinations
-#plt.show()    
-
-#Best estimated performance is 1169 with n=1000
-
-
-# ## Evaluation, prediction, and analysis
-# * MLP (Deep Learning)
-
-# In[ ]:
-
-
-#Evaluation of various combinations of multi-layer perceptrons
-
-#Import libraries for deep learning
-from keras.wrappers.scikit_learn import KerasRegressor
-from keras.models import Sequential
-from keras.layers import Dense
-
-# define baseline model
-def baseline(v):
-     # create model
-     model = Sequential()
-     model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu'))
-     model.add(Dense(1, init='normal'))
-     # Compile model
-     model.compile(loss='mean_absolute_error', optimizer='adam')
-     return model
-
-# define smaller model
-def smaller(v):
-     # create model
-     model = Sequential()
-     model.add(Dense(v*(c-1)/2, input_dim=v*(c-1), init='normal', activation='relu'))
-     model.add(Dense(1, init='normal', activation='relu'))
-     # Compile model
-     model.compile(loss='mean_absolute_error', optimizer='adam')
-     return model
-
-# define deeper model
-def deeper(v):
- # create model
- model = Sequential()
- model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu'))
- model.add(Dense(v*(c-1)/2, init='normal', activation='relu'))
- model.add(Dense(1, init='normal', activation='relu'))
- # Compile model
- model.compile(loss='mean_absolute_error', optimizer='adam')
- return model
-
-# Optimize using dropout and decay
-from keras.optimizers import SGD
-from keras.layers import Dropout
-from keras.constraints import maxnorm
-
-def dropout(v):
-    #create model
-    model = Sequential()
-    model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu',W_constraint=maxnorm(3)))
-    model.add(Dropout(0.2))
-    model.add(Dense(v*(c-1)/2, init='normal', activation='relu', W_constraint=maxnorm(3)))
-    model.add(Dropout(0.2))
-    model.add(Dense(1, init='normal', activation='relu'))
-    # Compile model
-    sgd = SGD(lr=0.1,momentum=0.9,decay=0.0,nesterov=False)
-    model.compile(loss='mean_absolute_error', optimizer=sgd)
-    return model
-
-# define decay model
-def decay(v):
-    # create model
-    model = Sequential()
-    model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu'))
-    model.add(Dense(1, init='normal', activation='relu'))
-    # Compile model
-    sgd = SGD(lr=0.1,momentum=0.8,decay=0.01,nesterov=False)
-    model.compile(loss='mean_absolute_error', optimizer=sgd)
-    return model
-
-est_list = []
-#uncomment the below if you want to run the algo
-#est_list = [('MLP',baseline),('smaller',smaller),('deeper',deeper),('dropout',dropout),('decay',decay)]
-
-for name, est in est_list:
- 
-    algo = name
-
-    #Accuracy of the model using all features
-    for m,i_cols_list in X_all:
-        model = KerasRegressor(build_fn=est, v=1, nb_epoch=10, verbose=0)
-        model.fit(X_train[:,i_cols_list],Y_train)
-        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
-        mae.append(result)
-        print(name + " %s" % result)
-        
-    comb.append(algo )
-
-if (len(est_list)==0):
-    mae.append(1168)
-    comb.append("MLP" + " baseline" )    
-    
-##Set figure size
-#plt.rc("figure", figsize=(25, 10))
-
-#Plot the MAE of all combinations
-fig, ax = plt.subplots()
-plt.plot(mae)
-#Set the tick names to names of combinations
-ax.set_xticks(range(len(comb)))
-ax.set_xticklabels(comb,rotation='vertical')
-#Plot the accuracy for all combinations
-plt.show()    
-
-#Best estimated performance is MLP=1168
-
-
-# ## Make Predictions
-
-# In[ ]:
-
-
-# Make predictions using XGB as it gave the best estimated performance        
-
-X = numpy.concatenate((X_train,X_val),axis=0)
-del X_train
-del X_val
-Y = numpy.concatenate((Y_train,Y_val),axis=0)
-del Y_train
-del Y_val
-
-n_estimators = 1000
-
-#Best model definition
-best_model = XGBRegressor(n_estimators=n_estimators,seed=seed)
-best_model.fit(X,Y)
-del X
-del Y
-#Read test dataset
-dataset_test = pandas.read_csv("../input/test.csv")
-#Drop unnecessary columns
-ID = dataset_test['id']
-dataset_test.drop('id',axis=1,inplace=True)
-
-#One hot encode all categorical attributes
-cats = []
-for i in range(0, split):
-    #Label encode
-    label_encoder = LabelEncoder()
-    label_encoder.fit(labels[i])
-    feature = label_encoder.transform(dataset_test.iloc[:,i])
-    feature = feature.reshape(dataset_test.shape[0], 1)
-    #One hot encode
-    onehot_encoder = OneHotEncoder(sparse=False,n_values=len(labels[i]))
-    feature = onehot_encoder.fit_transform(feature)
-    cats.append(feature)
-
-# Make a 2D array from a list of 1D arrays
-encoded_cats = numpy.column_stack(cats)
-
-del cats
-
-#Concatenate encoded attributes with continuous attributes
-X_test = numpy.concatenate((encoded_cats,dataset_test.iloc[:,split:].values),axis=1)
-
-del encoded_cats
-del dataset_test
-
-#Make predictions using the best model
-predictions = numpy.expm1(best_model.predict(X_test))
-del X_test
-# Write submissions to output file in the correct format
-with open("submission.csv", "w") as subfile:
-    subfile.write("id,loss\n")
-    for i, pred in enumerate(list(predictions)):
-        subfile.write("%s,%s\n"%(ID[i],pred))
-
+income_share = document.query("IndicatorCode == ['SI.DST.FRST.20','SI.DST.02ND.20','SI.DST.03RD.20','SI.DST.04TH.20','SI.DST.05TH.20'] & CountryName == ['Malawi', 'China', 'Luxembourg', 'United States'] & Year == 2010 ").groupby("IndicatorCode")
+N = 4
+i1 = income_share.get_group('SI.DST.FRST.20')['Value']
+i2 = income_share.get_group('SI.DST.02ND.20')['Value']
+i3 = income_share.get_group('SI.DST.03RD.20')['Value']
+i4 = income_share.get_group('SI.DST.04TH.20')['Value']
+i5 = income_share.get_group('SI.DST.05TH.20')['Value']
+
+f, ax_1 = plt.subplots(1, figsize = (15,8))
+ind = np.arange(N)
+width = 0.35
+p1 = ax_1.bar(ind, i1, width, color = '#404040')
+p2 = ax_1.bar(ind, i2, width, color = '#bababa', bottom = i1)
+p3 = ax_1.bar(ind, i3, width, color = '#ffffff', bottom = [i+j for i,j in zip(i1,i2)])
+p4 = ax_1.bar(ind, i4, width, color = '#f4a582', bottom = [i+j+k for i,j,k in zip(i1,i2,i3)])
+p5 = ax_1.bar(ind, i5, width, color = '#ca0020', bottom = [i+j+k+l for i,j,k,l in zip(i1,i2,i3,i4)])
+plt.ylabel('Percent', fontsize = 14)
+plt.xlabel('Country Name', fontsize = 14)
+plt.xticks(ind + (width/2), ('China', 'Luxembourg', 'Malawi', 'United States'))
+plt.title('Examining wealth distributions- China, Luxembourg, Malawi, and US', fontsize = 14)
+plt.legend((p1[0],p2[0],p3[0],p4[0],p5[0]),('Income Share Lowest 20%', 'Income Share Second 20%', 'Income Share Third 20%', 'Income Share Fourth 20%', 'Income Share Highest 20%'), loc = 'upper right', bbox_to_anchor=(1.3, 0.9))
+axes = plt.gca()
+axes.set_ylim([0,100])
+
+
+# China and Malawi have more skewed wealth distributions compared to Luxembourg and United States. Luxembourg has the most even wealth distribution while Malawi has the most skewed wealth distribution with the most of its income share beloging to the highest 20%.
+# 
+# However, wealth distributions do not change radically alter based on average income of the country. Regardless of the average income for a country, it can be clearly seen that income share is mostly allocated to the highest 20%!

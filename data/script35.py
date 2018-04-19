@@ -1,264 +1,232 @@
 
 # coding: utf-8
 
-# Welcome to the SQL Scavenger Hunt! Each day over the next five days we're going to be focusing on using different SQL commands to help us find the data we need to answer a specific question. I've put together this handbook to help you out by introducing you to SQL and BigQuery. In this handbook, I'll help you hit the ground running by covering the following topics: 
+# ### All days of the challange:
 # 
-# * [What are SQL & BigQuery and why you should learn them?](#What-are-SQL-&-BigQuery-and-why-you-should-learn-them?)
-# * [How to use BigQuery datasets in kernels](#How-to-use-BigQuery-datasets-in-kernels)
-# * [How to avoid common mistakes when querying big datasets](#How-to-avoid-common-mistakes-when-querying-big-datasets)
-# 
-# And I'll wrap up by collecting some helpful links, including the ones to the notebooks for the rest of the scavenger hunt. Let's get to it!
-
-# # What are SQL & BigQuery and why you should learn them?
-# ____
-# 
-# SQL (short for “Structured Query Language”, and said like either "see-quill" or "S-Q-L" ) is a programming language that allows you to interact with databases. For many databases out there, SQL is the *only* way to access the information in them and, as a result, it's an important skill for any data scientist or aspiring data scientist. (You don't need to take my word on this one: in our survey of data scientists we found that SQL was [the third most popular software tool for data science](https://www.kaggle.com/surveys/2017), right after Python and R.)
-# 
-# > **Why learn SQL?**: If you're currently looking for a data science job, being able to show that you're comfortable with SQL will open up more job opportunities for you. If you're currently *doing* data science, brushing up on your SQL skills will help you access more data sources and make it easier to get a subset of a database to work with locally. Plus, it's fun! :)
-# 
-# [BigQuery](https://cloud.google.com/bigquery/) is a Google Cloud product for storing and accessing very large databases very quickly. We've recently started making [some BigQuery datasets](https://www.kaggle.com/datasets?filetype=bigQuery) accessible via Kaggle. Since SQL is the easiest way to access these data in these datasets they make the perfect playground to help you get comfortable with this language.
-# 
-# >  Because the datasets on BigQuery can be very large, there are some restrictions on how much data you can access. The good news is that **each Kaggle user can scan 5TB every 30 days for free.** The bad news is that If you go over your quota you're going to have to wait for it to reset. 
-# 
-# Don't worry, though: in this handbook we'll teach you how to be careful when looking at BigQuery data to make sure you don't accidentally go over your quota.
-
-# # How to use BigQuery datasets in kernels
-# ____
-# 
-# In this section, we're going to go through how to get your first BigQuery notebook up and running and how to actually run a query. I'm going to cover:
-# 
-# * Getting your notebook set up
-# * Checking the structure of the dataset (to help you when you want to write queries)
-# * How to check the size of a query before you run it (to avoid accidentally asking for waaaay more data than you wanted)
-# * How to run your first query! 
-# * How to save the data from your query as a .csv to use later
-# 
-# I'm *not* going to cover all the intricacies of SQL. That's what the next five days of the Scavenger Hunt are for!
-# 
-# ## Getting set up
+# * [Day 1: Handling missing values](https://www.kaggle.com/rtatman/data-cleaning-challenge-handling-missing-values)
+# * [Day 2: Scaling and normalization](https://www.kaggle.com/rtatman/data-cleaning-challenge-scale-and-normalize-data)
+# * [Day 3: Parsing dates](https://www.kaggle.com/rtatman/data-cleaning-challenge-parsing-dates/)
+# * [Day 4: Character encodings](https://www.kaggle.com/rtatman/data-cleaning-challenge-character-encodings/)
+# * [Day 5: Inconsistent Data Entry](https://www.kaggle.com/rtatman/data-cleaning-challenge-inconsistent-data-entry/)
 # ___
-# The first step is to start a kernel using one of the BigQuery datasets as the data source. You can find these datasets by going to the [Datasets page](https://www.kaggle.com/datasets) and selecting "BigQuery" from the "File Types" drop down menu at the top of the list of datasets. (Alternatively, you can follow [this link](https://www.kaggle.com/datasets?filetype=bigQuery).) 
+# Welcome to day 1 of the 5-Day Data Challenge! Today, we're going to be looking at how to deal with missing values. To get started, click the blue "Fork Notebook" button in the upper, right hand corner. This will create a private copy of this notebook that you can edit and play with. Once you're finished with the exercises, you can choose to make your notebook public to share with others. :)
 # 
-# Once you've picked a BigQuery dataset, head to the dataset page for it and start a new kernel on it by hitting the "New Kernel" button, just as you would with any other dataset. Right now, you can only use BigQuery databases with Python kernels.
+# > **Your turn!** As we work through this notebook, you'll see some notebook cells (a block of either code or text) that has "Your Turn!" written in it. These are exercises for you to do to help cement your understanding of the concepts we're talking about. Once you've written the code to answer a specific question, you can run the code by clicking inside the cell (box with code in it) with the code you want to run and then hit CTRL + ENTER (CMD + ENTER on a Mac). You can also click in a cell and then click on the right "play" arrow to the left of the code. If you want to run all the code in your notebook, you can use the double, "fast forward" arrows at the bottom of the notebook editor.
 # 
-# > **Can you work with BigQuery in R kernels?** Right now, you can only work with BigQuery in Python kernels, so make sure you don't accidentally start an R kernel instead. If you want to do your analysis in R (which is my personal preference) you can save the data you query as an output file and then add that to a new kernel. We'll go over how to do that later in this notebook. :)
+# Here's what we're going to do today:
 # 
-# In order to make your life easier, we've put together a Python package called `bq_helper` and pre-loaded it into kernels. It has some helper functions for getting data out of BigQuery that will simplify the process of getting data. If you're curious, you can check out [example kernels with more in-depth information at the end of this notebook](#Additional-information-and-resources).
+# * [Take a first look at the data](#Take-a-first-look-at-the-data)
+# * [See how many missing data points we have](#See-how-many-missing-data-points-we-have)
+# * [Figure out why the data is missing](#Figure-out-why-the-data-is-missing)
+# * [Drop missing values](#Drop-missing-values)
+# * [Filling in missing values](#Filling-in-missing-values)
 # 
-# You can use `bq_helper` in your kernel by importing it, like so:
+# Let's get started!
+
+# # Take a first look at the data
+# ________
+# 
+# The first thing we'll need to do is load in the libraries and datasets we'll be using. For today, I'll be using a dataset of events that occured in American Football games for demonstration, and you'll be using a dataset of building permits issued in San Francisco.
+# 
+# > **Important!** Make sure you run this cell yourself or the rest of your code won't work!
 
 # In[ ]:
 
 
-# import our bq_helper package
-import bq_helper 
+# modules we'll use
+import pandas as pd
+import numpy as np
+
+# read in all our data
+nfl_data = pd.read_csv("../input/nflplaybyplay2009to2016/NFL Play by Play 2009-2017 (v4).csv")
+sf_permits = pd.read_csv("../input/building-permit-applications-data/Building_Permits.csv")
+
+# set seed for reproducibility
+np.random.seed(0) 
 
 
-# Now that we've added a BigQuery package to our kernel and imported the helper package, the next step is to create a BigQueryHelper object that points to a specific dataset. 
-# 
-# The first thing we need to do this is to know is what our specific dataset is called. You can find this by checking out the dataset listing for your dataset and then navigating to the "Data" tab. For example, [here's a link to the Data tab of the Hacker News dataset](https://www.kaggle.com/hacker-news/hacker-news/data), which is what we're going to be using in this kernel.
-# 
-# If you go to the link I provided, you'll notice a blue rectangle with rounded edges near the top of the page that has the following text in it: "bigquery-public-data.hacker_news.comments". This tells you that you're looking of a summary of the "comments" table in the "hacker_news" dataset. The addresses of BigQuery datasets look like this:
-# 
-# ![](https://i.imgur.com/l11gdKx.png)
-# 
-# We will need to pass this information to BigQueryHelper in order to create our helper object. The active_project argument takes the BigQuery info, which is currently "bigquery-public-data" for all the BigQuery datasets on Kaggle. The dataset_name argument takes the name of the dataset we've added to our query. In this case it's "hacker_news". So we can create our BigQueryHelper object like so:
-
-# In[ ]:
-
-
-# create a helper object for our bigquery dataset
-hacker_news = bq_helper.BigQueryHelper(active_project= "bigquery-public-data", 
-                                       dataset_name = "hacker_news")
-
-
-# Now that we've created our helper object, we can get started actually interacting with the dataset!
-
-# ## Check out the structure of your dataset
-# ____
-# 
-# The first thing you're going to want to do, like with any new dataset, is check out the way that data is structured. We're going to do that by looking at the schema.
-# 
-# > **Schema**: A description of how data is organized within a dataset.
-# 
-# Being able to access the information in the schema will be very helpful to us later on as we start to put together queries, so we're going to quickly go over how to do this and how to interpret the schemas once we get them. First, we can use the `BigQueryHelper.list_tables()` method to list all the files in the hacker_news dataset.
+# The first thing I do when I get a new dataset is take a look at some of it. This lets me see that it all read in correctly and get an idea of what's going on with the data. In this case, I'm looking to see if I see any missing values, which will be reprsented with `NaN` or `None`.
 
 # In[ ]:
 
 
-# print a list of all the tables in the hacker_news dataset
-hacker_news.list_tables()
+# look at a few rows of the nfl_data file. I can see a handful of missing data already!
+nfl_data.sample(5)
 
 
-# Now that we know what tables are in this dataset, we can get information on the columns in a specific table. In this example, we're looking at the information on the "full" table. 
-
-# In[ ]:
-
-
-# print information on all the columns in the "full" table
-# in the hacker_news dataset
-hacker_news.table_schema("full")
-
-
-# Each SchemaField tells us about a specific column. In order, the information is:
-# 
-# * The name of the column
-# * The datatype in the column
-# * [The mode of the column](https://cloud.google.com/bigquery/docs/reference/rest/v2/tables#schema.fields.mode) (NULLABLE means that a column allows NULL values, and is the default)
-# * A description of the data in that column
-# 
-# So, for the first column, we have the following schema field:
-# 
-# `SchemaField('by', 'string', 'NULLABLE', "The username of the item's author.",())`
-# 
-# This tells us that the column is called "by", that is has strings in it but that NULL values are allowed, and that it contains the username of the item's author.
-# 
-# We can use the `BigQueryHelper.head()` method to check just the first couple of lines of of the "full" table to make sure this is right. (Sometimes you'll run into databases out there where the schema isn't an accurate description of the data anymore, so it's good to check. This shouldn't be a problem with any of the BigQuery databases on Kaggle, though!)
+# Yep, it looks like there's some missing values. What about in the sf_permits dataset?
 
 # In[ ]:
 
 
-# preview the first couple lines of the "full" table
-hacker_news.head("full")
+# your turn! Look at a couple of rows from the sf_permits dataset. Do you notice any missing data?
+
+# your code goes here :)
 
 
-# The `BigQueryHelper.head()` method will also let us look at just the information in a specific column. If we want to see the first ten entries in the "by" column, for example, we can do that!
-
-# In[ ]:
-
-
-# preview the first ten entries in the by column of the full table
-hacker_news.head("full", selected_columns="by", num_rows=10)
-
-
-# Now that we know how to familiarize ourself with our datset, let's see how to check how big our queries are before we actually run them.
-
-# ## Check the size of your query before you run it
-# ____
-# 
-# BigQuery datasets are, true to their name, BIG. The [biggest dataset we've got on Kaggle so far](https://www.kaggle.com/github/github-repos) is 3 terabytes. Since the monthly quota for BigQuery queries is 5 terabytes, you can easily go past your 30-day quota by running just a couple of queries!
-# 
-# > **What's a query?** A query is small piece of SQL code that specifies what data would you like to scan from a databases, and how much of that data you would like returned. (Note that your quota is on data *scanned*, not the amount of data returned.)
-# 
-# One way to help avoid this is to estimate how big your query will be before you actually execute it. You can do this with the `BigQueryHelper.estimate_query_size()` method. For the rest of this notebook, I'll be using an example query that finding the scores for every Hacker News post of the type "job". Let's see how much data it will scan if we actually ran it.
-
-# In[ ]:
-
-
-# this query looks in the full table in the hacker_news
-# dataset, then gets the score column from every row where 
-# the type column has "job" in it.
-query = """SELECT score
-            FROM `bigquery-public-data.hacker_news.full`
-            WHERE type = "job" """
-
-# check how big this query will be
-hacker_news.estimate_query_size(query)
-
-
-# Running this query will take around 150 MB. (The query size is returned in gigabytes.)
-# 
-# > **Important:** When you're writing your query, make sure that the name of the table (next to FROM) is in back ticks (\`), not single quotes ('). The reason for this is that the names of BigQuery tables contain periods in them, which in SQL are special characters. Putting the table name in back ticks protects the table name, so it's treated as a single string instead of being run as code.
-
-# ## Actually run a query
+# # See how many missing data points we have
 # ___
 # 
-# Now that we know how to check the size of the query (and make sure we're not scanning several terabytes of data!) we're ready to actually run our first query. You have two methods available to help you do this:
+# Ok, now we know that we do have some missing values. Let's see how many we have in each column. 
+
+# In[ ]:
+
+
+# get the number of missing data points per column
+missing_values_count = nfl_data.isnull().sum()
+
+# look at the # of missing points in the first ten columns
+missing_values_count[0:10]
+
+
+# That seems like a lot! It might be helpful to see what percentage of the values in our dataset were missing to give us a better sense of the scale of this problem:
+
+# In[ ]:
+
+
+# how many total missing values do we have?
+total_cells = np.product(nfl_data.shape)
+total_missing = missing_values_count.sum()
+
+# percent of data that is missing
+(total_missing/total_cells) * 100
+
+
+# Wow, almost a quarter of the cells in this dataset are empty! In the next step, we're going to take a closer look at some of the columns with missing values and try to figure out what might be going on with them.
+
+# In[ ]:
+
+
+# your turn! Find out what percent of the sf_permits dataset is missing
+
+
+# # Figure out why the data is missing
+# ____
+#  
+# This is the point at which we get into the part of data science that I like to call "data intution", by which I mean "really looking at your data and trying to figure out why it is the way it is and how that will affect your analysis". It can be a frustrating part of data science, especially if you're newer to the field and don't have a lot of experience. For dealing with missing values, you'll need to use your intution to figure out why the value is missing. One of the most important question you can ask yourself to help figure this out is this:
 # 
-# * *`BigQueryHelper.query_to_pandas(query)`*: This method takes a query and returns a Pandas dataframe.
-# * *`BigQueryHelper.query_to_pandas_safe(query, max_gb_scanned=1)`*: This method takes a query and returns a Pandas dataframe only if the size of the query is less than the upperSizeLimit (1 gigabyte by default). 
+# > **Is this value missing becuase it wasn't recorded or becuase it dosen't exist?**
 # 
-# Here's an example of a query that is larger than the specified upper limit.
+# If a value is missing becuase it doens't exist (like the height of the oldest child of someone who doesn't have any children) then it doesn't make sense to try and guess what it might be. These values you probalby do want to keep as NaN. On the other hand, if a value is missing becuase it wasn't recorded, then you can try to guess what it might have been based on the other values in that column and row. (This is called "imputation" and we'll learn how to do it next! :)
+# 
+# Let's work through an example. Looking at the number of missing values in the nfl_data dataframe, I notice that the column `TimesSec` has a lot of missing values in it: 
 
 # In[ ]:
 
 
-# only run this query if it's less than 100 MB
-hacker_news.query_to_pandas_safe(query, max_gb_scanned=0.1)
+# look at the # of missing points in the first ten columns
+missing_values_count[0:10]
 
 
-# And here's an example where the same query returns a dataframe. 
+# By looking at [the documentation](https://www.kaggle.com/maxhorowitz/nflplaybyplay2009to2016), I can see that this column has information on the number of seconds left in the game when the play was made. This means that these values are probably missing because they were not recorded, rather than because they don't exist. So, it would make sense for us to try and guess what they should be rather than just leaving them as NA's.
+# 
+# On the other hand, there are other fields, like `PenalizedTeam` that also have lot of missing fields. In this case, though, the field is missing because if there was no penalty then it doesn't make sense to say *which* team was penalized. For this column, it would make more sense to either leave it empty or to add a third value like "neither" and use that to replace the NA's.
+# 
+# > **Tip:** This is a great place to read over the dataset documentation if you haven't already! If you're working with a dataset that you've gotten from another person, you can also try reaching out to them to get more information.
+# 
+# If you're doing very careful data analysis, this is the point at which you'd look at each column individually to figure out the best strategy for filling those missing values. For the rest of this notebook, we'll cover some "quick and dirty" techniques that can help you with missing values but will probably also end up removing some useful information or adding some noise to your data.
+# 
+# ## Your turn!
+# 
+# * Look at the columns `Street Number Suffix` and `Zipcode` from the `sf_permits` datasets. Both of these contain missing values. Which, if either, of these are missing because they don't exist? Which, if either, are missing because they weren't recorded?
 
-# In[ ]:
-
-
-# check out the scores of job postings (if the 
-# query is smaller than 1 gig)
-job_post_scores = hacker_news.query_to_pandas_safe(query)
-
-
-# Since this has returned a dataframe, we can work with it as we would any other dataframe. For example, we can get the mean of the column:
-
-# In[ ]:
-
-
-# average score for job posts
-job_post_scores.score.mean()
-
-
-# ## How to save the data from your query as a .csv
+# # Drop missing values
 # ___
 # 
-# Now that we've got a dataframe, we might want to save it out as a .csv to use later or in a different kernel. To do this, we can use the following code, which will write our dataframe to a file called "job_post_scores.csv" in the output directory. 
+# If you're in a hurry or don't have a reason to figure out why your values are missing, one option you have is to just remove any rows or columns that contain missing values. (Note: I don't generally recommend this approch for important projects! It's usually worth it to take the time to go through your data and really look at all the columns with missing values one-by-one to really get to know your dataset.)  
+# 
+# If you're sure you want to drop rows with missing values, pandas does have a handy function, `dropna()` to help you do this. Let's try it out on our NFL dataset!
 
 # In[ ]:
 
 
-# save our dataframe as a .csv 
-job_post_scores.to_csv("job_post_scores.csv")
+# remove all the rows that contain a missing value
+nfl_data.dropna()
 
 
-# In order to access this file later, you'll need to compile your notebook. You can do this using the "Publish" button (if you have the old editor) or the "New Snapshot" button (if you have the new editor). Both are in the upper right hand corner of the editor.
-# 
-# Once your notebook has compiled and your file is ready, it will show up under the "Output" tab of your notebook. (You should see an Output tab for this notebook with the file we just wrote to a .csv in it.) From there you can download it, or you can add the notebook with the output file as a data source to a new kernel and import the file to your notebook as you would any other .csv file. 
-# 
-# > *It can take a couple minutes for the Output tab to show up as your notebook compiles, especially if your file was very large. If you don't see it right away, give it a little bit and it should show up.*
-# 
-# And that's all you need to get started getting data from BigQuery datasets on Kaggle! During the scavenger hunt we'll learn more about how to use SQL to improve the power and flexibility of your queries. 
+# Oh dear, it looks like that's removed all our data! 😱 This is because every row in our dataset had at least one missing value. We might have better luck removing all the *columns* that have at least one missing value instead.
 
-# # How to avoid common mistakes when querying big datasets
-# ____
-# 
-# Big data is great! Until working at a bigger scale suddenly it makes your problems bigger too, like [this poor professor whose experiment racked up an unexpected $1000 bill](https://www.wired.com/2012/04/aws-bill-in-minutes/). Although Kaggle isn't charging for accessing BigQuery datasets, following these best practices can help you avoid trouble down the line. If you'd like to learn more, you can check out [all the BigQuery best practices here](https://cloud.google.com/bigquery/docs/best-practices).
-# 
-# * *Avoid using the asterisk *(**) in your queries.* As you might have seen before in regular expressions, the asterisk means “everything”. While this may be okay with smaller datasets, if you send a query to a 4 terabyte dataset and ask for “everything” you're going to scan waaaaay more than you bargained for (or that a kernel can handle).
-# * *For initial exploration, look at just part of the table instead of the whole thing.* If you're just curious to see what data's in a table, preview it instead of scanning the whole table. We've included a method, `BigQueryHelper.head()`, in our helper package to help with this. Like `head()` in Pandas or R, it will just return the first few rows for you to look at.
-# * *Double-check the size of complex queries.* If you're planning on running what might be a large query, either estimate the size first or run it using the `BigQueryHelper.query_to_pandas_safe()` method.
-# * *Be cautious about joining tables.* In particular, avoid joining a table with itself (i.e. a self-join) and try to avoid joins that return a table that's larger than the ones you're joining together. (If you want to double-check yourself, you can try the join on just the heads of the tables involved.)
-# * *Don't rely on LIMIT*: One of the things that can be confusing when working with BigQuery datasets is the difference between the data you *scan* and the data you actually *get back* especially since it's the first one that actually counts against your quota. When you do something like select a column with LIMIT = 10, you'll only get 10 results back... but you'll actually be scanning the whole column. It's not a big deal if your table has 1000 rows, but it's a much bigger deal if it has 10,000,000 rows!
+# In[ ]:
 
-# # Additional information and resources
+
+# remove all columns with at least one missing value
+columns_with_na_dropped = nfl_data.dropna(axis=1)
+columns_with_na_dropped.head()
+
+
+# In[ ]:
+
+
+# just how much data did we lose?
+print("Columns in original dataset: %d \n" % nfl_data.shape[1])
+print("Columns with na's dropped: %d" % columns_with_na_dropped.shape[1])
+
+
+# We've lost quite a bit of data, but at this point we have successfully removed all the `NaN`'s from our data. 
+
+# In[ ]:
+
+
+# Your turn! Try removing all the rows from the sf_permits dataset that contain missing values. How many are left?
+
+
+# In[ ]:
+
+
+# Now try removing all the columns with empty values. Now how much of your data is left?
+
+
+# # Filling in missing values automatically
 # _____
 # 
-# ### Links to the workbook for each day
+# Another option is to try and fill in the missing values. For this next bit, I'm getting a small sub-section of the NFL data so that it will print well.
+
+# In[ ]:
+
+
+# get a small subset of the NFL dataset
+subset_nfl_data = nfl_data.loc[:, 'EPA':'Season'].head()
+subset_nfl_data
+
+
+# We can use the Panda's fillna() function to fill in missing values in a dataframe for us. One option we have is to specify what we want the `NaN` values to be replaced with. Here, I'm saying that I would like to replace all the `NaN` values with 0.
+
+# In[ ]:
+
+
+# replace all NA's with 0
+subset_nfl_data.fillna(0)
+
+
+# I could also be a bit more savvy and replace missing values with whatever value comes directly after it in the same column. (This makes a lot of sense for datasets where the observations have some sort of logical order to them.)
+
+# In[ ]:
+
+
+# replace all NA's the value that comes directly after it in the same column, 
+# then replace all the reamining na's with 0
+subset_nfl_data.fillna(method = 'bfill', axis=0).fillna(0)
+
+
+# Filling in missing values is also known as "imputation", and you can find more exercises on it [in this lesson, also linked under the "More practice!" section](https://www.kaggle.com/dansbecker/handling-missing-values). First, however, why don't you try replacing some of the missing values in the sf_permit dataset?
+
+# In[ ]:
+
+
+# Your turn! Try replacing all the NaN's in the sf_permits data with the one that
+# comes directly after it and then replacing any remaining NaN's with 0
+
+
+# And that's it for today! If you have any questions, be sure to post them in the comments below or [on the forums](https://www.kaggle.com/questions-and-answers). 
 # 
-# Now that you've read the handbook, you're ready to get started on the scavenger hunt! These notebooks were designed to be done at the pace of one per day, but feel free to work at your own pace: they'll be available indefinitely. 
+# Remember that your notebook is private by default, and in order to share it with other people or ask for help with it, you'll need to make it public. First, you'll need to save a version of your notebook that shows your current work by hitting the "Commit & Run" button. (Your work is saved automatically, but versioning your work lets you go back and look at what it was like at the point you saved it. It also let's you share a nice compiled notebook instead of just the raw code.) Then, once your notebook is finished running, you can go to the Settings tab in the panel to the left (you may have to expand it by hitting the [<] button next to the "Commit & Run" button) and setting the "Visibility" dropdown to "Public".
 # 
-#  - [Day 1: SELECT FROM](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-1/)
-#  - [Day 2: GROUP BY](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-2/) 
-#  - [Day 3: ORDER BY &amp; Dates](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-3/)
-#  - [Day 4: WITH &amp; AS](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-4/)
-#  - [Day 5: JOIN](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-5/)
+# # More practice!
+# ___
 # 
-# ### A video intro for working in Kernels
+# If you're looking for more practice handling missing values, check out these extra-credit\* exercises:
 # 
-# If you haven't worked in Kernels previously or just want to learn more about our new editor, I've recorded [a short intro video](https://www.youtube.com/watch?v=aMdk40hz30c) to help you get started. 
+# * [Handling Missing Values](https://www.kaggle.com/dansbecker/handling-missing-values): In this notebook Dan shows you several approaches to imputing missing data using scikit-learn's imputer. 
+# * Look back at the `Zipcode` column in the `sf_permits` dataset, which has some missing values. How would you go about figuring out what the actual zipcode of each address should be? (You might try using another dataset. You can search for datasets about San Fransisco on the [Datasets listing](https://www.kaggle.com/datasets).) 
 # 
-# ### Develop a deeper understanding
-# If you're interested in learning more about BigQuery specifically, Sohier has put together a number of useful kernels to help you learn about the ins and outs. A lot of the things discussed in these kernels have been integrated into our package, so these will let you see under the hood and gain a deeper understanding of what's going on.
-# 
-# * [A getting started guide that walks you through using the BigQuery package directly (this is a lot of what our package does for you)](https://www.kaggle.com/sohier/getting-started-with-big-query)
-# * [A discussion of how to efficiently use resources in BigQuery](https://www.kaggle.com/sohier/efficient-resource-use-in-bigquery/)
-# * [A more in-depth dicussion of the BigQuery API](https://www.kaggle.com/sohier/beyond-queries-exploring-the-bigquery-api)
-# * [Converting BigQuery results to a Pandas dataframe](https://www.kaggle.com/sohier/how-to-integrate-bigquery-pandas)
-# 
-# ### Get inspired!
-# 
-# Here are a couple of interesting analysis to show you what sort of things are possible with BigQuery datasets.
-# 
-# * [What's the most common number of spaces to indent in Python code?](https://www.kaggle.com/hayatoy/most-common-indentation-space-count-in-python-code)
-# * [In what contexts does Kaggle get mentioned in Hacker News?](https://www.kaggle.com/mrisdal/mentions-of-kaggle-on-hacker-news)
-# 
-# ### Learn more about BigQuery
-# 
-# The best place to learn more is in BigQuery documentation, which [you can find here](https://cloud.google.com/bigquery/docs/).
+# \* no actual credit is given for completing the challenge, you just learn how to clean data real good :P

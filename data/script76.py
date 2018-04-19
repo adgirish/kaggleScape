@@ -1,203 +1,168 @@
 
 # coding: utf-8
 
-# ### All days of the challange:
+# # How to load the data
+# ---
 # 
-# * [Day 1: Handling missing values](https://www.kaggle.com/rtatman/data-cleaning-challenge-handling-missing-values)
-# * [Day 2: Scaling and normalization](https://www.kaggle.com/rtatman/data-cleaning-challenge-scale-and-normalize-data)
-# * [Day 3: Parsing dates](https://www.kaggle.com/rtatman/data-cleaning-challenge-parsing-dates/)
-# * [Day 4: Character encodings](https://www.kaggle.com/rtatman/data-cleaning-challenge-character-encodings/)
-# * [Day 5: Inconsistent Data Entry](https://www.kaggle.com/rtatman/data-cleaning-challenge-inconsistent-data-entry/)
-# ___
-# Welcome to day 2 of the 5-Day Data Challenge! Today, we're going to be looking at how to scale and normalize data (and what the difference is between the two!). To get started, click the blue "Fork Notebook" button in the upper, right hand corner. This will create a private copy of this notebook that you can edit and play with. Once you're finished with the exercises, you can choose to make your notebook public to share with others. :)
+# This kernel shows you how to resize these images and load them into an array ready to feed your models. The dataset contains 14 different disease classes, but this kernel separates the data based on which x-rays show Lung Infiltrations and which x-rays do not. This makes the data suitable for a binary classification and you can modify this kernel to classifiy any of the other disease classes. 
 # 
-# > **Your turn!** As we work through this notebook, you'll see some notebook cells (a block of either code or text) that has "Your Turn!" written in it. These are exercises for you to do to help cement your understanding of the concepts we're talking about. Once you've written the code to answer a specific question, you can run the code by clicking inside the cell (box with code in it) with the code you want to run and then hit CTRL + ENTER (CMD + ENTER on a Mac). You can also click in a cell and then click on the right "play" arrow to the left of the code. If you want to run all the code in your notebook, you can use the double, "fast forward" arrows at the bottom of the notebook editor.
-# 
-# Here's what we're going to do today:
-# 
-# * [Get our environment set up](#Get-our-environment-set-up)
-# * [Scaling vs. Normalization: What's the difference?](#Scaling-vs.-Normalization:-What's-the-difference?)
-# * [Practice scaling](#Practice-scaling)
-# * [Practice normalization](#Practice-normalization)
-# 
-# Let's get started!
-
-# # Get our environment set up
-# ________
-# 
-# The first thing we'll need to do is load in the libraries and datasets we'll be using. 
-# 
-# > **Important!** Make sure you run this cell yourself or the rest of your code won't work!
+# [Click here](https://www.kaggle.com/crawford/keras-cnn-using-kernel-output-as-a-data-source) to see the second kernel, where I use the output from this kernel to train a convolutional neural network.
 
 # In[ ]:
 
 
-# modules we'll use
+import cv2
+import os
+import random
+import matplotlib.pylab as plt
+from glob import glob
 import pandas as pd
 import numpy as np
-
-# for Box-Cox Transformation
-from scipy import stats
-
-# for min_max scaling
-from mlxtend.preprocessing import minmax_scaling
-
-# plotting modules
-import seaborn as sns
-import matplotlib.pyplot as plt
-
-# read in all our data
-kickstarters_2017 = pd.read_csv("../input/kickstarter-projects/ks-projects-201801.csv")
-
-# set seed for reproducibility
-np.random.seed(0)
+from sklearn.model_selection import train_test_split
 
 
-# Now that we're set up, let's learn about scaling & normalization. (If you like, you can take this opportunity to take a look at some of the data.)
-
-# # Scaling vs. Normalization: What's the difference?
-# ____
+# # Prepare file directories and image paths and load labels
 # 
-# One of the reasons that it's easy to get confused between scaling and normalization is because the terms are sometimes used interchangeably and, to make it even more confusing, they are very similar! In both cases, you're transforming the values of numeric variables so that the transformed data points have specific helpful properties. The difference is that, in scaling, you're changing the *range* of your data while in normalization you're changing the *shape of the distribution* of your data. Let's talk a little more in-depth about each of these options. 
-# 
-# ___
-# 
-# ## **Scaling**
-# 
-# This means that you're transforming your data so that it fits within a specific scale, like 0-100 or 0-1.  You want to scale data when you're using methods based on measures of how far apart data points, like [support vector machines, or SVM](https://en.wikipedia.org/wiki/Support_vector_machine) or [k-nearest neighbors, or KNN](https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm). With these algorithms, a change of "1" in any numeric feature is given the same importance. 
-# 
-# For example, you might be looking at the prices of some products in both Yen and US Dollars. One US Dollar is worth about 100 Yen, but if you don't scale your prices methods like SVM or KNN will consider a difference in price of 1 Yen as important as a difference of 1 US Dollar! This clearly doesn't fit with our intuitions of the world. With currency, you can convert between currencies. But what about if you're looking at something like height and weight? It's not entirely clear how many pounds should equal one inch (or how many kilograms should equal one meter).
-# 
-# By scaling your variables, you can help compare different variables on equal footing. To help solidify what scaling looks like, let's look at a made-up example. (Don't worry, we'll work with real data in just a second, this is just to help illustrate my point.)
-# 
+# ---
 
 # In[ ]:
 
 
-# generate 1000 data points randomly drawn from an exponential distribution
-original_data = np.random.exponential(size = 1000)
+# ../input/
+PATH = os.path.abspath(os.path.join('..', 'input'))
 
-# mix-max scale the data between 0 and 1
-scaled_data = minmax_scaling(original_data, columns = [0])
+# ../input/sample/images/
+SOURCE_IMAGES = os.path.join(PATH, "sample", "images")
 
-# plot both together to compare
-fig, ax=plt.subplots(1,2)
-sns.distplot(original_data, ax=ax[0])
-ax[0].set_title("Original Data")
-sns.distplot(scaled_data, ax=ax[1])
-ax[1].set_title("Scaled data")
+# ../input/sample/images/*.png
+images = glob(os.path.join(SOURCE_IMAGES, "*.png"))
 
+# Load labels
+labels = pd.read_csv('../input/sample_labels.csv')
 
-# Notice that the *shape* of the data doesn't change, but that instead of ranging from 0 to 8ish, it now ranges from 0 to 1.
-# 
-# ___
-# ## Normalization
-# 
-# Scaling just changes the range of your data. Normalization is a more radical transformation. The point of normalization is to change your observations so that they can be described as a normal distribution.
-# 
-# > **[Normal distribution:](https://en.wikipedia.org/wiki/Normal_distribution)** Also known as the "bell curve", this is a specific statistical distribution where a roughly equal observations fall above and below the mean, the mean and the median are the same, and there are more observations closer to the mean. The normal distribution is also known as the Gaussian distribution.
-# 
-# In general, you'll only want to normalize your data if you're going to be using a machine learning or statistics technique that assumes your data is normally distributed. Some examples of these include t-tests, ANOVAs, linear regression, linear discriminant analysis (LDA) and Gaussian naive Bayes. (Pro tip: any method with "Gaussian" in the name probably assumes normality.)
-# 
-# The method were  using to normalize here is called the [Box-Cox Transformation](https://en.wikipedia.org/wiki/Power_transform#Box%E2%80%93Cox_transformation). Let's take a quick peek at what normalizing some data looks like:
 
 # In[ ]:
 
 
-# normalize the exponential data with boxcox
-normalized_data = stats.boxcox(original_data)
-
-# plot both together to compare
-fig, ax=plt.subplots(1,2)
-sns.distplot(original_data, ax=ax[0])
-ax[0].set_title("Original Data")
-sns.distplot(normalized_data[0], ax=ax[1])
-ax[1].set_title("Normalized data")
+# First five images paths
+images[0:5]
 
 
-# Notice that the *shape* of our data has changed. Before normalizing it was almost L-shaped. But after normalizing it looks more like the outline of a bell (hence "bell curve"). 
+# # Show three random images
 # 
-# ___
-# ## Your turn!
-# 
-# For the following example, decide whether scaling or normalization makes more sense. 
-# 
-# * You want to build a linear regression model to predict someone's grades given how much time they spend on various activities during a normal school week.  You notice that your measurements for how much time students spend studying aren't normally distributed: some students spend almost no time studying and others study for four or more hours every day. Should you scale or normalize this variable?
-# * You're still working on your grades study, but you want to include information on how students perform on several fitness tests as well. You have information on how many jumping jacks and push-ups each student can complete in a minute. However, you notice that students perform far more jumping jacks than push-ups: the average for the former is 40, and for the latter only 10. Should you scale or normalize these variables?
-
-# # Practice scaling
-# ___
-# 
-# To practice scaling and normalization, we're going to be using a dataset of Kickstarter campaigns. (Kickstarter is a website where people can ask people to invest in various projects and concept products.)
-# 
-# Let's start by scaling the goals of each campaign, which is how much money they were asking for.
+# ---
 
 # In[ ]:
 
 
-# select the usd_goal_real column
-usd_goal = kickstarters_2017.usd_goal_real
+r = random.sample(images, 3)
+r
 
-# scale the goals from 0 to 1
-scaled_data = minmax_scaling(usd_goal, columns = [0])
+# Matplotlib black magic
+plt.figure(figsize=(16,16))
+plt.subplot(131)
+plt.imshow(cv2.imread(r[0]))
 
-# plot the original & scaled data together to compare
-fig, ax=plt.subplots(1,2)
-sns.distplot(kickstarters_2017.usd_goal_real, ax=ax[0])
-ax[0].set_title("Original Data")
-sns.distplot(scaled_data, ax=ax[1])
-ax[1].set_title("Scaled data")
+plt.subplot(132)
+plt.imshow(cv2.imread(r[1]))
 
+plt.subplot(133)
+plt.imshow(cv2.imread(r[2]));    
 
-# You can see that scaling changed the scales of the plots dramatically (but not the shape of the data: it looks like most campaigns have small goals but a few have very large ones)
 
 # In[ ]:
 
 
-# Your turn! 
+# Example of bad x-ray and good reason to use data augmentation
+e = cv2.imread(os.path.join(SOURCE_IMAGES,'00030209_008.png'))
 
-# We just scaled the "usd_goal_real" column. What about the "goal" column?
+plt.imshow(e)
+
+labels[labels["Image Index"] == '00030209_008.png']
 
 
-# # Practice normalization
-# ___
+# # Turn images into arrays and make a list of classes
+# ---
 # 
-# Ok, now let's try practicing normalization. We're going to normalize the amount of money pledged to each campaign.
+# Images with Lung Infiltrations will be labeled "Infiltration" and everything else goes into "Not Infiltration". In this process I am creating two arrays, one for the images and one for the labels. I am also resizing the images from 1024x1024 to 128x128.
 
 # In[ ]:
 
 
-# get the index of all positive pledges (Box-Cox only takes postive values)
-index_of_positive_pledges = kickstarters_2017.usd_pledged_real > 0
+def proc_images():
+    """
+    Returns two arrays: 
+        x is an array of resized images
+        y is an array of labels
+    """
+    
+    disease="Infiltration"
 
-# get only positive pledges (using their indexes)
-positive_pledges = kickstarters_2017.usd_pledged_real.loc[index_of_positive_pledges]
+    x = [] # images as arrays
+    y = [] # labels Infiltration or Not_infiltration
+    WIDTH = 128
+    HEIGHT = 128
 
-# normalize the pledges (w/ Box-Cox)
-normalized_pledges = stats.boxcox(positive_pledges)[0]
+    for img in images:
+        base = os.path.basename(img)
+        finding = labels["Finding Labels"][labels["Image Index"] == base].values[0]
 
-# plot both together to compare
-fig, ax=plt.subplots(1,2)
-sns.distplot(positive_pledges, ax=ax[0])
-ax[0].set_title("Original Data")
-sns.distplot(normalized_pledges, ax=ax[1])
-ax[1].set_title("Normalized data")
+        # Read and resize image
+        full_size_image = cv2.imread(img)
+        x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
 
+        # Labels
+        if disease in finding:
+            #finding = str(disease)
+            finding = 1
+            y.append(finding)
 
-# It's not perfect (it looks like a lot pledges got very few pledges) but it is much closer to normal!
+        else:
+            #finding = "Not_" + str(disease)
+            finding = 0
+            y.append(finding)
+
+    return x,y
+
 
 # In[ ]:
 
 
-# Your turn! 
-# We looked as the usd_pledged_real column. What about the "pledged" column? Does it have the same info?
+x,y = proc_images()
 
 
-# And that's it for today! If you have any questions, be sure to post them in the comments below or [on the forums](https://www.kaggle.com/questions-and-answers). 
+# In[ ]:
+
+
+# Set it up as a dataframe if you like
+df = pd.DataFrame()
+df["labels"]=y
+df["images"]=x
+
+
+# In[ ]:
+
+
+print(len(df), df.images[0].shape)
+
+
+# # Saving arrays for use in another kernel
+# ----
 # 
-# Remember that your notebook is private by default, and in order to share it with other people or ask for help with it, you'll need to make it public. First, you'll need to save a version of your notebook that shows your current work by hitting the "Commit & Run" button. (Your work is saved automatically, but versioning your work lets you go back and look at what it was like at the point you saved it. It also lets you share a nice compiled notebook instead of just the raw code.) Then, once your notebook is finished running, you can go to the Settings tab in the panel to the left (you may have to expand it by hitting the [<] button next to the "Commit & Run" button) and setting the "Visibility" dropdown to "Public".
-# 
-# # More practice!
-# ___
-# 
-# Try finding a new dataset and pretend you're preparing to preform a [regression analysis](https://www.kaggle.com/rtatman/the-5-day-regression-challenge). ([These datasets are a good start!](https://www.kaggle.com/rtatman/datasets-for-regression-analysis)) Pick three or four variables and decide if you need to normalize or scale any of them and, if you think you should, practice applying the correct technique.
+# Since this kernel takes up valuable time modifying the data to feed into a predictive model, it makes sense to save the arrays so that we don't have to process them again. We can use the output from this kernal as a data source for another kernel where we  can train a model. 
+
+# In[ ]:
+
+
+np.savez("x_images_arrays", x)
+np.savez("y_infiltration_labels", y)
+
+
+# In[ ]:
+
+
+get_ipython().system('ls -1')
+
+
+# ### Click here to see how I use the output from this kernel as input for a CNN with Keras:<br>
+# [https://www.kaggle.com/crawford/keras-cnn-using-kernel-output-as-a-data-source](https://www.kaggle.com/crawford/keras-cnn-using-kernel-output-as-a-data-source)

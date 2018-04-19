@@ -1,369 +1,256 @@
 
 # coding: utf-8
 
+# # TSNE vs PCA
+
+# How about compare how well PCA and TSNE differentiate basic ("Type 1") types of pokemons.
+
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
-import warnings
 import matplotlib.pyplot as plt
-from sklearn.utils import shuffle
+get_ipython().run_line_magic('pylab', 'inline')
+
+
+# Loading dataset.
+
+# In[ ]:
+
+
+df = pd.read_csv('../input/Pokemon.csv').drop('Type 2', axis=1)
+
+
+# Indexing different types with new column "Type1Id".
+
+# In[ ]:
+
+
+df['Type1Id'] = df['Type 1'].rank(method='dense').astype(int)
+df.head()
+
+
+# In[ ]:
+
+
+from sklearn.manifold import TSNE
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+from sklearn.decomposition import PCA
 
-from sklearn.model_selection import KFold
-from sklearn.preprocessing import LabelEncoder
-from sklearn.model_selection import cross_val_score
+features = ['Total', 'HP', 'Attack', 'Defense', 'Sp. Atk', 'Sp. Def', 'Speed', 'Generation', 
+            'Legendary']
+targets  = ['Type1Id']
 
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
-from sklearn.linear_model import LogisticRegression
 
-import time
+# Normalizing dataset with standard scaler. Mean of transformed features will be close to zero, and standard deviation also very close to 1.
 
-random_state = 6
-np.random.seed(random_state)
-warnings.filterwarnings('ignore')
+# In[ ]:
+
+
+df_norm = df.copy()
+df_norm[features] = StandardScaler().fit(df[features]).transform(df[features])
+
+
+# Learning TSNE with 2 components and PCA with default number.
+
+# In[ ]:
+
+
+X_tsne = TSNE(learning_rate=500, n_components=2).fit_transform(df_norm[features])
+X_pca = PCA().fit_transform(df_norm[features])
+
+
+# Let's plot how pairs of top 5 types are divided in tsne 2D layout. Not very succesfull.
+
+# In[ ]:
+
+
+fig = figure(figsize=(11, 11))
+
+cmap = plt.get_cmap('nipy_spectral')
+types1 = df['Type 1'].unique()
+type1_ids = df['Type1Id'].unique()
+num_types1 = len(types1)
+
+rows, cols = 5, 5
+num = 1
+for row, t1_id, t1 in zip(range(rows), type1_ids, types1):
+    for col, t2_id, t2 in zip(range(cols), type1_ids, types1):
+        subplot(rows,cols,num)
+        X_i = X_tsne[np.where(df['Type1Id'] == t1_id)[0]]
+        X_j = X_tsne[np.where(df['Type1Id'] == t2_id)[0]]
+        scatter(X_i[:, 0], X_i[:, 1], c=cmap(t1_id / num_types1))
+        scatter(X_j[:, 0], X_j[:, 1], c=cmap(t2_id / num_types1))
+        title(str(t1) + ' vs ' + str(t2))
+        num += 1
+fig.tight_layout()
+
+
+# All other pairs of types aren't devided either. Nor by TSNE and nor by PCA.
+
+# In[ ]:
+
+
+figure(figsize=(11, 5))
+cmap = plt.get_cmap('nipy_spectral')
+
+subplot(1,2,1)
+scatter(X_tsne[:, 0], X_tsne[:, 1], c=cmap(df['Type1Id'] / num_types1))
+title('TSNE')
+subplot(1,2,2)
+scatter(X_pca[:, 0], X_pca[:, 1], c=cmap(df['Type1Id'] / num_types1))
+title('PCA');
+
+
+# There is a cluster of pokemons in TSNE layout that stands out. Let us plot "Legendary" variable.
+
+# In[ ]:
+
+
+figure(figsize=(12, 5))
+cmap = plt.get_cmap('nipy_spectral')
+
+subplot(1,2,1)
+scatter(X_tsne[:, 0], X_tsne[:, 1], c=cmap(df['Legendary'] * 1.))
+title('TSNE')
+subplot(1,2,2)
+scatter(X_pca[:, 0], X_pca[:, 1], c=cmap(df['Legendary'] * 1.));
+title('PCA');
+
+
+# TSNE better differentiates legendary and non legendary pokemons. As bigger plot shows, we ideally predict "legendary" property.
+
+# In[ ]:
+
+
+figure(figsize=(10, 7))
+cmap = plt.get_cmap('nipy_spectral')
+
+scatter(X_tsne[:, 0], X_tsne[:, 1], c=cmap(df['Legendary'] * 1.))
+title('TSNE');
+
+
+# ## Non legendary pokemons
+
+# As out tsne layout strongly depends on whether there are legendary pokemons in a dataset, let's only consider non legendary pokemons.
+
+# In[ ]:
+
+
+df = df[~df['Legendary']]
+
+df_norm = df.copy()
+df_norm[features] = StandardScaler().fit(df[features]).transform(df[features])
+
+X_tsne = TSNE(learning_rate=600, n_components=2).fit_transform(df_norm[features])
+X_pca = PCA().fit_transform(df_norm[features])
 
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-get_ipython().run_line_magic('matplotlib', 'inline')
+fig = figure(figsize=(11, 11))
 
-# latex parameter
-font = {
-    'family': 'serif', 
-    'serif': ['Computer Modern Roman'],
-    'weight' : 'regular',
-    'size'   : 18
-    }
+cmap = plt.get_cmap('nipy_spectral')
+types1 = df['Type 1'].unique()
+type1_ids = df['Type1Id'].unique()
+num_types1 = len(types1)
 
-plt.rc('font', **font)
-plt.rc('text', usetex=False)
-# plt.style.use('classic')
-
-color_map = 'viridis'
-
-
-# In[ ]:
-
-
-df_train = pd.read_csv('train.csv')
-df_test = pd.read_csv('test.csv')
-
-
-# ### Check if both test and train have the same shape
-
-# In[ ]:
-
-
-print('Training data shape: {}'.format(df_train.shape))
-print('Training data shape: {}'.format(df_test.shape))
-
-
-# ### Check if there are any missing values
-
-# In[ ]:
-
-
-print('Is null on train: {}'.format(df_train.isnull().any().any()))
-print('Is null on test: {}'.format(df_test.isnull().any().any()))
-
-
-# ### Descriptive statistics
-
-# In[ ]:
-
-
-df_train.describe()
-
-
-# ### Heatmap 
-
-# In[ ]:
-
-
-import seaborn as sns
-cor = df_train.corr()
-plt.figure(figsize=(16,10))
-sns.heatmap(cor)
-
-
-# #### Since 'ps_calc' features do not show any have zero relationship with other features
-# #### We can delete them.
-
-# In[ ]:
-
-
-col_to_drop = list(df_train.columns[df_train.columns.str.startswith('ps_calc_')])
-df_train = df_train.drop(col_to_drop, axis=1)  
-df_test = df_test.drop(col_to_drop, axis=1)
-
-
-# ## Work with missing values
-
-# In[ ]:
-
-
-def get_missing_features(df):
-    missings = pd.DataFrame([], columns=['feature', 'no_recoreds', 'percentage'])
-    total_rows = df.shape[0]
-    index = 0
-    for feature in list(df):
-        total_nulls = df[feature].isnull().sum()
-        if total_nulls > 0:
-            missings_perc = total_nulls / total_rows
-            missings.loc[index] = [feature, total_nulls, missings_perc]
-            index += 1
-    missings = missings.sort_values('no_recoreds', ascending=False)
-    return missings
+rows, cols = 5, 5
+num = 1
+for row, t1_id, t1 in zip(range(rows), type1_ids, types1):
+    for col, t2_id, t2 in zip(range(cols), type1_ids, types1):
+        subplot(rows,cols,num)
+        X_i = X_tsne[np.where(df['Type1Id'] == t1_id)[0]]
+        X_j = X_tsne[np.where(df['Type1Id'] == t2_id)[0]]
+        scatter(X_i[:, 0], X_i[:, 1], c=cmap(t1_id / num_types1))
+        scatter(X_j[:, 0], X_j[:, 1], c=cmap(t2_id / num_types1))
+        title(str(t1) + ' vs ' + str(t2))
+        num += 1
+fig.tight_layout()
 
 
 # In[ ]:
 
 
-df_missings = get_missing_features(df_train)
-print(df_missings)
+figure(figsize=(12, 5))
+cmap = plt.get_cmap('nipy_spectral')
+
+subplot(1,2,1)
+scatter(X_tsne[:, 0], X_tsne[:, 1], c=cmap(df['Type1Id'] / num_types1))
+title('TSNE')
+subplot(1,2,2)
+scatter(X_pca[:, 0], X_pca[:, 1], c=cmap(df['Type1Id'] / num_types1))
+title('PCA');
 
 
-# ### Bar plot of missing features
+# Layout still is not that good in detecting pokemon types. Let's see then, which method better differentiates 'Total', 'HP', 'Attack', 'Defense', 'Special Attack', 'Special Deffense'.
 
-# In[ ]:
-
-
-df_missings.plot(x='feature', y='no_recoreds', kind='bar', )
-
-
-# ### Treat missing values by mean of the column
-
-# In[ ]:
-
-
-for i, feature in enumerate(list(df_train.drop(['id'], axis=1))):
-    if df_train[feature].isnull().sum() > 0:
-        df_train[feature].fillna(df_train[feature].mode()[0],inplace=True)
-
-for i, feature in enumerate(list(df_test.drop(['id'], axis=1))):
-    if df_test[feature].isnull().sum() > 0:
-        df_test[feature].fillna(df_test[feature].mode()[0],inplace=True)
-
-
-# ### Check if there are any missing values
+# Let's cluster pokemons into 4 components.
 
 # In[ ]:
 
 
-get_missing_features(df_train)
-get_missing_features(df_test)
+from sklearn.cluster import KMeans
 
-
-# ## Check category features of the dataset
-
-# In[ ]:
-
-
-cat_cols = [col for col in df_train.columns if '_cat' in col]
-dummed_cols = []
-
-for cat_col in cat_cols:
-    unique_values = len(np.unique(df_train[cat_col]))
-    if unique_values < 50:
-        dummed_cols.append(cat_col)
-    print('{} has {} unique values'.format(cat_col, unique_values))
-
-
-# ## Transform category features to dummies
-
-# In[ ]:
-
-
-id_test = df_test['id'].values
-y = df_train['target'].values
-
-df_train = df_train.drop(['target','id'], axis = 1)
-df_test = df_test.drop(['id'], axis = 1)
-
-cat_features = [a for a in df_train.columns if a.endswith('cat')]
-
-for column in cat_features:
-    temp = pd.get_dummies(pd.Series(df_train[column]))
-    df_train = pd.concat([df_train,temp],axis=1)
-    df_train = df_train.drop([column],axis=1)
-    
-for column in cat_features:
-    temp = pd.get_dummies(pd.Series(df_test[column]))
-    df_test = pd.concat([df_test,temp],axis=1)
-    df_test = df_test.drop([column],axis=1)
-
-print(df_train.values.shape, df_test.values.shape)
-
-
-# ### Plot class ratio
-
-# In[ ]:
-
-
-# Distribution of target variable
-def plot_class_balace(train, val):
-    train_aa = dict(Counter(train))
-    val_aa = dict(Counter(val))
-    
-    plt.figure(figsize=(10, 4))
-    plt.subplot(121)
-    plt.bar([0, 1], height= [train_aa[0],train_aa[1]])
-    plt.xticks([0, 1]);
-    plt.xlabel('Class')
-    plt.ylabel('Number of data points')
-    plt.title('Train positive class {}%\n:'.format(round(train_aa[1]*100/train_aa[0], 2)))
-    
-    plt.subplot(122)
-    plt.bar([0, 1], height= [val_aa[0],val_aa[1]])
-    plt.xticks([0, 1]);
-    plt.xlabel('Class')
-    plt.title('Valid pos class {}%\n:'.format(round(val_aa[1]*100/val_aa[0], 2)))
-    plt.tight_layout()
-    plt.show()
-
-plot_class_balace(y_train_im, y_val_im)
-
-
-# ### Gini coeficient 
-
-# In[ ]:
-
-
-# from https://www.kaggle.com/mashavasilenko/
-# porto-seguro-xgb-modeling-and-parameters-tuning
-def eval_gini(y_true, y_prob):
-    y_true = np.asarray(y_true)
-    y_true = y_true[np.argsort(y_prob)]
-    ntrue = 0
-    gini = 0
-    delta = 0
-    n = len(y_true)
-    for i in range(n-1, -1, -1):
-        y_i = y_true[i]
-        ntrue += y_i
-        gini += y_i * delta
-        delta += 1 - y_i
-    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
-    return gini
-
-
-def gini_xgb(preds, dtrain):
-    labels = dtrain.get_label()
-    gini_score = -eval_gini(labels, preds)
-    return [('gini', gini_score)]
-
-def gini_normalized(a, p):
-    return gini(a, p) / gini(a, a)
-
-
-# ### Ensembling
-
-# In[ ]:
-
-
-from sklearn.model_selection import StratifiedKFold
-
-class Create_ensemble(object):
-    def __init__(self, n_splits, base_models):
-        self.n_splits = n_splits
-        self.base_models = base_models
-
-    def predict(self, X, y, T):
-        X = np.array(X)
-        y = np.array(y)
-        T = np.array(T)
-
-        folds = list(StratifiedKFold(n_splits=self.n_splits, shuffle=True, random_state=2016).split(X, y))
-
-        S_train = np.zeros((X.shape[0], len(self.base_models)))
-        S_test = np.zeros((T.shape[0], len(self.base_models)))
-        
-        for i, clf in enumerate(self.base_models):
-            S_test_i = np.zeros((T.shape[0], self.n_splits))
-
-            for j, (train_idx, valid_idx) in enumerate(folds):
-                X_train = X[train_idx]
-                y_train = y[train_idx]
-                X_valid = X[valid_idx]
-                y_valid = y[valid_idx]
-                
-                clf.fit(X_train, y_train)
-                valid_pred = clf.predict_proba(X_valid)[:,1]
-                S_train[valid_idx, i] = valid_pred
-                S_test_i[:, j] = clf.predict_proba(T)[:,1]
-            
-            print( "\nTraining Gini for model {} : {}".format(i, eval_gini(y, S_train[:,i])))
-            S_test[:, i] = S_test_i.mean(axis=1)
-            
-        return S_train, S_test
-
-
-# ## Lightbm model
-
-# In[ ]:
-
-
-# LightGBM params
-lgb_params = {}
-lgb_params['learning_rate'] = 0.02
-lgb_params['n_estimators'] = 700
-lgb_params['max_bin'] = 15
-lgb_params['subsample'] = 0.8
-lgb_params['subsample_freq'] = 10
-lgb_params['colsample_bytree'] = 0.8   
-lgb_params['min_child_samples'] = 800
-lgb_params['random_state'] = 99
-lgb_params['scale_pos_weight'] = 3
-
-lgb_params2 = {}
-lgb_params2['learning_rate'] = 0.02
-lgb_params2['n_estimators'] = 900
-lgb_params2['max_bin'] = 20
-lgb_params2['subsample'] = 0.8
-lgb_params2['subsample_freq'] = 10
-lgb_params2['colsample_bytree'] = 0.8   
-lgb_params2['min_child_samples'] = 600
-lgb_params2['random_state'] = 99
-lgb_params2['scale_pos_weight'] = 3
-
-lgb_model = LGBMClassifier(**lgb_params)
-lgb_model2 = LGBMClassifier(**lgb_params2)
+num_clusters = 4
+features0 = ['Total', 'HP', 'Attack', 'Defense', 'Sp. Atk', 'Sp. Def']
+kmeans_tsne = KMeans(n_clusters=num_clusters).fit(X_tsne)
+kmeans_pca = KMeans(n_clusters=num_clusters).fit(X_pca)
 
 
 # In[ ]:
 
 
-lgb_stack = Create_ensemble(n_splits = 5, base_models = [lgb_model, lgb_model2])        
-X = df_train
-Y = y
-T = df_test
-lgb_train_pred, lgb_test_pred = lgb_stack.predict(X, Y, T)
+figure(figsize=(12, 5))
+cmap = plt.get_cmap('nipy_spectral')
+
+subplot(1,2,1)
+scatter(X_tsne[:, 0], X_tsne[:, 1], c=cmap(kmeans_tsne.labels_ / num_clusters))
+title('TSNE')
+subplot(1,2,2)
+scatter(X_pca[:, 0], X_pca[:, 1], c=cmap(kmeans_pca.labels_ / num_clusters))
+title('PCA');
 
 
 # In[ ]:
 
 
-# Create submission file
-sub = pd.DataFrame()
-sub['id'] = id_test
-sub['target'] = lgb_test_pred.mean(axis=1)
-sub.to_csv('lightgbm_submit_ensemble_features.csv', float_format='%.6f', index=False)
+df_norm['tsne_cluster'] = kmeans_tsne.labels_
+df_norm['pca_cluster'] = kmeans_pca.labels_
+df_tsne_mean = df_norm.groupby('tsne_cluster').mean()
+df_pca_mean = df_norm.groupby('pca_cluster').mean()
 
 
-# ## correlation among the models
+# Beneath there are mean values of different pokemon stats for each cluster.
+# 
+# Both Tsne and Pca distinguish simular pokemon clusters: two high stats pokemons and two low stats pokemons:
+#     1. Pokemons with good overall stats and especially high defense and HP.
+#     2. Pokemons with good overall stats and especially high Total and Special Attack.
+#     3. Pokemons with bad overall stats and especially low Total and Special Attack.
+#     4. Pokemons with very bad overall stats and especially low Total and Attack.
 
 # In[ ]:
 
 
 import seaborn as sns
-test_pred_df = pd.DataFrame(data = lgb_test_pred)
-cor = test_pred_df.corr()
-plt.figure(figsize=(16,10))
-sns.heatmap(cor)
+
+figure(figsize=(7, 5))
+ax = sns.heatmap(df_tsne_mean[features0].transpose(), 
+                 center=0, cmap="RdBu", vmin=-1, vmax=1, annot=True)
+ax.set_xticklabels(['tsne ' + str(i + 1) for i in range(num_clusters) ], rotation=0, fontsize=8);
+ax.set_yticklabels(['mean Total', 'mean HP', 'mean Attack', 'mean Deffense', 'mean Special Attack',
+                    'mean Special Deffense'][::-1], rotation=0, fontsize=8);
+
+
+# In[ ]:
+
+
+
+figure(figsize=(7, 5))
+ax = sns.heatmap(df_pca_mean[features0].transpose(), 
+                 center=0, cmap="RdBu", vmin=-1, vmax=1, annot=True)
+ax.set_xticklabels(['pca ' + str(i + 1) for i in range(num_clusters) ], rotation=0, fontsize=8);
+ax.set_yticklabels(['mean Total', 'mean HP', 'mean Attack', 'mean Deffense', 'mean Special Attack',
+                    'mean Special Deffense'][::-1], rotation=0, fontsize=8);
 

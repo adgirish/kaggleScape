@@ -1,643 +1,216 @@
 
 # coding: utf-8
 
-# ![title_img](https://cdn.midwestsupplies.com/img/lph/beer-recipe-kits.jpg)
-# image from [Midwest Supplies](https://www.midwestsupplies.com/)
+# # Creating, reading, and writing reference
 # 
-# # Beer Recipes Exploratory Analysis
+# This is the reference component to the "Creating, reading, and writing" section of the tutorial. For the workbook section, [click here](https://www.kaggle.com/residentmario/creating-reading-and-writing-).
 # 
-# I created this kernel in a attempt to improve my current exploratory analysis skills as well as my plotting skills. I'm looking at coming up with some reusable code snippets that I'll be able to use in other kernels for analysing other datasets.
+# The very first step in any data analytics project will probably reading the data out of a file somewhere, so it makes sense that that's the first thing we'd need to cover. In this section, we'll look at exercises on creating `pandas` `Series` and `DataFrame` objects, both by hand and by reading data from disc.
 # 
-# What I'm trying to say is that it may be a bit... messy I guess... so bear with me.
-# 
-# ## Table of Contents
-# ---
-# 1. [Imports](#import)  
-# 1.1 [Importing the necessary librairies for this kernel](#import_librairies)  
-# 1.2 [Importing the dataset into a pandas DataFrame](#import)
-# 
-# 2. [High Level feel for the dataset](#feel)  
-# 2.1 [Shape](#shape)  
-# 2.2 [Missing Values](#missing)  
-#   * [The Story behind Priming Method and Amount](#priming)  
-# 
-#   2.3 [Categorical Features](#cat_feats)    
-# 2.4 [Numerical Features](#num_feats)    
-# 2.5 [Class Imbalance](#class)  
-#     * [About Pie Charts ...](#pie)
-# 
-# 3. [Correlations](#corr)  
-# 3.1 [ABV vs. OG](#abv_vs_og)
-# 
-# 4. [Building a simple classifier](#clf)  
-# 4.1 [Preprocessing](#clf_process)  
-# 4.2 [Scale](#clf_scale)  
-# 4.3 [Train](#clf_train)  
-# 4.4 [Test](#clf_test)
-
-# # Imports  <a class="anchor" id="import"></a>
-# ## Import necessary librairies  <a class="anchor" id="import_librairies"></a>
-# I'll be using the following librairies for my exploratory analysis.
-# A librairy that I don't see often in other kernel is [missingno](https://github.com/ResidentMario/missingno). I'm using this library to look at missing values and where they are in the dataset. I like the easiness and the visual representations provided.
-# 
-# The creator of the librairy says in the readme that it can accomodate up to 50 variables before the visualisation becomes unreadable.  So it's nice for a small dataset like the one here, but for biggger dataset you'll have to watchout for the number of features.
-
-# In[1]:
-
-
-import numpy as np
-import pandas as pd
-import missingno as msno
-import matplotlib.pyplot as plt
-import seaborn as sns
-sns.set(style="whitegrid")
-
-
-# ## Importing the dataset and first look <a class="anchor" id="import_dataset"></a>
-# We have to watch out for special characters in the input file (forward slashes), hence the use of a different encoding that the default one.
-
-# In[2]:
-
-
-beer_recipe = pd.read_csv('../input/recipeData.csv', index_col='BeerID', encoding='latin1')
-beer_recipe.head()
-
-
-# # High Level feel for the dataset <a class="anchor" id="feel"></a>
-# 
-# This section is going to look at very basic information regarding the dataset.
-# 
-# Since I don't know anything about the data, I want to get an idea of...
-# * how big it is
-# * how "good" it is
-# * etc.
-# 
-# Let's start with how big  
-# 
-# ## Shape<a class="anchor" id="shape"></a>
-
-# In[3]:
-
-
-print(beer_recipe.info(verbose=False))
-
-
-# OK, so 73K entries and 21 features is not too bad, it's a pretty "small" dataset and it will be easy to build visualisations on it, hopefully :)
-# ___
-# 
-# ## Missing Values <a class="anchor" id="missing"></a>
-# 
-# Next, let's look at how good the data is... well, right now I'll focus on **missing values**. 
-# 
-# Just by looking at the first 5 rows above, we can see that there's a couple of null values.  I think it's safe to expect a couple of null value throughout the whole data set.  let's see how many we have.
-# 
-
-# In[4]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-msno.matrix(beer_recipe.sample(500))
-
-
-# 
-# 
-# You can also see that the visualization above is only looking at 500 rows of the whole dataset, which might not seem like a lot, but I did check with higher number and the distribution of null values is pretty similar.
-# 
-# ---
-# Anyhow, what have we learned here ?
-# 
-# * There seems to be some null values in the Style column, which is suprising, because the StyleID columns doesn't seem to have any nulls
-#     * The reason behind this is that the Style field is not mandatory, but the website does have an ID (111) for "No Style" (N/A)
-# * There are columns that are mostly null (Priming Method / Priming Amount)
-#     * it does make sense, based on the fact that they both relate to priming and if one is null, the other is most likely too (which is not always the case)
-# * Other columns also have a large number of nulls, but they are not as bad as the Priming ones
-
-# <a class="anchor" id="priming"></a>
-# ![priming](https://www.highgravitybrew.com/store/pc/catalog/New-to-Homebrew-Large.jpg)
-# 
-# ## Let's investigate the worst offenders in missing values found above 
-# ### Priming Method & Priming Amount 
-# First, what is Priming ???
-# 
-# Priming refers to adding sugars (glucose of any form) to the fermented beer before bottling.  This will help to carbonate the beer naturally when homebrewing, where specialized equipement to achieve this is unavailable. Corn syrup is the most widely used ingredient for priming and it said to be included in most home brewing kits. This is something we'll try to confirm below).
-# 
-# Doing a bit of research on homebrewing, it seems like priming is an integral part of the process and that it should included in pretty much every recipe. However, it's important to note that giudelines for homebrewing are suggesting to use different amount of sugars depending on the type (style) of beer you're brewing.  The different styles of beer requires different amount of carbonation, so that's not surprising.
-# 
-# I still find it very strange that this information is not available for most of the dataset.
-
-# In[5]:
-
-
-null_priming = beer_recipe['PrimingMethod'].isnull()
-print('Priming Method is null on {} rows out of {}, so {} % of the time'.format(null_priming.sum(), len(beer_recipe), round((null_priming.sum()/len(beer_recipe))*100,2)))
-
-
-# wow... it's null 90% of the time.
-# 
-# Let's see if it the same across all styles
-
-# In[6]:
-
-
-style_cnt = beer_recipe.loc[:,['Style','PrimingMethod']]
-style_cnt['NullPriming'] = style_cnt['PrimingMethod'].isnull()
-style_cnt['Count'] = 1
-style_cnt_grp = style_cnt.loc[:,['Style','Count','NullPriming']].groupby('Style').sum()
-
-style_cnt_grp = style_cnt_grp.sort_values('NullPriming', ascending=False)
-style_cnt_grp.reset_index(inplace=True)
-
-def stacked_bar_plot(df, x_total, x_sub_total, sub_total_label, y):
-    # Initialize the matplotlib figure
-    f, ax = plt.subplots(figsize=(12, 8))
-    
-    # Plot the total
-    sns.set_color_codes("pastel")
-    sns.barplot(x=x_total, y=y, data=df, label="Total", color="b")
-
-    # Plot
-    sns.set_color_codes("muted")
-    sns.barplot(x=x_sub_total, y=y, data=df, label=sub_total_label, color="b")
-    
-    # Add a legend and informative axis label
-    ax.legend(ncol=2, loc="lower right", frameon=True)
-    sns.despine(left=True, bottom=True)
-    
-    return f, ax
-    
-f, ax = stacked_bar_plot(style_cnt_grp[:20], 'Count', 'NullPriming', 'Priming Method is null', 'Style')
-ax.set(title='Missing Values in PrimingMethod column, per style', ylabel='', xlabel='Count of Beer Recipes')
-sns.despine(left=True, bottom=True)
-
-
-# Upon further reading of the data notes, it seems that the priming fields are not standardized like the other fields. Which might implied that they were added later, while the database was already created.  This could be a reason for so much missing values.
-# 
-# Another reason would be that these fields are in a funny place in the Brewer's Friend website. When adding a new recipe to the database, the Priming Method and Priming Amount are under the section **Other Ingredients** which might not be entered most of the time.  It might also be because, as explained earlier, this is such a given that most brewers are not just taking the time to enter it assuming that everyone will prime their own beers (if they try the recipe) like they want to and with what they're used to.
-# 
-
-# ## Categorical Features <a class="anchor" id="cat_feats"></a>
-# Let's have a look at the categorical features in the dataset.
-# 
-# In this case, there aren't many, but it's important to understand how many values each of this features have and what's the distribution of each of those values within each features.
-# 
-# Let's just start by looking at what features are of the object type in our dataframe:
-
-# In[7]:
-
-
-print( list(beer_recipe.select_dtypes(include=object).columns))
-
-
-# First, we don't have to look at **Name** or **URL** as these columns should be unique per type of beer.
-# 
-# Second, **Style** is going to be our class or label, so this is not a feature.
-# 
-# Third, that leaves us with the following:
-# * SugarScale
-# * BrewMethod
-# * PrimingMethod
-# * PrimingAmount
-# 
-# It's odd that we have **PrimingAmount** here, since we would think that this would be a numerical feature based on name.  Let's look at that before moving on.
-# 
-
-# In[8]:
-
-
-print(beer_recipe.PrimingAmount.unique())
-
-
-# We can see that the reason this shows up as an *object* dtype is because the unit is included with the amount. If we wanted to use that information in the classifer we would have to clean that up.  But since we found out that 90% of the data doesn't have values in those fields, we'll let that go for now.  We may come back to this if we find out that the fact that the information is present may help us classify some styles of beers.
-# 
-# ---
-# So then let's have a closer look at the 3 remaining categorical features:
-# 
-
-# In[9]:
-
-
-ax = sns.countplot(x='SugarScale', data=beer_recipe)
-ax.set(title='Frequency table of possible values in SugarScale')
-sns.despine(left=True, bottom=True)
-
-print('SugarScale has {} null values'.format(beer_recipe.SugarScale.isnull().sum()))
-
-
-# ### Quick note on SugarScale
-# As Aaron Santos pointed out to me in the comments, this feature is giving us more information on the type of measurement used for numerical feature concerning gravity (**OG**, **FG** and **BoilGravity**).  
-# I'll use that information to recalculate the proper Specific Gravity where a *Plato* scale was used.
-
-# In[10]:
-
-
-ax = sns.countplot(x='BrewMethod', data=beer_recipe)
-ax.set(title='Frequency table of possible values in BrewMethod')
-sns.despine(left=True, bottom=True)
-
-print('BrewMethod has {} null values'.format(beer_recipe.BrewMethod.isnull().sum()))
-
-
-# In[11]:
-
-
-print('PrimingMethod has {} unique values'.format(beer_recipe.PrimingMethod.nunique()))
-print(beer_recipe.PrimingMethod.unique()[:20])
-
-
-# **SugarScale** and **BrewMethod** have generated pretty nice plot (and have no null values), however since the categories are few in both those fields a clear majority, it will be hard to use these in a classifier.
-# 
-# **PrimingMethod** did not generate a good plot and that's why I changed the outpout to a count and a list of unique values.  The reason why we see this situation (even with the high number of nulls in that column) is because the field on the website to enter this information is freeform.  If that feature had more information, we could clean this up a bit and try to group together data that looks similar, but given our current knowledge about the data, it doesn't seem like it's worth the effort
-
-# ## Numerical Features <a class="anchor" id="num_feats"></a>
-# 
-# Let's have a quick look at the features that are in that group:
-
-# In[12]:
-
-
-print( list( beer_recipe.select_dtypes(exclude=object)))
-
-
-# First, **StyleID** is part of our class, so this is not a feature.
-# 
-# But all the other features seems like they are good numerical features and don't have any "problems" that we've uncovered yet.
-# 
-# ---
-# As mentionned above (see my exploration of SugarScale), I've got to align the values in the gravity related columns based on SugarScale used.  
-# *The formula I'm using is defined on Brewer's Friends website: [here](https://www.brewersfriend.com/plato-to-sg-conversion-chart/)*
-
-# In[37]:
-
-
-def get_sg_from_plato(plato):
-    sg = 1 + (plato / (258.6 - ( (plato/258.2) *227.1) ) )
-    return sg
-
-beer_recipe['OG_sg'] = beer_recipe.apply(lambda row: get_sg_from_plato(row['OG']) if row['SugarScale'] == 'Plato' else row['OG'], axis=1)
-beer_recipe['FG_sg'] = beer_recipe.apply(lambda row: get_sg_from_plato(row['FG']) if row['SugarScale'] == 'Plato' else row['FG'], axis=1)
-beer_recipe['BoilGravity_sg'] = beer_recipe.apply(lambda row: get_sg_from_plato(row['BoilGravity']) if row['SugarScale'] == 'Plato' else row['BoilGravity'], axis=1)
-
-
-# In[38]:
-
-
-num_feats_list = ['Size(L)', 'OG_sg', 'FG_sg', 'ABV', 'IBU', 'Color', 'BoilSize', 'BoilTime', 'BoilGravity_sg', 'Efficiency', 'MashThickness', 'PitchRate', 'PrimaryTemp']
-beer_recipe.loc[:, num_feats_list].describe().T
-
-
-# With just this table, we can see the following:
-# * There are a couple of features that have null values (we'll have to watchout for **MashThickness** and **PitchRate**, since they have a pretty high ratio of nulls)
-# * The numerical features in this dataset are on different scales (**OG** and **FG** have low std, but other fields like **Size** or **BoilSize** have very high std).  This means that some sort of scaling is absolutely necessary
-# * Every numerical feature will have some important outliers (the only exception being **PitchRate**) because the max value is always very far away from the 75 percentile.
-# 
-# That third point is pretty important, we should have a look at boxplots for these features.
-
-# In[43]:
-
-
-# I should define a function that will categorize the features automatically
-vlow_scale_feats = ['OG_sg', 'FG_sg', 'BoilGravity_sg', 'PitchRate']
-low_scale_feats = ['ABV', 'MashThickness']
-mid_scale_feats = ['Color', 'BoilTime', 'Efficiency', 'PrimaryTemp']
-high_scale_feats = ['IBU', 'Size(L)',  'BoilSize']
-
-
-# In[44]:
-
-
-f, ax = plt.subplots(figsize=(12, 8))
-ax = sns.boxplot(data=beer_recipe.loc[:, vlow_scale_feats], orient='h')
-ax.set(title='Boxplots of very low scale features in Beer Recipe dataset')
-sns.despine(left=True, bottom=True)
-
-
-# In[45]:
-
-
-f, ax = plt.subplots(figsize=(12, 8))
-ax = sns.boxplot(data=beer_recipe.loc[:, low_scale_feats], orient='h')
-ax.set(title='Boxplots of low scale features in Beer Recipe dataset')
-sns.despine(left=True, bottom=True)
-
-
-# In[46]:
-
-
-f, ax = plt.subplots(figsize=(12, 8))
-ax = sns.boxplot(data=beer_recipe.loc[:, mid_scale_feats], orient='h')
-ax.set(title='Boxplots of medium scale features in Beer Recipe dataset')
-sns.despine(left=True, bottom=True)
-
-
-# In[47]:
-
-
-f, ax = plt.subplots(figsize=(12, 8))
-ax = sns.boxplot(data=beer_recipe.loc[:, high_scale_feats], orient='h')
-ax.set(title='Boxplots of high scale features in Beer Recipe dataset')
-sns.despine(left=True, bottom=True)
-
-
-# I've seperated the fields by scale so that each plot would make a bit of sense and not have any features "overpowered" by other... but even by doing that, the sheer number of outliers in each features just distort each and every plot.
-# 
-# I think this type of situation is to be expected when dealing with so many different classes, the data for each of those features when seperated by style might make more sense. We'll have to investigate that further.
-
-# ## Class Imbalance <a class="anchor" id="class"></a>
-# If the final purpose of this exploratory analysis is to help in setting up a classifier, we have to look at the classes that we have. It's important to define if we have some sort of class imbalance within the dataset.
-# 
-# The classes in this dataset are the individual **Style** under which each beer is classified and each style is part of a group of styles.  On the Brewers' Friends website, the data is entered in 2 drop-down lists. Here in the data, we only have the individual style under the **Style** and **StyleID** columns.
-
-# In[19]:
-
-
-print('There are {} different styles of beer'.format(beer_recipe.StyleID.nunique()))
-
-
-# As we can see we have a lot of different classes.
-# 
-# I've used the **StyleID** column to get the number, because there's an actual value in there for "No Style" - so that count would be missing if looking at the style columns.
-# 
-# We've already seen the most popular styles above when looking at missing values in **PrimingMethod** and **PrimingAmount**, but let's see how much of the data these most popular styles represent.
-
-# In[20]:
-
-
-# Get top10 styles
-top10_style = list(style_cnt_grp['Style'][:10].values)
-
-# Group by current count information computed earlier and group every style not in top20 together
-style_cnt_other = style_cnt_grp.loc[:, ['Style','Count']]
-style_cnt_other.Style = style_cnt_grp.Style.apply(lambda x: x if x in top10_style else 'Other')
-style_cnt_other = style_cnt_other.groupby('Style').sum()
-
-# Get ratio of each style
-style_cnt_other['Ratio'] = style_cnt_other.Count.apply(lambda x: x/float(len(beer_recipe)))
-style_cnt_other = style_cnt_other.sort_values('Count', ascending=False)
-
-f, ax = plt.subplots(figsize=(8, 8))
-explode = (0.05, 0.05, 0.05, 0, 0, 0, 0, 0, 0, 0, 0)
-plt.pie(x=style_cnt_other['Ratio'], labels=list(style_cnt_other.index), startangle = 180, autopct='%1.1f%%', pctdistance= .9, explode=explode)
-plt.title('Ratio of styles across dataset')
-plt.show()
-
-
-# Just with the top 10 styles, we can see that they make up about 45% of the data. 
-# 
-# But even then, the ratio drops severely just after the 2 first style: *American IPA* and *American Pale Ale*. 
-# 
-# There's a clear imbalance between the classes and we'll have to deal with that when comes time to build the classifier.
-# It would be cool to have the "grouping" of styles that the Brewers' Friend website uses in the first dropdown to reduce the number of classes to a more manageable level. I'll see if I can figure out a quick way to bring in that data.
-
-# ### About Pie Charts ...  <a class="anchor" id="pie"></a>
-# Well after researching about how to make my pie chart a bit sexier, I found out they have a bad reputation :)
-# 
-# Even if I still think that the pie chart above still does what it's supposed to do (presenting the importance of the top classes in the dataset), I'll try a different approach and you can tell me in the comments which one looks / works best.
-# 
-# Let's try to present the same thing using a bar chart:
-
-# In[21]:
-
-
-#plt.barh(list(style_cnt_other.index), style_cnt_other['Count'])
-style_cnt_other['Ratio'].plot(kind='barh', figsize=(12,6),)
-plt.title('Ratio of styles across dataset')
-sns.despine(left=True, bottom=True)
-plt.gca().invert_yaxis()
-
-
-# <a class="anchor" id="corr"></a>
-# ![beer_n_diapers](https://blog.a4everyone.com/wp-content/uploads/2016/06/beer-diapers-correlation-data-analytics-sales-forecasting.jpg)
-# # Correlations
-# 
-# Are there any correlations between the fields in the dataset ???
-# 
-# For this part of the analysis, I'll focus on the fields which we know are more "reliable" (as per the notes and our previous analysis of null values):
-# * Original Gravity (OG)
-# * Final Gravity (FG)
-# * Alcohol by Volume (ABV)
-# * Internation Bitterness Units (IBU)
-# * Color
-
-# In[48]:
-
-
-# create specific df that only contains the fields we're interested in
-pairplot_df = beer_recipe.loc[:, ['Style','OG_sg','FG_sg','ABV','IBU','Color']]
-
-# create the pairplot
-sns.set(style="dark")
-sns.pairplot(data=pairplot_df)
-plt.show()
-
-
-# This might not be the best way to look at this type of information...
-# 
-# The diagonal plots are really weird and it's hard to see if there is any semblance of distributions. The main reason seems to be based on the scale of the x axis that's always too large.  So this points to the presence of significant outliers within each of those fields.  
-# 
-# These outliers could be related to certains styles having extreme values, or just plain user error, since all these recipes are entered manually.  Let's see if we can spot those outliers in the most popular styles...
-
-# In[57]:
-
-
-style_cnt_grp = style_cnt_grp.sort_values('Count', ascending=False)
-top5_style = list(style_cnt_grp['Style'][:5].values)
-
-top5_style_df = pairplot_df[pairplot_df['Style'].isin(top5_style)]
-
-f, ax = plt.subplots(figsize=(12, 8))
-sns.violinplot(x='Style', y='OG_sg',data=top5_style_df)
-plt.show()
-
-
-# The plots for all the fields and for at least the top20 styles all look like the one above.  Each fields, even when split by style have a significant numbers of outliers, which will make it difficult for a classifier to use.
-# 
-# The five fields that were mentionned in the notes as being standardized are that way because they are automatically calculated by Brewer's Friend when the recipe is entered.  They depends on the ingredients that are specified and their quantity.
-# 
-# The reason behind the outliers seems to be because of the *disconnect* between the style of beer and the ingredients used during brewing.  There is certainly a connection, however, the same ingredient could be added to the beer in different forms, which are all going to affect the **Original Gravity** and **Final Gravity** in their own way.  For example:
-# 
-# * Flaked Barley
-# * Rolled Barley
-# * Black Barley
-# 
-# The same quantity of these fermentables added to the recipe will affect the calculated fieds in a different way.
-# 
-
-# ## ABV vs. Original Gravity <a class="anchor" id="abv_vs_og"></a>
-# Note that the text below was before I realigned the gravity related fields to be all Specific Gravity.  
-# The 2 linear relationship that I mention below was because there was 2 different scale in the same feature (managed through the feature SugarScale).  
-# Once re-aligned, there's only a single linear relationship between the 2 features.
-# 
-# ---
-# 
-# I want to look further at the correlation between these 2 features, since there seems to be something there, but it's hard to make out in the plot seen above.
-# 
-# I mean, there seems to be 2 different linear relationship between the variable. I'm wondering if these relationship are not based on styles, meaning that the correlation would be stronger for certain specific styles.
-# Let's look at the Top5 styles to keep things simple:
-
-# In[24]:
-
-
-# Get Top5 styles
-top5_style = list(style_cnt_grp['Style'][:5].values)
-beer_recipe['Top5_Style'] = beer_recipe.Style.apply(lambda x: x if x in top5_style else 'Other')
-
-# Create Reg plot
-sns.lmplot(x='ABV', y='OG', hue='Top5_Style', col='Top5_Style', col_wrap=3, data=beer_recipe, n_boot=100)
-
-
-# Doesn't seem to be the case (that the linear relationship is based on styles - each of the Top5 styles each have values in both "lines".
-# 
-# ---
-# 
-# Now let's look at the same thing but with the realigned OG field and see the difference:
-
-# In[49]:
-
-
-# Create Reg plot
-sns.lmplot(x='ABV', y='OG_sg', hue='Top5_Style', col='Top5_Style', col_wrap=3, data=beer_recipe, n_boot=100)
-
-
-# # Building a simple classifier <a class="anchor" id="clf"></a>
-# I think it's time to take a jab at building a quick classifier with the data that we have to see what kind of accuracy we can get out of a simple classifier.
-# 
-# I'll be using a DecisionTree based model like XGBoost or RandomForest first to see how it performs on this dataset.
-# 
-# ## Preprocessing the data <a class="anchor" id="clf_process"></a>
-# But before we can start looking at the classifier, we'll have to preprocess our data to be able to use it to train our model.
-# 
-# The steps I'll need to go through are:
-# * Label-encoding the categorical features I'll use
-# * Fill null values in some of the numerical features (if I decide to use them)
-# * Seperate Target Classes from the Features
-# * Perform a Train-Test Split so we can evaluate the classifier on part of the data
-
-# In[50]:
-
-
-# imports
-from sklearn.preprocessing import LabelEncoder, Imputer
-from sklearn.model_selection import train_test_split
-
-# Get only the features to be used from original dataset
-features_list= ['StyleID', #target
-                'OG_sg','FG_sg','ABV','IBU','Color', #standardized fields
-                'SugarScale', 'BrewMethod', #categorical features
-                'Size(L)', 'BoilSize', 'BoilTime', 'BoilGravity_sg', 'Efficiency', 'MashThickness', 'PitchRate', 'PrimaryTemp' # other numerical features
-                ]
-
-clf_data = beer_recipe.loc[:, features_list]
-
-# Label encoding
-cat_feats_to_use = list(clf_data.select_dtypes(include=object).columns)
-for feat in cat_feats_to_use:
-    encoder = LabelEncoder()
-    clf_data[feat] = encoder.fit_transform(clf_data[feat])
-
-# Fill null values
-num_feats_to_use = list(clf_data.select_dtypes(exclude=object).columns)
-for feat in num_feats_to_use:
-    imputer = Imputer(strategy='median')
-    clf_data[feat] = imputer.fit_transform(clf_data[feat].values.reshape(-1,1))
-    
-# Seperate Targets from Features
-X = clf_data.iloc[:, 1:]
-y = clf_data.iloc[:, 0] #the target were the first column I included
-
-# Train test split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=.2, stratify=y, random_state=35)
-
-
-# In[51]:
-
-
-#sanity check making sure everything is in number format and no null values
-X.info()
-
-
-# ## Scaling features <a class="anchor" id="clf_scale"></a>
-# Since we've seen earlier that the numerical features are on totally different scales, we need to bring them to the same scale.
-
-# In[52]:
-
-
-# imports
-from sklearn.preprocessing import StandardScaler
-
-scaler = StandardScaler()
-X_train = scaler.fit_transform(X_train)
-X_test = scaler.transform(X_test)
-
-
-# In[53]:
-
-
-#sanity check again
-sanity_df = pd.DataFrame(X_train, columns = X.columns)
-sanity_df.describe().T
-
-
-# ## Training the classifier <a class="anchor" id="clf_train"></a>
-
-# In[54]:
-
-
-#imports
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-import xgboost as xgb
-
-clf = RandomForestClassifier()
-#clf = LogisticRegression()
-#clf = xgb.XGBClassifier()
-clf.fit(X_train, y_train)
-
-
-# ## Testing the classifier <a class="anchor" id="clf_test"></a>
+# The [IO Tools](http://pandas.pydata.org/pandas-docs/stable/io.html) section of the official `pandas` docs provides a comprehensive overview on this subject.
 
 # In[ ]:
 
 
-from sklearn.metrics import accuracy_score
-
-y_pred = clf.predict(X_test)
-score = accuracy_score(y_test, y_pred)
-print('Accuracy: {}'.format(score))
+import pandas as pd
 
 
-# Well, that didn't go well at all... 32% accuracy.
+# ## Creating data
 # 
-# I wasn't expecting much based on the exploration results we've seen above, but this is much lower than what I was thinking we would see.
+# There are two core objects in `pandas`: the **DataFrame** and the **Series**.
 # 
-# ---
-# I've tried other models and here are their accuracy score:
-# * RandomForest: 32.5 %
-# * LogisticRegression: 25.1 %
-# * XGBoost: 37 %
+# A DataFrame is a table. It contains an array of individual *entries*, each of which has a certain *value*. Each entry corresponds with a row (or *record*) and a *column*.
 # 
-# I'll leave the RandomForest in the Kernel so that it runs quicker.
+# For example, consider the following simple `DataFrame`:
+
+# In[ ]:
+
+
+pd.DataFrame({'Yes': [50, 21], 'No': [131, 2]})
+
+
+# In this example, the "0, No" entry has the value of 131. The "0, Yes" entry has a value of 50, and so on.
 # 
-# ---
+# `DataFrame` entries are not limited to integers. For instance, here's a `DataFrame` whose values are `str` strings:
+
+# In[ ]:
+
+
+pd.DataFrame({'Bob': ['I liked it.', 'It was awful.'], 'Sue': ['Pretty good.', 'Bland.']})
+
+
+# We are using the `pd.DataFrame` constructor to generate these `DataFrame` objects. The syntax for declaring a new one is a dictionary whose keys are the column names (`Bob` and `Sue` in this example), and whose values are a list of entries. This is the standard way of constructing a new `DataFrame`, and the one you are likliest to encounter.
+
+# The dictionary-list constructor assigns values to the *column labels*, but just uses an ascending count from 0 (0, 1, 2, 3, ...) for the *row labels*. Sometimes this is OK, but oftentimes we will want to assign these labels ourselves.
 # 
-# Let's see what features the model used to differentiate between the styles.
+# The list of row labels used in a `DataFrame` is known as an **Index**. We can assign values to it by using an `index` parameter in our constructor:
 
-# In[31]:
-
-
-feats_imp = pd.DataFrame(clf.feature_importances_, index=X.columns, columns=['FeatureImportance'])
-feats_imp = feats_imp.sort_values('FeatureImportance', ascending=False)
-
-feats_imp.plot(kind='barh', figsize=(12,6), legend=False)
-plt.title('Feature Importance from RandomForest Classifier')
-sns.despine(left=True, bottom=True)
-plt.gca().invert_yaxis()
+# In[ ]:
 
 
-# Make sense that **Color** and **IBU** are at the top of that list. 
+pd.DataFrame({'Bob': ['I liked it.', 'It was awful.'], 
+              'Sue': ['Pretty good.', 'Bland.']},
+             index=['Product A', 'Product B'])
+
+
+# A Series, by contrast, is a sequence of data values. If a `DataFrame` is a table, a `Series` is a list. And in fact you can create one with nothing more than a list:
+
+# In[ ]:
+
+
+pd.Series([1, 2, 3, 4, 5])
+
+
+# A `Series` is, in essence, a single column of a `DataFrame`. So you can assign column values to the `Series` the same way as before, using an `index` parameter. However, a `Series` do not have a column name, it only has one overall `name`:
+
+# In[ ]:
+
+
+pd.Series([30, 35, 40], index=['2015 Sales', '2016 Sales', '2017 Sales'], name='Product A')
+
+
+# `Series` and the `DataFrame` are intimately related. It's helpful to think of a `DataFrame` as actually being just a bunch of `Series` "glue together". We'll see more of this in the next section of this tutorial.
+
+# ## Reading common file formats
 # 
-# These features are the ones that may vary the most between the different styles.
+# Being able to create a `DataFrame` and `Series` by hand is handy. But, most of the time, we won't actually be creating our own data by hand, we'll be working with data that already exists.
+# 
+# Data can be stored in any of a number of different forms and formats. By far the most basic of these is the humble CSV file. When you open a CSV file you get something that looks like this:
+# 
+# ```csv
+# Product A,Product B,Product C,
+# 30,21,9,
+# 35,34,1,
+# 41,11,11
+# ```
+# 
+# So a CSV file is a table of values separated by commas. Hence the name: "comma-seperated values", or CSV.
+# 
+# Let's now set aside our toy datasets and see what a real dataset looks like when we read it into a `DataFrame`. We'll use the `read_csv` function to read the data into a `DataFrame`. This goes thusly:
 
-# ## Still to be done... <a class="anchor" id="tbd"></a>
-# 1. Continue investigating correlations between standardized features
-# 2. Investigate other types of classifier and their respective score.
-# 3. Maybe refine the RandomForest (hyper parameters tuning) to see how much we can get out of it
+# In[ ]:
+
+
+wine_reviews = pd.read_csv("../input/wine-reviews/winemag-data-130k-v2.csv")
+
+
+# We can use the `shape` attribute to check how large the resulting `DataFrame` is:
+
+# In[ ]:
+
+
+wine_reviews.shape
+
+
+# So our new `DataFrame` has 130,000 records split across 14 different columns. That's almost 2 million entries!
+# 
+# We can examine the contents of the resultant `DataFrame` using the `head` command, which grabs the first five rows:
+
+# In[ ]:
+
+
+wine_reviews.head()
+
+
+# The `pandas` `read_csv` function is well-endowed, with over 30 optional parameters you can specify. For example, you can see in this dataset that the `csv` file has an in-built index, which `pandas` did not pick up on automatically. To make `pandas` use that column for the index (instead of creating a new one from scratch), we may specify and use an `index_col`.
+
+# In[ ]:
+
+
+wine_reviews = pd.read_csv("../input/wine-reviews/winemag-data-130k-v2.csv", index_col=0)
+wine_reviews.head()
+
+
+# Let's look at a few more datatypes you're likely to encounter.
+# 
+# First up, the venerable Excel spreadsheet. An Excel file (`XLS` or `XLST`) organizes itself as a sequence of named sheets. Each sheet is basically a table. So to load the data into `pandas` we need one additional parameter: the name of the sheet of interest.
+# 
+# So this:
+# 
+# ![](https://s3.amazonaws.com/nonwebstorage/excel.png)
+# 
+# Becomes this:
+# 
+# <!-- First up, the venerable SQL database. You can read a single table in a SQL database directly into a `pandas` `DataFrame` using the `read_sql` method. The only thing you need is -->
+
+# In[ ]:
+
+
+wic = pd.read_excel("../input/publicassistance/xls_files_all/WICAgencies2013ytd.xls", 
+                    sheet_name='Total Women')
+wic.head()
+
+
+# As you can see in this example, Excel files are often not formatted as well as CSV files are. Spreadsheets allow (and encourage) creating notes and fields which are human-readable, but not machine-readable.
+# 
+# So before we can use this particular dataset, we will need to clean it up a bit. We will see how to do so in the next section.
+# 
+# For now, let's move on to another common data format: SQL files.
+# 
+# SQL databases are where most of the data on the web ultimately gets stored. They can be used to store data on things as simple as recipes to things as complicated as "almost everything on the Kaggle website".
+# 
+# Connecting to a SQL database requires a lot more thought than reading from an Excel file. For one, you need to create a **connector**, something that will handle siphoning data from the database.
+# 
+# `pandas` won't do this for you automatically because there are many, many different types of SQL databases out there, each with its own connector. So for a SQLite database (the only kind supported on Kaggle), you would need to first do the following (using the `sqlite3` library that comes with Python):
+
+# In[ ]:
+
+
+import sqlite3
+conn = sqlite3.connect("../input/188-million-us-wildfires/FPA_FOD_20170508.sqlite")
+
+
+# The other thing you need to do is write a SQL statement. Internally, SQL databases all operate very differently. Externally, however, they all provide the same API, the "Structured Query Language" (or...SQL...for short).
+# 
+# We (very briefly) need to use SQL to load data into 
+# 
+# For the purposes of analysis however we can usually just think of a SQL database as a set of tables with names, and SQL as a minor inconvenience in getting that data out of said tables.
+# 
+# So, without further ado, here is all the SQL you have to know to get the data out of `SQLite` and into `pandas`:
+
+# In[ ]:
+
+
+fires = pd.read_sql_query("SELECT * FROM fires", conn)
+
+
+# Every SQL statement beings with `SELECT`. The asterisk (`*`) is a wildcard character, meaning "everything", and `FROM fires` tells the database we want only the data from the `fires` table specifically.
+# 
+# And, out the other end, data:
+
+# In[ ]:
+
+
+fires.head()
+
+
+# ## Writing common file formats
+
+# Writing data to a file is usually easier than reading it out of one, because `pandas` handles the nuisance of conversions for you. 
+# 
+# We'll start with CSV files again. The opposite of `read_csv`, which reads our data, is `to_csv`, which writes it. With CSV files it's dead simple:
+
+# In[ ]:
+
+
+wine_reviews.head().to_csv("wine_reviews.csv")
+
+
+# To write an Excel file back you need `to_excel` and the `sheet_name` again:
+
+# In[ ]:
+
+
+wic.to_excel('wic.xlsx', sheet_name='Total Women')
+
+
+# And finally, to output to a SQL database, supply the name of the table in the database we want to throw the data into, and a connector:
+
+# In[ ]:
+
+
+conn = sqlite3.connect("fires.sqlite")
+fires.head(10).to_sql("fires", conn)
+
+
+# Painless!

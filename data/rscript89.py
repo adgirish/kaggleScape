@@ -1,119 +1,130 @@
-# The goal of this kernel is to demonstrate that LightGBM can have predictive
-# performance in line with that of a logistic regression. The theory is that
-# labeling is being driven by a few keywords that can be picked up by trees.
-#
-# With some careful tuning, patience with runtimes, and additional feature
-# engineering, this kernel can be tuned to slightly exceed the best
-# logistic regression. Best of all, the two approaches (LR and LGB) blend
-# well together.
-#
-# Hopefully, with some work, this could be a good addition to your ensemble.
-
-import gc
+import numpy as np
+np.random.seed(42)
 import pandas as pd
 
-from scipy.sparse import csr_matrix, hstack
-
-from sklearn.feature_extraction.text import TfidfVectorizer
-
 from sklearn.model_selection import train_test_split
-from sklearn.feature_selection import SelectFromModel
+from sklearn.metrics import roc_auc_score
+from nltk import WordNetLemmatizer
+from nltk import pos_tag, word_tokenize
 
-from sklearn.linear_model import LogisticRegression
-import lightgbm as lgb
+from keras.models import Model
+from keras.layers import Input, Dense, Embedding, SpatialDropout1D, concatenate
+from keras.layers import GRU, Bidirectional, GlobalAveragePooling1D, GlobalMaxPooling1D
+from keras.preprocessing import text, sequence
+from keras.callbacks import Callback
+
+import warnings
+warnings.filterwarnings('ignore')
+
+import os
+os.environ['OMP_NUM_THREADS'] = '4'
 
 
-class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+def lemmatize_all(sentence):
+    wnl = WordNetLemmatizer()
+    for word, tag in pos_tag(word_tokenize(sentence)):
+        if tag.startswith("NN"):
+            yield wnl.lemmatize(word, pos='n')
+        elif tag.startswith('VB'):
+            yield wnl.lemmatize(word, pos='v')
+        elif tag.startswith('JJ'):
+            yield wnl.lemmatize(word, pos='a')
+        elif tag.startswith('R'):
+            yield wnl.lemmatize(word, pos='r')
+            
+        else:
+            yield word
 
-train = pd.read_csv('../input/train.csv').fillna(' ')
-test = pd.read_csv('../input/test.csv').fillna(' ')
-print('Loaded')
+EMBEDDING_FILE = '../input/fasttext-crawl-300d-2m/crawl-300d-2M.vec'
 
-train_text = train['comment_text']
-test_text = test['comment_text']
-all_text = pd.concat([train_text, test_text])
+train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
+test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
+submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
 
-word_vectorizer = TfidfVectorizer(
-    sublinear_tf=True,
-    strip_accents='unicode',
-    analyzer='word',
-    token_pattern=r'\w{1,}',
-    ngram_range=(1, 2),
-    max_features=50000)
-word_vectorizer.fit(all_text)
-print('Word TFIDF 1/3')
-train_word_features = word_vectorizer.transform(train_text)
-print('Word TFIDF 2/3')
-test_word_features = word_vectorizer.transform(test_text)
-print('Word TFIDF 3/3')
+X_train = train["comment_text"].fillna("fillna").values
+y_train = train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]].values
+X_test = test["comment_text"].fillna("fillna").values
 
-char_vectorizer = TfidfVectorizer(
-    sublinear_tf=True,
-    strip_accents='unicode',
-    analyzer='char',
-    stop_words='english',
-    ngram_range=(2, 6),
-    max_features=50000)
-char_vectorizer.fit(all_text)
-print('Char TFIDF 1/3')
-train_char_features = char_vectorizer.transform(train_text)
-print('Char TFIDF 2/3')
-test_char_features = char_vectorizer.transform(test_text)
-print('Char TFIDF 3/3')
+X_train1=[]
+X_test1=[]
+#Function call to lemmatize X_train and X_test
+print ("Train data lemmatization begins")
+for i in range(0,len(train)):
+    X_train1.append(" ".join(lemmatize_all(str(train['comment_text'][i]))))
+print ("Train data lemmatization ends")
+print ("Test data lemmatization begins")
+for i in range (0, len(test)):
+    X_test1.append(" ".join(lemmatize_all(str(test['comment_text'][i]))))
+print ("Test data lemmatization ends")
 
-train_features = hstack([train_char_features, train_word_features])
-print('HStack 1/2')
-test_features = hstack([test_char_features, test_word_features])
-print('HStack 2/2')
+max_features = 30000
+maxlen = 100
+embed_size = 300
 
-submission = pd.DataFrame.from_dict({'id': test['id']})
+tokenizer = text.Tokenizer(num_words=max_features)
+tokenizer.fit_on_texts(list(X_train1) + list(X_test1))
+X_train = tokenizer.texts_to_sequences(X_train1)
+X_test = tokenizer.texts_to_sequences(X_test1)
+x_train = sequence.pad_sequences(X_train, maxlen=maxlen)
+x_test = sequence.pad_sequences(X_test, maxlen=maxlen)
 
-train.drop('comment_text', axis=1, inplace=True)
-del test
-del train_text
-del test_text
-del all_text
-del train_char_features
-del test_char_features
-del train_word_features
-del test_word_features
-gc.collect()
 
-for class_name in class_names:
-    print(class_name)
-    train_target = train[class_name]
-    model = LogisticRegression(solver='sag')
-    sfm = SelectFromModel(model, threshold=0.2)
-    print(train_features.shape)
-    train_sparse_matrix = sfm.fit_transform(train_features, train_target)
-    print(train_sparse_matrix.shape)
-    train_sparse_matrix, valid_sparse_matrix, y_train, y_valid = train_test_split(train_sparse_matrix, train_target, test_size=0.05, random_state=144)
-    test_sparse_matrix = sfm.transform(test_features)
-    d_train = lgb.Dataset(train_sparse_matrix, label=y_train)
-    d_valid = lgb.Dataset(valid_sparse_matrix, label=y_valid)
-    watchlist = [d_train, d_valid]
-    params = {'learning_rate': 0.2,
-              'application': 'binary',
-              'num_leaves': 31,
-              'verbosity': -1,
-              'metric': 'auc',
-              'data_random_seed': 2,
-              'bagging_fraction': 0.8,
-              'feature_fraction': 0.6,
-              'nthread': 4,
-              'lambda_l1': 1,
-              'lambda_l2': 1}
-    rounds_lookup = {'toxic': 140,
-                 'severe_toxic': 50,
-                 'obscene': 80,
-                 'threat': 80,
-                 'insult': 70,
-                 'identity_hate': 80}
-    model = lgb.train(params,
-                      train_set=d_train,
-                      num_boost_round=rounds_lookup[class_name],
-                      valid_sets=watchlist,
-                      verbose_eval=10)
-    submission[class_name] = model.predict(test_sparse_matrix)
+def get_coefs(word, *arr): return word, np.asarray(arr, dtype='float32')
+embeddings_index = dict(get_coefs(*o.rstrip().rsplit(' ')) for o in open(EMBEDDING_FILE))
 
-submission.to_csv('lgb_submission.csv', index=False)
+word_index = tokenizer.word_index
+nb_words = min(max_features, len(word_index))
+embedding_matrix = np.zeros((nb_words, embed_size))
+for word, i in word_index.items():
+    if i >= max_features: continue
+    embedding_vector = embeddings_index.get(word)
+    if embedding_vector is not None: embedding_matrix[i] = embedding_vector
+
+
+class RocAucEvaluation(Callback):
+    def __init__(self, validation_data=(), interval=1):
+        super(Callback, self).__init__()
+
+        self.interval = interval
+        self.X_val, self.y_val = validation_data
+
+    def on_epoch_end(self, epoch, logs={}):
+        if epoch % self.interval == 0:
+            y_pred = self.model.predict(self.X_val, verbose=0)
+            score = roc_auc_score(self.y_val, y_pred)
+            print("\n ROC-AUC - epoch: %d - score: %.6f \n" % (epoch+1, score))
+
+
+def get_model():
+    inp = Input(shape=(maxlen, ))
+    x = Embedding(max_features, embed_size, weights=[embedding_matrix])(inp)
+    x = SpatialDropout1D(0.4)(x)
+    x = Bidirectional(GRU(80, return_sequences=True,activation='relu', dropout=0.3, recurrent_dropout=0.))(x)
+    avg_pool = GlobalAveragePooling1D()(x)
+    max_pool = GlobalMaxPooling1D()(x)
+    conc = concatenate([avg_pool, max_pool])
+    outp = Dense(6, activation="sigmoid")(conc)
+    
+    model = Model(inputs=inp, outputs=outp)
+    model.compile(loss='binary_crossentropy',
+                  optimizer='adam',
+                  metrics=['accuracy'])
+
+    return model
+
+model = get_model()
+
+
+batch_size = 32
+epochs = 2
+
+X_tra, X_val, y_tra, y_val = train_test_split(x_train, y_train, train_size=0.95, random_state=233)
+RocAuc = RocAucEvaluation(validation_data=(X_val, y_val), interval=1)
+
+hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=epochs, validation_data=(X_val, y_val),
+                 callbacks=[RocAuc], verbose=2)
+
+
+y_pred = model.predict(x_test, batch_size=1024)
+submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_pred
+submission.to_csv('submission.csv', index=False)

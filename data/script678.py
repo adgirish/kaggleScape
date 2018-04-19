@@ -1,293 +1,473 @@
 
 # coding: utf-8
 
-# # Pistol Round Analysis
+# In addition to the 3 models used in the *surpise me 2!* script, I have added a feed forward neural network for the prediction of visitors.
 # 
-# Hello! I am the creator of this data-set and just wanted to provide a sample analysis for anyone interested in looking at CS.  I look at mainly the pistol round here but many of the techniques can be applied to all types of rounds.  There are many ways to analyze this dataset so I hope you can go off and answer interesting questions for yourself :)
-# 
-# In this notebook, I will analyze pistol round outcomes and damages done on average to improve player decision making on pistol rounds.  The analysis I provide in this notebook is very minimal, I'm only here to show code, however, you can find [the full analysis that I put on reddit with more in-depth talk about the numbers](https://www.reddit.com/r/GlobalOffensive/comments/72fkl7/mm_analytics_some_pistol_round_statistics_and/). 
-# 
-# The following questions will be answered in this notebook:
-# 
-# 1. What are the most common pistol round buys?
-# - What is the ADR by each pistol on pistol rounds?
-# - What sites do bomb get planted the most on pistol rounds?
-# - After bomb gets planted at A/B Site, for all XvX situation, what is the win Probability for Ts?
-# - In a 1v1, 1v2, 2v1, 2v2, should players play out of site/in-site or one-in one-out to deal the most damage while receiving the least?
+# **Update**:
+# Took pointers from @aharless kernel: https://www.kaggle.com/aharless/exclude-same-wk-res-from-nitin-s-surpriseme2-w-nn
 
 # In[ ]:
 
 
-import pandas as pd
+"""
+Contributions from:
+DSEverything - Mean Mix - Math, Geo, Harmonic (LB 0.493) 
+https://www.kaggle.com/dongxu027/mean-mix-math-geo-harmonic-lb-0-493
+JdPaletto - Surprised Yet? - Part2 - (LB: 0.503)
+https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503
+hklee - weighted mean comparisons, LB 0.497, 1ST
+https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st
+tunguz - Surprise Me 2!
+https://www.kaggle.com/tunguz/surprise-me-2/code
+aharless - Exclude same wk res from Nitin's SurpriseMe2 w NN
+https://www.kaggle.com/aharless/exclude-same-wk-res-from-nitin-s-surpriseme2-w-nn/versions#base=2217075&new=2253052
+
+Also all comments for changes, encouragement, and forked scripts rock
+
+Keep the Surprise Going
+"""
+
+import glob, re
 import numpy as np
-import seaborn as sns
+import pandas as pd
+from sklearn import *
+from datetime import datetime
+from xgboost import XGBRegressor
+
+from keras.layers import Embedding, Input, Dense
+from keras.models import Model
+import keras
+import keras.backend as K
+
 import matplotlib.pyplot as plt
-import warnings
-from scipy.misc import imread
-import matplotlib.patches as mpatches
-from matplotlib.collections import PatchCollection
-import matplotlib.colors as colors
-warnings.filterwarnings('ignore')
-get_ipython().run_line_magic('matplotlib', 'inline')
 
 
 # In[ ]:
 
 
-df = pd.read_csv('../input/mm_master_demos.csv', index_col=0)
-map_bounds = pd.read_csv('../input/map_data.csv', index_col=0)
-df.head()
+def RMSLE(y, pred):
+    return metrics.mean_squared_error(y, pred)**0.5
 
-
-# ### Data Prep
-# 
-# Let's first only isolate for active duty maps as they are the maps that most competitive players really care about.  I also want to first convert the in-game coordinates to overhead map coordinates.
-
-# In[ ]:
-
-
-active_duty_maps = ['de_cache', 'de_cbble', 'de_dust2', 'de_inferno', 'de_mirage', 'de_overpass', 'de_train']
-df = df[df['map'].isin(active_duty_maps)]
-df = df.reset_index(drop=True)
-md = map_bounds.loc[df['map']]
-md[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']] = (df.set_index('map')[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']])
-md['att_pos_x'] = (md['ResX']*(md['att_pos_x']-md['StartX']))/(md['EndX']-md['StartX'])
-md['att_pos_y'] = (md['ResY']*(md['att_pos_y']-md['StartY']))/(md['EndY']-md['StartY'])
-md['vic_pos_x'] = (md['ResX']*(md['vic_pos_x']-md['StartX']))/(md['EndX']-md['StartX'])
-md['vic_pos_y'] = (md['ResY']*(md['vic_pos_y']-md['StartY']))/(md['EndY']-md['StartY'])
-df[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']] = md[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']].values
+def plot_actual_predicted(actual, predicted):
+    print('RMSE: ', RMSLE(actual, predicted))
+    tmp = pd.DataFrame({'actual': actual, 'predicted': predicted}).sort_values(['actual'])
+    plt.scatter(range(tmp.shape[0]), tmp['predicted'], color='green')
+    plt.scatter(range(tmp.shape[0]), tmp['actual'], color='blue')
+    plt.show()
+    del tmp
 
 
 # In[ ]:
 
 
-print("Total Number of Rounds: %i" % df.groupby(['file', 'round'])['tick'].first().count())
+data = {
+    'tra': pd.read_csv('../input/air_visit_data.csv'),
+    'as': pd.read_csv('../input/air_store_info.csv'),
+    'hs': pd.read_csv('../input/hpg_store_info.csv'),
+    'ar': pd.read_csv('../input/air_reserve.csv'),
+    'hr': pd.read_csv('../input/hpg_reserve.csv'),
+    'id': pd.read_csv('../input/store_id_relation.csv'),
+    'tes': pd.read_csv('../input/sample_submission.csv'),
+    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
+    }
+
+data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
+
+for df in ['ar','hr']:
+    data[df]['reserve_visitors'] = np.log1p(data[df]['reserve_visitors'])
+    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
+    data[df]['visit_dow'] = data[df]['visit_datetime'].dt.dayofweek
+    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
+    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
+    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
+    data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
+    # NEW FEATURE FROM aharless kernel
+    data[df]['early_reservation'] = data[df]['reserve_datetime_diff'] > 2
+    data[df]['late_reservation'] = data[df]['reserve_datetime_diff'] <= 2
+    tmp1 = data[df][data[df]['early_reservation']].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
+    tmp2 = data[df][data[df]['early_reservation']].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
+    tmp3 = data[df][data[df]['late_reservation']].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs12', 'reserve_visitors':'rv12'})
+    tmp4 = data[df][data[df]['late_reservation']].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs22', 'reserve_visitors':'rv22'})
+    data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
+    data[df] = pd.merge(data[df], tmp3, how='left', on=['air_store_id','visit_date'])
+    data[df] = pd.merge(data[df], tmp4, how='left', on=['air_store_id','visit_date'])
+    
+# for df in ['ar','hr']:
+#     data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
+#     data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
+#     data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
+#     data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
+#     data[df]['reserve_datetime_diff'] = data[df].apply(lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
+#     # NEW FEATURE FROM aharless kernel
+#     # Exclude less than 2 days gap
+#     data[df] = data[df][data[df]['reserve_datetime_diff'] > 2]
+#     tmp1 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs1', 'reserve_visitors':'rv1'})
+#     tmp2 = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[['reserve_datetime_diff', 'reserve_visitors']].mean().rename(columns={'visit_datetime':'visit_date', 'reserve_datetime_diff': 'rs2', 'reserve_visitors':'rv2'})
+#     data[df] = pd.merge(tmp1, tmp2, how='inner', on=['air_store_id','visit_date'])
+
+data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
+data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
+data['tra']['year'] = data['tra']['visit_date'].dt.year
+data['tra']['month'] = data['tra']['visit_date'].dt.month
+# NEW FEATURE FROM aharless kernel
+data['tra']['week'] = data['tra']['visit_date'].dt.week
+data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
+
+data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
+data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
+data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
+data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
+data['tes']['year'] = data['tes']['visit_date'].dt.year
+data['tes']['month'] = data['tes']['visit_date'].dt.month
+data['tes']['week'] = data['tes']['visit_date'].dt.week
+data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
+
+unique_stores = data['tes']['air_store_id'].unique()
+stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
+
+#sure it can be compressed...
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].min().rename(columns={'visitors':'min_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].mean().rename(columns={'visitors':'mean_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].median().rename(columns={'visitors':'median_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].max().rename(columns={'visitors':'max_visitors'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)['visitors'].count().rename(columns={'visitors':'count_observations'})
+stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
+
+stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
+# NEW FEATURES FROM Georgii Vyshnia
+stores['air_genre_name'] = stores['air_genre_name'].map(lambda x: str(str(x).replace('/',' ')))
+stores['air_area_name'] = stores['air_area_name'].map(lambda x: str(str(x).replace('-',' ')))
+lbl = preprocessing.LabelEncoder()
+for i in range(10):
+    stores['air_genre_name'+str(i)] = lbl.fit_transform(stores['air_genre_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+    stores['air_area_name'+str(i)] = lbl.fit_transform(stores['air_area_name'].map(lambda x: str(str(x).split(' ')[i]) if len(str(x).split(' '))>i else ''))
+stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
+stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
+
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
+train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
+test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
+
+train = pd.merge(train, stores, how='inner', on=['air_store_id','dow']) 
+test = pd.merge(test, stores, how='left', on=['air_store_id','dow'])
+
+for df in ['ar','hr']:
+    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
+    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
+
+train['id'] = train.apply(lambda r: '_'.join([str(r['air_store_id']), str(r['visit_date'])]), axis=1)
+
+train['total_reserv_sum'] = train['rv1_x'] + train['rv1_y']
+train['total_reserv_mean'] = (train['rv2_x'] + train['rv2_y']) / 2
+train['total_reserv_dt_diff_mean'] = (train['rs2_x'] + train['rs2_y']) / 2
+
+test['total_reserv_sum'] = test['rv1_x'] + test['rv1_y']
+test['total_reserv_mean'] = (test['rv2_x'] + test['rv2_y']) / 2
+test['total_reserv_dt_diff_mean'] = (test['rs2_x'] + test['rs2_y']) / 2
+
+# NEW FEATURES FROM JMBULL
+train['date_int'] = train['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
+test['date_int'] = test['visit_date'].apply(lambda x: x.strftime('%Y%m%d')).astype(int)
+train['var_max_lat'] = train['latitude'].max() - train['latitude']
+train['var_max_long'] = train['longitude'].max() - train['longitude']
+test['var_max_lat'] = test['latitude'].max() - test['latitude']
+test['var_max_long'] = test['longitude'].max() - test['longitude']
+
+# NEW FEATURES FROM Georgii Vyshnia
+train['lon_plus_lat'] = train['longitude'] + train['latitude'] 
+test['lon_plus_lat'] = test['longitude'] + test['latitude']
+
+lbl = preprocessing.LabelEncoder()
+train['air_store_id2'] = lbl.fit_transform(train['air_store_id'])
+test['air_store_id2'] = lbl.transform(test['air_store_id'])
+
+col = [c for c in train if c not in ['id', 'air_store_id', 'visit_date','visitors']]
+train = train.fillna(-1)
+test = test.fillna(-1)
+
+train['visitors'] = np.log1p(train['visitors'].values)
 
 
-# ### Pistol Round Buys
+# Here we prepare data required for the neural network model.
 # 
-# Let's first start by taking only pistol rounds and count the number of rounds
+# **value_col**:  taken as float input(which are normalized)
+# 
+# **nn_col - value_col**: taken as categorical inputs(embedding layers used)
 
 # In[ ]:
 
 
-avail_pistols = ['USP', 'Glock', 'P2000', 'P250', 'Tec9', 'FiveSeven', 'Deagle', 'DualBarettas', 'CZ']
+value_col = ['holiday_flg','min_visitors','mean_visitors','median_visitors','max_visitors','count_observations',
+'rs1_x','rv1_x','rs2_x','rv2_x','rs1_y','rv1_y','rs2_y','rv2_y','total_reserv_sum','total_reserv_mean',
+'total_reserv_dt_diff_mean','date_int','var_max_lat','var_max_long','lon_plus_lat']
 
-df_pistol = df[(df['round'].isin([1,16])) & (df['wp'].isin(avail_pistols))]
-print("Total Number of Pistol Rounds: %i" % df_pistol.groupby(['file', 'round'])['tick'].first().count())
+nn_col = value_col + ['dow', 'year', 'month', 'air_store_id2', 'air_area_name', 'air_genre_name',
+'air_area_name0', 'air_area_name1', 'air_area_name2', 'air_area_name3', 'air_area_name4',
+'air_area_name5', 'air_area_name6', 'air_genre_name0', 'air_genre_name1',
+'air_genre_name2', 'air_genre_name3', 'air_genre_name4']
+
+X = train.copy()
+X_test = test[nn_col].copy()
+
+value_scaler = preprocessing.MinMaxScaler()
+for vcol in value_col:
+    X[vcol] = value_scaler.fit_transform(X[vcol].values.astype(np.float64).reshape(-1, 1))
+    X_test[vcol] = value_scaler.transform(X_test[vcol].values.astype(np.float64).reshape(-1, 1))
+
+X_train = list(X[nn_col].T.as_matrix())
+Y_train = X['visitors'].values
+nn_train = [X_train, Y_train]
+nn_test = [list(X_test[nn_col].T.as_matrix())]
+print("Train and test data prepared for NN")
 
 
-# Let's first start by looking at pistol round buys.  We infer this from the damage dealt by pistols each round.  There is a bias here where if you did 0 damage with that pistol you had, then it doesn't get counted.  The potential bias is that aim punch will make most weapons get undercounted but I don't think it's a large issue.
+# Following function implements the Keras neural network model.
+# 
+# Basic structure:
+# - categorical columns get independent inputs, passed through embedding layer and then flattened.
+# - numeric columns are simply taken as float32 inputs
+# - the final tensors of categorical and numerical are then concatenated together
+# - following the concatenated layer and simple feed forward neural network is implemented.
+# - output layer has 'ReLU' activation function
 
 # In[ ]:
 
 
-pistol_buys = df_pistol.groupby(['file', 'round', 'att_side', 'wp'])['hp_dmg'].first()
-(pistol_buys.groupby(['wp']).count()/pistol_buys.groupby(['wp']).count().sum())*100.
+def get_nn_complete_model(train, hidden1_neurons=35, hidden2_neurons=15):
+    """
+    Input:
+        train:           train dataframe(used to define the input size of the embedding layer)
+        hidden1_neurons: number of neurons in the first hidden layer
+        hidden2_neurons: number of neurons in the first hidden layer
+    Output:
+        return 'keras neural network model'
+    """
+    K.clear_session()
 
+    air_store_id = Input(shape=(1,), dtype='int32', name='air_store_id')
+    air_store_id_emb = Embedding(len(train['air_store_id2'].unique()) + 1, 15, input_shape=(1,),
+                                 name='air_store_id_emb')(air_store_id)
+    air_store_id_emb = keras.layers.Flatten(name='air_store_id_emb_flatten')(air_store_id_emb)
 
-# Looks like Glock/USP trumps over most pistols.
-# 
-# ---
-# 
-# ### Heatmaps of Frequency of Pistol Damage
-# 
-# Next we can look at what are the most frequent spots when attacking as a T.  To keep it short, I will just do it on dust2 but changing `smap` will work on any map within `active_duty_maps`
+    dow = Input(shape=(1,), dtype='int32', name='dow')
+    dow_emb = Embedding(8, 3, input_shape=(1,), name='dow_emb')(dow)
+    dow_emb = keras.layers.Flatten(name='dow_emb_flatten')(dow_emb)
+
+    month = Input(shape=(1,), dtype='int32', name='month')
+    month_emb = Embedding(13, 3, input_shape=(1,), name='month_emb')(month)
+    month_emb = keras.layers.Flatten(name='month_emb_flatten')(month_emb)
+
+    air_area_name, air_genre_name = [], []
+    air_area_name_emb, air_genre_name_emb = [], []
+    for i in range(7):
+        area_name_col = 'air_area_name' + str(i)
+        air_area_name.append(Input(shape=(1,), dtype='int32', name=area_name_col))
+        tmp = Embedding(len(train[area_name_col].unique()), 3, input_shape=(1,),
+                        name=area_name_col + '_emb')(air_area_name[-1])
+        tmp = keras.layers.Flatten(name=area_name_col + '_emb_flatten')(tmp)
+        air_area_name_emb.append(tmp)
+
+        if i > 4:
+            continue
+        area_genre_col = 'air_genre_name' + str(i)
+        air_genre_name.append(Input(shape=(1,), dtype='int32', name=area_genre_col))
+        tmp = Embedding(len(train[area_genre_col].unique()), 3, input_shape=(1,),
+                        name=area_genre_col + '_emb')(air_genre_name[-1])
+        tmp = keras.layers.Flatten(name=area_genre_col + '_emb_flatten')(tmp)
+        air_genre_name_emb.append(tmp)
+
+    air_genre_name_emb = keras.layers.concatenate(air_genre_name_emb)
+    air_genre_name_emb = Dense(4, activation='sigmoid', name='final_air_genre_emb')(air_genre_name_emb)
+
+    air_area_name_emb = keras.layers.concatenate(air_area_name_emb)
+    air_area_name_emb = Dense(4, activation='sigmoid', name='final_air_area_emb')(air_area_name_emb)
+    
+    air_area_code = Input(shape=(1,), dtype='int32', name='air_area_code')
+    air_area_code_emb = Embedding(len(train['air_area_name'].unique()), 8, input_shape=(1,), name='air_area_code_emb')(air_area_code)
+    air_area_code_emb = keras.layers.Flatten(name='air_area_code_emb_flatten')(air_area_code_emb)
+    
+    air_genre_code = Input(shape=(1,), dtype='int32', name='air_genre_code')
+    air_genre_code_emb = Embedding(len(train['air_genre_name'].unique()), 5, input_shape=(1,),
+                                   name='air_genre_code_emb')(air_genre_code)
+    air_genre_code_emb = keras.layers.Flatten(name='air_genre_code_emb_flatten')(air_genre_code_emb)
+
+    
+    holiday_flg = Input(shape=(1,), dtype='float32', name='holiday_flg')
+    year = Input(shape=(1,), dtype='float32', name='year')
+    min_visitors = Input(shape=(1,), dtype='float32', name='min_visitors')
+    mean_visitors = Input(shape=(1,), dtype='float32', name='mean_visitors')
+    median_visitors = Input(shape=(1,), dtype='float32', name='median_visitors')
+    max_visitors = Input(shape=(1,), dtype='float32', name='max_visitors')
+    count_observations = Input(shape=(1,), dtype='float32', name='count_observations')
+    rs1_x = Input(shape=(1,), dtype='float32', name='rs1_x')
+    rv1_x = Input(shape=(1,), dtype='float32', name='rv1_x')
+    rs2_x = Input(shape=(1,), dtype='float32', name='rs2_x')
+    rv2_x = Input(shape=(1,), dtype='float32', name='rv2_x')
+    rs1_y = Input(shape=(1,), dtype='float32', name='rs1_y')
+    rv1_y = Input(shape=(1,), dtype='float32', name='rv1_y')
+    rs2_y = Input(shape=(1,), dtype='float32', name='rs2_y')
+    rv2_y = Input(shape=(1,), dtype='float32', name='rv2_y')
+    total_reserv_sum = Input(shape=(1,), dtype='float32', name='total_reserv_sum')
+    total_reserv_mean = Input(shape=(1,), dtype='float32', name='total_reserv_mean')
+    total_reserv_dt_diff_mean = Input(shape=(1,), dtype='float32', name='total_reserv_dt_diff_mean')
+    date_int = Input(shape=(1,), dtype='float32', name='date_int')
+    var_max_lat = Input(shape=(1,), dtype='float32', name='var_max_lat')
+    var_max_long = Input(shape=(1,), dtype='float32', name='var_max_long')
+    lon_plus_lat = Input(shape=(1,), dtype='float32', name='lon_plus_lat')
+
+    date_emb = keras.layers.concatenate([dow_emb, month_emb, year, holiday_flg])
+    date_emb = Dense(5, activation='sigmoid', name='date_merged_emb')(date_emb)
+
+    cat_layer = keras.layers.concatenate([holiday_flg, min_visitors, mean_visitors,
+                    median_visitors, max_visitors, count_observations, rs1_x, rv1_x,
+                    rs2_x, rv2_x, rs1_y, rv1_y, rs2_y, rv2_y,
+                    total_reserv_sum, total_reserv_mean, total_reserv_dt_diff_mean,
+                    date_int, var_max_lat, var_max_long, lon_plus_lat,
+                    date_emb, air_area_name_emb, air_genre_name_emb,
+                    air_area_code_emb, air_genre_code_emb, air_store_id_emb])
+
+    m = Dense(hidden1_neurons, name='hidden1',
+             kernel_initializer=keras.initializers.RandomNormal(mean=0.0,
+                            stddev=0.05, seed=None))(cat_layer)
+    m = keras.layers.LeakyReLU(alpha=0.2)(m)
+    m = keras.layers.BatchNormalization()(m)
+    
+    m1 = Dense(hidden2_neurons, name='hidden2')(m)
+    m1 = keras.layers.LeakyReLU(alpha=0.2)(m1)
+    m = Dense(1, activation='relu')(m1)
+
+    inp_ten = [
+        holiday_flg, min_visitors, mean_visitors, median_visitors, max_visitors, count_observations,
+        rs1_x, rv1_x, rs2_x, rv2_x, rs1_y, rv1_y, rs2_y, rv2_y, total_reserv_sum, total_reserv_mean,
+        total_reserv_dt_diff_mean, date_int, var_max_lat, var_max_long, lon_plus_lat,
+        dow, year, month, air_store_id, air_area_code, air_genre_code
+    ]
+    inp_ten += air_area_name
+    inp_ten += air_genre_name
+    model = Model(inp_ten, m)
+    model.compile(loss='mse', optimizer='rmsprop', metrics=['acc'])
+
+    return model
+
 
 # In[ ]:
 
 
-smap = 'de_dust2'
+model1 = ensemble.GradientBoostingRegressor(learning_rate=0.2, random_state=3,
+                    n_estimators=180, subsample=0.78, max_depth=10)
+# model2 = neighbors.KNeighborsRegressor(n_jobs=-1, n_neighbors=4)
+# model2 = ensemble.RandomForestRegressor(n_estimators=13, random_state=3, max_depth=18,
+#                                         min_weight_fraction_leaf=0.0002)
+model3 = XGBRegressor(learning_rate=0.2, random_state=3, n_estimators=330, subsample=0.8, 
+                      colsample_bytree=0.8, max_depth=10)
+model4 = get_nn_complete_model(train, hidden1_neurons=45)
 
-bg = imread('../input/'+smap+'.png')
-fig, (ax1, ax2) = plt.subplots(1,2,figsize=(18,16))
-ax1.grid(b=True, which='major', color='w', linestyle='--', alpha=0.25)
-ax2.grid(b=True, which='major', color='w', linestyle='--', alpha=0.25)
-ax1.imshow(bg, zorder=0, extent=[0.0, 1024, 0., 1024])
-ax2.imshow(bg, zorder=0, extent=[0.0, 1024, 0., 1024])
-plt.xlim(0,1024)
-plt.ylim(0,1024)
+model1.fit(train[col], train['visitors'].values)
+print("Model1 trained")
 
-plot_df = df_pistol.loc[(df_pistol.map == smap) & (df_pistol.att_side == 'Terrorist')]
-sns.kdeplot(plot_df['att_pos_x'], plot_df['att_pos_y'], cmap='YlOrBr', bw=15, ax=ax1)
-ax1.set_title('Terrorists Attacking')
+model3.fit(train[col], train['visitors'].values)
+print("Model3 trained")
 
-plot_df = df_pistol.loc[(df_pistol.map == smap) & (df_pistol.att_side == 'CounterTerrorist')]
-sns.kdeplot(plot_df['att_pos_x'], plot_df['att_pos_y'], cmap='Blues', bw=15, ax=ax2)
-ax2.set_title('Counter-Terrorists Attacking')
+for i in range(5):
+    model4.fit(nn_train[0], nn_train[1], epochs=8, verbose=0, batch_size=256, shuffle=True)
+    model4.fit(nn_train[0], nn_train[1], epochs=3, verbose=0,
+        batch_size=256, shuffle=True, validation_split=0.15)
+model4.fit(nn_train[0], nn_train[1], epochs=4, verbose=0, batch_size=512, shuffle=True)
+print("Model4 trained")
 
+preds1 = model1.predict(train[col])
+preds3 = model3.predict(train[col])
+preds4 = pd.Series(model4.predict(nn_train[0]).reshape(-1)).clip(0, 6.8).values
 
-# 
-# ---
-# 
-# ### ADR by Pistols
-# 
-# Next let's take a look at the average damage per round dealt by a player given their pistol.  Note that if they had picked up a pistol during the round, it does get counted separately.  However, given that most pistol kills are headshots, it shouldn't skew the statistic that much (especially for USPS).
+actual_output = train['visitors'].values
+print('GradientBoostingRegressor:')
+plot_actual_predicted(actual_output, preds1)
+print('XGBRegressor:')
+plot_actual_predicted(actual_output, preds3)
+print('NeuralNetwork:')
+plot_actual_predicted(actual_output, preds4)
 
-# In[ ]:
+preds1 = model1.predict(test[col])
+preds3 = model3.predict(test[col])
+# .clip(0, 6.8) used to avoid random high values that might occur
+preds4 = pd.Series(model4.predict(nn_test[0]).reshape(-1)).clip(0, 6.8).values
 
-
-df_pistol.groupby(['file', 'round', 'wp', 'att_id'])['hp_dmg'].sum().groupby('wp').agg(['count', 'mean']).sort_values(by='mean')
-
-
-# __Deagle has a massive advantage in damage__
-# 
-# ---
-# 
-# ### Bomb Site Plants
-# 
-# Let's now look at the Number of bomb plants by site.  This statistic tells us the T's preferences for deciding which site to take during the round.  Although the possibility of rotates are always there, it gives us a good idea of what to expect.
-
-# In[ ]:
+test['visitors'] = 0.2*preds1+0.4*preds3+0.4*preds4
+test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
+sub1 = test[['id','visitors']].copy()
+sub1['preds1'] = pd.Series(preds1)
+sub1['preds3'] = pd.Series(preds3)
+sub1['preds4'] = pd.Series(preds4)
+print("Model predictions done.")
+# del train; del data;
 
 
-df_pistol[~df_pistol['bomb_site'].isnull()].groupby(['file', 'map', 'round', 'bomb_site'])['tick']         .first().groupby(['map', 'bomb_site']).count().unstack('bomb_site')
-
-
-# ---
-# 
-# ### Post-plant Win Probabilities by Advantages
-# 
-# This one could be further disseminated but we want to be able to look at the win probabilities post plant given the context of how many Ts and CTs are alive at that time.  First, we can look at overall statistic:
+# In the following, a small modification from the original kernal is made, we only get the visitors values from history only if they match ['air_store_id', 'day_of_week', 'holiday_flg'] or ['air_store_id', 'day_of_week'] columns match
 
 # In[ ]:
 
 
-bomb_prob_overall = df_pistol[~df_pistol['bomb_site'].isnull()].groupby(['file', 'round', 'map', 'bomb_site', 'winner_side'])['tick'].first().groupby(['map', 'bomb_site', 'winner_side']).count()
-bomb_prob_overall_pct = bomb_prob_overall.groupby(level=[0,1]).apply(lambda x: 100 * x / float(x.sum()))
-bomb_prob_overall_pct.unstack('map')
+# from hklee
+# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
+dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
+    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
 
+for k, v in dfs.items(): locals()[k] = v
 
-# Next we can first find for each round the post-plant situation (if it was planted at all) and calculate advantages.  I've given two options (XvX) or more generally by differences (e.g 5 Ts - 3 CTs = 2).
+wkend_holidays = date_info.apply(
+    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
+date_info.loc[wkend_holidays, 'holiday_flg'] = 0
+date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
+
+visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
+visit_data.drop('calendar_date', axis=1, inplace=True)
+visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
+
+wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
+visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
+visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
+
+sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
+sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
+sample_submission.drop('visitors', axis=1, inplace=True)
+sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
+sample_submission = sample_submission.merge(visitors, on=[
+    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
+
+missings = sample_submission.visitors.isnull()
+sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
+    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), 
+    how='left')['visitors_y'].values
+
+sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
+sub2 = sample_submission[['id', 'visitors']].copy()
+sub2 = sub2.fillna(-1) # for the unfound values
+
 
 # In[ ]:
 
 
-df_pistol['XvX'] = np.nan
-for k,g in df_pistol.groupby(['file', 'round']):
-    if((g['is_bomb_planted'] == True).any() == False):
-        continue
+def final_visitors(x, alt=False):
+    visitors_x, visitors_y = x['visitors_x'], x['visitors_y']
+    if x['visitors_y'] == -1:
+        return visitors_x
     else:
-        post_plant_survivors = 5-np.floor((g[~g['is_bomb_planted']].groupby('vic_side')['hp_dmg'].sum()/100.))
-       # df_pistol.loc[g.index, 'XvX'] = "%iv%i" % (post_plant_survivors.get('Terrorist', 5), post_plant_survivors.get('CounterTerrorist', 5) )
-        df_pistol.loc[g.index, 'XvX'] = post_plant_survivors.get('Terrorist', 5) - post_plant_survivors.get('CounterTerrorist', 5)
+        return 0.7*visitors_x + 0.3*visitors_y* 1.1
 
+sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
+sub_merge['visitors'] = sub_merge.apply(lambda x: final_visitors(x), axis=1)
+print("Done")
+sub_merge[['id', 'visitors']].to_csv('submission.csv', index=False)
 
-# Now we can calculate the Win probabilities by advantages, note that I isolate for just Terrorist because having CT columns (which is redundant), muddles the table.
 
 # In[ ]:
 
 
-bomb_prob = df_pistol[~df_pistol['XvX'].isnull()].groupby(['file', 'round', 'map', 'bomb_site', 'XvX', 'winner_side'])['tick'].first().groupby(['XvX', 'map', 'bomb_site', 'winner_side']).count()
-bomb_prob_pct = bomb_prob.groupby(level=[0,1,2]).apply(lambda x: 100 * x / float(x.sum()))
-bomb_prob_pct.xs('Terrorist', level=3).unstack(['XvX', 'bomb_site']).fillna(0)
-
-
-# ---
-# 
-# ### In/Out-of-site ADR
-# 
-# I've always wondered if it's better to play post-plants in-site our out-of-site during a one-man up/down or equal situation. In-site has the advantage of peeking when the CTs are clearing outer-site spots but the con of being in a spot where you are forced to duel the CTs. Outer-site has pro of baiting shots and playing time but having to peek into the CT when he is defusing. Let's isolate for only 1v1, 2v1, 1v2, 2v2 situations and look at average ADR differential when you play inner site or outer site.
-# 
-# Before we do that though, we have to define what is considered Inner/Outer site.  Using some basic rectangles, I can draw sites on the map and then define them via simple top-left, bottom-right coordinates.
-
-# In[ ]:
-
-
-callouts = {
-    'de_cache': {
-        'B inner': [[310,782,413,865]],
-        'A inner': [[278,165,388,320]]
-    },
-    'de_cbble': {
-        'B inner': [[625,626,720,688]],
-        'A inner': [[134,746,225,861]]
-    },
-    'de_train': {
-        'B inner': [[405,754,607,812]],
-        'A inner': [[582,462,713,539]]
-    },
-    'de_dust2': {
-        'B inner': [[162,99,256,199]],
-        'A inner': [[786,182,846,239]]
-    },
-    'de_mirage': {
-        'B inner': [[188,245,286,345]],
-        'A inner': [[498,737,610,835]]
-    },
-    'de_inferno': {
-        'B inner': [[410,115,548,320]],
-        'A inner': [[783,638,877,765]]
-    },
-    'de_overpass': {
-        'B inner': [[686,294,745,359]],
-        'A inner': [[452,174,560,272]]
-    },
-}
-
-def find_callout(x,y,m,buffer=10): 
-    callout = 'N/A'
-    for c,coord in callouts[m].items():
-        for box in coord:
-            if ((box[2]+buffer >= x >= box[0]-buffer) & 
-                (buffer+(1024-box[1]) >= y >= (1024-box[3])-buffer)):
-                    callout = c
-    return callout
-
-
-# Let's see an example of this on dust2
-
-# In[ ]:
-
-
-smap = 'de_dust2'
-
-def calc_plot_coord(l):
-    tx,ty,bx,by = l
-    by = 1024-by; ty=1024-ty;
-    w = bx-tx; h= ty-by;
-    return (tx,by,w,h)
-
-bg = imread('../input/'+smap+'.png')
-fig, ax = plt.subplots(figsize=(10,10))
-ax.grid(b=True, which='major', color='w', linestyle='--', alpha=0.25)
-ax.imshow(bg, zorder=0, extent=[0.0, 1024, 0., 1024])
-plt.xlim(0,1024)
-plt.ylim(0,1024)
-patches = []
-for k,coords in callouts[smap].items():
-    for c in coords:
-        x,y,w,h = calc_plot_coord(c)
-        patches.append(mpatches.Rectangle((x,y),w,h))
-        plt.text(x+w/2.3,y+h/2.3, s=k, size= 8, color='w')
-colors = np.linspace(0, 1, len(patches))
-collection = PatchCollection(patches, cmap=plt.cm.hsv, alpha=0.4)
-collection.set_array(np.array(colors))
-ax.add_collection(collection)
-
-
-# Now let's convert the coordinates of T attackers or victims to callouts (either N/A: outer site or Inner A/Inner B)
-
-# In[ ]:
-
-
-bomb_dist = df_pistol[(df_pistol['XvX'].isin([-1, 0, 1]))
-                     &(~df_pistol['bomb_site'].isnull())
-                     &((df_pistol['vic_side'] == 'Terrorist') | (df_pistol['att_side'] == 'Terrorist'))]
-
-bomb_dist['att_callout'] = bomb_dist.apply(lambda x: find_callout(x['att_pos_x'], x['att_pos_y'], x['map'], buffer=5), axis=1)
-bomb_dist['vic_callout'] = bomb_dist.apply(lambda x: find_callout(x['vic_pos_x'], x['vic_pos_y'], x['map'], buffer=5), axis=1)
-
-
-# Now we can calculate ADR by site
-
-# In[ ]:
-
-
-bomb_dist_total_dmg_att = bomb_dist.groupby(['file', 'map', 'round', 'att_callout', 'att_id'])['hp_dmg'].sum()
-bomb_dist_total_dmg_vic = bomb_dist.groupby(['file', 'map', 'round', 'vic_callout', 'vic_id'])['hp_dmg'].sum()
-dmg_dealt = bomb_dist_total_dmg_att.groupby(['map', 'att_callout']).agg(['count', 'mean'])
-dmg_rec = bomb_dist_total_dmg_vic.groupby(['map', 'vic_callout']).agg(['count', 'mean'])
-dmg_diff = dmg_dealt['mean'] - dmg_rec['mean']
-dmg_diff.unstack('att_callout')
+sub_merge.head()
 

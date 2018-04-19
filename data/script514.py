@@ -1,187 +1,194 @@
 
 # coding: utf-8
 
-# I start with [Alex Papiu's](https://www.kaggle.com/apapiu/ridge-script) script where he preprocesses the data into a ```scipy.sparse``` matrix and train a neural network. Keras does not like ```scipy.sparse``` matrices and converting the entire training set to a matrix will lead to computer memory issues; so the model is trained in batches: 32 samples at a time, and these few samples can be converted to matrices and fed into the network. 
-#               
-# Also, thanks to Pavel (Pasha) Gyrya's contribution for improving the model. Now there is no need to convert batches to np matrices. 
-# 
-# This requieres a batch generator, which I pieced together from this [stack overflow question](https://stackoverflow.com/questions/41538692/using-sparse-matrices-with-keras-and-tensorflow) and I set up an iterator to make it threadsafe for parallelization. ~~Kagle allows the use of 32 cores which speeds up the training~~. Seems like kaggle only allows four cores.  
-# 
-# I have been tuning the network and it seems like a smaller network with longer epochs yields better results. Currently I have a two hidden layers with 25  and 10 nodes. This is quite small but, with the input layer considered, this network still yields approximately 1.5M parameters!
-# 
-# Give it a try and let me know what you think. There are still plenty of things on can try:
-# * Add a validation set for early stopping. 
-# * Tune `batch_size`, `samples_per_epoch`, and nodes in hidden layers.
-# * Add dropout.
-# * Add L1 and/or L2 regularization.
-#    
-# 
-# 
+# # The Importance of Cleaning the Text
+
+# After a few different iterations, I think that I have found a pretty good way to clean the questions to improve the performance of a model. I was able to reduce my loss value by a few points because of this method.  Feel free to use this code and improve upon the method!
 
 # In[ ]:
 
 
 import pandas as pd
 import numpy as np
-import scipy
-import time
-import gc
-
-from sklearn import metrics
-from sklearn.preprocessing import LabelBinarizer
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-
-from keras.models import Model
-from keras.callbacks import EarlyStopping
-from keras.layers import Dense, Dropout, Activation, Input
+import nltk
+from nltk.corpus import stopwords
+from nltk.stem import SnowballStemmer
+import re
+from string import punctuation
 
 
-start_time = time.time()
+# In[ ]:
 
 
-def avg_predictions(L):
-    N = len(L)
-    f = L[0]
-    for p in range(1,N):
-        f = f + L[p]
-        f = (1/N)*f
-    return f
+train = pd.read_csv("../input/train.csv")[:100]
+test = pd.read_csv("../input/test.csv")[:100]
 
-def define_model(data, nodes1, nodes2, drop1, drop2):
-    x = Input(shape = (data.shape[1], ), dtype = 'float32', sparse = True)     
-    d1 = Dense(nodes1, activation='relu')(x)
-    d2 = Dropout(drop1)(d1)
-    d3 = Dense(nodes2, activation='sigmoid')(d2)
-    d4 = Dropout(drop2)(d3)
-    out= Dense(1, activation = 'linear')(d4)
-    model = Model(x,out)
-    return model
+
+# In[ ]:
+
+
+# Check for any null values
+print(train.isnull().sum())
+print(test.isnull().sum())
+
+
+# In[ ]:
+
+
+# Add the string 'empty' to empty strings
+train = train.fillna('empty')
+test = test.fillna('empty')
+
+
+# In[ ]:
+
+
+# Preview some of the pairs of questions
+a = 0 
+for i in range(a,a+10):
+    print(train.question1[i])
+    print(train.question2[i])
+    print()
+
+
+# In[ ]:
+
+
+stop_words = ['the','a','an','and','but','if','or','because','as','what','which','this','that','these','those','then',
+              'just','so','than','such','both','through','about','for','is','of','while','during','to','What','Which',
+              'Is','If','While','This']
+
+
+# In[ ]:
+
+
+def text_to_wordlist(text, remove_stop_words=True, stem_words=False):
+    # Clean the text, with the option to remove stop_words and to stem words.
+
+    # Clean the text
+    text = re.sub(r"[^A-Za-z0-9]", " ", text)
+    text = re.sub(r"what's", "", text)
+    text = re.sub(r"What's", "", text)
+    text = re.sub(r"\'s", " ", text)
+    text = re.sub(r"\'ve", " have ", text)
+    text = re.sub(r"can't", "cannot ", text)
+    text = re.sub(r"n't", " not ", text)
+    text = re.sub(r"I'm", "I am", text)
+    text = re.sub(r" m ", " am ", text)
+    text = re.sub(r"\'re", " are ", text)
+    text = re.sub(r"\'d", " would ", text)
+    text = re.sub(r"\'ll", " will ", text)
+    text = re.sub(r"60k", " 60000 ", text)
+    text = re.sub(r" e g ", " eg ", text)
+    text = re.sub(r" b g ", " bg ", text)
+    text = re.sub(r"\0s", "0", text)
+    text = re.sub(r" 9 11 ", "911", text)
+    text = re.sub(r"e-mail", "email", text)
+    text = re.sub(r"\s{2,}", " ", text)
+    text = re.sub(r"quikly", "quickly", text)
+    text = re.sub(r" usa ", " America ", text)
+    text = re.sub(r" USA ", " America ", text)
+    text = re.sub(r" u s ", " America ", text)
+    text = re.sub(r" uk ", " England ", text)
+    text = re.sub(r" UK ", " England ", text)
+    text = re.sub(r"india", "India", text)
+    text = re.sub(r"switzerland", "Switzerland", text)
+    text = re.sub(r"china", "China", text)
+    text = re.sub(r"chinese", "Chinese", text) 
+    text = re.sub(r"imrovement", "improvement", text)
+    text = re.sub(r"intially", "initially", text)
+    text = re.sub(r"quora", "Quora", text)
+    text = re.sub(r" dms ", "direct messages ", text)  
+    text = re.sub(r"demonitization", "demonetization", text) 
+    text = re.sub(r"actived", "active", text)
+    text = re.sub(r"kms", " kilometers ", text)
+    text = re.sub(r"KMs", " kilometers ", text)
+    text = re.sub(r" cs ", " computer science ", text) 
+    text = re.sub(r" upvotes ", " up votes ", text)
+    text = re.sub(r" iPhone ", " phone ", text)
+    text = re.sub(r"\0rs ", " rs ", text) 
+    text = re.sub(r"calender", "calendar", text)
+    text = re.sub(r"ios", "operating system", text)
+    text = re.sub(r"gps", "GPS", text)
+    text = re.sub(r"gst", "GST", text)
+    text = re.sub(r"programing", "programming", text)
+    text = re.sub(r"bestfriend", "best friend", text)
+    text = re.sub(r"dna", "DNA", text)
+    text = re.sub(r"III", "3", text) 
+    text = re.sub(r"the US", "America", text)
+    text = re.sub(r"Astrology", "astrology", text)
+    text = re.sub(r"Method", "method", text)
+    text = re.sub(r"Find", "find", text) 
+    text = re.sub(r"banglore", "Banglore", text)
+    text = re.sub(r" J K ", " JK ", text)
     
-
-def preprocess(num_brands, name_min, max_feat_desc, ngrams):
-    print("Preprocessing Data...")
-    NUM_BRANDS = num_brands
-    NAME_MIN_DF = name_min
-    MAX_FEAT_DESCP = max_feat_desc
+    # Remove punctuation from text
+    text = ''.join([c for c in text if c not in punctuation])
     
-    df_train = pd.read_csv('../input/train.tsv', sep='\t')
-    df_train = df_train.reindex(np.random.permutation(df_train.index))
-    df_train.reset_index(inplace=True, drop=True)
+    # Optionally, remove stop words
+    if remove_stop_words:
+        text = text.split()
+        text = [w for w in text if not w in stop_words]
+        text = " ".join(text)
     
-    df_test = pd.read_csv('../input/test.tsv', sep='\t')
+    # Optionally, shorten words to their stems
+    if stem_words:
+        text = text.split()
+        stemmer = SnowballStemmer('english')
+        stemmed_words = [stemmer.stem(word) for word in text]
+        text = " ".join(stemmed_words)
     
-    df = pd.concat([df_train, df_test], 0)
-    nrow_train = df_train.shape[0]
-    Y = np.log1p(df_train["price"])
-    
-    del df_train
-    gc.collect()
-    
-    df["category_name"] = df["category_name"].fillna("Other").astype("category")
-    df["brand_name"] = df["brand_name"].fillna("unknown")
-    
-    pop_brands = df["brand_name"].value_counts().index[:NUM_BRANDS]
-    df.loc[~df["brand_name"].isin(pop_brands), "brand_name"] = "Other"
-    
-    df["item_description"] = df["item_description"].fillna("None")
-    df["item_condition_id"] = df["item_condition_id"].astype("category")
-    df["brand_name"] = df["brand_name"].astype("category")
-    
-    
-    #print("Encodings...")
-    count = CountVectorizer(min_df=NAME_MIN_DF)
-    X_name = count.fit_transform(df["name"])
-    
-    #print("Category Encoders...")
-    unique_categories = pd.Series("/".join(df["category_name"].unique().astype("str")).split("/")).unique()
-    count_category = CountVectorizer()
-    X_category = count_category.fit_transform(df["category_name"])
-    
-    #print("Descp encoders...")
-    count_descp = TfidfVectorizer(max_features = MAX_FEAT_DESCP, 
-                                  ngram_range = (1, ngrams),
-                                  stop_words = "english")
-    X_descp = count_descp.fit_transform(df["item_description"])
-    
-    #print("Brand encoders...")
-    vect_brand = LabelBinarizer(sparse_output=True)
-    X_brand = vect_brand.fit_transform(df["brand_name"])
-    
-    #print("Dummy Encoders...")
-    X_dummies = scipy.sparse.csr_matrix(pd.get_dummies(df[[
-        "item_condition_id", "shipping"]], sparse = True).values)
-    
-    X = scipy.sparse.hstack((X_dummies, 
-                             X_descp,
-                             X_brand,
-                             X_category,
-                             X_name)).tocsr()
-
-    
-    return X[:nrow_train], Y, X[nrow_train:], df_test
-    
-    
-def set_split(X_data, y_data, test_size):
-    
-    N = int(X_data.shape[0]*(1-test_size))
-    
-    return(X_data[:N], X_data[N:], y_data[:N], y_data[N:])
+    # Return a list of words
+    return(text)
 
 
-def hms_string(sec_elapsed):
-    h = int(sec_elapsed / (60 * 60))
-    m = int((sec_elapsed % (60 * 60)) / 60)
-    s = sec_elapsed % 60
-    return "{}:{:>02}:{:>05.2f}".format(h, m, s)
+# In[ ]:
 
 
+def process_questions(question_list, questions, question_list_name, dataframe):
+    '''transform questions and display progress'''
+    for question in questions:
+        question_list.append(text_to_wordlist(question))
+        if len(question_list) % 100000 == 0:
+            progress = len(question_list)/len(dataframe) * 100
+            print("{} is {}% complete.".format(question_list_name, round(progress, 1)))
 
 
-start_time = time.time()
-
-X, Y, X_test, df_test = preprocess(2500, 10, 50000, 3)
-
-x_train, x_val, y_train, y_val = set_split(X, Y, test_size=0.10)
-
-elapsed_time = time.time() - start_time
-print("Preprocessing Time: {}".format(hms_string(elapsed_time)))
-
-tpoint1 = time.time()
-print("Fitting Model...")
-
-nodes1 = 64
-nodes2 = 32
-drop1 =  0.30
-drop2 =  0.25
-
-print("Training Model...")
-    
-model = define_model(x_train, nodes1, nodes2, drop1, drop2)
-monitor = EarlyStopping(monitor='val_loss', min_delta=1e-3, patience=3, verbose=1, mode='auto')
-model.compile(loss='mean_squared_error', optimizer='adam')
-
-model.fit(x=x_train, y=y_train,
-          batch_size=600,
-          callbacks=[monitor],
-          validation_data=(x_val, y_val),
-          epochs=10, verbose=0)
-    
-tpoint2 = time.time()
-print("Time Training: {}".format(hms_string(tpoint2-tpoint1)))
-    
-pred = model.predict(x=X_test, batch_size=8000, verbose=0)
+# In[ ]:
 
 
-tpoint3 = time.time()
-print("Time for Predicting: {}".format(hms_string(tpoint3-tpoint2)))
-
-df_test["price"] = np.expm1(pred)
-df_test[["test_id", "price"]].to_csv("submission_NN.csv", index = False)
-
-elapsed_time = time.time() - start_time
-print("Total Time: {}".format(hms_string(elapsed_time)))
+train_question1 = []
+process_questions(train_question1, train.question1, 'train_question1', train)
 
 
+# In[ ]:
 
 
+train_question2 = []
+process_questions(train_question2, train.question2, 'train_question2', train)
+
+
+# In[ ]:
+
+
+test_question1 = []
+process_questions(test_question1, test.question1, 'test_question1', test)
+
+
+# In[ ]:
+
+
+test_question2 = []
+process_questions(test_question2, test.question2, 'test_question2', test)
+
+
+# In[ ]:
+
+
+# Preview some transformed pairs of questions
+a = 0 
+for i in range(a,a+10):
+    print(train_question1[i])
+    print(train_question2[i])
+    print()
 

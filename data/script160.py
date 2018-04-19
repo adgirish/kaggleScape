@@ -1,352 +1,350 @@
 
 # coding: utf-8
 
-# ## POKEMON STATS ANALYSIS
-
-# Hello People.....!!
 # 
-# This is my first Kaggle Notebook and I have tried my best to keep this notebook as simple as possible and I have explained each and every function used thus even a beginner would easily understand this notebook. 
-# This Pokemon Dataset is a very good dataset to begin with and I myself started Analysis with the same. Hope this would help you too.
 # 
-# If u want to check a more advanced analysis notebook have a look at my another notebook: [Here][1]
+# <h1 style="font-size:30px;color:black;text-align:center; text-decoration:underline">                   An analysis of the most popular repos on Github[completed]</h1>
+# <img src="https://kanbanize.com/blog/wp-content/uploads/2014/11/GitHub.jpg" alt="github" width=50% height=50%>
+# <hr>
+# _Areas of focus include: Type of repo,Metrics of popularity, Languages used_
 # 
-# If u find this notebook useful **Please Upvote**.
+# _Data Source: https://www.kaggle.com/chasewillden/topstarredopensourceprojects _
 # 
-#   [1]: https://www.kaggle.com/ash316/ipl-analysis-and-visualisations
-
-# ### Let's get started with some Basic Analysis
+# #### Objective of this analysis:
+# <br>
+# <ol>
+# <li>Learning how to read and analyse a dataset</li>
+# <li>Understanding the dominant languages used for popular GitHub projects and mapping them</li>
+# <li>Extracting the different domains of work done in these projects via the repositories tags</li>
+# <li>Deriving conclusions over the popularity of respective domains and languages</li>
+# </ol>
+# <hr>
+# **All text in blue represents a derived conclusion**
 
 # In[ ]:
 
 
-import pandas as pd   #importing all the important packages
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
+from wordcloud import WordCloud
 import seaborn as sns
-plt.style.use('fivethirtyeight')
+from ggplot import *
+plt.style.use('default')
 
 
 # In[ ]:
 
 
-df =  pd.read_csv('../input/Pokemon.csv')  #read the csv file and save it into a variable
-df.head(n=10)                    #print the first 10 rows of the table
+git_df = pd.read_csv("../input/TopStaredRepositories.csv", parse_dates=['Last Update Date'], dayfirst=True)
+git_df.head()
 
 
 # In[ ]:
 
 
-df.columns = df.columns.str.upper().str.replace('_', '') #change into upper case
-df.head()
+git_df.info()
+
+
+# <h2 style="text-decoration:underline">1. Popular Repositories</h2>
+# <br>
+# **Determining what constitutes a popular repository by extracting the range of maximum and minimum starred repositories**
+
+# <em>Converting the alphanumeric format of "Number of Stars" to numeric
+
+# In[ ]:
+
+
+git_df_max = git_df['Number of Stars'].str.contains('k').all()
+git_df_max
 
 
 # In[ ]:
 
 
-df[df['LEGENDARY']==True].head(5)  #Showing the legendary pokemons
+git_df['Number of Stars']=git_df['Number of Stars'].str.replace('k','').astype(float)
+
+
+# ### 1.1 The top 5 repositories in the dataset [based on "Number of Stars"]
+
+# In[ ]:
+
+
+git_df.head()
+
+
+# ### 1.2 The bottom 5 repositories in the dataset
+
+# In[ ]:
+
+
+git_df.tail()
+
+
+# ### 1.3 Statistical analysis of the repositories
+
+# In[ ]:
+
+
+git_df['Number of Stars'].describe()
+
+
+# <h4 style="color:blue">Most popular repo- 290,000 stars</h4>
+# <h4 style="color:blue"> Least popular repo- 6400 stars</h4>
+# <h4 style="color:blue">Average rating of repos- 13,000 stars</h4>
+
+# ### 1.3 List of all repositories with stars > 13,000
+
+# In[ ]:
+
+
+popular_repos= git_df[git_df['Number of Stars'] > 13.0]
+len(popular_repos)
 
 
 # In[ ]:
 
 
-df = df.set_index('NAME') #change and set the index to the name attribute
-
-
-# ### CLEANING THE DATAFRAME
-
-# In[ ]:
-
-
-## The index of Mega Pokemons contained extra and unneeded text. Removed all the text before "Mega"  
-df.index = df.index.str.replace(".*(?=Mega)", "")
-df.head(10)
+popular_repos.head(8)
 
 
 # In[ ]:
 
 
-df=df.drop(['#'],axis=1) #drop the columns with axis=1;axis=0 is for rows
+popular_repos.tail(8)
 
 
-# In[ ]:
-
-
-print('The columns of the dataset are: ',df.columns) #show the dataframe columns
-print('The shape of the dataframe is: ',df.shape)    #shape of the dataframe
-
-
-# In[ ]:
-
-
-#some values in TYPE2 are empty and thus they have to be filled or deleted
-df['TYPE 2'].fillna(df['TYPE 1'], inplace=True) #fill NaN values in Type2 with corresponding values of Type
-
-
-# In[ ]:
-
-
-print(df.loc['Bulbasaur']) #retrieves complete row data from index with value Bulbasaur
-print(df.iloc[0]) #retrieves complete row date from index 0 ; integer version of loc
-print(df.ix[0]) #similar to iloc
-print(df.ix['Kakuna']) #similar to loc
-#loc works on labels in the index.
-#iloc works on the positions in the index (so it only takes integers).
-#ix usually tries to behave like loc but falls back to behaving like iloc if the label is not in the index.
-#inoreder to find details about any pokemon, just specify its name
-
-
-# In[ ]:
-
-
-#filtering pokemons using logical operators
-df[((df['TYPE 1']=='Fire') | (df['TYPE 1']=='Dragon')) & ((df['TYPE 2']=='Dragon') | (df['TYPE 2']=='Fire'))].head(3)
-
-
-# In[ ]:
-
-
-print("MAx HP:",df['HP'].argmax())  #returns the pokemon with highest HP
-print("Max DEFENCE:",(df['DEFENSE']).idxmax()) #similar to argmax()
-
-
-# In[ ]:
-
-
-df.sort_values('TOTAL',ascending=False).head(3)  #this arranges the pokemons in the descendng order of the Totals.
-#sort_values() is used for sorting and ascending=False is making it in descending order
-
-
-# In[ ]:
-
-
-print('The unique  pokemon types are',df['TYPE 1'].unique()) #shows all the unique types in column
-print('The number of unique types are',df['TYPE 1'].nunique()) #shows count of unique values 
-
-
-# In[ ]:
-
-
-print(df['TYPE 1'].value_counts(), '\n' ,df['TYPE 2'].value_counts())#count different types of pokemons
-df.groupby(['TYPE 1']).size()  #same as above
-(df['TYPE 1']=='Bug').sum() #counts for a single value
-
-
-# In[ ]:
-
-
-df_summary = df.describe() #summary of the pokemon dataframe
-df_summary
-
-
-# ## VISUALISATIONS
-
-# ##### The attack distribution for the pokemons across all the genarations
-
-# In[ ]:
-
-
-bins=range(0,200,20) #they act as containers
-plt.hist(df["ATTACK"],bins,histtype="bar",rwidth=1.2,color='#0ff0ff') #hist() is used to plot a histogram
-plt.xlabel('Attack') #set the xlabel name
-plt.ylabel('Count') #set the ylabel name
-plt.plot()
-plt.axvline(df['ATTACK'].mean(),linestyle='dashed',color='red') #draw a vertical line showing the average Attack value
-plt.show()
-
-
-# Above is a Histogram showing the distribution of attacks for the Pokemons. The average value is between 75-77
-
-# ### Fire Vs Water
-
-# In[ ]:
-
-
-fire=df[(df['TYPE 1']=='Fire') | ((df['TYPE 2'])=="Fire")] #fire contains all fire pokemons
-water=df[(df['TYPE 1']=='Water') | ((df['TYPE 2'])=="Water")]  #all water pokemins
-plt.scatter(fire.ATTACK.head(50),fire.DEFENSE.head(50),color='R',label='Fire',marker="*",s=50) #scatter plot
-plt.scatter(water.ATTACK.head(50),water.DEFENSE.head(50),color='B',label="Water",s=25)
-plt.xlabel("Attack")
-plt.ylabel("DEFENCE")
-plt.legend()
-plt.plot()
-fig=plt.gcf()  #get the current figure using .gcf()
-fig.set_size_inches(12,6) #set the size for the figure
-plt.show()
-
-
-# This shows that fire type pokemons have a better attack than water type pokemons but have a lower defence than water type.
-
-# ### Strongest Pokemons By Types
-
-# In[ ]:
-
-
-strong=df.sort_values(by='TOTAL', ascending=False) #sorting the rows in descending order
-strong.drop_duplicates(subset=['TYPE 1'],keep='first') #since the rows are now sorted in descending oredr
-#thus we take the first row for every new type of pokemon i.e the table will check TYPE 1 of every pokemon
-#The first pokemon of that type is the strongest for that type
-#so we just keep the first row
-
-
-# ## Distribution of various pokemon types
-
-# In[ ]:
-
-
-labels = 'Water', 'Normal', 'Grass', 'Bug', 'Psychic', 'Fire', 'Electric', 'Rock', 'Other'
-sizes = [112, 98, 70, 69, 57, 52, 44, 44, 175]
-colors = ['Y', 'B', '#00ff00', 'C', 'R', 'G', 'silver', 'white', 'M']
-explode = (0, 0, 0.1, 0, 0, 0, 0, 0, 0)  # only "explode" the 3rd slice 
-plt.pie(sizes, explode=explode, labels=labels, colors=colors,
-        autopct='%1.1f%%', shadow=True, startangle=90)
-plt.axis('equal')
-plt.title("Percentage of Different Types of Pokemon")
-plt.plot()
-fig=plt.gcf()
-fig.set_size_inches(7,7)
-plt.show()
-
-
-# ## All stats analysis of the pokemons
-
-# In[ ]:
-
-
-df2=df.drop(['GENERATION','TOTAL'],axis=1)
-sns.boxplot(data=df2)
-plt.ylim(0,300)  #change the scale of y axix
-plt.show()
-
-
-# In[ ]:
-
-
-plt.subplots(figsize = (15,5))
-plt.title('Attack by Type1')
-sns.boxplot(x = "TYPE 1", y = "ATTACK",data = df)
-plt.ylim(0,200)
-plt.show()
-
-
-# #### This shows that the Dragon type pokemons have an edge over the other types as they have a higher attacks compared to the other types. Also since the fire pokemons have lower range of values, but higher attacks, they can be preferred over the grass and water types for attacking.
 # 
+# <h3 style="color:blue"> Here we see that freeCodeCamp tops the list with 290,000 stars to its repository.</h3>
+# <hr>
+# ### The above list lists all repos that have > 13,000 stars [above average repositories]
+# #### A few more observations can be derived from this list:
+# <ol>
+# <li style="color:blue">5 of the most popular repos are frameworks</li>
+# <li style="color:blue">The third, sixth and eighth most popular repos are educational, and instructive in nature.</li>
+# </ol>
 
 # In[ ]:
 
 
-plt.subplots(figsize = (15,5))
-plt.title('Attack by Type2')
-sns.boxplot(x = "TYPE 2", y = "ATTACK",data=df)
-plt.show()
-
-
-# In[ ]:
-
-
-plt.subplots(figsize = (15,5))
-plt.title('Defence by Type')
-sns.boxplot(x = "TYPE 1", y = "DEFENSE",data = df)
-plt.show()
-
-
-# This shows that steel type pokemons have the highest defence but normal type pokemons have the lowest defence
-
-# ### Now lets see the same stats in violinplot
-
-# In[ ]:
-
-
-plt.subplots(figsize = (20,10))
-plt.title('Attack by Type1')
-sns.violinplot(x = "TYPE 1", y = "ATTACK",data = df)
-plt.ylim(0,200)
-plt.show()
-
-
-# What the violinplot actually does is it plots according to the density of a region. This means that the parts of the plot where the width is thicker denotes a region with higher density points whereas regions with thinner area show less densely populated points.
-
-# In[ ]:
-
-
-plt.subplots(figsize = (20,10))
-plt.title('Attack by Type1')
-sns.violinplot(x = "TYPE 1", y = "DEFENSE",data = df)
-plt.ylim(0,200)
-plt.show()
+# classifying repositories according to the popularity
+classified_repos=[]
+for i in range(8,300,7):
+    x = git_df[(git_df['Number of Stars'] >= i) & (git_df['Number of Stars'] <(i+7.0))]
+    classified_repos.append(len(x))
 
 
 # In[ ]:
 
 
-plt.subplots(figsize = (15,5))
-plt.title('Strongest Genaration')
-sns.violinplot(x = "GENERATION", y = "TOTAL",data = df)
-plt.show()
+indexes = []
 
+for i in range (8000,300000, 7000):
+    x = '[' + str(i) +','+ (str(i+7000)) + ')'
+    indexes.append(x)
 
-# This shows that generation 3  has the better pokemons
-
-# ### Strong Pokemons By Type
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,6))
-top_types=df['TYPE 1'].value_counts()[:10] #take the top 10 Types
-df1=df[df['TYPE 1'].isin(top_types.index)] #take the pokemons of the type with highest numbers, top 10
-sns.swarmplot(x='TYPE 1',y='TOTAL',data=df1,hue='LEGENDARY') # this plot shows the points belonging to individual pokemons
-# It is distributed by Type
-plt.axhline(df1['TOTAL'].mean(),color='red',linestyle='dashed')
-plt.show()
+divided_repos = pd.Series(data=classified_repos, index=indexes)
+divided_repos.plot(kind='bar', figsize=(15,10), color=['red'],legend=True, label='Number of repositories')
 
 
-#  Legendary Pokemons are mostly taking the top spots in the Strongest Pokemons
-# 
-
-# ### Finding any Correlation between the attributes
+# <h2 style="text-decoration:underline">2. Popular Languages</h2>
+# <br>
+# **Determining the popularity of a language based on the number of repositories using it.**
 
 # In[ ]:
 
 
-plt.figure(figsize=(10,6)) #manage the size of the plot
-sns.heatmap(df.corr(),annot=True) #df.corr() makes a correlation matrix and sns.heatmap is used to show the correlations heatmap
-plt.show()
+x=git_df['Language'].value_counts()
+x.head()
+#p = ggplot(aes(x='index',y='count'), data =x) + geom_point(color='coral') + geom_line(color='red')
+#print(p)
 
-
-# From the heatmap it can be seen that there is not much correlation between the attributes of the pokemons. The highest we can see is the correlation between Sp.Atk and the Total 
-
-# ### Number of Pokemons by Type And Generation
-
-# ### Type 1
 
 # In[ ]:
 
 
-a=df.groupby(['GENERATION','TYPE 1']).count().reset_index()
-a=a[['GENERATION','TYPE 1','TOTAL']]
-a=a.pivot('GENERATION','TYPE 1','TOTAL')
-a[['Water','Fire','Grass','Dragon','Normal','Rock','Flying','Electric']].plot(color=['b','r','g','#FFA500','brown','#6666ff','#001012','y'],marker='o')
-fig=plt.gcf()
-fig.set_size_inches(12,6)
-plt.show()
+get_ipython().run_line_magic('matplotlib', 'inline')
+plt.figure()
+x.plot(kind='barh',figsize=(15,10),grid=True, label='Number of repositories',legend='No of repos',title='No of repositories vs language used')
 
-
-# We can see that water pokemons had the highest numbers in the 1st Generation. However the number has decreased with passing generations. Similarly Grass type pokemons showed an increase in their numbers till generation 5.
 
 # In[ ]:
 
 
-a=df.groupby(['GENERATION','TYPE 2']).count().reset_index()
-a=a[['GENERATION','TYPE 2','TOTAL']]
-a=a.pivot('GENERATION','TYPE 2','TOTAL')
-a[['Water','Fire','Grass','Dragon','Normal','Rock','Flying','Electric']].plot(color=['b','r','g','#FFA500','brown','#6666ff','#001012','y'],marker='o')
-fig=plt.gcf()
-fig.set_size_inches(12,6)
-plt.show()
+get_ipython().run_line_magic('matplotlib', 'inline')
+x[:5].plot.pie(label="Division of the top 5 languages",fontsize=10,figsize=(10,10),legend=True)
 
 
-# This graph shows that the number of Type2 Grass Pokemons has been steadily increasing. The same is the case for the Dragon Type Pokemons. For other Types the trends are somewhat uneven.
+# In[ ]:
 
-# ### Thanks A Lot to Alberto Barradas for this great Dataset.
-# 
-# Thank You All for reading this notebook. Hope You All Liked It!!!!!!
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+x[:20].plot.pie(label="Division of the top 20 languages",fontsize=10,figsize=(10,10),legend=True)
+
+
+# <h2 style="text-decoration:underline">3. Popular Domains</h2>
+# <br>
+# **Determining the popular domains by analysing the repository tags**
+
+# <em>Removing all the null-tags fields from the dataframe
+
+# In[ ]:
+
+
+#git_df['Number of Stars']=git_df['Number of Stars'].str.replace('k','').astype(float)
+nonull_df = git_df[['Tags','Number of Stars']].dropna()
+tags_list = nonull_df['Tags'].str.split(',')
+
+
+# In[ ]:
+
+
+tags_list.head()
+
+
+# In[ ]:
+
+
+initial = nonull_df['Tags'].str.split(',')
+a = []
+for item in initial:
+       a = a+item
+wc_text = ' '.join(a)
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+wordcloud = WordCloud(background_color='black',width=800, height=400).generate(wc_text)
+plt.figure(figsize=(25,10), facecolor='k')
+plt.imshow(wordcloud, interpolation='bilinear')
+plt.tight_layout(pad=0)
+plt.axis("off")
+
+
+# In[ ]:
+
+
+web_dev_count = 0
+tags = ['javascript', 'css', 'html', 'nodejs', 'bootstrap','react', 'react-native', 'rest-api', 'rest', 'web-development','typescript','coffeescript']
+for item in tags_list:
+    if set(tags).intersection(item):
+        web_dev_count+=1
+web_dev_count
+
+
+# In[ ]:
+
+
+machine_data_count=0
+mach=[]
+tags=['machine-learning', 'jupyter','jupter-notebook', 'tensorflow','data-science','data-analytics']
+for item in tags_list:
+    if set(tags).intersection(item):
+        machine_data_count+=1
+        mach.append(item)
+machine_data_count
+
+
+# In[ ]:
+
+
+mobile_dev_count=0
+tags=['android','sdk','ios','swift','mobile','react','macos','windows']
+for item in tags_list:
+    if set(tags).intersection(item):
+        mobile_dev_count+=1
+mobile_dev_count
+
+
+# In[ ]:
+
+
+linux_dev_count=0
+linux=[]
+tags=['linux','unix','bash','shell','cli','bsd']
+for item in tags_list:
+    if set(tags).intersection(item):
+        linux_dev_count+=1
+        linux.append(item)
+linux_dev_count
+
+
+# In[ ]:
+
+
+hardware_dev_count=0
+hardware=[]
+tags=['hardware','iot','smart','system','system-architecture','cloud']
+for item in tags_list:
+    if set(tags).intersection(item):
+        hardware.append(item)
+        hardware_dev_count+=1
+hardware_dev_count
+
+
+# In[ ]:
+
+
+domain_series=pd.Series(index=['Web Development','Data Science and Machine Learning','Mobile Development','Linux and Shell Programming','System hardware and IOT'],
+                        data=[web_dev_count,machine_data_count,mobile_dev_count,linux_dev_count,hardware_dev_count])
+
+
+# In[ ]:
+
+
+domain_series
+
+
+# In[ ]:
+
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+fig_domain=domain_series.plot(lw=2,kind='barh',figsize=(20,10),color=['green'],grid=True,title='Domain-wise repository analysis',
+                              )
+fig_domain.set(xlabel="Number of repositories", ylabel="Domain Name")
+
+
+# <h2 style="text-decoration:underline">3. Determing the correlation between Number of Tags and Number of Stars</h2>
+
+# In[ ]:
+
+
+nonull_df['CountTag']=0
+for i in range(0,489,1):
+    nonull_df['CountTag'].iloc[i] = len(list(nonull_df['Tags'].iloc[i].split(',')))
+
+
+# In[ ]:
+
+
+nonull_df['CountTag'].corr(nonull_df['Number of Stars'])
+
+
+# <hr>
+# <h2 style="text-decoration:underline">4. Conclusion</h2>
+# <br>
+# **Inferences from the analysis**
+# <hr>
+# <ol>
+# <li>The most popular repository on GitHub is freeCodeCamp, with 290,000 stars</li>
+# <li>In the top 8 repositories in the dataset, 3 are instructional and educational</li>
+# <li>JavaScript is the most popularly used language, and constitutes <b>38.5 %</b> of the total languages in these repositories</li> 
+# <li>Frameworks are the most popular type of projects across GitHub</li>
+# <li>In domains, Web Development is the most popular domain of work, followed by Mobile (android, iOS, macOS, Windows) development</li>
+# <li>There is no determinable correlation between the number of tags and the number of stars. The correlation coefficient is a weak 0.04646</li>
+
+# ### [Extra] Popular python based projects 
+
+# In[ ]:
+
+
+python_tags = git_df[git_df['Language'] == 'Python'][['Username', 'Repository Name', 'Description', 'Tags']]
+
+
+# In[ ]:
+
+
+python_tags
+

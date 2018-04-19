@@ -1,357 +1,623 @@
 
 # coding: utf-8
 
-# # Intro
-# Step-by-step guide for extracting features from shapes by turning them into time-series. The functions are optimized for the Swedish Leaf Dataset as it is published on Kaggle.
+# # *Women and kids first! (c) Titanic*
 # 
-# Data Scientists spend vast majority of their time by data preparation, not model optimization. So let's dive into that a bit.
+
+# ![Titanic](https://www.usnews.com/dims4/USNEWS/4f3cd50/2147483647/thumbnail/970x647/quality/85/?url=http%3A%2F%2Fmedia.beam.usnews.com%2F0e%2Fe187dd2f8f1fe5be9058fa8eef419e%2F7018FE_DA_080929titanic.jpg)
+
+# # Visualization of titanic dataset
+# This notebook presents a profound exploratory analysis of the dataset in order to provide understanding of the dependencies and interesting facts. Simple Logistic regression was used to perform classification.
 # 
-# ## [Here is the second part][1], it is more advanced and [follows PEP8][2]
+# Four ML techniques are used to do prediction: RandomForest, LogisticRegression, KNeighbours and the Ensemble.
 # 
-# ![Feature Extraction from leaf contours][3]
+# Logistic Regression performed the best with a score of 0.80383.
 # 
 # 
 # 
-#   [1]: https://www.kaggle.com/lorinc/leaf-classification/feature-extraction-v4/
-#   [2]: https://www.python.org/dev/peps/pep-0008/
-#   [3]: https://raw.githubusercontent.com/lorinc/kaggle-notebooks/master/extracted_leaf_shape.png
+# *****************
+# **I will happy to hear some remarks or suggestions and feel free to upvote if you like it :)**
+# 
+# **Have fun with the data!**
+# *****************
 
 # In[ ]:
 
 
-# imports
-import numpy as np                     # numeric python lib
+import pandas as pd
+import numpy as np
+import collections, re
+import copy
 
-import matplotlib.image as mpimg       # reading images to numpy arrays
-import matplotlib.pyplot as plt        # to plot any graph
-import matplotlib.patches as mpatches  # to draw a circle at the mean contour
+from pandas.tools.plotting import scatter_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+plt.style.use('bmh')
 
-from skimage import measure            # to find shape contour
-import scipy.ndimage as ndi            # to determine shape centrality
-
-
-# matplotlib setup
 get_ipython().run_line_magic('matplotlib', 'inline')
-from pylab import rcParams
-rcParams['figure.figsize'] = (6, 6)      # setting default size of plots
+
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.model_selection import cross_val_score
+
+from sklearn.grid_search import GridSearchCV
+
+pd.set_option('display.max_columns', 500)
+import warnings
+warnings.filterwarnings("ignore")
 
 
 # In[ ]:
 
 
-# reading an image file using matplotlib into a numpy array
-# good ones: 11, 19, 23, 27, 48, 53, 78, 218
-img = mpimg.imread('../input/images/53.jpg')
-
-# using image processing module of scipy to find the center of the leaf
-cy, cx = ndi.center_of_mass(img)
-
-plt.imshow(img, cmap='Set3')  # show me the leaf
-plt.scatter(cx, cy)           # show me its center
-plt.show()
-
-
-# Later we might want to switch to another measure of centrality, based on how efficient this center is, when we generate a time-series from the shape, using the distance between the edge and the center.
-# 
-# One way to do that is just measure the (Euclidean) distance between the center and the edge... but there is a better way - we project the Cartesian coordinates into Polar coordinates.
-# 
-# But before that, we need to [find the edges][1] of the leaf.
-# 
-#   [1]: http://scikit-image.org/docs/dev/auto_examples/
-
-# In[ ]:
-
-
-# scikit-learn imaging contour finding, returns a list of found edges
-contours = measure.find_contours(img, .8)
-
-# from which we choose the longest one
-contour = max(contours, key=len)
-
-# let us see the contour that we hopefully found
-plt.plot(contour[::,1], contour[::,0], linewidth=0.5)  # (I will explain this [::,x] later)
-plt.imshow(img, cmap='Set3')
-plt.show()
-
-
-# Now we can project this contour - that is, thousands of pairs of (x,y) coordinates - into the Polar coordinate system.
-# ![Cartesian to Polar][1]
-# [1]: http://jwilson.coe.uga.edu/emat6680fa11/lee/asnmt11hylee/fig2.jpg
-
-# In[ ]:
-
-
-# cartesian to polar coordinates, just as the image shows above
-def cart2pol(x, y):
-    rho = np.sqrt(x**2 + y**2)
-    phi = np.arctan2(y, x)
-    return [rho, phi]
-
-# just calling the transformation on all pairs in the set
-polar_contour = np.array([cart2pol(x, y) for x, y in contour])
-
-# and plotting the result
-plt.plot(polar_contour[::,1], polar_contour[::,0], linewidth=0.5)
-plt.show()
-
-
-# What on earth is this. We expected a time-series, then we got a monster-leaf.
-# 
-# Let's try the projection again, but move the leaf to (0,0) first this time.
-# 
-# This gives a chance to look into something we already used, but not explained: [numpy.ndarray indexing][1]. "nd" stands for "n-dimensional" and there is a powerful syntax helps us to select whatever slice we need from our array. The syntax is `array[start:stop:step]`. Also, this syntax allows us to select into subdimensions.
-# 
-# 
-#   [1]: http://docs.scipy.org/doc/numpy/reference/arrays.indexing.html
-
-# In[ ]:
-
-
-# numpy BASIC indexing example, see link above for more
-
-x = np.array([[[1,11,111], [2,22,222], [3,33,333]], 
-              [[4,44,444], [5,55,555], [6,66,666]], 
-              [[7,77,777], [8,88,888], [9,99,999]]])
-
-# reverse the first dimension
-# take the 0th element
-# and take its last element
-x[::-1, 0, -1]
-
-
-# So, using this, let us demean the contour data.
-# 
-# Demean (making its mean 0 by shifting points) is needed: the polar coordnate projection failed to yield what we want, because the shape is in the +,+ part of the Cartesian system, not around the center.
-# 
-# Why the contour, why not the image? First, image is big, contour is small. Second, image is just hundreds n hundreds of bits on a grid, not (x,y) pairs. It is not the right data format for us.
-
-# In[ ]:
-
-
-# numpy is smart and assumes the same about us
-# if we substract a number from an array of numbers,
-# it assumes that we wanted to substract from all members
-contour[::,1] -= cx  # demean X
-contour[::,0] -= cy  # demean Y
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
 
 
 # In[ ]:
 
 
-# checking if we succeeded to move the center to (0,0)
-plt.plot(-contour[::,1], -contour[::,0], linewidth=0.5)
-plt.grid()
-plt.scatter(0, 0)
-plt.show()
+train.info()
 
 
-# Now we can try to project it again into polar space.
+# # 1. Exploratory analysis
+# ## Basic Information about the table
 
 # In[ ]:
 
 
-# just calling the transformation on all pairs in the set
-polar_contour = np.array([cart2pol(x, y) for x, y in contour])
+train.head(2)
 
-# and plotting the result
-rcParams['figure.figsize'] = (12, 6)
-plt.subplot(121)
-plt.scatter(polar_contour[::,1], polar_contour[::,0], linewidth=0, s=.5, c=polar_contour[::,1])
-plt.title('in Polar Coordinates')
-plt.grid()
-plt.subplot(122)
-plt.scatter(contour[::,1],             # x axis is radians
-            contour[::,0],             # y axis is distance from center
-            linewidth=0, s=2,          # small points, w/o borders
-            c=range(len(contour)))     # continuous coloring (so that plots match)
-plt.scatter(0, 0)
-plt.title('in Cartesian Coordinates')
-plt.grid()
-plt.show()
-
-
-# Ok, I consider this beginning part done.
-# 
-# Challenges:
-# 
-# - This is definitely not a time-series yet, as one x can have multiple y values. (I do not know yet if it is a good thing for the classification and feature extraction or not)
-# - I have to solve that the same leaf if I rotate it, is still equivalent from feature extraction and classification point of view.
-# - And - of course - I'm yet to find and quantify meaningful and generic features.
-# 
-# And a funny thought - what if I cut each sample into half along the symmetry axis and treat them as two samples? How shameless would that be? I get double sample size, I generalize better, I simplify and reduce the features I work with... 
-# 
-# ![Evil genius laughter][1]
-# 
-#   [1]: http://www.jimbowley.com/wp-content/uploads/2011/06/DrEvilPinky.jpg
 
 # In[ ]:
 
 
-# check a few scikitlearn image feature extractions, if they can help us
-
-from skimage.feature import corner_harris, corner_subpix, corner_peaks, CENSURE
-
-detector = CENSURE()
-detector.detect(img)
-
-coords = corner_peaks(corner_harris(img), min_distance=5)
-coords_subpix = corner_subpix(img, coords, window_size=13)
-
-plt.subplot(121)
-plt.title('CENSURE feature detection')
-plt.imshow(img, cmap='Set3')
-plt.scatter(detector.keypoints[:, 1], detector.keypoints[:, 0],
-              2 ** detector.scales, facecolors='none', edgecolors='r')
-
-plt.subplot(122)
-plt.title('Harris Corner Detection')
-plt.imshow(img, cmap='Set3')  # show me the leaf
-plt.plot(coords[:, 1], coords[:, 0], '.b', markersize=5)
-plt.show()
+train.describe()
 
 
-# I really want to find features that generalize well, but this is just random noise.
-# 
-# How about finding local maxima and minima on the time series instead?
+# Average Age is 29 years and ticket price is 32.
+# As there are 681 unique tickets and there is no way to extract less detailed information we exclude this variable. There are 891 unique names but we could take a look on the title of each person to understand if the survival rate of people from high society was higher
 
 # In[ ]:
 
 
-from scipy.signal import argrelextrema
+train.describe(include=['O'])
 
-# for local maxima
-c_max_index = argrelextrema(polar_contour[::,0], np.greater, order=50)
-c_min_index = argrelextrema(polar_contour[::,0], np.less, order=50)
-
-plt.subplot(121)
-plt.scatter(polar_contour[::,1], polar_contour[::,0], 
-            linewidth=0, s=2, c='k')
-plt.scatter(polar_contour[::,1][c_max_index], 
-            polar_contour[::,0][c_max_index], 
-            linewidth=0, s=30, c='b')
-plt.scatter(polar_contour[::,1][c_min_index], 
-            polar_contour[::,0][c_min_index], 
-            linewidth=0, s=30, c='r')
-
-plt.subplot(122)
-plt.scatter(contour[::,1], contour[::,0], 
-            linewidth=0, s=2, c='k')
-plt.scatter(contour[::,1][c_max_index], 
-            contour[::,0][c_max_index], 
-            linewidth=0, s=30, c='b')
-plt.scatter(contour[::,1][c_min_index], 
-            contour[::,0][c_min_index], 
-            linewidth=0, s=30, c='r')
-
-plt.show()
-
-
-# Ok, I surprised myself. This worked out pretty well. I think, I can build an extremely efficient feature from this.
-# 
-# But this method is NOT robust yet.
-# 
-# - It is not finding the tips, but the points with the greatest distance from center. (look at leaf#19)
-# - It will miserably fail on a more complex, or unfortunately rotated leaf. (look at leaf#78)
-# 
-# I really have to smooth the contour to find the dominant symmetry. Also, it would give me a better generalization about the shape. Then I could measure the distance between the smooth contour and the actual one to quantify the variability of the contour.
-# 
-# There is a feature in `scipy.ndimage` called 'Mathematical Morphology' that can do stuff like this: 
-# 
-# ![Scipy's Mathematical Morphology functions][1]
-# 
-# 
-#   [1]: http://www.scipy-lectures.org/_images/morpho_mat.png
 
 # In[ ]:
 
 
-def cont(img):
-    return max(measure.find_contours(img, .8), key=len)
-
-# let us set the 'brush' to a 6x6 circle
-struct = [[ 0., 0., 1., 1., 0., 0.],
-          [ 0., 1., 1., 1., 1., 0.],  
-          [ 1., 1., 1., 1., 1., 1.], 
-          [ 1., 1., 1., 1., 1., 1.], 
-          [ 1., 1., 1., 1., 1., 1.], 
-          [ 0., 1., 1., 1., 1., 0.],
-          [ 0., 0., 1., 1., 0., 0.]]
-
-erosion = cont(ndi.morphology.binary_erosion(img, structure=struct).astype(img.dtype))
-closing = cont(ndi.morphology.binary_closing(img, structure=struct).astype(img.dtype))
-opening = cont(ndi.morphology.binary_opening(img, structure=struct).astype(img.dtype))
-dilation = cont(ndi.morphology.binary_dilation(img, structure=struct).astype(img.dtype))
-
-plt.imshow(img.T, cmap='Greys', alpha=.2)
-plt.plot(erosion[::,0], erosion[::,1], c='b')
-plt.plot(opening[::,0], opening[::,1], c='g')
-plt.plot(closing[::,0], closing[::,1], c='r')
-plt.plot(dilation[::,0], dilation[::,1], c='k')
-#plt.xlim([220, 420])
-#plt.ylim([250, 420])
-plt.xlim([0, 400])
-plt.ylim([400, 800])
-plt.show()
+## exctract cabin letter
+def extract_cabin(x):
+    return x!=x and 'other' or x[0]
+train['Cabin_l'] = train['Cabin'].apply(extract_cabin)
 
 
-# This does not make ANY sense. It looks like there is noise around the edges of the original image, and I was not aware of that.
+# ## 1.1 Superficial overview of each variable
+
+# Just a quick look on variables we are dealing with.
 
 # In[ ]:
 
 
-plt.imshow(img.astype(bool).astype(float), cmap='hot')
-plt.show()
+plain_features = ['Pclass', 'Sex', 'SibSp', 'Parch', 'Embarked', 'Cabin_l']
+fig, ax = plt.subplots(nrows = 2, ncols = 3 ,figsize=(20,10))
+start = 0
+for j in range(2):
+    for i in range(3):
+        if start == len(plain_features):
+            break
+        sns.barplot(x=plain_features[start], y='Survived', data=train, ax=ax[j,i])
+        start += 1
 
 
-# Here we go. We have noise. This challenge just got way more realistic. (Sh*t.) It seems I must learn how to denoise.
-# 
-# Ok. The pixels are 8bit greyscale in the original image. Check if I can separate the leaf from the noise by their value.
-# 
-# If not, I have a nasty plan. I invert the whole image, do a binary_closing on it to fill up the small holes, then invert it back - now without the noise.
+# #### A citate from a movie: 'Children and women first'. 
+# * Sex: Survival chances of women are higher.
+# * Pclass: Having a first class ticket is beneficial for the survival.
+# * SibSp and Parch: middle size families had higher survival rate than the people who travelled alone or big families. The reasoning might be that alone people would want to sacrifice themselves to help others. Regarding the big families I would explain that it is hard to manage the whole family and therefore people would search for the family members insetad of getting on the boat.
+# * Embarked C has a higher survival rate. It would be interesting to see if, for instance, the majority of Pclass 1 went on board in embarked C.
 
-# In[ ]:
-
-
-erosion = cont(ndi.morphology.binary_erosion(img > 254, structure=struct).astype(img.dtype))
-closing = cont(ndi.morphology.binary_closing(img > 254, structure=struct).astype(img.dtype))
-opening = cont(ndi.morphology.binary_opening(img > 254, structure=struct).astype(img.dtype))
-dilation = cont(ndi.morphology.binary_dilation(img > 254, structure=struct).astype(img.dtype))
-
-plt.imshow(img.T, cmap='Greys', alpha=.2)
-plt.plot(erosion[::,0], erosion[::,1], c='b')
-plt.plot(opening[::,0], opening[::,1], c='g')
-plt.plot(closing[::,0], closing[::,1], c='r')
-plt.plot(dilation[::,0], dilation[::,1], c='k')
-plt.xlim([0, 400])
-plt.ylim([400, 800])
-plt.show()
-
-
-# From these 2 binary morphology tests, it is clear:
-# 
-# - the leaf has debris around it's edge
-# - there are not 100% white pixels at the edge
-# 
-# But for me this second red contour is just perfect. I will use that as baseline. (yes, I loose some minimal contour information, but it makes my measurements more accurate in exchange)
+# ## 1.2 Survival by Sex and Age
 
 # In[ ]:
 
 
-# While I was looking up how to threshold an image, I have found this.
-# The further away from the edges a pixel is, the higher value it gets.
-# This is important, because it describes the morphology of the leaf better, 
-# than a simple euclidean distance from the center, because it considers
-# concave parts differently, and that's an important feature I wish to keep.
+sv_lab = 'survived'
+nsv_lab = 'not survived'
+fig, ax = plt.subplots(figsize=(5,3))
+ax = sns.distplot(train[train['Survived']==1].Age.dropna(), bins=20, label = sv_lab, ax = ax)
+ax = sns.distplot(train[train['Survived']==0].Age.dropna(), bins=20, label = nsv_lab, ax = ax)
+ax.legend()
+_ = ax.set_ylabel('KDE')
 
-# This is very promising. Using this, I will probably be able to find symmetry.
+fig, axes = plt.subplots(nrows=1, ncols=2,figsize=(10, 4))
+females = train[train['Sex']=='female']
+males = train[train['Sex']=='male']
 
-# I also believe, that using this distance map, I will be able to separate
-# the core shape of the leaf and the edge texture, which are two distinct,
-# pretty good features.
+ax = sns.distplot(females[females['Survived']==1].Age.dropna(), bins=30, label = sv_lab, ax = axes[0], kde =False)
+ax = sns.distplot(females[females['Survived']==0].Age.dropna(), bins=30, label = nsv_lab, ax = axes[0], kde =False)
+ax.legend()
+ax.set_title('Female')
+ax = sns.distplot(males[males['Survived']==1].Age.dropna(), bins=30, label = sv_lab, ax = axes[1], kde = False)
+ax = sns.distplot(males[males['Survived']==0].Age.dropna(), bins=30, label = nsv_lab, ax = axes[1], kde = False)
+ax.legend()
+_ = ax.set_title('Male')
 
-dist_2d = ndi.distance_transform_edt(img)
-plt.imshow(img, cmap='Greys', alpha=.2)
-plt.imshow(dist_2d, cmap='plasma', alpha=.2)
-plt.contour(dist_2d, cmap='plasma')
-plt.show()
 
+# * Survival rate of boys is higher than of the adult men. However, the same fact does not hold for the girls. and between 13 and 30 is lower. Take it into consideration while engineering the variable: we could specify a categorical variable as young and adult.
+# * For women the survival chances are higher between 14 and 40 age. For men of the same age the survival chances are flipped.
+
+# ## 1.3 Survival by Class,  Embarked and Fare.
+
+# ## 1.3.1 Survival by Class and Embarked
+
+# In[ ]:
+
+
+_ = sns.factorplot('Pclass', 'Survived', hue='Sex', col = 'Embarked', data=train)
+_ = sns.factorplot('Pclass', 'Survived', col = 'Embarked', data=train)
+
+
+# * As noticed already before, the class 1 passangers had a higher survival rate.
+# * All women who died were from the 3rd class. 
+# * Embarked in Q as a 3rd class gave you slighly better survival chances than embarked in S for the same class.
+# * In fact, there is a very high variation in survival rate in embarked Q among 1st and 2nd class. The third class had the same survival rate as the 3rd class embarked C. We will exclude this variable embarked Q. From crosstab we see that there were only 5 passengers in embarked Q with the 1st and 2nd class. That explains large variation in survival rate and a perfect separation of men and women in Q.
+
+# In[ ]:
+
+
+tab = pd.crosstab(train['Embarked'],train['Pclass'])
+print(tab)
+tab_prop = tab.div(tab.sum(1).astype(float), axis=0)
+tab_prop.plot(kind="bar", stacked=True)
+
+
+# ## 1.3.2 Fare and class distribution
+
+# In[ ]:
+
+
+ax = sns.boxplot(x="Pclass", y="Fare", hue="Survived", data=train)
+ax.set_yscale('log')
+
+
+# * It appears that the higher the fare was in the first class the higher survival chances a person from the 1st had.
+
+# ## 1.3.3 Class and age distribution
+
+# In[ ]:
+
+
+_ = sns.violinplot(x='Pclass', y='Age', hue = 'Survived', data=train, split=True)
+
+
+# * Interesting note that Age decreases proportionally with the Pclass, meaning most old passangers are from 1st class. We will construct a new feature Age*Class to intefere the this findig. 
+# * The younger people from 1st had higher survival chanches than older from the same class.
+# * Majority (from the 3rd class) and most children from the 2nd class survived.
+
+# ## 1.4 Survival rate regarding the family members
+
+# In[ ]:
+
+
+# To get the full family size of a person, added siblings and parch.
+#fig, axes = plt.subplots(nrows=1, ncols=1,figsize=(15, 5))
+train['family_size'] = train['SibSp'] + train['Parch'] + 1 
+test['family_size'] = test['SibSp'] + test['Parch'] + 1 
+axes = sns.factorplot('family_size','Survived', 
+                      hue = 'Sex', 
+                      data=train, aspect = 4)
+
+
+# Assumption: the less people was in your family the faster you were to get to the boat. The more people they are the more managment is required. However, if you had no family members you might wanted to help others and therefore sacrifice.
+# 
+# * The females traveling with up to 2 more family members had a higher chance to survive. However, a high variation of survival rate appears once family size exceeds 4 as mothers/daughters would search longer for the members and therefore the chanes for survival decrease.
+# * Alone men might want to sacrifice and help other people to survive. 
+
+# ## 1.5 Survival rate by the title
+# * Barplots show that roalties had normally 1st or 2nd class tickets. However, people with the title Master had mostly 3rd class. In fact, a title 'Master' was given to unmarried boys. You can see that the age of of people with this title is less than 13.
+# * Women and roalties had higher survival rate. (There are only two titlted women in the train class and both have survived, I would put them into Mrs class)
+# * The civils and reverends a lower one due to the fact that they had/wanted to help people.
+
+# In[ ]:
+
+
+train['Title'] = train['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
+print(collections.Counter(train['Title']).most_common())
+test['Title'] = test['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
+print()
+print(collections.Counter(test['Title']).most_common())
+
+
+# In[ ]:
+
+
+tab = pd.crosstab(train['Title'],train['Pclass'])
+print(tab)
+tab_prop = tab.div(tab.sum(1).astype(float), axis=0)
+tab_prop.plot(kind="bar", stacked=True)
+
+
+# Investigate who were masters. The age is less than 12.
+
+# In[ ]:
+
+
+max(train[train['Title']== 'Master'].Age)
+
+
+# In[ ]:
+
+
+_ = sns.factorplot('Title','Survived', data=train, aspect = 3)
+
+
+# We will group the roalties and assign masters to Mr and due to the fact that there were not so many roaly women, we will assign then to Mrs.
+
+# In[ ]:
+
+
+#train['Title'].replace(['Master','Major', 'Capt', 'Col', 'Countess','Dona','Lady', 'Don', 'Sir', 'Jonkheer', 'Dr'], 'titled', inplace = True)
+train['Title'].replace(['Master','Major', 'Capt', 'Col','Don', 'Sir', 'Jonkheer', 'Dr'], 'titled', inplace = True)
+#train['Title'].replace(['Countess','Dona','Lady'], 'titled_women', inplace = True)
+#train['Title'].replace(['Master','Major', 'Capt', 'Col','Don', 'Sir', 'Jonkheer', 'Dr'], 'titled_man', inplace = True)
+train['Title'].replace(['Countess','Dona','Lady'], 'Mrs', inplace = True)
+#train['Title'].replace(['Master'], 'Mr', inplace = 'True')
+train['Title'].replace(['Mme'], 'Mrs', inplace = True)
+train['Title'].replace(['Mlle','Ms'], 'Miss', inplace = True)
+
+
+# In[ ]:
+
+
+g = sns.factorplot('Title','Survived', data=train, aspect = 3)
+
+
+# ## 1.6 Survival rate by cabin
+# Cabin is supposed to be less distingushing, also taking into consideration that most of the values are missing.
+
+# In[ ]:
+
+
+def extract_cabin(x):
+    return x!=x and 'other' or x[0]
+train['Cabin_l'] = train['Cabin'].apply(extract_cabin)
+print(train.groupby('Cabin_l').size())
+sns.factorplot('Cabin_l','Survived', 
+               order = ['other', 'A','B', 'C', 'D', 'E', 'F', 'T' ], 
+               aspect = 3, 
+               data=train)
+
+
+# ## 1.7 Correlation of the variables
+# * Pclass is slightly correlated with Fare as logically, 3rd class ticket would cost less than the 1st class.
+# * Pclass is also slightly correlated with Survived
+# * SibSp and Parch are weakly correlated as basically they show how big the family size is.
+# 
+
+# In[ ]:
+
+
+plt.figure(figsize=(8, 8))
+corrmap = sns.heatmap(train.drop('PassengerId',axis=1).corr(),square=True, annot=True)
+
+
+# ## 2. FEATURE SELECTION AND ENGINEERING
+# ## 2.1 Impute values
+# First, we check how many nas there is in general. If there is only small amount then we can just exclude those individuals. Considering that there are 891 training samples, 708 do not have missing values. 183 samples have na values. It is better to impute. There are different techniques one can impute the values.
+
+# In[ ]:
+
+
+train.shape[0] - train.dropna().shape[0]
+
+
+# Check wich columns to impute in which set. It shows the number of na-values in each column.
+
+# In[ ]:
+
+
+train.isnull().sum()
+
+
+# In[ ]:
+
+
+test.isnull().sum()
+
+
+# Embarked: fill embarked with a major class
+
+# In[ ]:
+
+
+max_emb = np.argmax(train['Embarked'].value_counts())
+train['Embarked'].fillna(max_emb, inplace=True)
+
+
+# Pclass: because there is only one missing value in Fare we will fill it with a median of the corresponding Pclass
+
+# In[ ]:
+
+
+indz = test['Fare'].index[test['Fare'].apply(np.isnan)].tolist
+print(indz)
+pclass = test['Pclass'][152]
+fare_test = test[test['Pclass']==pclass].Fare.dropna()
+fare_train = train[train['Pclass']==pclass].Fare
+fare_med = (fare_test + fare_train).median()
+print(fare_med)
+test.loc[152,'Fare'] = fare_med
+
+
+# There are several imputing techniques, we will use the random number from the range mean +- std 
+
+# In[ ]:
+
+
+ages = np.concatenate((test['Age'].dropna(), train['Age'].dropna()), axis=0)
+std_ages = ages.std()
+mean_ages = ages.mean()
+train_nas = np.isnan(train["Age"])
+test_nas = np.isnan(test["Age"])
+np.random.seed(122)
+impute_age_train  = np.random.randint(mean_ages - std_ages, mean_ages + std_ages, size = train_nas.sum())
+impute_age_test  = np.random.randint(mean_ages - std_ages, mean_ages + std_ages, size = test_nas.sum())
+train["Age"][train_nas] = impute_age_train
+test["Age"][test_nas] = impute_age_test
+ages_imputed = np.concatenate((test["Age"],train["Age"]), axis = 0)
+
+
+# In[ ]:
+
+
+train['Age*Class'] = train['Age']*train['Pclass']
+test['Age*Class'] = test['Age']*test['Pclass']
+
+
+# Check if we disrupted the distribution somehow.
+
+# In[ ]:
+
+
+_ = sns.kdeplot(ages_imputed, label = 'After imputation')
+_ = sns.kdeplot(ages, label = 'Before imputation')
+
+
+# ## 2.2 ENGENEER VALUES
+
+# Integrate into test the title feature
+
+# In[ ]:
+
+
+test['Title'] = test['Name'].str.extract(' ([A-Za-z]+)\.', expand=False)
+
+test['Title'].replace(['Master','Major', 'Capt', 'Col','Don', 'Sir', 'Jonkheer', 'Dr'], 'titled', inplace = True)
+test['Title'].replace(['Countess','Dona','Lady'], 'Mrs', inplace = True)
+#test['Title'].replace(['Master'], 'Mr', inplace = True)
+test['Title'].replace(['Mme'], 'Mrs', inplace = True)
+test['Title'].replace(['Mlle','Ms'], 'Miss', inplace = True)
+
+
+# Seperate young and adult people
+
+# In[ ]:
+
+
+train['age_cat'] = None
+train.loc[(train['Age'] <= 13), 'age_cat'] = 'young'
+train.loc[ (train['Age'] > 13), 'age_cat'] = 'adult'
+
+test['age_cat'] = None
+test.loc[(test['Age'] <= 13), 'age_cat'] = 'young'
+test.loc[(test['Age'] > 13), 'age_cat'] = 'adult'
+
+
+# Drop broaden variables. As we have seen from describe there are too many unique values for Ticket and missing values for Cabin
+
+# In[ ]:
+
+
+train_label = train['Survived']
+test_pasId = test['PassengerId']
+drop_cols = ['Name','Ticket', 'Cabin', 'SibSp', 'Parch', 'PassengerId']
+train.drop(drop_cols + ['Cabin_l'], 1, inplace = True)
+test.drop(drop_cols, 1, inplace = True)
+
+
+# Convert Pclass into categorical variable
+
+# In[ ]:
+
+
+train['Pclass'] = train['Pclass'].apply(str)
+test['Pclass'] = test['Pclass'].apply(str)
+
+
+# Create dummy variables for categorical data.
+
+# In[ ]:
+
+
+train.drop(['Survived'], 1, inplace = True)
+train_objs_num = len(train)
+dataset = pd.concat(objs=[train, test], axis=0)
+dataset = pd.get_dummies(dataset)
+train = copy.copy(dataset[:train_objs_num])
+test = copy.copy(dataset[train_objs_num:])
+
+
+# In[ ]:
+
+
+droppings = ['Embarked_Q', 'Age']
+#droppings += ['Sex_male', 'Sex_female']
+
+test.drop(droppings, 1, inplace = True)
+train.drop(droppings,1, inplace = True)
+
+
+# In[ ]:
+
+
+train.head(5)
+
+
+# ## CLASSIFICATION
+# 
+
+# In[ ]:
+
+
+def prediction(model, train, label, test, test_pasId):
+    model.fit(train, label)
+    pred = model.predict(test)
+    accuracy = cross_val_score(model, train, label, cv = 5)
+
+    sub = pd.DataFrame({
+            "PassengerId": test_pasId,
+            "Survived": pred
+        })    
+    return [model, accuracy, sub]
+
+
+# ## 1. Random Forest
+# There are many categorical features, so I have chosen random forest to do the classification.
+
+# In[ ]:
+
+
+rf = RandomForestClassifier(n_estimators=80, min_samples_leaf = 2, min_samples_split=2, random_state=110)
+acc_random_forest = prediction(rf, train, train_label, test, test_pasId)
+importances = pd.DataFrame({'feature':train.columns,'importance':np.round(rf.feature_importances_,3)})
+importances = importances.sort_values('importance', ascending=False).set_index('feature')
+#acc_random_forest[2].to_csv('~/Desktop/random_forest.txt', index=False)
+print (importances)
+importances.plot.bar()
+print(acc_random_forest[1])
+
+test_predictions = acc_random_forest[0].predict(test)
+test_predictions = test_predictions.astype(int)
+submission = pd.DataFrame({
+        "PassengerId": test_pasId,
+        "Survived": test_predictions
+    })
+
+submission.to_csv("titanic_submission_randomforest.csv", index=False)
+
+
+# ## 2. Logistic Regression
+# 
+
+# In[ ]:
+
+
+from sklearn.preprocessing import StandardScaler
+scaler = StandardScaler().fit(train['Fare'].values.reshape(-1, 1))
+train['Fare'] = scaler.transform(train['Fare'].values.reshape(-1, 1)) 
+test['Fare'] = scaler.transform(test['Fare'].values.reshape(-1, 1))  
+
+scaler = StandardScaler().fit(train['Age*Class'].values.reshape(-1, 1))
+train['Age*Class'] = scaler.transform(train['Age*Class'].values.reshape(-1, 1)) 
+test['Age*Class'] = scaler.transform(test['Age*Class'].values.reshape(-1, 1))  
+
+
+
+lr  = LogisticRegression(random_state=110)
+acc = prediction(lr, train, train_label, test, test_pasId)
+print(acc[1])
+
+test_predictions = acc[0].predict(test)
+test_predictions = test_predictions.astype(int)
+submission = pd.DataFrame({
+        "PassengerId": test_pasId,
+        "Survived": test_predictions
+    })
+submission.to_csv("titanic_submission_logregres.csv", index=False)
+
+#train.columns.tolist()
+print(list(zip(acc[0].coef_[0], train.columns.tolist())))
+
+
+# ## 3. KNeighbours
+
+# In[ ]:
+
+
+kn = KNeighborsClassifier()
+acc = prediction(kn, train, train_label, test, test_pasId)
+print(acc[1])
+test_predictions = acc[0].predict(test)
+test_predictions = test_predictions.astype(int)
+submission = pd.DataFrame({
+        "PassengerId": test_pasId,
+        "Survived": test_predictions
+    })
+submission.to_csv("titanic_submission_kn.csv", index=False)
+
+
+# ## 4. Ensemble
+# 
+
+# In[ ]:
+
+
+from sklearn.ensemble import VotingClassifier
+eclf1 = VotingClassifier(estimators=[
+        ('lr', lr), ('rf', rf)], voting='soft')
+eclf1 = eclf1.fit(train, train_label)
+test_predictions = eclf1.predict(test)
+test_predictions = test_predictions.astype(int)
+submission = pd.DataFrame({
+        "PassengerId": test_pasId,
+        "Survived": test_predictions
+    })
+
+submission.to_csv("titanic_submission.csv", index=False)
+
+
+# ## 5. Grid Search
+# Find optimal parameters for the logistic regression.
+
+# In[ ]:
+
+
+def grid_search(clf, X, Y, parameters, cv):
+    grid_model = GridSearchCV(estimator=clf, param_grid=parameters, cv=cv)
+    grid_model.fit(X, Y)
+    #grid_model.cv_results_
+    print("Best Score:", grid_model.best_score_," / Best parameters:", grid_model.best_params_)
+    return grid_model.best_params_
+
+
+# In[ ]:
+
+
+param_range = np.logspace(-6, 5, 12)
+parameters = dict(C= param_range, penalty = ['l1', 'l2'])
+grid_search(lr, train, train_label, parameters, 5)
+
+
+# In[ ]:
+
+
+lr  = LogisticRegression(random_state=110, penalty= 'l1', C= 100)
+acc = prediction(lr, train, train_label, test, test_pasId)
+print(acc[1])
+
+test_predictions = acc[0].predict(test)
+test_predictions = test_predictions.astype(int)
+submission = pd.DataFrame({
+        "PassengerId": test_pasId,
+        "Survived": test_predictions
+    })
+submission.to_csv("titanic_submission_logregres_tuned_scaled.csv", index=False)
+
+
+# **********
+# I will be happy to hear remarks or comments. If you liked the Kernel, please upvote :)
+#     
+# Have fun with the data!
+# *****

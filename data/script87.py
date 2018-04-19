@@ -1,659 +1,1237 @@
 
 # coding: utf-8
 
-# ## Introduction
-
-# This notebook aims at getting a good insight in the data for the PorteSeguro competition. Besides that, it gives some tips and tricks to prepare your data for modeling. The notebook consists of the following main sections:
-# 
-# 1. [Visual inspection of your data](#visual_inspection)
-# 2. [Defining the metadata](#metadata)
-# 3. [Descriptive statistics](#descriptive_stats)
-# 4. [Handling imbalanced classes](#imbalanced_data)
-# 5. [Data quality checks](#data_quality)
-# 6. [Exploratory data visualization](#eda)
-# 7. [Feature engineering](#feat_engineering)
-# 8. [Feature selection](#feat_selection)
-# 9. [Feature scaling](#feat_scaling)
-
-# ## Loading packages
-
 # In[ ]:
 
 
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+plt.style.use('seaborn')
+from scipy.stats import norm, skew
+import numpy as np
 import seaborn as sns
-from sklearn.preprocessing import Imputer
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn.preprocessing import StandardScaler
-from sklearn.feature_selection import VarianceThreshold
-from sklearn.feature_selection import SelectFromModel
-from sklearn.utils import shuffle
-from sklearn.ensemble import RandomForestClassifier
-
-pd.set_option('display.max_columns', 100)
 
 
-# ## Loading data
-
-# In[ ]:
-
-
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-
-
-# <a class="anchor" id="visual_inspection"></a>
-
-# ## Data at first sight
-
-# Here is an excerpt of the the data description for the competition:
-# * Features that belong to **similar groupings are tagged** as such in the feature names (e.g.,  ind, reg, car, calc).
-# * Feature names include the postfix **bin** to indicate binary features and **cat** to  indicate categorical features. 
-# * Features **without these designations are either continuous or ordinal**. 
-# * Values of **-1**  indicate that the feature was **missing** from the observation. 
-# * The **target** columns signifies whether or not a claim was filed for that policy holder.
+# # Assignment 1 - House Price Prediction
+# ### Laurens ten Cate - MBD'18 - Machine Learning II
 # 
-# Ok, that's important information to get us started. Let's have a quick look at the first and last rows to confirm all of this.
-
-# In[ ]:
-
-
-train.head()
-
-
-# In[ ]:
-
-
-train.tail()
-
-
-# We indeed see the following
-# * binary variables
-# * categorical variables of which the category values are integers
-# * other variables with integer or float values
-# * variables with -1 representing missing values
-# * the target variable and an ID variable
-
-# Let's look at the number of rows and columns in the train data.
-
-# In[ ]:
-
-
-train.shape
-
-
-# We have 59 variables and 595.212 rows. Let's see if we have the same number of variables in the test data.<br>
-# Let's see if there are duplicate rows in the training data.
-
-# In[ ]:
-
-
-train.drop_duplicates()
-train.shape
-
-
-# No duplicate rows, so that's fine.
-
-# In[ ]:
-
-
-test.shape
-
-
-# We are missing one variable in the test set, but this is the target variable. So that's fine.<br>
-# Let's now invesigate how many variables of each type we have.
-
-# So later on we can create dummy variables for the 14 categorical variables. The *bin* variables are already binary and do not need dummification.
-
-# In[ ]:
-
-
-train.info()
-
-
-# Again, with the info() method we see that the data type is integer or float. No null values are present in the data set. That's normal because missing values are replaced by -1. We'll look into that later.
-
-# <a class="anchor" id="metadata"></a>
-
-# ## Metadata
-# To facilitate the data management, we'll store meta-information about the variables in a DataFrame. This will be helpful when we want to select specific variables for analysis, visualization, modeling, ...
+# ###### If you decide to use some of my code/ideas for your own kaggle submissions/kernel submissions I would really appreciate you giving me some credit! Thanks!
 # 
-# Concretely we will store:
-# - **role**: input, ID, target
-# - **level**: nominal, interval, ordinal, binary
-# - **keep**: True or False
-# - **dtype**: int, float, str
+# Personally I was inspired with model stacking by Serigne's great notebook.
+# (https://www.kaggle.com/serigne/stacked-regressions-top-4-on-leaderboard)
+# 
+# **kaggle score notes**
+# - Kaggle username: Laurenstc
+# - Kaggle final best score: RMSLE = 0.11383
+# - Kaggle final best score rank: 81
+# 
+# **local score notes**
+# 
+# Locally I managed when to obtain consistent RMSE's of below 0.10. However, this notebook does not include my best local RMSE score as this was due to a ton of overfitting.
+# 
+# **final delivery notes**
+# 
+# The experimental dataset we are going to use is the House Prices Dataset. It includes 79 explanatory variables of residential homes. For more details on the dataset and the competition see https://www.kaggle.com/c/house-prices-advanced-regression-techniques.
+# 
+# The workbook is structured as followed:
+# 
+# 1. Data Cleaning and Pre-processing
+#     - Outliers
+#     - Statistical transformations
+# 2. Feature Engineering
+#     - Concatenation
+#     - NA's
+#     - Incorrect values
+#     - Factorization
+#     - Further Statistical transformation
+#     - Column removal
+#     - Creating features
+#     - Dummies
+#     - In-depth outlier detection
+#     - Overfit prevention
+#     - Baseline model
+# 3. Feature Selection
+#     - Filter methods
+#         - baseline coefficients
+#     - Embedded methods
+#         - L2: Ridge Regression
+#         - L1: Lasso regression
+#             - In-depth coefficient analysis
+#         - Elasticnet
+#         - XGBoost
+#         - SVR
+#         - LightGBM
+# 3. Ensemble methods
+#     - Stacked generalizations
+#     - Averaging
+#         - standard
+#         - weighted
+# 4. Prediction
+# 
+# 
+# This notebook represents the data manipulation used for my final score on Kaggle (RMSLE = 0.11383). However, in the process of achieving this score a lot of different feature engineering tactics were employed. For the sake of brevity I left these out of the notebook though below is a quick overview of other things I tried that did not help my score. 
+# 
+# One thing that was used but was not included is GridsearchCV. Gridsearching helped me find ranges of Alphas and L1_ratios that I could reuse later. However, it became unfeasible to continuously gridserach for optimal parameters with each iteration of feature engineering. Thats why I decided to omit the code from the final delivery.
+# 
+# **feature engineering tries**
+# - Recoding categoricals to keep ordering information (if data was really ordinal)
+# - Binning date variables (yearbuilt etc)
+# - simplify and recode neighborhood variable based on a groupby with SalePrice
+# - create simplified quality variables (1-5 scale instead of 1-10)
+# - create 2nd and 3rd order polynomials of top10 strongest correlating variables with SalePrice
+# - create 2nd and 3rd order polynomials of all variables
+# - create interaction variables by looking at individual interaction plots
+# - use sklearns PolynomialPreprocessing for complete set of interaction and polynomial terms
+# 
+# **feature selection tries**
+# - F-score selection 
+# - Mutual information regression selection
+# - Backwards stepwise selection (RFECV)
+# - Forwards stepwise selection (LARS)
+# 
+# Besides feature selection and engineering a lot of time was spent on optimizing my ensemble of models. I believe some more gains can be made here specifically regarding my stacked generalization model.
+# 
+# In the end I believe the biggest gains in my score were achieved with a few things. OLS outlier removal, nuanced NA filling and averaging with a stacked generalization model.
+# 
 
 # In[ ]:
 
 
-data = []
-for f in train.columns:
-    # Defining the role
-    if f == 'target':
-        role = 'target'
-    elif f == 'id':
-        role = 'id'
-    else:
-        role = 'input'
-         
-    # Defining the level
-    if 'bin' in f or f == 'target':
-        level = 'binary'
-    elif 'cat' in f or f == 'id':
-        level = 'nominal'
-    elif train[f].dtype == float:
-        level = 'interval'
-    elif train[f].dtype == int:
-        level = 'ordinal'
+#Data reading
+
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
+
+
+# In[ ]:
+
+
+print("Train set size:", train.shape)
+print("Test set size:", test.shape)
+
+
+# # 1. Data Cleaning and Pre-processing
+# ## Outliers
+# According to the documentation of the dataset (http://ww2.amstat.org/publications/jse/v19n3/Decock/DataDocumentation.txt) there are outliers present that are recommended to be removed. Let's plot SalePrice vs GR LIV AREA to view these. 
+
+# In[ ]:
+
+
+plt.scatter(train.GrLivArea, train.SalePrice)
+
+
+# These outliers are extremely clear. The documentation recommends removing all houses above 4000 sq ft living area. Trial and error showed that this led to a little bit underfitting. Better performance was above 4500 sq.
+
+# In[ ]:
+
+
+train = train[train.GrLivArea < 4500]
+plt.scatter(train.GrLivArea, train.SalePrice)
+
+
+# In[ ]:
+
+
+print(len(np.unique(train['Id'])) == len(train))
+len(np.unique(test['Id'])) == len(test)
+
+
+# In[ ]:
+
+
+len(train)
+
+
+# So we can safely drop the Id columns.
+
+# In[ ]:
+
+
+train = train.drop(['Id'], axis=1)
+test = test.drop(['Id'], axis=1)
+
+
+# In[ ]:
+
+
+print("Train set size:", train.shape)
+print("Test set size:", test.shape)
+
+
+# ## Statistical transformation
+# Let's have a look at how the target variable is distributed.
+
+# In[ ]:
+
+
+df = pd.concat([train.SalePrice, np.log(train.SalePrice + 1).rename('LogSalePrice')], axis=1, names=['SalePrice', 'LogSalePrice'])
+df.head()
+
+
+# In[ ]:
+
+
+plt.subplot(1, 2, 1)
+sns.distplot(train.SalePrice, kde=False, fit = norm)
+
+plt.subplot(1, 2, 2)
+sns.distplot(np.log(train.SalePrice + 1), kde=False, fit = norm)
+plt.xlabel('Log SalePrice')
+
+
+# There seems to be clear evidence of right-skewedness in the target variable. We can correct this with a simple log transformation.
+
+# In[ ]:
+
+
+train.SalePrice = np.log1p(train.SalePrice)
+
+
+# # 2. Feature Engineering
+# ## Concatenation
+# To keep consistency between test and train features we concatenate the two sets while remembering the index so we can split it later again.
+
+# In[ ]:
+
+
+y = train.SalePrice.reset_index(drop=True)
+train_features = train.drop(['SalePrice'], axis=1)
+test_features = test
+
+
+# In[ ]:
+
+
+print(train_features.shape)
+print(test_features.shape)
+
+
+# In[ ]:
+
+
+features = pd.concat([train_features, test_features]).reset_index(drop=True)
+features.shape
+
+
+# ## NA's
+# Let's figure out what NA's excist, sort them by categories and impute them in the best possible way.
+
+# In[ ]:
+
+
+nulls = np.sum(features.isnull())
+nullcols = nulls.loc[(nulls != 0)]
+dtypes = features.dtypes
+dtypes2 = dtypes.loc[(nulls != 0)]
+info = pd.concat([nullcols, dtypes2], axis=1).sort_values(by=0, ascending=False)
+print(info)
+print("There are", len(nullcols), "columns with missing values")
+
+
+# Most of these can be filled with 'None'. Some exceptions though:
+# 
+# - Functional: The documentation says that we should assume "Typ", so lets impute that.
+# - Electrical: The documentation doesn't give any information but obviously every house has this so let's impute the most common value: "SBrkr".
+# - KitchenQual: Similar to Electrical, most common value: "TA".
+# - Exterior 1 and Exterior 2: Let's use the most common one here. 
+# - SaleType: Similar to electrical, let's use most common value.
+# 
+
+# In[ ]:
+
+
+features['Functional'] = features['Functional'].fillna('Typ')
+features['Electrical'] = features['Electrical'].fillna("SBrkr")
+features['KitchenQual'] = features['KitchenQual'].fillna("TA")
+
+features['Exterior1st'] = features['Exterior1st'].fillna(features['Exterior1st'].mode()[0])
+features['Exterior2nd'] = features['Exterior2nd'].fillna(features['Exterior2nd'].mode()[0])
+
+features['SaleType'] = features['SaleType'].fillna(features['SaleType'].mode()[0])
+
+
+# Let's check some points individually to figure out the best imputation strategy
+
+# In[ ]:
+
+
+pd.set_option('max_columns', None)
+features[features['PoolArea'] > 0 & features['PoolQC'].isnull()]
+
+
+# There are three NaN's foor PoolQC that have a PoolArea. Let's impute them based on overall quality of the house.
+
+# In[ ]:
+
+
+features.loc[2418, 'PoolQC'] = 'Fa'
+features.loc[2501, 'PoolQC'] = 'Gd'
+features.loc[2597, 'PoolQC'] = 'Fa'
+
+
+# In[ ]:
+
+
+pd.set_option('max_columns', None)
+features[(features['GarageType'] == 'Detchd') & features['GarageYrBlt'].isnull()]
+
+
+# So there are houses with garages that are detached but that have NaN's for all other Garage variables. Let's impute these manually too.
+
+# In[ ]:
+
+
+features.loc[2124, 'GarageYrBlt'] = features['GarageYrBlt'].median()
+features.loc[2574, 'GarageYrBlt'] = features['GarageYrBlt'].median()
+
+features.loc[2124, 'GarageFinish'] = features['GarageFinish'].mode()[0]
+features.loc[2574, 'GarageFinish'] = features['GarageFinish'].mode()[0]
+
+features.loc[2574, 'GarageCars'] = features['GarageCars'].median()
+
+features.loc[2124, 'GarageArea'] = features['GarageArea'].median()
+features.loc[2574, 'GarageArea'] = features['GarageArea'].median()
+
+features.loc[2124, 'GarageQual'] = features['GarageQual'].mode()[0]
+features.loc[2574, 'GarageQual'] = features['GarageQual'].mode()[0]
+
+features.loc[2124, 'GarageCond'] = features['GarageCond'].mode()[0]
+features.loc[2574, 'GarageCond'] = features['GarageCond'].mode()[0]
+
+
+# Let's look at the basements:
+# - BsmtQual
+# - BsmtCond
+# - BsmtExposure
+# - BsmtFinType1
+# - BsmtFinType2
+# - BsmtFinSF1
+# - BsmtFinSF2
+# - BsmtUnfSF
+# - TotalBsmtSF
+
+# In[ ]:
+
+
+basement_columns = ['BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1',
+                   'BsmtFinType2', 'BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF',
+                   'TotalBsmtSF']
+
+tempdf = features[basement_columns]
+tempdfnulls = tempdf[tempdf.isnull().any(axis=1)]
+
+
+# In[ ]:
+
+
+#now select just the rows that have less then 5 NA's, 
+# meaning there is incongruency in the row.
+tempdfnulls[(tempdfnulls.isnull()).sum(axis=1) < 5]
+
+
+# Let's impute all incongruencies with the most likely value.
+
+# In[ ]:
+
+
+features.loc[332, 'BsmtFinType2'] = 'ALQ' #since smaller than SF1
+features.loc[947, 'BsmtExposure'] = 'No' 
+features.loc[1485, 'BsmtExposure'] = 'No'
+features.loc[2038, 'BsmtCond'] = 'TA'
+features.loc[2183, 'BsmtCond'] = 'TA'
+features.loc[2215, 'BsmtQual'] = 'Po' #v small basement so let's do Poor.
+features.loc[2216, 'BsmtQual'] = 'Fa' #similar but a bit bigger.
+features.loc[2346, 'BsmtExposure'] = 'No' #unfinished bsmt so prob not.
+features.loc[2522, 'BsmtCond'] = 'Gd' #cause ALQ for bsmtfintype1
+
+
+# Zoning is also interesting
+
+# In[ ]:
+
+
+subclass_group = features.groupby('MSSubClass')
+Zoning_modes = subclass_group['MSZoning'].apply(lambda x : x.mode()[0])
+Zoning_modes
+
+
+# In[ ]:
+
+
+features['MSZoning'] = features.groupby('MSSubClass')['MSZoning'].transform(lambda x: x.fillna(x.mode()[0]))
+
+
+# For the rest we will just use a loop to impute 'None' value. 
+
+# In[ ]:
+
+
+objects = []
+for i in features.columns:
+    if features[i].dtype == object:
+        objects.append(i)
+
+features.update(features[objects].fillna('None'))
+
+nulls = np.sum(features.isnull())
+nullcols = nulls.loc[(nulls != 0)]
+dtypes = features.dtypes
+dtypes2 = dtypes.loc[(nulls != 0)]
+info = pd.concat([nullcols, dtypes2], axis=1).sort_values(by=0, ascending=False)
+print(info)
+print("There are", len(nullcols), "columns with missing values")
+
+
+# Now let's think about imputing the missing values in the numerical features. Most of the time I will impute 0, but sometimes something else is needed.
+# 
+# - LotFrontage: This is linear feet of street connected to property. Let's impute with the median per neighborhood since I assume this is extremely linked to what kind of area you live in.
+
+# In[ ]:
+
+
+neighborhood_group = features.groupby('Neighborhood')
+lot_medians = neighborhood_group['LotFrontage'].median()
+lot_medians
+
+
+# As expected the lotfrontage averages differ a lot per neighborhood so let's impute with the median per neighborhood.
+
+# In[ ]:
+
+
+features['LotFrontage'] = features.groupby('Neighborhood')['LotFrontage'].transform(lambda x: x.fillna(x.median()))
+
+
+# Let's also take a closer look at GarageYrBlt
+
+# In[ ]:
+
+
+pd.set_option('max_columns', None)
+features[(features['GarageYrBlt'].isnull()) & features['GarageArea'] > 0]
+
+
+# GarageYrBlt does not have any incongruencies. Let's also examine MasVnrArea.
+
+# In[ ]:
+
+
+pd.set_option('max_columns', None)
+features[(features['MasVnrArea'].isnull())]
+
+
+# No incongruencies here either.
+# The rest can be safely imputed with 0 since this means that the property is not present in the house.
+
+# In[ ]:
+
+
+#Filling in the rest of the NA's
+
+numeric_dtypes = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
+numerics = []
+for i in features.columns:
+    if features[i].dtype in numeric_dtypes: 
+        numerics.append(i)
         
-    # Initialize keep to True for all variables except for id
-    keep = True
-    if f == 'id':
-        keep = False
-    
-    # Defining the data type 
-    dtype = train[f].dtype
-    
-    # Creating a Dict that contains all the metadata for the variable
-    f_dict = {
-        'varname': f,
-        'role': role,
-        'level': level,
-        'keep': keep,
-        'dtype': dtype
-    }
-    data.append(f_dict)
-    
-meta = pd.DataFrame(data, columns=['varname', 'role', 'level', 'keep', 'dtype'])
-meta.set_index('varname', inplace=True)
+features.update(features[numerics].fillna(0))
 
+nulls = np.sum(features.isnull())
+nullcols = nulls.loc[(nulls != 0)]
+dtypes = features.dtypes
+dtypes2 = dtypes.loc[(nulls != 0)]
+info = pd.concat([nullcols, dtypes2], axis=1).sort_values(by=0, ascending=False)
+print(info)
+print("There are", len(nullcols), "columns with missing values")
+
+
+# ## Incorrect values
+# Some values can be obviously wrong and this might impact our model. I used min and max values to check odd values in the data.
 
 # In[ ]:
 
 
-meta
+features.describe()
 
 
-# Example to extract all nominal variables that are not dropped
-
-# In[ ]:
-
-
-meta[(meta.level == 'nominal') & (meta.keep)].index
-
-
-# Below the number of variables per role and level are displayed. 
-
-# In[ ]:
-
-
-pd.DataFrame({'count' : meta.groupby(['role', 'level'])['role'].size()}).reset_index()
-
-
-# <a class="anchor" id="descriptive_stats"></a>
-
-# ## Descriptive statistics
-
-# We can also apply the *describe* method on the dataframe. However, it doesn't make much sense to calculate the mean, std, ... on categorical variables and the id variable. We'll explore the categorical variables visually later.
+# Looking at the min and max of each variable there are some errors in the data.
 # 
-# Thanks to our meta file we can easily select the variables on which we want to compute the descriptive statistics. To keep things clear, we'll do this per data type.
-
-# ### Interval variables
+# - GarageYrBlt - the max value is 2207, this is obviously wrong since the data is only until 2010. 
+# 
+# The rest of the data looks fine. Let's inspect this row a bit more carefully and impute an approximate correct value.
 
 # In[ ]:
 
 
-v = meta[(meta.level == 'interval') & (meta.keep)].index
-train[v].describe()
+features[features['GarageYrBlt'] == 2207]
 
 
-# #### reg variables
-# - only ps_reg_03 has missing values
-# - the range (min to max) differs between the variables. We could apply scaling (e.g. StandardScaler), but it depends on the classifier we will want to use.
-# 
-# #### car variables
-# - ps_car_12 and ps_car_15 have missing values
-# - again, the range differs and we could apply scaling.
-# 
-# #### calc variables
-# - no missing values
-# - this seems to be some kind of ratio as the maximum is 0.9
-# - all three *_calc* variables have very similar distributions
-# 
-# 
-# **Overall**, we can see that the range of the interval variables is rather small. Perhaps some transformation (e.g. log) is already applied in order to anonymize the data?
-# 
-
-# ### Ordinal variables
+# This particular datapoint has YearBuilt in 2006 and YearRemodAdd in 2007. 2207 most likely is a data input error that should have been 2007 when the remodel happened. Let's impute 2007.
 
 # In[ ]:
 
 
-v = meta[(meta.level == 'ordinal') & (meta.keep)].index
-train[v].describe()
+features.loc[2590, 'GarageYrBlt'] = 2007
 
 
-# - Only one missing variable: ps_car_11
-# - We could apply scaling to deal with the different ranges
-
-# ### Binary variables
+# ## Factorization
+# There are features that are read in as numericals but are actually objects. Let's transform them.
 
 # In[ ]:
 
 
-v = meta[(meta.level == 'binary') & (meta.keep)].index
-train[v].describe()
+#factors = ['MSSubClass', 'MoSold']
+factors = ['MSSubClass']
+ 
 
 
-# - A priori in the train data is 3.645%, which is **strongly imbalanced**. 
-# - From the means we can conclude that for most variables the value is zero in most cases.
+for i in factors:
+    features.update(features[i].astype('str'))
 
-# <a class="anchor" id="imbalanced_data"></a>
 
-# ## Handling imbalanced classes
-# As we mentioned above the proportion of records with target=1 is far less than target=0. This can lead to a model that has great accuracy but does have any added value in practice. 
-# Two possible strategies to deal with this problem are:
-# * oversampling records with target=1 
-# * undersampling records with target=0
-# 
-# There are many more strategies of course and MachineLearningMastery.com gives a [nice overview]((https://machinelearningmastery.com/tactics-to-combat-imbalanced-classes-in-your-machine-learning-dataset/).
-# As we have a rather large training set, we can go for **undersampling**. 
+# ## Skew transformation features
+# Let's check skew in our features and transform if necessary.
 
 # In[ ]:
 
 
-desired_apriori=0.10
+from scipy.stats import skew
 
-# Get the indices per target value
-idx_0 = train[train.target == 0].index
-idx_1 = train[train.target == 1].index
+numeric_dtypes = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
+numerics2 = []
+for i in features.columns:
+    if features[i].dtype in numeric_dtypes: 
+        numerics2.append(i)
 
-# Get original number of records per target value
-nb_0 = len(train.loc[idx_0])
-nb_1 = len(train.loc[idx_1])
-
-# Calculate the undersampling rate and resulting number of records with target=0
-undersampling_rate = ((1-desired_apriori)*nb_1)/(nb_0*desired_apriori)
-undersampled_nb_0 = int(undersampling_rate*nb_0)
-print('Rate to undersample records with target=0: {}'.format(undersampling_rate))
-print('Number of records with target=0 after undersampling: {}'.format(undersampled_nb_0))
-
-# Randomly select records with target=0 to get at the desired a priori
-undersampled_idx = shuffle(idx_0, random_state=37, n_samples=undersampled_nb_0)
-
-# Construct list with remaining indices
-idx_list = list(undersampled_idx) + list(idx_1)
-
-# Return undersample data frame
-train = train.loc[idx_list].reset_index(drop=True)
+skew_features = features[numerics2].apply(lambda x: skew(x)).sort_values(ascending=False)
+skews = pd.DataFrame({'skew':skew_features})
+skews
 
 
-# <a class="anchor" id="data_quality"></a>
-
-# ## Data Quality Checks
-
-# ### Checking missing values
-# Missings are represented as -1
+# I use the boxcox1p transformation here because I tried the log transform first but a lot of skew remained in the data. I use boxcox1p over normal boxcox because boxcox can't handle zero values.
 
 # In[ ]:
 
 
-vars_with_missing = []
+from scipy.special import boxcox1p
+from scipy.stats import boxcox_normmax
 
-for f in train.columns:
-    missings = train[train[f] == -1][f].count()
-    if missings > 0:
-        vars_with_missing.append(f)
-        missings_perc = missings/train.shape[0]
+high_skew = skew_features[skew_features > 0.5]
+high_skew = high_skew
+skew_index = high_skew.index
+
+for i in skew_index:
+    features[i]= boxcox1p(features[i], boxcox_normmax(features[i]+1))
+
         
-        print('Variable {} has {} records ({:.2%}) with missing values'.format(f, missings, missings_perc))
+skew_features2 = features[numerics2].apply(lambda x: skew(x)).sort_values(ascending=False)
+skews2 = pd.DataFrame({'skew':skew_features2})
+skews2
+
+
+# ## Incomplete cases
+# Checking to see if levels of my variables in my train and test set match and if not or if the level distribution is very low whether it should be deleted.
+
+# In[ ]:
+
+
+objects3 = []
+for i in features.columns:
+    if features[i].dtype == object:
+        objects3.append(i)
+
+
+# In[ ]:
+
+
+print("Training Set incomplete cases")
+
+sums_features = features[objects3].apply(lambda x: len(np.unique(x)))
+sums_features.sort_values(ascending=False)
+
+
+# Let's take a closer look at some of these lower numbered variables.
+
+# In[ ]:
+
+
+print(features['Street'].value_counts())
+print('-----')
+print(features['Utilities'].value_counts())
+print('-----')
+print(features['CentralAir'].value_counts())
+print('-----')
+print(features['PavedDrive'].value_counts())
+
+
+# I experimented a bunch with this and decided in the end that if a column has low amount of levels and most values are in the same class (>97%) I'd remove them.
+
+# Let's delete Utilities because of how unbalanced it is.
+
+# In[ ]:
+
+
+#features = features.drop(['Utilities'], axis=1)
+features = features.drop(['Utilities', 'Street'], axis=1)
+
+
+# ## Creating features
+# In this section I create some features that can be created from the current data. 
+# 
+# Size of the house. There are a few variables dealing with square footage, I don't use TotalBsmtSF as a proxy for the basement because I believe unfinished square feet in the basement area won't have a big impact on price as it needs money to make it 'livable' square footage, so I just use BsmtSF1 and BsmtSF2.
+# - BsmtFinSF1
+# - BsmtFinSF2
+# - 1stFlrSF 
+# - 2ndFlrSF
+# 
+# Another combined variable is the bathrooms in the house. I count fullbath for 1 and halfbath for 0.5.
+# - FullBath
+# - HalfBath
+# - BsmtFullBath
+# - BsmtHalfBath
+# 
+# Another combined variable is the total porch size.
+# - OpenPorchSF
+# - EnclosedPorch
+# - 3SsnPorch
+# - Screenporch
+# - WoodDeckSF
+# 
+# Next to that I make some simplified features.
+# - haspool
+# - has2ndfloor
+# - hasgarage
+# - hasbsmt
+# - hasfireplace
+
+# In[ ]:
+
+
+features['Total_sqr_footage'] = (features['BsmtFinSF1'] + features['BsmtFinSF2'] +
+                                 features['1stFlrSF'] + features['2ndFlrSF'])
+
+features['Total_Bathrooms'] = (features['FullBath'] + (0.5*features['HalfBath']) + 
+                               features['BsmtFullBath'] + (0.5*features['BsmtHalfBath']))
+
+features['Total_porch_sf'] = (features['OpenPorchSF'] + features['3SsnPorch'] +
+                              features['EnclosedPorch'] + features['ScreenPorch'] +
+                             features['WoodDeckSF'])
+
+
+#simplified features
+features['haspool'] = features['PoolArea'].apply(lambda x: 1 if x > 0 else 0)
+features['has2ndfloor'] = features['2ndFlrSF'].apply(lambda x: 1 if x > 0 else 0)
+features['hasgarage'] = features['GarageArea'].apply(lambda x: 1 if x > 0 else 0)
+features['hasbsmt'] = features['TotalBsmtSF'].apply(lambda x: 1 if x > 0 else 0)
+features['hasfireplace'] = features['Fireplaces'].apply(lambda x: 1 if x > 0 else 0)
+
+
+# ## Creating Dummies
+# Since sklearn lm.fit() does not accept strings we have to convert our objects to dummy variables. 
+
+# In[ ]:
+
+
+features.shape
+
+
+# In[ ]:
+
+
+final_features = pd.get_dummies(features).reset_index(drop=True)
+final_features.shape
+
+
+# Now we resplit the model in test and train
+
+# In[ ]:
+
+
+y.shape
+
+
+# In[ ]:
+
+
+X = final_features.iloc[:len(y),:]
+testing_features = final_features.iloc[len(X):,:]
+
+print(X.shape)
+print(testing_features.shape)
+
+
+# ## Overfitting prevention
+# 
+# ### Outliers
+# Let's do a little bit more in-depth and rigorous analysis first on outliers. I'll employ Leave-One-Out methodology with OLS to find which points have a significant effect on our model fit.  
+
+# In[ ]:
+
+
+import statsmodels.api as sm
+
+#ols = sm.OLS(endog = y, exog = X)
+
+#fit = ols.fit()
+#test2 = fit.outlier_test()['bonf(p)']
+
+
+# In[ ]:
+
+
+outliers = list(test2[test2<1e-3].index) 
+
+outliers
+
+#print(test[test<1e-3])
+
+
+# In[ ]:
+
+
+outliers = [30, 88, 462, 631, 1322]
+
+
+# So we find that these are outliers. Let's delete these.
+
+# In[ ]:
+
+
+X = X.drop(X.index[outliers])
+y = y.drop(y.index[outliers])
+
+
+# ### Dummy levels
+
+# To prevent overfitting I'll also remove columns that have more than 97% 1 or 0 after doing pd.get_dummies.
+
+# In[ ]:
+
+
+overfit = []
+for i in X.columns:
+    counts = X[i].value_counts()
+    zeros = counts.iloc[0]
+    if zeros / len(X) * 100 >99.94:
+        overfit.append(i)
+
+
+# In[ ]:
+
+
+overfit = list(overfit)
+overfit
+
+
+# Let's drop these from 'X' and 'testing_features'. Let's also drop MSZoning_C (all). It has about 99.44% zeros but unlike others with that kind of percentage it's being included in my lasso/ridge/elasticnet models with quite strong coefficient sizes.
+
+# In[ ]:
+
+
+overfit.append('MSZoning_C (all)')
+
+
+# In[ ]:
+
+
+overfit
+
+
+# In[ ]:
+
+
+X.drop(overfit,axis=1,inplace=True)
+testing_features.drop(overfit,axis=1,inplace=True)
+
+
+# In[ ]:
+
+
+print(X.shape)
+print(testing_features.shape)
+
+
+# ## Baseline model
+# 
+# ### Full Model w/ kfold cross validation
+# 
+# Let's build a baseline linear regression model to benchmark our feature selected models and advanced models on.
+# 
+# I decided not to do a manual train/test split but instead rely completely on 10-fold cross-validation for every model including our benchmark.
+# 
+
+# Our in-class benchmark has an RMSE of ~0.14 which is the goal to beat but I will rebuild a benchmark model in this notebook too.
+
+# In[ ]:
+
+
+from sklearn.linear_model import LinearRegression
+from sklearn.model_selection import KFold, cross_val_score
+from sklearn.model_selection import cross_val_predict
+from sklearn.preprocessing import RobustScaler
+from sklearn.pipeline import make_pipeline
+
+#Build our model method
+lm = LinearRegression()
+
+#Build our cross validation method
+kfolds = KFold(n_splits=10, shuffle=True, random_state=23)
+
+#build our model scoring function
+def cv_rmse(model):
+    rmse = np.sqrt(-cross_val_score(model, X, y, 
+                                   scoring="neg_mean_squared_error", 
+                                   cv = kfolds))
+    return(rmse)
+
+
+#second scoring metric
+def cv_rmsle(model):
+    rmsle = np.sqrt(np.log(-cross_val_score(model, X, y,
+                                           scoring = 'neg_mean_squared_error',
+                                           cv=kfolds)))
+    return(rmsle)
+
+
+# Let's fit our first model
+
+# In[ ]:
+
+
+benchmark_model = make_pipeline(RobustScaler(),
+                                lm).fit(X=X, y=y)
+cv_rmse(benchmark_model).mean()
+
+
+# ### Visualizing baseline model
+# Let's see how the residuals and predictions vs actual values are distributed. Here I should note this looks absolutely ridiculous for a reason I can't figure out yet. Basically, for some reason, my baseline model gives an incredibly high residual error. I believe this is due to the fact that the dimensionality of my model is crazy high compared to the amount of data (~1500 rows vs ~320 columns). This gets reduced down with feature selection but the baseline model includes all which leads to a ton of multicollinearity causing high RMSE values. 
+
+# # 3. Feature Selection
+# 
+# Before starting this section it should be noted that I will try to be extra careful not to create contamination during feature selection. Meaning that I will select features constrained per fold in my cross-validation to ensure no data leakage happens.
+# 
+# ## Filter methods
+# 
+# ### Coefficient importance
+# 
+
+# In[ ]:
+
+
+coeffs = pd.DataFrame(list(zip(X.columns, benchmark_model.steps[1][1].coef_)), columns=['Predictors', 'Coefficients'])
+
+coeffs.sort_values(by='Coefficients', ascending=False)
+
+
+# ## Embedded methods
+# 
+# ### Ridge Regression (L2 penalty)
+# 
+
+# In[ ]:
+
+
+from sklearn.linear_model import RidgeCV
+
+def ridge_selector(k):
+    ridge_model = make_pipeline(RobustScaler(),
+                                RidgeCV(alphas = [k],
+                                        cv=kfolds)).fit(X, y)
+    
+    ridge_rmse = cv_rmse(ridge_model).mean()
+    return(ridge_rmse)
+
+
+# In[ ]:
+
+
+r_alphas = [.0001, .0003, .0005, .0007, .0009, 
+          .01, 0.05, 0.1, 0.3, 1, 3, 5, 10, 15, 20, 30, 50, 60, 70, 80]
+
+ridge_scores = []
+for alpha in r_alphas:
+    score = ridge_selector(alpha)
+    ridge_scores.append(score)
+
+
+# In[ ]:
+
+
+plt.plot(r_alphas, ridge_scores, label='Ridge')
+plt.legend('center')
+plt.xlabel('alpha')
+plt.ylabel('score')
+
+ridge_score_table = pd.DataFrame(ridge_scores, r_alphas, columns=['RMSE'])
+ridge_score_table
+
+
+# In[ ]:
+
+
+alphas_alt = [14.5, 14.6, 14.7, 14.8, 14.9, 15, 15.1, 15.2, 15.3, 15.4, 15.5]
+
+ridge_model2 = make_pipeline(RobustScaler(),
+                            RidgeCV(alphas = alphas_alt,
+                                    cv=kfolds)).fit(X, y)
+
+cv_rmse(ridge_model2).mean()
+
+
+# In[ ]:
+
+
+ridge_model2.steps[1][1].alpha_
+
+
+# ### Lasso Regression (L1 penalty)
+
+# In[ ]:
+
+
+from sklearn.linear_model import LassoCV
+
+
+alphas = [0.00005, 0.0001, 0.0003, 0.0005, 0.0007, 
+          0.0009, 0.01]
+alphas2 = [0.00005, 0.0001, 0.0002, 0.0003, 0.0004, 0.0005,
+           0.0006, 0.0007, 0.0008]
+
+
+lasso_model2 = make_pipeline(RobustScaler(),
+                             LassoCV(max_iter=1e7,
+                                    alphas = alphas2,
+                                    random_state = 42)).fit(X, y)
+
+
+# In[ ]:
+
+
+scores = lasso_model2.steps[1][1].mse_path_
+
+plt.plot(alphas2, scores, label='Lasso')
+plt.legend(loc='center')
+plt.xlabel('alpha')
+plt.ylabel('RMSE')
+plt.tight_layout()
+plt.show()
+
+
+# In[ ]:
+
+
+lasso_model2.steps[1][1].alpha_
+
+
+# In[ ]:
+
+
+cv_rmse(lasso_model2).mean()
+
+
+# In[ ]:
+
+
+coeffs = pd.DataFrame(list(zip(X.columns, lasso_model2.steps[1][1].coef_)), columns=['Predictors', 'Coefficients'])
+
+
+# In[ ]:
+
+
+used_coeffs = coeffs[coeffs['Coefficients'] != 0].sort_values(by='Coefficients', ascending=False)
+print(used_coeffs.shape)
+print(used_coeffs)
+
+
+# In[ ]:
+
+
+used_coeffs_values = X[used_coeffs['Predictors']]
+used_coeffs_values.shape
+
+
+# In[ ]:
+
+
+overfit_test2 = []
+for i in used_coeffs_values.columns:
+    counts2 = used_coeffs_values[i].value_counts()
+    zeros2 = counts2.iloc[0]
+    if zeros2 / len(used_coeffs_values) * 100 > 99.5:
+        overfit_test2.append(i)
         
-print('In total, there are {} variables with missing values'.format(len(vars_with_missing)))
+overfit_test2
 
 
-# - **ps_car_03_cat and ps_car_05_cat** have a large proportion of  records with missing values. Remove these variables.
-# - For the other categorical variables with missing values, we can leave the missing value -1 as such.
-# - **ps_reg_03** (continuous) has missing values for 18% of all records. Replace by the mean.
-# - **ps_car_11** (ordinal) has only 5 records with misisng values. Replace by the mode.
-# - **ps_car_12** (continuous) has only 1 records with missing value. Replace by the mean.
-# - **ps_car_14** (continuous) has missing values for 7% of all records. Replace by the mean.
+# ### Elastic Net (L1 and L2 penalty)
+# One of the issues with Lasso is that it's likely to pick, from correlated features, one at random. Elastic net would pick both. Its a bit of a mix between ridge and lasso. I decided to include it since R's implementation of ridge regression actually invovles some elasticNet properties. 
 
 # In[ ]:
 
 
-# Dropping the variables with too many missing values
-vars_to_drop = ['ps_car_03_cat', 'ps_car_05_cat']
-train.drop(vars_to_drop, inplace=True, axis=1)
-meta.loc[(vars_to_drop),'keep'] = False  # Updating the meta
+from sklearn.linear_model import ElasticNetCV
 
-# Imputing with the mean or mode
-mean_imp = Imputer(missing_values=-1, strategy='mean', axis=0)
-mode_imp = Imputer(missing_values=-1, strategy='most_frequent', axis=0)
-train['ps_reg_03'] = mean_imp.fit_transform(train[['ps_reg_03']]).ravel()
-train['ps_car_12'] = mean_imp.fit_transform(train[['ps_car_12']]).ravel()
-train['ps_car_14'] = mean_imp.fit_transform(train[['ps_car_14']]).ravel()
-train['ps_car_11'] = mode_imp.fit_transform(train[['ps_car_11']]).ravel()
+e_alphas = [0.0001, 0.0002, 0.0003, 0.0004, 0.0005, 0.0006, 0.0007]
+e_l1ratio = [0.8, 0.85, 0.9, 0.95, 0.99, 1]
 
+elastic_cv = make_pipeline(RobustScaler(), 
+                           ElasticNetCV(max_iter=1e7, alphas=e_alphas, 
+                                        cv=kfolds, l1_ratio=e_l1ratio))
 
-# ### Checking the cardinality of the categorical variables
-# Cardinality refers to the number of different values in a variable. As we will create dummy variables from the categorical variables later on, we need to check whether there are variables with many distinct values. We should handle these variables differently as they would result in many dummy variables.
+elastic_model3 = elastic_cv.fit(X, y)
+
 
 # In[ ]:
 
 
-v = meta[(meta.level == 'nominal') & (meta.keep)].index
-
-for f in v:
-    dist_values = train[f].value_counts().shape[0]
-    print('Variable {} has {} distinct values'.format(f, dist_values))
+cv_rmse(elastic_model3).mean()
 
 
-# Only **ps_car_11_cat** has many distinct values, although it is still reasonable. 
+# In[ ]:
+
+
+print(elastic_model3.steps[1][1].l1_ratio_)
+print(elastic_model3.steps[1][1].alpha_)
+
+
+# ### Xgboost
+# The project I made this notebook for we weren't allowed to use more advanced algorithms than lasso, ridge, elasticnet. This was added later to see if I could improve my score.
 # 
-# **EDIT:** [nickycan](https://www.kaggle.com/nickycan) made an excellent remark on the fact that my first solution could lead to data leakage. He also pointed me to another kernel made by [oliver](https://www.kaggle.com/ogrellier) which deals with that. I therefore replaced this part with the kernel of oliver. All credits go to him. It is so great what you can learn by participating in the Kaggle competitions :)
 
 # In[ ]:
 
 
-# Script by https://www.kaggle.com/ogrellier
-# Code: https://www.kaggle.com/ogrellier/python-target-encoding-for-categorical-features
-def add_noise(series, noise_level):
-    return series * (1 + noise_level * np.random.randn(len(series)))
+from sklearn.model_selection import GridSearchCV
+from matplotlib.pylab import rcParams
+rcParams['figure.figsize'] = 12, 4
+get_ipython().run_line_magic('matplotlib', 'inline')
+import xgboost as xgb
+from xgboost import XGBRegressor
 
-def target_encode(trn_series=None, 
-                  tst_series=None, 
-                  target=None, 
-                  min_samples_leaf=1, 
-                  smoothing=1,
-                  noise_level=0):
-    """
-    Smoothing is computed like in the following paper by Daniele Micci-Barreca
-    https://kaggle2.blob.core.windows.net/forum-message-attachments/225952/7441/high%20cardinality%20categoricals.pdf
-    trn_series : training categorical feature as a pd.Series
-    tst_series : test categorical feature as a pd.Series
-    target : target data as a pd.Series
-    min_samples_leaf (int) : minimum samples to take category average into account
-    smoothing (int) : smoothing effect to balance categorical average vs prior  
-    """ 
-    assert len(trn_series) == len(target)
-    assert trn_series.name == tst_series.name
-    temp = pd.concat([trn_series, target], axis=1)
-    # Compute target mean 
-    averages = temp.groupby(by=trn_series.name)[target.name].agg(["mean", "count"])
-    # Compute smoothing
-    smoothing = 1 / (1 + np.exp(-(averages["count"] - min_samples_leaf) / smoothing))
-    # Apply average function to all target data
-    prior = target.mean()
-    # The bigger the count the less full_avg is taken into account
-    averages[target.name] = prior * (1 - smoothing) + averages["mean"] * smoothing
-    averages.drop(["mean", "count"], axis=1, inplace=True)
-    # Apply averages to trn and tst series
-    ft_trn_series = pd.merge(
-        trn_series.to_frame(trn_series.name),
-        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
-        on=trn_series.name,
-        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
-    # pd.merge does not keep the index so restore it
-    ft_trn_series.index = trn_series.index 
-    ft_tst_series = pd.merge(
-        tst_series.to_frame(tst_series.name),
-        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
-        on=tst_series.name,
-        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
-    # pd.merge does not keep the index so restore it
-    ft_tst_series.index = tst_series.index
-    return add_noise(ft_trn_series, noise_level), add_noise(ft_tst_series, noise_level)
 
+# Belows function was used to obtain the optimal boosting rounds. This is accomplished useing xgb.cv's early stopping. 
 
 # In[ ]:
 
 
-train_encoded, test_encoded = target_encode(train["ps_car_11_cat"], 
-                             test["ps_car_11_cat"], 
-                             target=train.target, 
-                             min_samples_leaf=100,
-                             smoothing=10,
-                             noise_level=0.01)
+from sklearn.metrics import mean_squared_error
+
+def modelfit(alg, dtrain, target, useTrainCV=True, 
+             cv_folds=5, early_stopping_rounds=50):
     
-train['ps_car_11_cat_te'] = train_encoded
-train.drop('ps_car_11_cat', axis=1, inplace=True)
-meta.loc['ps_car_11_cat','keep'] = False  # Updating the meta
-test['ps_car_11_cat_te'] = test_encoded
-test.drop('ps_car_11_cat', axis=1, inplace=True)
-
-
-# <a class="anchor" id="eda"></a>
-
-# ## Exploratory Data Visualization
-
-# ### Categorical variables
-# Let's look into the categorical variables and the proportion of customers with target = 1
-
-# In[ ]:
-
-
-v = meta[(meta.level == 'nominal') & (meta.keep)].index
-
-for f in v:
-    plt.figure()
-    fig, ax = plt.subplots(figsize=(20,10))
-    # Calculate the percentage of target=1 per category value
-    cat_perc = train[[f, 'target']].groupby([f],as_index=False).mean()
-    cat_perc.sort_values(by='target', ascending=False, inplace=True)
-    # Bar plot
-    # Order the bars descending on target mean
-    sns.barplot(ax=ax, x=f, y='target', data=cat_perc, order=cat_perc[f])
-    plt.ylabel('% target', fontsize=18)
-    plt.xlabel(f, fontsize=18)
-    plt.tick_params(axis='both', which='major', labelsize=18)
-    plt.show();
-
-
-# As we can see from the variables **with missing values**,  it is a good idea to keep the missing values as a separate category value, instead of replacing them by the mode for instance. The customers with a missing value appear to have a much higher (in some cases much lower) probability to ask for an insurance claim.
-
-# ### Interval variables
-# Checking the correlations between interval variables. A heatmap is a good way to visualize the correlation between variables. The code below is based on [an example by Michael Waskom](http://seaborn.pydata.org/examples/many_pairwise_correlations.html)
-
-# In[ ]:
-
-
-def corr_heatmap(v):
-    correlations = train[v].corr()
-
-    # Create color map ranging between two colors
-    cmap = sns.diverging_palette(220, 10, as_cmap=True)
-
-    fig, ax = plt.subplots(figsize=(10,10))
-    sns.heatmap(correlations, cmap=cmap, vmax=1.0, center=0, fmt='.2f',
-                square=True, linewidths=.5, annot=True, cbar_kws={"shrink": .75})
-    plt.show();
+    if useTrainCV:
+        xgb_param = alg.get_xgb_params()
+        xgtrain = xgb.DMatrix(dtrain.values, 
+                              label=y.values)
+        
+        print("\nGetting Cross-validation result..")
+        cvresult = xgb.cv(xgb_param, xgtrain, 
+                          num_boost_round=alg.get_params()['n_estimators'], 
+                          nfold=cv_folds,metrics='rmse', 
+                          early_stopping_rounds=early_stopping_rounds,
+                          verbose_eval = True)
+        alg.set_params(n_estimators=cvresult.shape[0])
     
-v = meta[(meta.level == 'interval') & (meta.keep)].index
-corr_heatmap(v)
+    #Fit the algorithm on the data
+    print("\nFitting algorithm to data...")
+    alg.fit(dtrain, target, eval_metric='rmse')
+        
+    #Predict training set:
+    print("\nPredicting from training data...")
+    dtrain_predictions = alg.predict(dtrain)
+        
+    #Print model report:
+    print("\nModel Report")
+    print("RMSE : %.4g" % np.sqrt(mean_squared_error(target.values,
+                                             dtrain_predictions)))
 
 
-# There are a strong correlations between the variables:
-# - ps_reg_02 and ps_reg_03 (0.7)
-# - ps_car_12 and ps_car13 (0.67)
-# - ps_car_12 and ps_car14 (0.58)
-# - ps_car_13 and ps_car15 (0.67)
+
+# Gridsearching gave me optimal parameters for XGBoost
+
+# In[ ]:
+
+
+xgb3 = XGBRegressor(learning_rate =0.01, n_estimators=3460, max_depth=3,
+                     min_child_weight=0 ,gamma=0, subsample=0.7,
+                     colsample_bytree=0.7,objective= 'reg:linear',
+                     nthread=4,scale_pos_weight=1,seed=27, reg_alpha=0.00006)
+
+xgb_fit = xgb3.fit(X, y)
+
+
+# ### Support Vector Regression
+
+# Gridsearching gave me optimal C and gamma for SVR.
+
+# In[ ]:
+
+
+from sklearn import svm
+svr_opt = svm.SVR(C = 100000, gamma = 1e-08)
+
+svr_fit = svr_opt.fit(X, y)
+
+
+# ### LightGBM
+
+# In[ ]:
+
+
+from lightgbm import LGBMRegressor
+
+lgbm_model = LGBMRegressor(objective='regression',num_leaves=5,
+                              learning_rate=0.05, n_estimators=720,
+                              max_bin = 55, bagging_fraction = 0.8,
+                              bagging_freq = 5, feature_fraction = 0.2319,
+                              feature_fraction_seed=9, bagging_seed=9,
+                              min_data_in_leaf =6, min_sum_hessian_in_leaf = 11)
+
+
+# In[ ]:
+
+
+cv_rmse(lgbm_model).mean()
+
+
+# In[ ]:
+
+
+lgbm_fit = lgbm_model.fit(X, y)
+
+
+# ## Ensemble methods
+# Let's see if I can get a better performance on the test data by employing ensemble methods. To stay in the constraints of the exercise I won't employ stronger models but instead combine three models.
 # 
-# Seaborn has some handy plots to visualize the (linear) relationship between variables. We could use a *pairplot* to visualize the relationship between the variables. But because the heatmap already showed the limited number of correlated variables, we'll look at each of the highly correlated variables separately.<br>
-# **NOTE**: I take a sample of the train data to speed up the process. 
-
-# In[ ]:
-
-
-s = train.sample(frac=0.1)
-
-
-# #### ps_reg_02 and ps_reg_03
-# As the regression line shows, there is a linear relationship between these variables. Thanks to the *hue* parameter we can see that the regression lines for target=0 and target=1 are the same.
-
-# In[ ]:
-
-
-sns.lmplot(x='ps_reg_02', y='ps_reg_03', data=s, hue='target', palette='Set1', scatter_kws={'alpha':0.3})
-plt.show()
-
-
-# #### ps_car_12 and ps_car_13
-
-# In[ ]:
-
-
-sns.lmplot(x='ps_car_12', y='ps_car_13', data=s, hue='target', palette='Set1', scatter_kws={'alpha':0.3})
-plt.show()
-
-
-# #### ps_car_12 and ps_car_14
-
-# In[ ]:
-
-
-sns.lmplot(x='ps_car_12', y='ps_car_14', data=s, hue='target', palette='Set1', scatter_kws={'alpha':0.3})
-plt.show()
-
-
-# #### ps_car_13 and ps_car_15
-
-# In[ ]:
-
-
-sns.lmplot(x='ps_car_15', y='ps_car_13', data=s, hue='target', palette='Set1', scatter_kws={'alpha':0.3})
-plt.show()
-
-
-# Allright, so now what? How can we decide which of the correlated variables to keep? We could perform Principal Component Analysis (PCA) on the variables to reduce the dimensions. In the AllState Claims Severity Competition I made [this kernel](https://www.kaggle.com/bertcarremans/reducing-number-of-numerical-features-with-pca) to do that. But as the number of correlated variables is rather low, we will let the model do the heavy-lifting.
-
-# ### Checking the correlations between ordinal variables
-
-# In[ ]:
-
-
-v = meta[(meta.level == 'ordinal') & (meta.keep)].index
-corr_heatmap(v)
-
-
-# For the ordinal variables we do not see many correlations. We could, on the other hand, look at how the distributions are when grouping by the target value.
-
-# <a class="anchor" id="feat_engineering"></a>
-
-# ## Feature engineering
-
-# ### Creating dummy variables
-# The values of the categorical variables do not represent any order or magnitude. For instance, category 2 is not twice the value of category 1. Therefore we can create dummy variables to deal with that. We drop the first dummy variable as this information can be derived from the other dummy variables generated for the categories of the original variable.
-
-# In[ ]:
-
-
-v = meta[(meta.level == 'nominal') & (meta.keep)].index
-print('Before dummification we have {} variables in train'.format(train.shape[1]))
-train = pd.get_dummies(train, columns=v, drop_first=True)
-print('After dummification we have {} variables in train'.format(train.shape[1]))
-
-
-# So, creating dummy variables adds 52 variables to the training set.
-
-# ### Creating interaction variables
-
-# In[ ]:
-
-
-v = meta[(meta.level == 'interval') & (meta.keep)].index
-poly = PolynomialFeatures(degree=2, interaction_only=False, include_bias=False)
-interactions = pd.DataFrame(data=poly.fit_transform(train[v]), columns=poly.get_feature_names(v))
-interactions.drop(v, axis=1, inplace=True)  # Remove the original columns
-# Concat the interaction variables to the train data
-print('Before creating interactions we have {} variables in train'.format(train.shape[1]))
-train = pd.concat([train, interactions], axis=1)
-print('After creating interactions we have {} variables in train'.format(train.shape[1]))
-
-
-# This adds extra interaction variables to the train data. Thanks to the *get_feature_names* method we can assign column names to these 
-# new variables.
-
-# <a class="anchor" id="feat_selection"></a>
-
-# ## Feature selection
-
-# ### Removing features with low or zero variance
-
-# Personally, I prefer to let the classifier algorithm chose which features to keep. But there is one thing that we can do ourselves. That is removing features with no or a very low variance. Sklearn has a handy method to do that: **VarianceThreshold**. By default it removes features with zero variance. This will not be applicable for this competition as we saw there are no zero-variance variables in the previous steps. But if we would remove features with less than 1% variance, we would remove 31 variables.
-
-# In[ ]:
-
-
-selector = VarianceThreshold(threshold=.01)
-selector.fit(train.drop(['id', 'target'], axis=1)) # Fit to train without id and target variables
-
-f = np.vectorize(lambda x : not x) # Function to toggle boolean array elements
-
-v = train.drop(['id', 'target'], axis=1).columns[f(selector.get_support())]
-print('{} variables have too low variance.'.format(len(v)))
-print('These variables are {}'.format(list(v)))
-
-
-# We would lose rather many variables if we would select based on variance. But because we do not have so many variables, we'll let the classifier chose. For data sets with many more variables this could reduce the processing time.
+# - LassoCV
+# - RidgeCV
+# - Elasticnet
 # 
-# Sklearn also comes with other [feature selection methods](http://scikit-learn.org/stable/modules/feature_selection.html). One of these methods is *SelectFromModel* in which you let another classifier select the best features and continue with these. Below I'll show you how to do that with a Random Forest.
-
-# ### Selecting features with a Random Forest and SelectFromModel
-# Here we'll base feature selection on the feature importances of a random forest. With Sklearn's SelectFromModel you can then specify how many variables you want to keep. You can set a threshold on the level of feature importance manually. But we'll simply select the top 50% best variables. 
+# Experimenting with averaging cost a lot of time since local RMSE and kaggle RMSLE are disconnected at this point. Basically I am optimizing the tradeoff between under and over fitting.
 # 
-# > The code in the cell below is borrowed from the [GitHub repo of Sebastian Raschka](https://github.com/rasbt/python-machine-learning-book/blob/master/code/ch04/ch04.ipynb). This repo contains code samples of his book *Python Machine Learning*, which is an absolute must to read.
+# First I'll build a meta-regressor through a process called stacking generalizations which trains a model on a part of the training set (it gets split first into a new training set and a holdout set). Then the algorithm test these models on the holdout set and uses these predictions (called out-of-fold predictions) as input for the 'meta model'. Below is a grahpical representation of the process.
 
 # In[ ]:
 
 
-X_train = train.drop(['id', 'target'], axis=1)
-y_train = train['target']
-
-feat_labels = X_train.columns
-
-rf = RandomForestClassifier(n_estimators=1000, random_state=0, n_jobs=-1)
-
-rf.fit(X_train, y_train)
-importances = rf.feature_importances_
-
-indices = np.argsort(rf.feature_importances_)[::-1]
-
-for f in range(X_train.shape[1]):
-    print("%2d) %-*s %f" % (f + 1, 30,feat_labels[indices[f]], importances[indices[f]]))
+from IPython.display import Image
+from IPython.core.display import HTML 
+Image(url = "http://i.imgur.com/QBuDOjs.jpg")
 
 
-# With SelectFromModel we can specify which prefit classifier to use and what the threshold is for the feature importances. With the *get_support* method we can then limit the number of variables in the train data.
+# ### Ensemble 1 - Stacking Generalization
+# To try to eek out more performance of our already decent rank let's try Stacking Generalization, I tried a few different options. Vecstack package from python seemed to be implementing it incorrectly, so instead I decided to use the mlxtend package.
 
 # In[ ]:
 
 
-sfm = SelectFromModel(rf, threshold='median', prefit=True)
-print('Number of features before selection: {}'.format(X_train.shape[1]))
-n_features = sfm.transform(X_train).shape[1]
-print('Number of features after selection: {}'.format(n_features))
-selected_vars = list(feat_labels[sfm.get_support()])
+from mlxtend.regressor import StackingCVRegressor
+from sklearn.pipeline import make_pipeline
+
+#setup models
+ridge = make_pipeline(RobustScaler(), 
+                      RidgeCV(alphas = alphas_alt, cv=kfolds))
+
+lasso = make_pipeline(RobustScaler(),
+                      LassoCV(max_iter=1e7, alphas = alphas2,
+                              random_state = 42, cv=kfolds))
+
+elasticnet = make_pipeline(RobustScaler(), 
+                           ElasticNetCV(max_iter=1e7, alphas=e_alphas, 
+                                        cv=kfolds, l1_ratio=e_l1ratio))
+
+lightgbm = make_pipeline(RobustScaler(),
+                        LGBMRegressor(objective='regression',num_leaves=5,
+                                      learning_rate=0.05, n_estimators=720,
+                                      max_bin = 55, bagging_fraction = 0.8,
+                                      bagging_freq = 5, feature_fraction = 0.2319,
+                                      feature_fraction_seed=9, bagging_seed=9,
+                                      min_data_in_leaf =6, 
+                                      min_sum_hessian_in_leaf = 11))
+
+xgboost = make_pipeline(RobustScaler(),
+                        XGBRegressor(learning_rate =0.01, n_estimators=3460, 
+                                     max_depth=3,min_child_weight=0 ,
+                                     gamma=0, subsample=0.7,
+                                     colsample_bytree=0.7,
+                                     objective= 'reg:linear',nthread=4,
+                                     scale_pos_weight=1,seed=27, 
+                                     reg_alpha=0.00006))
+
+
+#stack
+stack_gen = StackingCVRegressor(regressors=(ridge, lasso, elasticnet, 
+                                            xgboost, lightgbm), 
+                               meta_regressor=xgboost,
+                               use_features_in_secondary=True)
+
+#prepare dataframes
+stackX = np.array(X)
+stacky = np.array(y)
 
 
 # In[ ]:
 
 
-train = train[selected_vars + ['target']]
+#scoring 
 
+print("cross validated scores")
 
-# <a class="anchor" id="feat_scaling"></a>
+for model, label in zip([ridge, lasso, elasticnet, xgboost, lightgbm, stack_gen],
+                     ['RidgeCV', 'LassoCV', 'ElasticNetCV', 'xgboost', 'lightgbm',
+                      'StackingCVRegressor']):
+    
+    SG_scores = cross_val_score(model, stackX, stacky, cv=kfolds,
+                               scoring='neg_mean_squared_error')
+    print("RMSE", np.sqrt(-SG_scores.mean()), "SD", scores.std(), label)
 
-# ## Feature scaling
-# As mentioned before, we can apply standard scaling to the training data. Some classifiers perform better when this is done.
 
 # In[ ]:
 
 
-scaler = StandardScaler()
-scaler.fit_transform(train.drop(['target'], axis=1))
+stack_gen_model = stack_gen.fit(stackX, stacky)
 
 
-# ## Conclusion
-# Hopefully this notebook helped you with some tips on how to start with this competition. Feel free to vote for it. And if you have questions, post a comment.
+# ### Ensemble 2 - averaging
+# Final averaging weights are mostly trial and error as at this point my local scores were so completely detached from my real kaggle score. In the end I felt that SVR wasn't helping my score so it's not included in my final predictions.
+
+# In[ ]:
+
+
+em_preds = elastic_model3.predict(testing_features)
+lasso_preds = lasso_model2.predict(testing_features)
+ridge_preds = ridge_model2.predict(testing_features)
+stack_gen_preds = stack_gen_model.predict(testing_features)
+xgb_preds = xgb_fit.predict(testing_features)
+svr_preds = svr_fit.predict(testing_features)
+lgbm_preds = lgbm_fit.predict(testing_features)
+
+
+# In[ ]:
+
+
+stack_preds = ((0.2*em_preds) + (0.1*lasso_preds) + (0.1*ridge_preds) + 
+               (0.2*xgb_preds) + (0.1*lgbm_preds) + (0.3*stack_gen_preds))
+
+
+# ## Actual predictions for Kaggle
+# I transform the predictions back to normal values because the model is trained with logSalePrice.
+
+# In[ ]:
+
+
+submission = pd.read_csv("../input/sample_submission.csv")
+
+
+# In[ ]:
+
+
+submission.iloc[:,1] = np.expm1(stack_preds)
+
+
+# In[ ]:
+
+
+submission.to_csv("final_submission.csv", index=False)
+

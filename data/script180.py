@@ -1,141 +1,262 @@
 
 # coding: utf-8
 
-# **INTRODUCTION**
-# * The data were obtained in a survey of students math and portuguese language courses in secondary school. It contains a lot of interesting social, gender and study information about students. You can use it for some EDA or try to predict students final grade.
-# * Correlation between features
-# * Weekly Consumption of Alcohol
-# * Final Exam Scores According to Students' alcohol consumption
-# * Students grade with grade average according to alcohol consumption
-# *  Alcohol consumption: 1 time  is very  low and 10 times are very high
-
-# <a href="http://imgbb.com/"><img src="http://image.ibb.co/eqPopQ/alc.jpg" alt="alc" border="0"></a><br /><a target='_blank' href='http://tr.imgbb.com/'>upload picture</a><br />
-
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import seaborn as sns # visualize
-import matplotlib.pyplot as plt
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
+import numpy as np
+import pandas as pd
+import keras as k
+from keras.layers import Merge
+from keras.layers.normalization import BatchNormalization
+from keras.callbacks import ModelCheckpoint,EarlyStopping,ReduceLROnPlateau
+from keras.callbacks import History
+from keras.layers import Activation
+from keras.models import model_from_json
+from keras.optimizers import Adam
+from matplotlib import pyplot as plt
+from scipy.ndimage import rotate as rot
+np.random.seed(100)
 
 
 # In[ ]:
 
 
-data = pd.read_csv('../input/student-mat.csv')
+file_path = '/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/data/processed/train.json'
 
 
 # In[ ]:
 
 
-# I use final grade = G3, and weekly alcohol consumption = Dalc + Walc 
-data.columns
-
-
-# **Correlation between features**
-# * For broad perspective lets look at first correlation of features.
-
-# In[ ]:
-
-
-
-plt.figure(figsize=(15,15))
-sns.heatmap(data.corr(),annot = True,fmt = ".2f",cbar = True)
-plt.xticks(rotation=90)
-plt.yticks(rotation = 0)
-
-
-# As it can be seen from correlation map only exam scoreas are highly correlated with each other. It says that if students takes almost same grade at each exams.
-
-# I am goint to combine weekdays alcohol consumption with weekend alcoho consumption.
-
-# In[ ]:
-
-
-data['Dalc'] = data['Dalc'] + data['Walc']
-
-
-# **Weekly Consumption of Alcohol**
-# * Students drink alcohol at least 2 times in a week.
-
-# In[ ]:
-
-
-# There is no student who does not consume alcohol. However, all students at least 2 times in a week consume alcohol.
-list = []
-for i in range(11):
-    list.append(len(data[data.Dalc == i]))
-ax = sns.barplot(x = [0,1,2,3,4,5,6,7,8,9,10], y = list)
-plt.ylabel('Number of Students')
-plt.xlabel('Weekly alcohol consumption')
-
-
-# **Final Exam Scores According to Students' alcohol consumption**
-# * I visualize taken total grades according to alcohol consuption
-
-# In[ ]:
-
-
-labels = ['2','3','4','5','6','7','8','9','10']
-colors = ['lime','blue','orange','cyan','grey','purple','brown','red','darksalmon']
-explode = [0,0,0,0,0,0,0,0,0]
-sizes = []
-for i in range(2,11):
-    sizes.append(sum(data[data.Dalc == i].G3))
-total_grade = sum(sizes)
-average = total_grade/float(len(data))
-plt.pie(sizes,explode=explode,colors=colors,labels=labels,autopct = '%1.1f%%')
-plt.axis('equal')
-plt.title('Total grade : '+str(total_grade))
-plt.xlabel('Students grade distribution according to weekly alcohol consumption')
-
-
-# Well, it looks like students who consume alcohol 2 times in a week more successful than others. However, it actually cannot be understood from this graph. Because number of students who consume alcohol 2 times in a week more than others. Therefore, lets look at swarm plot to understand whether alcohol affects the success or not.
-
-# **Students grade with grade average according to alcohol consumption **
-# * Final exam average grade is 10.4
-# * In order to understand whether alcohol affects students success, I compare grades with average.
-
-# In[ ]:
-
-
-ave = sum(data.G3)/float(len(data))
-data['ave_line'] = ave
-data['average'] = ['above average' if i > ave else 'under average' for i in data.G3]
-sns.swarmplot(x='Dalc', y = 'G3', hue = 'average',data= data,palette={'above average':'lime', 'under average': 'red'})
-
-
-# As it can be seen swarm plot, student who takes highest grade consumes alcohol only 2 times in a week.
-
-# In[ ]:
-
-
-sum(data[data.Dalc == 2].G3)/float(len(data[data.Dalc == 2]))
+train = pd.read_json(file_path)
 
 
 # In[ ]:
 
 
-# Average grade
-list = []
-for i in range(2,11):
-    list.append(sum(data[data.Dalc == i].G3)/float(len(data[data.Dalc == i])))
-ax = sns.barplot(x = [2,3,4,5,6,7,8,9,10], y = list)
-plt.ylabel('Average Grades of students')
-plt.xlabel('Weekly alcohol consumption')
+print(train.head())
+train.shape
 
 
-# **CONCLUSION**
-# **If you have any suggest or question, I will be happy to hear it.**
+# In[ ]:
+
+
+train[train['inc_angle'] == 'na'].count()
+
+
+# In[ ]:
+
+
+train.inc_angle = train.inc_angle.map(lambda x: 0.0 if x == 'na' else x)
+
+
+# In[ ]:
+
+
+def transform (df):
+    images = []
+    for i, row in df.iterrows():
+        band_1 = np.array(row['band_1']).reshape(75,75)
+        band_2 = np.array(row['band_2']).reshape(75,75)
+        band_3 = band_1 + band_2
+        
+        band_1_norm = (band_1 - band_1.mean()) / (band_1.max() - band_1.min())
+        band_2_norm = (band_2 - band_2. mean()) / (band_2.max() - band_2.min())
+        band_3_norm = (band_3 - band_3.mean()) / (band_3.max() - band_3.min())
+        
+        images.append(np.dstack((band_1_norm, band_2_norm, band_3_norm)))
+    
+    return np.array(images)
+
+
+# In[ ]:
+
+
+def augment(images):
+    image_mirror_lr = []
+    image_mirror_ud = []
+    image_rotate = []
+    for i in range(0,images.shape[0]):
+        band_1 = images[i,:,:,0]
+        band_2 = images[i,:,:,1]
+        band_3 = images[i,:,:,2]
+            
+        # mirror left-right
+        band_1_mirror_lr = np.flip(band_1, 0)
+        band_2_mirror_lr = np.flip(band_2, 0)
+        band_3_mirror_lr = np.flip(band_3, 0)
+        image_mirror_lr.append(np.dstack((band_1_mirror_lr, band_2_mirror_lr, band_3_mirror_lr)))
+        
+        # mirror up-down
+        band_1_mirror_ud = np.flip(band_1, 1)
+        band_2_mirror_ud = np.flip(band_2, 1)
+        band_3_mirror_ud = np.flip(band_3, 1)
+        image_mirror_ud.append(np.dstack((band_1_mirror_ud, band_2_mirror_ud, band_3_mirror_ud)))
+        
+        #rotate 
+        band_1_rotate = rot(band_1, 30, reshape=False)
+        band_2_rotate = rot(band_2, 30, reshape=False)
+        band_3_rotate = rot(band_3, 30, reshape=False)
+        image_rotate.append(np.dstack((band_1_rotate, band_2_rotate, band_3_rotate)))
+        
+    mirrorlr = np.array(image_mirror_lr)
+    mirrorud = np.array(image_mirror_ud)
+    rotated = np.array(image_rotate)
+    images = np.concatenate((images, mirrorlr, mirrorud, rotated))
+    return images
+
+
+# In[ ]:
+
+
+train_X = transform(train)
+train_y = np.array(train ['is_iceberg'])
+
+indx_tr = np.where(train.inc_angle > 0)
+print (indx_tr[0].shape)
+
+train_y = train_y[indx_tr[0]]
+train_X = train_X[indx_tr[0], ...]
+
+train_X = augment(train_X)
+train_y = np.concatenate((train_y,train_y, train_y, train_y))
+
+print (train_X.shape)
+print (train_y.shape)
+
+
+# In[ ]:
+
+
+model = k.models.Sequential()
+
+model.add(k.layers.convolutional.Conv2D(64, kernel_size=(3,3), input_shape=(75,75,3)))
+model.add(Activation('relu'))
+model.add(BatchNormalization())
+model.add(k.layers.convolutional.MaxPooling2D(pool_size=(3,3), strides=(2,2)))
+model.add(k.layers.Dropout(0.2))
+
+model.add(k.layers.convolutional.Conv2D(128, kernel_size=(3, 3)))
+model.add(Activation('relu'))
+model.add(BatchNormalization())
+model.add(k.layers.convolutional.MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+model.add(k.layers.Dropout(0.2))
+
+model.add(k.layers.convolutional.Conv2D(128, kernel_size=(3, 3)))
+model.add(Activation('relu'))
+model.add(BatchNormalization())
+model.add(k.layers.convolutional.MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+model.add(k.layers.Dropout(0.3))
+
+model.add(k.layers.convolutional.Conv2D(64, kernel_size=(3, 3)))
+model.add(Activation('relu'))
+model.add(BatchNormalization())
+model.add(k.layers.convolutional.MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+model.add(k.layers.Dropout(0.3))
+
+model.add(k.layers.Flatten())
+
+model.add(k.layers.Dense(512))
+model.add(Activation('relu'))
+model.add(BatchNormalization())
+model.add(k.layers.Dropout(0.2))
+
+model.add(k.layers.Dense(256))
+model.add(Activation('relu'))
+model.add(BatchNormalization())
+model.add(k.layers.Dropout(0.2))
+
+
+model.add(k.layers.Dense(1))
+model.add(Activation('sigmoid'))
+
+mypotim=Adam(lr=0.01, decay=0.0)
+model.compile(loss='binary_crossentropy', optimizer = mypotim, metrics=['accuracy'])
+
+model.summary()
+
+
+# In[ ]:
+
+
+batch_size = 64
+early_stopping = EarlyStopping(monitor = 'val_loss', patience = 10, verbose = 0, mode= 'min')
+reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor = 0.1, patience = 7, verbose =1, 
+                                   epsilon = 1e-4, mode='min', min_lr = 0.0001)
+model_filepath='/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/weights.best.hdf5'
+checkpoint = ModelCheckpoint(model_filepath, monitor='val_loss', verbose=1, save_best_only=True, mode='min')
+callbacks_list = [early_stopping, checkpoint]
+
+
+# In[ ]:
+
+
+history = model.fit(train_X, train_y, batch_size = batch_size, epochs =20, verbose =1, validation_split = 0.1, 
+          callbacks=callbacks_list)
+
+
+# In[ ]:
+
+
+print (history.history.keys())
+fig = plt.figure()
+plt.plot(history.history['acc'])
+plt.plot(history.history['val_acc'])
+plt.title('model accuracy')
+plt.ylabel('accuracy')
+plt.xlabel('epoch')
+plt.legend(['train','test'],loc='upper left')
+plt.show()
+
+
+# In[ ]:
+
+
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper right')
+plt.show()
+
+
+# In[ ]:
+
+
+model_json = model.to_json()
+with open("/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/model.json", "w") as json_file:
+    json_file.write(model_json)
+
+
+# In[ ]:
+
+
+# load json and create model
+json_file = open('/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/model.json', 'r')
+loaded_model_json = json_file.read()
+json_file.close()
+loaded_model = model_from_json(loaded_model_json)
+# load weights into new model
+loaded_model.load_weights('/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/weights.best.hdf5')
+print("Loaded model from disk")
+loaded_model.compile(loss='binary_crossentropy', optimizer = mypotim, metrics=['accuracy'])
+
+
+# In[ ]:
+
+
+test_file = '/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/data-1/processed/test.json'
+test = pd.read_json(test_file)
+test.inc_angle = test.inc_angle.replace('na',0)
+test_X = transform(test)
+print (test_X.shape)
+
+
+# In[ ]:
+
+
+pred_test = loaded_model.predict(test_X, verbose=1)
+submission = pd.DataFrame({'id': test["id"], 'is_iceberg': pred_test.reshape((pred_test.shape[0]))})
+submission.to_csv('/Users/henok.s.mengistu/Documents/Henok\'s/Iceberg_challenge/submission.csv', index=False)
+

@@ -1,324 +1,391 @@
 
 # coding: utf-8
 
-# **Introduction**
-# 
-# This will be a short exploratory analysis with the goal of becoming more familiar with the 2018 Data Science Bowl dataset and identifying some possible hurdles that could have a negative effect on model performance.
-# 
-# **Contents:**
-# - Importing and processing image data
-# - Looking at the image metadata summary statistics
-# - Plotting image width, height and area distributions
-# - Plotting number of nuclei per image distribution
-# - Plotting images with the most and fewest nuclei
-# - Plotting the smallest and largest nuclei
-# - Plotting a sample of images
-# - Conclusion
-
-# In[2]:
+# In[ ]:
 
 
-import os
-import sys
-import random
-import warnings
-
-import numpy as np
-import pandas as pd
-import math
-
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
-import seaborn as sns
-sns.set(color_codes=True)
-import cv2
 
-from tqdm import tqdm
-from itertools import chain
-from skimage.io import imread, imshow, imread_collection, concatenate_images
-from skimage.transform import resize
-from skimage.morphology import label
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-TRAIN_PATH = '../input/stage1_train/'
-TEST_PATH = '../input/stage1_test/'
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
-seed = 42
-random.seed = seed
-np.random.seed = seed
-
-# Get train and test IDs
-train_ids = next(os.walk(TRAIN_PATH))[1]
-test_ids = next(os.walk(TEST_PATH))[1]
-
-
-# In[3]:
-
-
-# sys.stdout.flush()
-# These lists will be used to store the images.
-imgs = []
-masks = []
-
-# These lists will be used to store the image metadata that will then be used to create
-# pandas dataframes.
-img_data = []
-mask_data = []
-print('Processing images ... ')
-
-# Loop over the training images. tqdm is used to display progress as reading
-# all the images can take about 1 - 2 minutes.
-for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
-    path = TRAIN_PATH + id_
-    img = imread(path + '/images/' + id_ + '.png')
-    
-    # Get image.
-    imgs.append(img)
-    img_height = img.shape[0]
-    img_width = img.shape[1]
-    img_area = img_width * img_height
-
-    # Initialize counter. There is one mask for each annotated nucleus.
-    nucleus_count = 1
-    
-    # Loop over the mask ids, read the images and gather metadata from them.
-    for mask_file in next(os.walk(path + '/masks/'))[2]:
-        mask = imread(path + '/masks/' + mask_file)
-        masks.append(mask)
-        mask_height = mask.shape[0]
-        mask_width = mask.shape[1]
-        mask_area = mask_width * img_height
-        
-        # Sum and divide by 255 to get the number
-        # of pixels for the nucleus. Masks are grayscale.
-        nucleus_area = (np.sum(mask) / 255)
-        
-        mask_to_img_ratio = nucleus_area / mask_area
-        
-        # Append to masks data list that will be used to create a pandas dataframe.
-        mask_data.append([n, mask_height, mask_width, mask_area, nucleus_area, mask_to_img_ratio])
-        
-        # Increment nucleus count.
-        nucleus_count = nucleus_count + 1
-    
-    # Build image info list that will be used to create dataframe. This is done after the masks loop
-    # because we want to store the number of nuclei per image in the img_data list.
-    img_data.append([img_height, img_width, img_area, nucleus_count])
-
-
-# **Create Images Metadata Dataframe**
-# 
-# Create a pandas data frame from the list of image metadata that was created in the loop above. This will make the data easier to manipulate and plot.
-# 
-# After creating the data frame we can take a look at its summary stats along with the first five and last five rows to make sure it looks ok and get familiar with it.
-
-# In[4]:
-
-
-# Create dataframe for images
-df_img = pd.DataFrame(img_data, columns=['height', 'width', 'area', 'nuclei'])
+mushrooms = pd.read_csv('../input/mushrooms.csv')
 
 
 # In[ ]:
 
 
-df_img.describe()
+mushrooms.head()
 
 
 # In[ ]:
 
 
-df_img.head()
+#Idea: 1) Pick two features for classification (cap color, odor)
+#      2) Run some statistical analysis
+#      3) Assign numerical values to the letter values in order to feed the Logistic Regression Algo.
 
 
 # In[ ]:
 
 
-df_img.tail()
-
-
-# **Create Image Masks Metadata Dataframe**
-# 
-# Let's create another data frame for the masks metadata.
-
-# In[6]:
-
-
-# Create dataframe for masks
-df_mask = pd.DataFrame(mask_data, columns=['img_index', 'height', 'width', 'area', 'nucleus_area', 'mask_to_img_ratio'])
+mushrooms.shape
 
 
 # In[ ]:
 
 
-df_mask.describe()
+mushrooms.describe()
 
 
 # In[ ]:
 
 
-df_mask.head()
+'To visualize the number of mushrooms for each cap color categorize. We will build a bar chart'
 
 
 # In[ ]:
 
 
-df_mask.tail()
+#Obtain total number of mushrooms for each 'cap-color' (Entire DataFrame)
+cap_colors = mushrooms['cap-color'].value_counts()
+m_height = cap_colors.values.tolist() #Provides numerical values
+cap_colors.axes #Provides row labels
+cap_color_labels = cap_colors.axes[0].tolist() #Converts index object to list
 
+#=====PLOT Preparations and Plotting====#
+ind = np.arange(10)  # the x locations for the groups
+width = 0.7        # the width of the bars
+colors = ['#DEB887','#778899','#DC143C','#FFFF99','#f8f8ff','#F0DC82','#FF69B4','#D22D1E','#C000C5','g']
+#FFFFF0
+fig, ax = plt.subplots(figsize=(10,7))
+mushroom_bars = ax.bar(ind, m_height , width, color=colors)
 
-# **Plot some of the metadata distributions**
+#Add some text for labels, title and axes ticks
+ax.set_xlabel("Cap Color",fontsize=20)
+ax.set_ylabel('Quantity',fontsize=20)
+ax.set_title('Mushroom Cap Color Quantity',fontsize=22)
+ax.set_xticks(ind) #Positioning on the x axis
+ax.set_xticklabels(('brown', 'gray','red','yellow','white','buff','pink','cinnamon','purple','green'),
+                  fontsize = 12)
+
+#Auto-labels the number of mushrooms for each bar color.
+def autolabel(rects,fontsize=14):
+    """
+    Attach a text label above each bar displaying its height
+    """
+    for rect in rects:
+        height = rect.get_height()
+        ax.text(rect.get_x() + rect.get_width()/2., 1*height,'%d' % int(height),
+                ha='center', va='bottom',fontsize=fontsize)
+autolabel(mushroom_bars)        
+plt.show() #Display bars. 
+
 
 # In[ ]:
 
 
-fig, ax = plt.subplots(1, 3, figsize=(10,5))
-width_plt = sns.distplot(df_img['width'].values, ax=ax[0])
-width_plt.set(xlabel='width (px)')
-width_plt.set(ylim=(0, 0.01))
-height_plt = sns.distplot(df_img['height'].values, ax=ax[1])
-height_plt.set(xlabel='height (px)')
-height_plt.set(ylim=(0, 0.015))
-area_plt = sns.distplot(df_img['area'].values)
-area_plt.set(xlabel="area (px)")
-fig.show()
-plt.tight_layout()
+'Following bar chart shows the # of mushrooms which are edible or poisonous based on cap-color'
 
-
-# The image dimensions do not appear to be equally distributed and have a somewhat bimodal distribution. This issue will need to be addressed before feeding the images to our model. The images could be resized to squares but this will cause images to be squashed either vertically or horizontally and would result in a loss of information. Most of the images look like they are 256x256 so the squashing/stretching might not be an issue. Scaling the smaller images up might be a better option than scaling the larger images down as this would also result in a loss of information. Different strategies should be tried here to see what works best. 
 
 # In[ ]:
 
 
-sns.distplot(df_img['nuclei'].values)
-plt.xlabel("nuclei")
+poisonous_cc = [] #Poisonous color cap list
+edible_cc = []    #Edible color cap list
+for capColor in cap_color_labels:
+    size = len(mushrooms[mushrooms['cap-color'] == capColor].index)
+    edibles = len(mushrooms[(mushrooms['cap-color'] == capColor) & (mushrooms['class'] == 'e')].index)
+    edible_cc.append(edibles)
+    poisonous_cc.append(size-edibles)
+                        
+#=====PLOT Preparations and Plotting====#
+width = 0.40
+fig, ax = plt.subplots(figsize=(12,7))
+edible_bars = ax.bar(ind, edible_cc , width, color='#ADFF2F')
+poison_bars = ax.bar(ind+width, poisonous_cc , width, color='#DA70D6')
+
+#Add some text for labels, title and axes ticks
+ax.set_xlabel("Cap Color",fontsize=20)
+ax.set_ylabel('Quantity',fontsize=20)
+ax.set_title('Edible and Poisonous Mushrooms Based on Cap Color',fontsize=22)
+ax.set_xticks(ind + width / 2) #Positioning on the x axis
+ax.set_xticklabels(('brown', 'gray','red','yellow','white','buff','pink','cinnamon','purple','green'),
+                  fontsize = 12)
+ax.legend((edible_bars,poison_bars),('edible','poisonous'),fontsize=17)
+autolabel(edible_bars, 10)
+autolabel(poison_bars, 10)
+plt.show()
+print(edible_cc)
+print(poisonous_cc)
+
+
+# In[ ]:
+
+
+'The next bar chart shows the number of mushrooms based on "odor"'
+
+
+# In[ ]:
+
+
+#Obtain total number of mushrooms for each 'odor' (Entire DataFrame)
+odors = mushrooms['odor'].value_counts()
+odor_height = odors.values.tolist() #Provides numerical values
+odor_labels = odors.axes[0].tolist() #Converts index labels object to list
+
+#=====PLOT Preparations and Plotting====#
+width = 0.7 
+ind = np.arange(9)  # the x locations for the groups
+colors = ['#FFFF99','#ADFF2F','#00BFFF','#FA8072','#FFEBCD','#800000','#40E0D0','#808080','#2E8B57']
+
+fig, ax = plt.subplots(figsize=(10,7))
+odor_bars = ax.bar(ind, odor_height , width, color=colors)
+
+#Add some text for labels, title and axes ticks
+ax.set_xlabel("Odor",fontsize=20)
+ax.set_ylabel('Quantity',fontsize=20)
+ax.set_title('Mushroom Odor and Quantity',fontsize=22)
+ax.set_xticks(ind) #Positioning on the x axis
+ax.set_xticklabels(('none', 'foul','fishy','spicy','almond','anise','pungent','creosote','musty'),
+                  fontsize = 12)
+ax.legend(odor_bars, ['none: no smell','foul: rotten eggs', 'fishy: fresh fish','spicy: pepper',
+                      'almond: nutlike kernel', 'anise: sweet herbal', 'pungent: vinegar',
+                     'creosote: smoky chimney', 'musty: mold mildew'],fontsize=17)
+autolabel(odor_bars)        
+plt.show() #Display bars. 
+
+
+# In[ ]:
+
+
+'Following bar: # of mushrooms which are edible|poisonous based on odor'
+
+
+# In[ ]:
+
+
+poisonous_od = [] #Poisonous odor list
+edible_od = []    #Edible odor list
+for odor in odor_labels:
+    size = len(mushrooms[mushrooms['odor'] == odor].index)
+    edibles = len(mushrooms[(mushrooms['odor'] == odor) & (mushrooms['class'] == 'e')].index)
+    edible_od.append(edibles)
+    poisonous_od.append(size-edibles)
+                        
+#=====PLOT Preparations and Plotting====#
+width = 0.40
+fig, ax = plt.subplots(figsize=(12,7))
+edible_bars = ax.bar(ind, edible_od , width, color='#ADFF2F')
+poison_bars = ax.bar(ind+width, poisonous_od , width, color='#DA70D6')
+
+#Add some text for labels, title and axes ticks
+ax.set_xlabel("Odor",fontsize=20)
+ax.set_ylabel('Quantity',fontsize=20)
+ax.set_title('Edible and Poisonous Mushrooms Based on Odor',fontsize=22)
+ax.set_xticks(ind + width / 2) #Positioning on the x axis
+ax.set_xticklabels(('none', 'foul','fishy','spicy','almond','anise','pungent','creosote','musty'),
+                  fontsize = 12)
+ax.legend((edible_bars,poison_bars),('edible','poisonous'),fontsize=17)
+autolabel(edible_bars, 10)
+autolabel(poison_bars, 10)
+plt.show()
+print(edible_od)
+print(poisonous_od)
+
+
+# In[ ]:
+
+
+'***Th0ugHT[0]: According to my expectations, at least some of the "not nose friendly" mushrooms'
+'could be edible. However, the above contradicts that thought. All smelly and stingy mushrooms' 
+'are poisonous. To my surprise all the almond and anise mushrooms are edible. Finally, we must be'
+'careful for mushrooms with no smell, there seems to be a small chance of getting poisoned.***'
+
+
+# In[ ]:
+
+
+'Pie Chart: Show the type of mushroom population.'
+'Double Pie Chart: Show edibles and poisonous percentages of mushrrom population types.'
+
+
+# In[ ]:
+
+
+#Get the population types and its values for Single Pie chart
+populations = mushrooms['population'].value_counts()
+pop_size = populations.values.tolist() #Provides numerical values
+pop_types = populations.axes[0].tolist() #Converts index labels object to list
+print(pop_size)
+# Data to plot
+pop_labels = 'Several', 'Solitary', 'Scattered', 'Numerous', 'Abundant', 'Clustered'
+colors = ['#F38181','#EAFFD0','#95E1D3','#FCE38A','#BDE4F4','#9EF4E6']
+explode = (0, 0.1, 0, 0, 0, 0)  # explode 1st slice
+fig = plt.figure(figsize=(12,8))
+# Plot
+plt.title('Mushroom Population Type Percentange', fontsize=22)
+patches, texts, autotexts = plt.pie(pop_size, explode=explode, labels=pop_labels, colors=colors,
+        autopct='%1.1f%%', shadow=True, startangle=150)
+for text,autotext in zip(texts,autotexts):
+    text.set_fontsize(14)
+    autotext.set_fontsize(14)
+
+plt.axis('equal')
 plt.show()
 
 
-# The distribution of nuclei (masks) per image appears to be skewed to the right. There is quite a large range in the number of nuclei per image. 
+# In[ ]:
+
+
+#DOUBLE PIE CHART
+poisonous_pop = [] #Poisonous population type list
+edible_pop = []    #Edible population type list
+for pop in pop_types: 
+    size = len(mushrooms[mushrooms['population'] == pop].index)
+    edibles = len(mushrooms[(mushrooms['population'] == pop) & (mushrooms['class'] == 'e')].index)
+    edible_pop.append(edibles) #Gets edibles
+    poisonous_pop.append(size-edibles) #Gets poisonous
+combine_ed_poi = []
+for i in range(0,len(edible_pop)): #Combines both edible and poisonous in a single list. 
+    combine_ed_poi.append(edible_pop[i])
+    combine_ed_poi.append(poisonous_pop[i])
+#print(edible_pop) print(poisonous_pop) print(combine_ed_poi)
+
+#Preparations for DOUBLE pie chart.
+fig = plt.subplots(figsize=(13,8))
+plt.title('Edible & Poisonous Mushroom Population Type Percentage', fontsize=22)
+percentages_e_p = ['14.67%','35.06%','13.10%', '7.98%','10.83%','4.53%','4.92%','0%','4.73%','0%',
+                  '3.55%','0.64%'] #Percetanges for edible and poisonous
+#===First pie===
+patches1, texts1 = plt.pie(combine_ed_poi,radius = 2, labels= percentages_e_p,
+                                colors=['#ADFF2F','#DA70D6'], shadow=True, startangle=150)
+for i in range(0,len(texts1)):
+    if(i%2==0):
+        texts1[i].set_color('#7CB721') #Color % labels with dark green
+    else:
+        texts1[i].set_color('#AE59AB') # " " dark purple
+    texts1[i].set_fontsize(14)         #make labels bigger
+#===Second pie===
+patches2, texts2, autotexts2 = plt.pie(pop_size, colors=colors, radius = 1.5,
+        autopct='%1.2f%%', shadow=True, startangle=150,labeldistance= 2.2)
+for aut in autotexts2:
+    aut.set_fontsize(14)  #Inner autotext fontsize
+    aut.set_horizontalalignment('center') #Center
+#==Set 2 Legends to the plot.
+first_legend   = plt.legend(patches1, ['edible','poisonous'], loc="upper left", fontsize=15)
+second_ledgend = plt.legend(patches2, pop_labels, loc="best",fontsize=13)
+plt.gca().add_artist(first_legend) #To display two legends
+#Align both pie charts in the same position
+plt.axis('equal')
+plt.show()
+
+
+# # Mushroom Habitat
+# ### Let's see where you can find those mushrooms and find out if they want to be eaten or not according to their habitat. (Please don't go eating random mushrooms you find >.<)
 
 # In[ ]:
 
 
-plt.figure(figsize=(18, 18))
-much_nuclei = df_img['nuclei'].argmax()
-print(much_nuclei)
-plt.grid(None)
-plt.imshow(imgs[much_nuclei])
+#Get the habitat types and its values for a Single Pie chart
+habitats = mushrooms['habitat'].value_counts()
+hab_size = habitats.values.tolist() #Provides numerical values
+hab_types = habitats.axes[0].tolist() #Converts index labels object to list
+print(habitats)
+# Data to plot
+hab_labels = 'Woods', 'Grasses', 'Paths', 'Leaves', 'Urban', 'Meadows', 'Waste'
+colors = ['#F5AD6F','#EAFFD0','#FFFF66','#84D9E2','#C0C0C0','#DE7E7E', '#FFB6C1']
+explode = (0, 0, 0, 0, 0, 0,0.5)  # explode 1st slice
+fig = plt.figure(figsize=(12,8))
+# Plot
+plt.title('Mushroom Habitat Type Percentange', fontsize=22)
+patches, texts, autotexts = plt.pie(hab_size, explode=explode, labels=hab_labels, colors=colors,
+        autopct='%1.1f%%', shadow=True, startangle=360)
+for text,autotext in zip(texts,autotexts):
+    text.set_fontsize(14)
+    autotext.set_fontsize(14)
 
+plt.axis('equal')
+plt.show()
 
-# There are 198 annotated nuclei in this image. It's an interesting structure, possibly some kind of creature!
 
 # In[ ]:
 
 
-plt.figure(figsize=(18, 18))
-not_much_nuclei = df_img['nuclei'].argmin()
-print(df_img['nuclei'].min())
-plt.grid(None)
-plt.imshow(imgs[not_much_nuclei])
+#DOUBLE PIE CHART
+poisonous_hab = [] #Poisonous habitat type list
+edible_hab = []    #Edible habitat type list
+for hab in hab_types: 
+    size = len(mushrooms[mushrooms['habitat'] == hab].index)
+    edibles = len(mushrooms[(mushrooms['habitat'] == hab) & (mushrooms['class'] == 'e')].index)
+    edible_hab.append(edibles) #Gets edibles
+    poisonous_hab.append(size-edibles) #Gets poisonous
+combine_ed_poi = []
+for i in range(0,len(edible_hab)): #Combines both edible and poisonous in a single list. 
+    combine_ed_poi.append(edible_hab[i])
+    combine_ed_poi.append(poisonous_hab[i])
+print(edible_hab) 
+print(poisonous_hab) 
+print(combine_ed_poi)
+
+#Preparations for DOUBLE pie chart.
+fig = plt.subplots(figsize=(13,8))
+plt.title('Edible & Poisonous Mushroom Habitat Type Percentage', fontsize=22)
+percentages_e_p = ['23.14%','15.61%','17.33%', '9.11%','1.67%','12.41%','2.95%','7.29%','1.18%','3.35%',
+                  '3.15%','0.44%','2.36%','0%'] #Percetanges for edible and poisonous
+#===First pie===
+patches1, texts1= plt.pie(combine_ed_poi,radius = 2, labels=percentages_e_p,
+                                colors=['#ADFF2F','#DA70D6'], shadow=True, startangle=150)
+for i in range(0,len(texts1)):
+    if(i%2==0):
+        texts1[i].set_color('#7CB721') #Color % labels with dark green
+    else:
+        texts1[i].set_color('#AE59AB') # " " dark purple
+    texts1[i].set_fontsize(14)         #make labels bigger
+#===Second pie===
+patches2, texts2, autotexts2 = plt.pie(hab_size, colors=colors, radius = 1.5,
+        autopct='%1.2f%%', shadow=True, startangle=150,labeldistance= 2.2)
+for aut in autotexts2:
+    aut.set_fontsize(14)  #Inner autotext fontsize
+    aut.set_horizontalalignment('center') #Center
+#==Set 2 Legends to the plot.
+first_legend   = plt.legend(patches1, ['edible','poisonous'], loc="upper left", fontsize=15)
+second_ledgend = plt.legend(patches2, hab_labels, loc="best",fontsize=13)
+plt.gca().add_artist(first_legend) #To display two legends
+#Align both pie charts in the same position
+plt.axis('equal')
+plt.show()
 
 
-# There appears to be a lot going on in this image but there are only two annotated nuclei.
-
-# **Nuclei Sizes**
-# 
-# Let's take a look at some differently sized nuclei in the training set. 
+# ### How strange...mushrooms with habitat 'waste' are edible. I wouldn't do it. Urban, leaves or path mushrooms are mostly poisionous. And if you ever go out to the woods or find a mushroom in the grass there is always the probability that it might not be edible.
 
 # In[ ]:
 
 
-smallest_mask_index = df_mask['mask_to_img_ratio'].argmin()
+#Let's pick a random sample of the dataset of 500 mushrooms
+mushrooms_sample = mushrooms.loc[np.random.choice(mushrooms.index, 1000, False)]
 
-fig, ax = plt.subplots(1, 2, figsize=(16, 16))
-ax[0].grid(None)
-ax[0].imshow(masks[smallest_mask_index])
-ax[1].grid(None)
-ax[1].imshow(imgs[df_mask.iloc[[smallest_mask_index], [0]].values[0][0]])
-plt.tight_layout()
-
-
-# Wow! This nucleus is either very small or very far away! This makes me concerned about scaling down some of the larger images as some of these small nuclei could become undetectable or a least much more difficult to detect.
 
 # In[ ]:
 
 
-smallest_mask_resized_128 = resize(masks[smallest_mask_index], (128, 128))
-smallest_mask_resized_256 = resize(masks[smallest_mask_index], (256, 256))
-smallest_mask_resized_512 = resize(masks[smallest_mask_index], (512, 512))
-print(np.sum(smallest_mask_resized_128))
-print(np.sum(smallest_mask_resized_256))
-print(np.sum(smallest_mask_resized_512))
-fig, ax = plt.subplots(1, 3, figsize=(14, 14))
-ax[0].grid(None)
-ax[1].grid(None)
-ax[2].grid(None)
-ax[0].imshow(smallest_mask_resized_128)
-ax[1].imshow(smallest_mask_resized_256)
-ax[2].imshow(smallest_mask_resized_512)
+#Get all unique cap-colors
+mushrooms_sample['cap-color'].unique()
 
 
-# As you can see above, the nucleus mask completely disappears when the image is scaled down to 128x128 pixels.
-
-# In[9]:
+# In[ ]:
 
 
-biggest_mask_index = df_mask['mask_to_img_ratio'].argmax()
-biggest_mask_img_index = df_mask.iloc[[biggest_mask_index], [0]].values[0][0]
+#mushrooms_sample.groupby('cap-color', 0).nunique()
 
-fig, ax = plt.subplots(1, 2, figsize=(12, 12))
-ax[0].grid(None)
-ax[1].grid(None)
-ax[0].imshow(masks[biggest_mask_index])
-ax[1].imshow(imgs[biggest_mask_img_index])
-plt.tight_layout()
+#Get 'cap-color' Series
+capColors = mushrooms_sample['cap-color']
 
+#Get the total number of mushrooms for each unique cap color. 
+capColors.value_counts()
 
-# In the image on the right, the nuclei appear to overlap each other. Let's see what the masks look like when stacked on top of each other.
-
-# In[10]:
-
-
-big_nuclei = df_mask.index[df_mask['img_index'] == biggest_mask_img_index]
-plt.figure(figsize=(18, 18))
-for i, mask_id in enumerate(big_nuclei):
-    plt.grid(None)
-    plt.imshow(masks[mask_id], interpolation='none', alpha=0.1)
-
-
-# Whereas the nuclei in the image overlap the masks do not appear to do so. 
-
-# In[14]:
-
-
-sample_nuclei = df_img.sample(36).index
-fig, ax = plt.subplots(9, 4, figsize=(16, 16))
-row = 0
-col = 0
-for i, img_id in enumerate(sample_nuclei):
-    ax[row, col].grid(False)
-    ax[row, col].imshow(imgs[img_id])
-    
-    # Increment col index and reset each time
-    # it gets to 4 to start a new row
-    col = col + 1
-    if(col == 4):
-        col = 0
-    
-    # Increment row index every 4 items
-    if((i + 1) % 4 == 0):
-        row = row + 1
-plt.tight_layout()
-
-
-# There is a wide range of different nuclei sizes and shapes.
-
-# **Conclusion**
-# 
-# There is a large range of image dimensions in the dataset and not all of the images are square. The smallest image was 256x256 and the largest was 1040x1388 pixels. The smallest nucleus was only a few pixels in size and was found in one of the larger images (1000x1000), resizing this image caused the tiny nucleus to disappear so resizing images should be approached with great caution. The size of nuclei vary a lot throughout the images in the training set and is likely to make detection more challenging. 
-# 
-# I have only scratched the surface of this dataset and there is much more to explore. A few more things I would like to look into are the distribution of color in the images, identifying different nuclei groups/clusters and taking a look at the test set.
-# 
-# *Any suggestions for improvements would be very helpful. Also, please don't hesitate to point out any mistakes I might have made (there are probably a lot of them!).*
-
-# I adapted various parts of the following kernels while putting this together:
-# - https://www.kaggle.com/jerrythomas/exploratory-analysis
-# - https://www.kaggle.com/keegil/keras-u-net-starter-lb-0-277

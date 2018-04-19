@@ -1,443 +1,454 @@
 
 # coding: utf-8
 
-# # **Categorizing actors (_hands on plotly_)**
-# *Fabien Daniel (August 2017)*
-# ___
-
-# In this notebook, I will try to get some insight on the habits of actors and the way they are perceived by spectators. I will not discuss the content of the current dataframe since this was done in many other notebooks (as, picking one up randomly, [this one](https://www.kaggle.com/fabiendaniel/film-recommendation-engine/)).
-# ____
-# **Acknowledgements:** many thanks to [Tianyi Wang](https://www.kaggle.com/tianyiwang/neighborhood-interaction-with-network-graph) whose kernel gave me the idea to write this notebook, and to [Stéphane Rappeneau](https://www.kaggle.com/stephanerappeneau) for the insights on Plotly's limits. The original dataset from which this kernel was built was originaly updated in September 2017 and [Sohier Dane](https://www.kaggle.com/sohier) made a [guide](https://www.kaggle.com/sohier/getting-imdb-kernels-working-with-tmdb-data) to adapt the old kernels to the new data structure. Many thanks to Sohier for this work !
-# ___
-# **1. Preparing the data** <br>
-# **2. Actors overview** <br>
-# **3. A close look at actors  ** <br>
-# **4. Actors network ** <br>
 # 
-# <font color='red'> Warning: currently, the objectives of Section 3 can't be fulfilled due to the developpement progress of the Plotly's package regarding polar charts. For further details, you can have a look at the tickets posted on github (the links are given below). </font>
-
-# ___
-# ## 1. Preparing the data
 # 
-# First, I introduce some functions taken from [Sohier's code](https://www.kaggle.com/sohier/getting-imdb-kernels-working-with-tmdb-data) to interface the kernel with the new data structure:
+# Version 24: Added Nikunj's features and retuned<br>
+# Version 25: Added more Nikunj features and retuned again. <br>
+# Version 26: Deleted some of Nikunj features and retuned again.<br>
+# Version 27: Remove Niknuj features and go to tuning that was optimal without them, as baseline<br>
+# Version 28: Same as version 27 but after having tested some Nikunj features individually<br>
+# Version 29: Add 2 best Nikunj features (zip_count, city_count)<br>
+# Version 30: Add 3rd feature (GarPoolAC), and some cleanup<br>
+# Version 32: Retune: colsample .7 -> .8<br>
+# Version 33: Retune: lambda=10, subsample=.55<br>
+# Version 34: Revert subsample=.5<br>
+# Version 35: Fine tune: lambda=9<br>
+# Version 36: Revert: colsample .7<br>
+# Version 37: Cleanup<br>
+# Version 38: Make boosting rounds and stopping rounds inversely proportional to learning rate<br>
+# Version 40: Add city_mean and zip_mean features<br>
+# Version 41: Fix comments (Previously mis-stated logerror as "sale price" in feature descriptions)<br>
+# Version 42: Fix bug in city_mean definition<br>
+# Version 43: Get rid of city_mean<br>
+# Version 44: Retune: alpha=0.5<br>
+# Version 45: fine tune: lambda=9.5<br>
+# Version 46: Roll back to version 39 model, because zip_mean had a data leak, and the corrected version doesn't help<br>
+# Version 47: Add additional aggregation features, including by neighborhood<br>
+# Verison 48: Put test set features in the correct order<br>
+# Version 49: Retune: lambda=5, colsample=.55<br>
+# Version 50: Retune: alpha=.65, colsample=.50<br>
+# Version 51: Retune: max_depth=7<br>
+# Version 52: Make it optional to generate submission file when running full notebook<br>
+# Version 53. Option to do validation only<br>
+# Version 54. Starting to clean up the code<br>
+# Version 55. Option to fit final model to full training set<br>
+# Version 56. Optimize fudge factor<br>
+# Version 57. Allow change to validation set cutoff date<br>
+# Version 59. Try September 15 as validation cutoff<br>
+# Version 62. Allow final fit on 2017 (no correction for data leak)<br>
+# Version 68. Add seasonal features<br>
+#  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(Turns out the seasonal features make the fudge factor largely irrelevant,<br>
+#  &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;but that's partly because I chose the basedate to fit the fudge factors.)<br>
+#  Version 71. Make separate predictions for 2017 using 2017 properties data<br>
+#  Version 72. Run with FIT_2017_TRAIN_SET = False<br>
+#  Version 73. Remove outliers from 2017 data and set FIT_2017_TRAIN_SET = True<br>
+#  Version 74. Set FIT_2017_TRAIN_SET = False again<br>
+#   &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;(Removing outliers helps, but 2017 data still generate bad 2016 predictions.)<br>
+#   Version 76. Allow fitting combined training set<br>
 
 # In[ ]:
 
 
-#__________________
-import json
-import pandas as pd
-#__________________
-def load_tmdb_movies(path):
-    df = pd.read_csv(path)
-    df['release_date'] = pd.to_datetime(df['release_date']).apply(lambda x: x.date())
-    json_columns = ['genres', 'keywords', 'production_countries', 'production_companies', 'spoken_languages']
-    for column in json_columns:
-        df[column] = df[column].apply(json.loads)
-    return df
-#____________________________
-def load_tmdb_credits(path):
-    df = pd.read_csv(path)
-    json_columns = ['cast', 'crew']
-    for column in json_columns:
-        df[column] = df[column].apply(json.loads)
-    return df
-#_______________________________________
-def safe_access(container, index_values):
-    result = container
-    try:
-        for idx in index_values:
-            result = result[idx]
-        return result
-    except IndexError or KeyError:
-        return pd.np.nan
-#_______________________________________
-LOST_COLUMNS = [
-    'actor_1_facebook_likes',
-    'actor_2_facebook_likes',
-    'actor_3_facebook_likes',
-    'aspect_ratio',
-    'cast_total_facebook_likes',
-    'color',
-    'content_rating',
-    'director_facebook_likes',
-    'facenumber_in_poster',
-    'movie_facebook_likes',
-    'movie_imdb_link',
-    'num_critic_for_reviews',
-    'num_user_for_reviews']
-#_______________________________________
-TMDB_TO_IMDB_SIMPLE_EQUIVALENCIES = {
-    'budget': 'budget',
-    'genres': 'genres',
-    'revenue': 'gross',
-    'title': 'movie_title',
-    'runtime': 'duration',
-    'original_language': 'language',  
-    'keywords': 'plot_keywords',
-    'vote_count': 'num_voted_users'}
-#_______________________________________     
-IMDB_COLUMNS_TO_REMAP = {'imdb_score': 'vote_average'}
-#_______________________________________
-def get_director(crew_data):
-    directors = [x['name'] for x in crew_data if x['job'] == 'Director']
-    return safe_access(directors, [0])
-#_______________________________________
-def pipe_flatten_names(keywords):
-    return '|'.join([x['name'] for x in keywords])
-#_______________________________________
-def convert_to_original_format(movies, credits):
-    tmdb_movies = movies.copy()
-    tmdb_movies.rename(columns=TMDB_TO_IMDB_SIMPLE_EQUIVALENCIES, inplace=True)
-    tmdb_movies['title_year'] = pd.to_datetime(tmdb_movies['release_date']).apply(lambda x: x.year)
-    # I'm assuming that the first production country is equivalent, but have not been able to validate this
-    tmdb_movies['country'] = tmdb_movies['production_countries'].apply(lambda x: safe_access(x, [0, 'name']))
-    tmdb_movies['language'] = tmdb_movies['spoken_languages'].apply(lambda x: safe_access(x, [0, 'name']))
-    tmdb_movies['director_name'] = credits['crew'].apply(get_director)
-    tmdb_movies['actor_1_name'] = credits['cast'].apply(lambda x: safe_access(x, [1, 'name']))
-    tmdb_movies['actor_2_name'] = credits['cast'].apply(lambda x: safe_access(x, [2, 'name']))
-    tmdb_movies['actor_3_name'] = credits['cast'].apply(lambda x: safe_access(x, [3, 'name']))
-    tmdb_movies['genres'] = tmdb_movies['genres'].apply(pipe_flatten_names)
-    tmdb_movies['plot_keywords'] = tmdb_movies['plot_keywords'].apply(pipe_flatten_names)
-    return tmdb_movies
+MAKE_SUBMISSION = True          # Generate output file.
+CV_ONLY = False                 # Do validation only; do not generate predicitons.
+FIT_FULL_TRAIN_SET = True       # Fit model to full training set after doing validation.
+FIT_2017_TRAIN_SET = False      # Use 2017 training data for full fit (no leak correction)
+FIT_COMBINED_TRAIN_SET = True   # Fit combined 2016-2017 training set
+USE_SEASONAL_FEATURES = True
+VAL_SPLIT_DATE = '2016-09-15'   # Cutoff date for validation split
+LEARNING_RATE = 0.007           # shrinkage rate for boosting roudns
+ROUNDS_PER_ETA = 20             # maximum number of boosting rounds times learning rate
+OPTIMIZE_FUDGE_FACTOR = False   # Optimize factor by which to multiply predictions.
+FUDGE_FACTOR_SCALEDOWN = 0.3    # exponent to reduce optimized fudge factor for prediction
 
-
-# and the load the packages and the dataset:
 
 # In[ ]:
 
 
-import matplotlib.pyplot as plt
-import plotly.offline as pyo
-pyo.init_notebook_mode()
-from plotly.graph_objs import *
-import plotly.graph_objs as go
 import numpy as np
 import pandas as pd
-#_______________________________________________
-credits = load_tmdb_credits("../input/tmdb_5000_credits.csv")
-movies = load_tmdb_movies("../input/tmdb_5000_movies.csv")
-df = convert_to_original_format(movies, credits)
-
-
-# This dataframe contains around 5000 movies which are described according to 28 variables. In what follows, I will focus on a few of them. I start with the **genres** variable that describes the cinematographic genres (each film can pertain to various categories). As a first step, I extract the list of categorical values:
-
-# In[ ]:
-
-
-liste_genres = set()
-for s in df['genres'].str.split('|'):
-    liste_genres = set().union(s, liste_genres)
-liste_genres = list(liste_genres)
-liste_genres.remove('')
-
-
-# For the current exercise, the others variables of interest are the **actor_*N*_name** (**_N_** $\in [1:3]$) variables, that list the three main actors appearing in each film. My first goal is to determine the favorite genre of actors. For simplicity, in what follows, I will only consider the actors who appear in the **actor_1_name**. In fact, a more exhaustive view would be
-# achieved considering also the two other categories. To proceed with that, I perform some one hot encoding:
-
-# In[ ]:
-
-
-df_reduced = df[['actor_1_name', 'vote_average',
-                 'title_year', 'movie_title']].reset_index(drop = True)
-for genre in liste_genres:
-    df_reduced[genre] = df['genres'].str.contains(genre).apply(lambda x:1 if x else 0)
-df_reduced[:5]
-
-
-# and I group according to every actors, taking the mean of all the other variables. Then I check which genre's column takes the highest value and assign the corresponding genre as the actor's favorite genre: 
-
-# In[ ]:
-
-
-df_actors = df_reduced.groupby('actor_1_name').mean()
-df_actors.loc[:, 'favored_genre'] = df_actors[liste_genres].idxmax(axis = 1)
-df_actors.drop(liste_genres, axis = 1, inplace = True)
-df_actors = df_actors.reset_index()
-df_actors[:10]
-
-
-# At this point, the dataframe contains a list of actors and for each of them, we have a mean IMDB score, its mean year of activity and his favored acting style.
-# 
-# Then, I create a mask to account only for the actors that played in more than 5 films:
-
-# In[ ]:
-
-
-df_appearance = df_reduced[['actor_1_name', 'title_year']].groupby('actor_1_name').count()
-df_appearance = df_appearance.reset_index(drop = True)
-selection = df_appearance['title_year'] > 4
-selection = selection.reset_index(drop = True)
-most_prolific = df_actors[selection]
-
-
-# Finally, I look at the percentage of films of each genre to further choose the genres I want to look at:
-
-# In[ ]:
-
-
-plt.rc('font', weight='bold')
-f, ax = plt.subplots(figsize=(5, 5))
-genre_count = []
-for genre in liste_genres:
-    genre_count.append([genre, df_reduced[genre].values.sum()])
-genre_count.sort(key = lambda x:x[1], reverse = True)
-labels, sizes = zip(*genre_count)
-labels_selected = [n if v > sum(sizes) * 0.01 else '' for n, v in genre_count]
-ax.pie(sizes, labels=labels_selected,
-       autopct = lambda x:'{:2.0f}%'.format(x) if x > 1 else '',
-       shadow=False, startangle=0)
-ax.axis('equal')
-plt.tight_layout()
-
-
-# ___
-# ## 2. Actors overview
-# And now, the **magic of plotly** happens:
-
-# In[ ]:
-
-
-reduced_genre_list = labels[:12]
-trace=[]
-for genre in reduced_genre_list:
-    trace.append({'type':'scatter',
-                  'mode':'markers',
-                  'y':most_prolific.loc[most_prolific['favored_genre']==genre,'vote_average'],
-                  'x':most_prolific.loc[most_prolific['favored_genre']==genre,'title_year'],
-                  'name':genre,
-                  'text': most_prolific.loc[most_prolific['favored_genre']==genre,'actor_1_name'],
-                  'marker':{'size':10,'opacity':0.7,
-                            'line':{'width':1.25,'color':'black'}}})
-layout={'title':'Actors favored genres',
-       'xaxis':{'title':'mean year of activity'},
-       'yaxis':{'title':'mean score'}}
-fig=Figure(data=trace,layout=layout)
-pyo.iplot(fig)
-
-
-# The above graph lists all the actors that appeared in more than 5 films (only taking into account the **actor_1_name**). The abscissa corresponds to the average of the film release years and the ordinate to the mean IMDB score. Every film is tagged according to its genre and hovering with the mouse, the actors names are displayed.
-
-# ___
-# ## 3. A close look at actors
-
-# In the previous section, we had a global overview of all the actors that appeared in more than 5 films and each of them was described with quantites (year, IMDB score, genre) averaged over the films. In this section, the aim is to select some particular actor and to display all its cinematographic biography in a simple view.
-
-# In[ ]:
-
-
-selection = df_appearance['title_year'] > 10
-most_prolific = df_actors[selection]
-most_prolific
+import xgboost as xgb
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import mean_absolute_error
+import datetime as dt
+from datetime import datetime
+import gc
+import patsy
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from statsmodels.regression.quantile_regression import QuantReg
 
 
 # In[ ]:
 
 
-class Trace():
-    #____________________
-    def __init__(self, color):
-        self.mode = 'markers'
-        self.name = 'default'
-        self.title = 'default title'
-        self.marker = dict(color=color, size=110,
-                           line=dict(color='white'), opacity=0.7)
-        self.r = []
-        self.t = []
-    #______________________________
-    def set_color(self, color):
-        self.marker = dict(color = color, size=110,
-                           line=dict(color='white'), opacity=0.7)
-    #____________________________
-    def set_name(self, name):
-        self.name = name
-    #____________________________
-    def set_title(self, title):
-        self.na = title
-    #__________________________
-    def set_values(self, r, t):
-        self.r = np.array(r)
-        self.t = np.array(t)
+properties16 = pd.read_csv('../input/properties_2016.csv', low_memory = False)
+properties17 = pd.read_csv('../input/properties_2017.csv', low_memory = False)
 
+# Number of properties in the zip
+zip_count = properties16['regionidzip'].value_counts().to_dict()
+# Number of properties in the city
+city_count = properties16['regionidcity'].value_counts().to_dict()
+# Median year of construction by neighborhood
+medyear = properties16.groupby('regionidneighborhood')['yearbuilt'].aggregate('median').to_dict()
+# Mean square feet by neighborhood
+meanarea = properties16.groupby('regionidneighborhood')['calculatedfinishedsquarefeet'].aggregate('mean').to_dict()
+# Neighborhood latitude and longitude
+medlat = properties16.groupby('regionidneighborhood')['latitude'].aggregate('median').to_dict()
+medlong = properties16.groupby('regionidneighborhood')['longitude'].aggregate('median').to_dict()
 
-# Below, I make a census of the films starring Brad Pitt, identifying the genre of every film. **However, I just take into account the genres with at least 4 films because of a bug in plotly: below this threshold, a few spurious points appear on the graph. A [ticket](https://github.com/plotly/plotly.js/issues/2023#issuecomment-330852374) was sent to report that bug.**
-
-# In[ ]:
-
-
-df2 = df_reduced[df_reduced['actor_1_name'] == 'Brad Pitt']
-total_count  = 0
-years = []
-imdb_score = []
-genre = []
-titles = []
-for s in liste_genres:
-    icount = df2[s].sum()
-    #__________________________________________________________________
-    # Here, we set the limit to 3 because of a bug in plotly's package
-    if icount > 3: 
-        total_count += 1
-        genre.append(s)
-        years.append(list(df2[df2[s] == 1]['title_year']))
-        imdb_score.append(list(df2[df2[s] == 1]['vote_average'])) 
-        titles.append(list(df2[df2[s] == 1]['movie_title']))
-max_y = max([max(s) for s in years])
-min_y = min([min(s) for s in years])
-year_range = max_y - min_y
-
-years_normed = []
-for i in range(total_count):
-    years_normed.append( [360/total_count*((an-min_y)/year_range+i) for an in years[i]])
+train = pd.read_csv("../input/train_2016_v2.csv")
+for c in properties16.columns:
+    properties16[c]=properties16[c].fillna(-1)
+    if properties16[c].dtype == 'object':
+        lbl = LabelEncoder()
+        lbl.fit(list(properties16[c].values))
+        properties16[c] = lbl.transform(list(properties16[c].values))
 
 
 # In[ ]:
 
 
-color = ['royalblue', 'grey', 'wheat', 'c', 'firebrick', 'seagreen', 'lightskyblue',
-          'lightcoral', 'yellowgreen', 'gold', 'tomato', 'violet', 'aquamarine', 'chartreuse']
+train_df = train.merge(properties16, how='left', on='parcelid')
+select_qtr4 = pd.to_datetime(train_df["transactiondate"]) >= VAL_SPLIT_DATE
+if USE_SEASONAL_FEATURES:
+    basedate = pd.to_datetime('2015-11-15').toordinal()
 
 
 # In[ ]:
 
 
-trace = [Trace(color[i]) for i in range(total_count)]
-tr    = []
-for i in range(total_count):
-    trace[i].set_name(genre[i])
-    trace[i].set_title(titles[i])
-    trace[i].set_values(np.array(imdb_score[i]),
-                        np.array(years_normed[i]))
-    tr.append(go.Scatter(r      = trace[i].r,
-                         t      = trace[i].t,
-                         mode   = trace[i].mode,
-                         name   = trace[i].name,
-                         marker = trace[i].marker,
-#                         text   = ['default title' for j in range(len(trace[i].r))], 
-                         hoverinfo = 'all'
-                        ))        
-layout = go.Layout(
-    title='Brad Pitt movies',
-    font=dict(
-        size=15
-    ),
-    plot_bgcolor='rgb(223, 223, 223)',
-    angularaxis=dict(        
-        tickcolor='rgb(253,253,253)'
-    ),
-    hovermode='Closest',
-)
-fig = go.Figure(data = tr, layout=layout)
-pyo.iplot(fig)
-
-
-# On this graph, we see every film starring Brad Pitt. The radial scale corresponds to the IMDB score and the angular scale indicates both the movie's genre and the films release years. **Unfortunately, polar charts are not any more maintened by plotly's developpement team and it is currently impossible to make the text appearing on hover (see this [ticket](https://github.com/plotly/plotly.js/issues/94#issuecomment-330853403))**. Initially, my objective was to make the films titles and release year appear on hover but it is currently impossible. Hence, this puts strong limits on the usefulness of that kind of representation ...
-
-# ### 4.  Network
-# 
-
-# Here, I look at the connections between the most prolific actors:
-
-# In[ ]:
-
-
-selection = df_appearance['title_year'] > 4
-most_prolific = df_actors[selection]
-actors_list = most_prolific['actor_1_name'].unique()
+del train
+gc.collect()
 
 
 # In[ ]:
 
 
-test = pd.crosstab(df['actor_1_name'], df['actor_2_name'])
+# Inputs to features that depend on target variable
+# (Ideally these should be recalculated, and the dependent features recalculated,
+#  when fitting to the full training set.  But I haven't implemented that yet.)
+
+# Standard deviation of target value for properties in the city/zip/neighborhood
+citystd = train_df[~select_qtr4].groupby('regionidcity')['logerror'].aggregate("std").to_dict()
+zipstd = train_df[~select_qtr4].groupby('regionidzip')['logerror'].aggregate("std").to_dict()
+hoodstd = train_df[~select_qtr4].groupby('regionidneighborhood')['logerror'].aggregate("std").to_dict()
 
 
 # In[ ]:
 
 
-edge = []
-for actor_1, actor_2 in list(test[test > 0].stack().index):
-    if actor_1 not in actors_list: continue
-    if actor_2 not in actors_list: continue
-   
-    if actor_1 not in actors_list or actor_2 not in actors_list: continue
-    if actor_1 != actor_2:
-        edge.append([actor_1, actor_2])
+def calculate_features(df):
+    # Nikunj's features
+    # Number of properties in the zip
+    df['N-zip_count'] = df['regionidzip'].map(zip_count)
+    # Number of properties in the city
+    df['N-city_count'] = df['regionidcity'].map(city_count)
+    # Does property have a garage, pool or hot tub and AC?
+    df['N-GarPoolAC'] = ((df['garagecarcnt']>0) &                          (df['pooltypeid10']>0) &                          (df['airconditioningtypeid']!=5))*1 
 
+    # More features
+    # Mean square feet of neighborhood properties
+    df['mean_area'] = df['regionidneighborhood'].map(meanarea)
+    # Median year of construction of neighborhood properties
+    df['med_year'] = df['regionidneighborhood'].map(medyear)
+    # Neighborhood latitude and longitude
+    df['med_lat'] = df['regionidneighborhood'].map(medlat)
+    df['med_long'] = df['regionidneighborhood'].map(medlong)
 
-# In[ ]:
-
-
-num_of_adjacencies = [0 for _ in range(len(df_actors))]
-for ind, col in df_actors.iterrows():
-    actor = col['actor_1_name']
-    nb = sum([1 for i,j in edge if (i == actor) or (j == actor)])
-    num_of_adjacencies[ind] = nb
-
-
-# In[ ]:
-
-
-def prep(edge, num_of_adjacencies, df, actors_list):
-    edge_trace = Scatter(
-    x=[],
-    y=[],
-    line = Line(width=0.5,color='#888'),
-    hoverinfo = 'none',
-    mode = 'lines')
+    df['zip_std'] = df['regionidzip'].map(zipstd)
+    df['city_std'] = df['regionidcity'].map(citystd)
+    df['hood_std'] = df['regionidneighborhood'].map(hoodstd)
     
-    for actor_1, actor_2 in edge:
-        x0, y0 = df[df['actor_1_name'] == actor_1][['title_year', 'vote_average']].unstack()
-        x1, y1 = df[df['actor_1_name'] == actor_2][['title_year', 'vote_average']].unstack()
-        edge_trace['x'] += [x0, x1, None]
-        edge_trace['y'] += [y0, y1, None]
+    if USE_SEASONAL_FEATURES:
+        df['cos_season'] = ( (pd.to_datetime(df['transactiondate']).apply(lambda x: x.toordinal()-basedate)) *                              (2*np.pi/365.25) ).apply(np.cos)
+        df['sin_season'] = ( (pd.to_datetime(df['transactiondate']).apply(lambda x: x.toordinal()-basedate)) *                              (2*np.pi/365.25) ).apply(np.sin)
 
-    node_trace = Scatter(
-        x=[],
-        y=[],
-        text=[],
-        mode='markers',
-        hoverinfo='text',
-        marker=Marker(
-            showscale=True,
-            colorscale='YIGnBu',
-            reversescale=True,
-            color=[],
-            size=10,
-             colorbar=dict(
-                thickness=15,
-                title='Node Connections',
-                xanchor='left',
-                titleside='right'
-            ),
-            line=dict(width=2)))
+
+# In[ ]:
+
+
+dropvars = ['airconditioningtypeid', 'buildingclasstypeid',
+            'buildingqualitytypeid', 'regionidcity']
+droptrain = ['parcelid', 'logerror', 'transactiondate']
+droptest = ['ParcelId']
+
+
+# In[ ]:
+
+
+calculate_features(train_df)
+
+x_valid = train_df.drop(dropvars+droptrain, axis=1)[select_qtr4]
+y_valid = train_df["logerror"].values.astype(np.float32)[select_qtr4]
+
+print('Shape full training set: {}'.format(train_df.shape))
+print('Dropped vars: {}'.format(len(dropvars+droptrain)))
+print('Shape valid X: {}'.format(x_valid.shape))
+print('Shape valid y: {}'.format(y_valid.shape))
+
+train_df=train_df[ train_df.logerror > -0.4 ]
+train_df=train_df[ train_df.logerror < 0.419 ]
+print('\nFull training set after removing outliers, before dropping vars:')     
+print('Shape training set: {}\n'.format(train_df.shape))
+
+if FIT_FULL_TRAIN_SET:
+    full_train = train_df.copy()
+
+train_df=train_df[~select_qtr4]
+x_train=train_df.drop(dropvars+droptrain, axis=1)
+y_train = train_df["logerror"].values.astype(np.float32)
+y_mean = np.mean(y_train)
+n_train = x_train.shape[0]
+print('Training subset after removing outliers:')     
+print('Shape train X: {}'.format(x_train.shape))
+print('Shape train y: {}'.format(y_train.shape))
+
+if FIT_FULL_TRAIN_SET:
+    x_full = full_train.drop(dropvars+droptrain, axis=1)
+    y_full = full_train["logerror"].values.astype(np.float32)
+    n_full = x_full.shape[0]
+    print('\nFull trainng set:')     
+    print('Shape train X: {}'.format(x_train.shape))
+    print('Shape train y: {}'.format(y_train.shape))
+
+
+# In[ ]:
+
+
+if not CV_ONLY:
+    # Generate test set data
     
-    for ind, col in df.iterrows():
-        if col['actor_1_name'] not in actors_list: continue
-        node_trace['x'].append(col['title_year'])
-        node_trace['y'].append(col['vote_average'])
-        node_trace['text'].append(col['actor_1_name'])
-        node_trace['marker']['color'].append(num_of_adjacencies[ind])
+    sample_submission = pd.read_csv('../input/sample_submission.csv', low_memory = False)
+    
+    # Process properties for 2016
+    test_df = pd.merge( sample_submission[['ParcelId']], 
+                        properties16.rename(columns = {'parcelid': 'ParcelId'}), 
+                        how = 'left', on = 'ParcelId' )
+    if USE_SEASONAL_FEATURES:
+        test_df['transactiondate'] = '2016-10-31'
+        droptest += ['transactiondate']
+    calculate_features(test_df)
+    x_test = test_df.drop(dropvars+droptest, axis=1)
+    print('Shape test: {}'.format(x_test.shape))
+
+    # Process properties for 2017
+    for c in properties17.columns:
+        properties17[c]=properties17[c].fillna(-1)
+        if properties17[c].dtype == 'object':
+            lbl = LabelEncoder()
+            lbl.fit(list(properties17[c].values))
+            properties17[c] = lbl.transform(list(properties17[c].values))
+    zip_count = properties17['regionidzip'].value_counts().to_dict()
+    city_count = properties17['regionidcity'].value_counts().to_dict()
+    medyear = properties17.groupby('regionidneighborhood')['yearbuilt'].aggregate('median').to_dict()
+    meanarea = properties17.groupby('regionidneighborhood')['calculatedfinishedsquarefeet'].aggregate('mean').to_dict()
+    medlat = properties17.groupby('regionidneighborhood')['latitude'].aggregate('median').to_dict()
+    medlong = properties17.groupby('regionidneighborhood')['longitude'].aggregate('median').to_dict()
+
+    test_df = pd.merge( sample_submission[['ParcelId']], 
+                        properties17.rename(columns = {'parcelid': 'ParcelId'}), 
+                        how = 'left', on = 'ParcelId' )
+    if USE_SEASONAL_FEATURES:
+        test_df['transactiondate'] = '2017-10-31'
+    calculate_features(test_df)
+    x_test17 = test_df.drop(dropvars+droptest, axis=1)
+
+    del test_df
+
+
+# In[ ]:
+
+
+del train_df
+del select_qtr4
+gc.collect()
+
+
+# In[ ]:
+
+
+xgb_params = {  # best as of 2017-09-28 13:20 UTC
+    'eta': LEARNING_RATE,
+    'max_depth': 7, 
+    'subsample': 0.6,
+    'objective': 'reg:linear',
+    'eval_metric': 'mae',
+    'lambda': 5.0,
+    'alpha': 0.65,
+    'colsample_bytree': 0.5,
+    'base_score': y_mean,'taxdelinquencyyear'
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(x_train, y_train)
+dvalid_x = xgb.DMatrix(x_valid)
+dvalid_xy = xgb.DMatrix(x_valid, y_valid)
+if not CV_ONLY:
+    dtest = xgb.DMatrix(x_test)
+    dtest17 = xgb.DMatrix(x_test17)
+    del x_test
+
+
+# In[ ]:
+
+
+del x_train
+gc.collect()
+
+
+# In[ ]:
+
+
+num_boost_rounds = round( ROUNDS_PER_ETA / xgb_params['eta'] )
+early_stopping_rounds = round( num_boost_rounds / 20 )
+print('Boosting rounds: {}'.format(num_boost_rounds))
+print('Early stoping rounds: {}'.format(early_stopping_rounds))
+
+
+# In[ ]:
+
+
+evals = [(dtrain,'train'),(dvalid_xy,'eval')]
+model = xgb.train(xgb_params, dtrain, num_boost_round=num_boost_rounds,
+                  evals=evals, early_stopping_rounds=early_stopping_rounds, 
+                  verbose_eval=10)
+
+
+# In[ ]:
+
+
+valid_pred = model.predict(dvalid_x, ntree_limit=model.best_ntree_limit)
+print( "XGBoost validation set predictions:" )
+print( pd.DataFrame(valid_pred).head() )
+print("\nMean absolute validation error:")
+mean_absolute_error(y_valid, valid_pred)
+
+
+# In[ ]:
+
+
+if OPTIMIZE_FUDGE_FACTOR:
+    mod = QuantReg(y_valid, valid_pred)
+    res = mod.fit(q=.5)
+    print("\nLAD Fit for Fudge Factor:")
+    print(res.summary())
+
+    fudge = res.params[0]
+    print("Optimized fudge factor:", fudge)
+    print("\nMean absolute validation error with optimized fudge factor: ")
+    print(mean_absolute_error(y_valid, fudge*valid_pred))
+
+    fudge **= FUDGE_FACTOR_SCALEDOWN
+    print("Scaled down fudge factor:", fudge)
+    print("\nMean absolute validation error with scaled down fudge factor: ")
+    print(mean_absolute_error(y_valid, fudge*valid_pred))
+else:
+    fudge=1.0
+
+
+# In[ ]:
+
+
+if FIT_FULL_TRAIN_SET and not CV_ONLY:
+    if FIT_COMBINED_TRAIN_SET:
+        # Merge 2016 and 2017 data sets
+        train16 = pd.read_csv('../input/train_2016_v2.csv')
+        train17 = pd.read_csv('../input/train_2017.csv')
+        train16 = pd.merge(train16, properties16, how = 'left', on = 'parcelid')
+        train17 = pd.merge(train17, properties17, how = 'left', on = 'parcelid')
+        train17[['structuretaxvaluedollarcnt', 'landtaxvaluedollarcnt', 'taxvaluedollarcnt', 'taxamount']] = np.nan
+        train_df = pd.concat([train16, train17], axis = 0)
+        # Generate features
+        citystd = train_df.groupby('regionidcity')['logerror'].aggregate("std").to_dict()
+        zipstd = train_df.groupby('regionidzip')['logerror'].aggregate("std").to_dict()
+        hoodstd = train_df.groupby('regionidneighborhood')['logerror'].aggregate("std").to_dict()
+        calculate_features(train_df)
+        # Remove outliers
+        train_df=train_df[ train_df.logerror > -0.4 ]
+        train_df=train_df[ train_df.logerror < 0.419 ]
+        # Create final training data sets
+        x_full = train_df.drop(dropvars+droptrain, axis=1)
+        y_full = train_df["logerror"].values.astype(np.float32)
+        n_full = x_full.shape[0]     
+    elif FIT_2017_TRAIN_SET:
+        train = pd.read_csv('../input/train_2017.csv')
+        train_df = train.merge(properties17, how='left', on='parcelid')
+        # Generate features
+        citystd = train_df.groupby('regionidcity')['logerror'].aggregate("std").to_dict()
+        zipstd = train_df.groupby('regionidzip')['logerror'].aggregate("std").to_dict()
+        hoodstd = train_df.groupby('regionidneighborhood')['logerror'].aggregate("std").to_dict()
+        calculate_features(train_df)
+        # Remove outliers
+        train_df=train_df[ train_df.logerror > -0.4 ]
+        train_df=train_df[ train_df.logerror < 0.419 ]
+        # Create final training data sets
+        x_full = train_df.drop(dropvars+droptrain, axis=1)
+        y_full = train_df["logerror"].values.astype(np.float32)
+        n_full = x_full.shape[0]     
+    dtrain = xgb.DMatrix(x_full, y_full)
+    num_boost_rounds = int(model.best_ntree_limit*n_full/n_train)
+    full_model = xgb.train(xgb_params, dtrain, num_boost_round=num_boost_rounds, 
+                           evals=[(dtrain,'train')], verbose_eval=10)
+
+
+# In[ ]:
+
+
+del properties16
+del properties17
+gc.collect()
+
+
+# In[ ]:
+
+
+if not CV_ONLY:
+    if FIT_FULL_TRAIN_SET:
+        pred = fudge*full_model.predict(dtest)
+        pred17 = fudge*full_model.predict(dtest17)
+    else:
+        pred = fudge*model.predict(dtest, ntree_limit=model.best_ntree_limit)
+        pred17 = fudge*model.predict(dtest17, ntree_limit=model.best_ntree_limit)
         
-    fig = Figure(data=Data([edge_trace, node_trace]),
-                 layout=Layout(
-                    title='<br>Connections between actors',
-                    titlefont=dict(size=16),
-                    showlegend=False,
-                    hovermode='closest',
-                    margin=dict(b=20,l=5,r=5,t=40),
-                    annotations=[ dict(
-                        showarrow=False,
-                        xref="paper", yref="paper",
-                        x=0.005, y=-0.002 ) ],
-                    xaxis=XAxis(showgrid=True, zeroline=False, showticklabels=True),
-                    yaxis=YAxis(showgrid=True, zeroline=False, showticklabels=True)))
-    
-    return fig
+    print( "XGBoost test set predictions for 2016:" )
+    print( pd.DataFrame(pred).head() )
+    print( "XGBoost test set predictions for 2017:" )
+    print( pd.DataFrame(pred17).head() )    
 
 
 # In[ ]:
 
 
-fig = prep(edge, num_of_adjacencies, df_actors, actors_list)
-pyo.iplot(fig)
+if MAKE_SUBMISSION and not CV_ONLY:
+   y_pred=[]
+   y_pred17=[]
+
+   for i,predict in enumerate(pred):
+       y_pred.append(str(round(predict,4)))
+   for i,predict in enumerate(pred17):
+       y_pred17.append(str(round(predict,4)))
+   y_pred=np.array(y_pred)
+   y_pred17=np.array(y_pred17)
+
+   output = pd.DataFrame({'ParcelId': sample_submission['ParcelId'].astype(np.int32),
+           '201610': y_pred, '201611': y_pred, '201612': y_pred,
+           '201710': y_pred17, '201711': y_pred17, '201712': y_pred17})
+   # set col 'ParceID' to first col
+   cols = output.columns.tolist()
+   cols = cols[-1:] + cols[:-1]
+   output = output[cols]
+
+   output.to_csv('sub{}.csv'.format(datetime.now().strftime('%Y%m%d_%H%M%S')), index=False)
+
+
+# In[ ]:
+
+
+print("Mean absolute validation error without fudge factor: ", )
+print( mean_absolute_error(y_valid, valid_pred) )
+if OPTIMIZE_FUDGE_FACTOR:
+    print("Mean absolute validation error with fudge factor:")
+    print( mean_absolute_error(y_valid, fudge*valid_pred) )
 

@@ -1,919 +1,286 @@
 
 # coding: utf-8
 
-# ## Introduction
-# 
-# **_Poonam Ligade_**
-# 
-# *27th Dec 2016*
-# 
-# I am are trying to find out how many people on titanic survived from disaster.
-# 
-# Here goes Titanic Survival Prediction End to End ML Pipeline  
-# 
-#  1) **Introduction**
-# 
-#  1. Import Libraries
-#  2. Load data
-#  3. Run Statistical summeries
-#  4. Figure out missing value columns
-# 
-#  
-#  
-# 2) **Visualizations**
-# 
-#  1. Correlation with target variable
-# 
-# 
-# 3) **Missing values imputation**
-# 
-#  1. train data Missing columns- Embarked,Age,Cabin
-#  2. test data Missing columns- Age and Fare
-#  
-# 
-# 4) **Feature Engineering**
-# 
-#  1. Calculate total family size
-#  2. Get title from name
-#  3. Find out which deck passenger belonged to
-#  4. Dealing with Categorical Variables
-#      * Label encoding
-#  5. Feature Scaling
-# 
-# 
-# 5) **Prediction**
-# 
-#  1. Split into training & test sets
-#  2. Build the model
-#  3. Feature importance
-#  4. Predictions
-#  5. Ensemble : Majority voting
-# 
-# 6) **Submission**
-
-# Import libraries
-# ================
-
 # In[ ]:
 
 
-# We can use the pandas library in python to read in the csv file.
-import pandas as pd
-#for numerical computaions we can use numpy library
-import numpy as np
+# This Python 3 environment comes with many helpful analytics libraries installed
 
-
-# Load train & test data
-# ======================
-
-# In[ ]:
-
-
-# This creates a pandas dataframe and assigns it to the titanic variable.
-titanic = pd.read_csv("../input/train.csv")
-# Print the first 5 rows of the dataframe.
-titanic.head()
-
-
-# In[ ]:
-
-
-titanic_test = pd.read_csv("../input/test.csv")
-#transpose
-titanic_test.head().T
-#note their is no Survived column here which is our target varible we are trying to predict
-
-
-# In[ ]:
-
-
-#shape command will give number of rows/samples/examples and number of columns/features/predictors in dataset
-#(rows,columns)
-titanic.shape
-
-
-# In[ ]:
-
-
-#Describe gives statistical information about numerical columns in the dataset
-titanic.describe()
-#you can check from count if there are missing vales in columns, here age has got missing values
-
-
-# In[ ]:
-
-
-#info method provides information about dataset like 
-#total values in each column, null/not null, datatype, memory occupied etc
-titanic.info()
-
-
-# In[ ]:
-
-
-#lets see if there are any more columns with missing values 
-null_columns=titanic.columns[titanic.isnull().any()]
-titanic.isnull().sum()
-
-
-# **yes even Embarked and cabin has missing values.**
-
-# In[ ]:
-
-
-#how about test set??
-titanic_test.isnull().sum()
-
-
-# **Age, Fare and cabin has missing values.
-# we will see how to fill missing values next.**
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import random
+import skimage.io
 import matplotlib.pyplot as plt
-import seaborn as sns
-sns.set(font_scale=1)
+from skimage import transform
+import os
+import shutil
+from tqdm import tqdm
+import tensorflow as tf
 
-pd.options.display.mpl_style = 'default'
-labels = []
-values = []
-for col in null_columns:
-    labels.append(col)
-    values.append(titanic[col].isnull().sum())
-ind = np.arange(len(labels))
-width=0.6
-fig, ax = plt.subplots(figsize=(6,5))
-rects = ax.barh(ind, np.array(values), color='purple')
-ax.set_yticks(ind+((width)/2.))
-ax.set_yticklabels(labels, rotation='horizontal')
-ax.set_xlabel("Count of missing values")
-ax.set_ylabel("Column Names")
-ax.set_title("Variables with missing values");
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
+from subprocess import check_output
+print(check_output(["ls", "../input/"]).decode("utf8"))
 
-# **Visualizations**
-# ==============
-
-# In[ ]:
-
-
-titanic.hist(bins=10,figsize=(9,7),grid=False);
-
-
-# **we can see that Age and Fare are measured on very different scaling. So we need to do feature scaling before predictions.**
-
-# In[ ]:
-
-
-g = sns.FacetGrid(titanic, col="Sex", row="Survived", margin_titles=True)
-g.map(plt.hist, "Age",color="purple");
+# Any results you write to the current directory are saved as output.
 
 
 # In[ ]:
 
 
-g = sns.FacetGrid(titanic, hue="Survived", col="Pclass", margin_titles=True,
-                  palette={1:"seagreen", 0:"gray"})
-g=g.map(plt.scatter, "Fare", "Age",edgecolor="w").add_legend();
+def read_image_labels(image_id):
+    # most of the content in this function is taken from 'Example Metric Implementation' kernel 
+    # by 'William Cukierski'
+    image_file = "../input/stage1_train/{}/images/{}.png".format(image_id,image_id)
+    mask_file = "../input/stage1_train/{}/masks/*.png".format(image_id)
+    image = skimage.io.imread(image_file)
+    masks = skimage.io.imread_collection(mask_file).concatenate()    
+    height, width, _ = image.shape
+    num_masks = masks.shape[0]
+    labels = np.zeros((height, width), np.uint16)
+    for index in range(0, num_masks):
+        labels[masks[index] > 0] = index + 1
+    return image, labels
+
+def data_aug(image,label,angel=30,resize_rate=0.9):
+    flip = random.randint(0, 1)
+    size = image.shape[0]
+    rsize = random.randint(np.floor(resize_rate*size),size)
+    w_s = random.randint(0,size - rsize)
+    h_s = random.randint(0,size - rsize)
+    sh = random.random()/2-0.25
+    rotate_angel = random.random()/180*np.pi*angel
+    # Create Afine transform
+    afine_tf = transform.AffineTransform(shear=sh,rotation=rotate_angel)
+    # Apply transform to image data
+    image = transform.warp(image, inverse_map=afine_tf,mode='edge')
+    label = transform.warp(label, inverse_map=afine_tf,mode='edge')
+    # Randomly corpping image frame
+    image = image[w_s:w_s+size,h_s:h_s+size,:]
+    label = label[w_s:w_s+size,h_s:h_s+size]
+    # Ramdomly flip frame
+    if flip:
+        image = image[:,::-1,:]
+        label = label[:,::-1]
+    return image, label
 
 
-# In[ ]:
-
-
-g = sns.FacetGrid(titanic, hue="Survived", col="Sex", margin_titles=True,
-                palette="Set1",hue_kws=dict(marker=["^", "v"]))
-g.map(plt.scatter, "Fare", "Age",edgecolor="w").add_legend()
-plt.subplots_adjust(top=0.8)
-g.fig.suptitle('Survival by Gender , Age and Fare');
-
-
-# In[ ]:
-
-
-titanic.Embarked.value_counts().plot(kind='bar', alpha=0.55)
-plt.title("Passengers per boarding location");
-
-
-# In[ ]:
-
-
-sns.factorplot(x = 'Embarked',y="Survived", data = titanic,color="r");
-
-
-# In[ ]:
-
-
-sns.set(font_scale=1)
-g = sns.factorplot(x="Sex", y="Survived", col="Pclass",
-                    data=titanic, saturation=.5,
-                    kind="bar", ci=None, aspect=.6)
-(g.set_axis_labels("", "Survival Rate")
-    .set_xticklabels(["Men", "Women"])
-    .set_titles("{col_name} {col_var}")
-    .set(ylim=(0, 1))
-    .despine(left=True))  
-plt.subplots_adjust(top=0.8)
-g.fig.suptitle('How many Men and Women Survived by Passenger Class');
-
-
-# In[ ]:
-
-
-ax = sns.boxplot(x="Survived", y="Age", 
-                data=titanic)
-ax = sns.stripplot(x="Survived", y="Age",
-                   data=titanic, jitter=True,
-                   edgecolor="gray")
-sns.plt.title("Survival by Age",fontsize=12);
-
-
-# In[ ]:
-
-
-titanic.Age[titanic.Pclass == 1].plot(kind='kde')    
-titanic.Age[titanic.Pclass == 2].plot(kind='kde')
-titanic.Age[titanic.Pclass == 3].plot(kind='kde')
- # plots an axis lable
-plt.xlabel("Age")    
-plt.title("Age Distribution within classes")
-# sets our legend for our graph.
-plt.legend(('1st Class', '2nd Class','3rd Class'),loc='best') ;
-
-
-# In[ ]:
-
-
-corr=titanic.corr()#["Survived"]
-plt.figure(figsize=(10, 10))
-
-sns.heatmap(corr, vmax=.8, linewidths=0.01,
-            square=True,annot=True,cmap='YlGnBu',linecolor="white")
-plt.title('Correlation between features');
-
-
-# In[ ]:
-
-
-#correlation of features with target variable
-titanic.corr()["Survived"]
-
-
-# **Looks like Pclass has got highest negative correlation with "Survived" followed by Fare, Parch and Age** 
-
-# In[ ]:
-
-
-g = sns.factorplot(x="Age", y="Embarked",
-                    hue="Sex", row="Pclass",
-                    data=titanic[titanic.Embarked.notnull()],
-                    orient="h", size=2, aspect=3.5, 
-                   palette={'male':"purple", 'female':"blue"},
-                    kind="violin", split=True, cut=0, bw=.2);
-
-
-# Missing Value Imputation
-# ========================
+# Here comes an example of randomly rotate and resize an image.
 # 
-# **Its important to fill missing values, because some machine learning algorithms can't accept them eg SVM.**
+# The augmented sample could be not the same shape as the original  image, they should all be resize before feed in deep learning model.
+
+# In[ ]:
+
+
+image_ids = check_output(["ls", "../input/stage1_train/"]).decode("utf8").split()
+image_id = image_ids[random.randint(0,len(image_ids))]
+image, labels = read_image_labels(image_id)
+plt.subplot(221)
+plt.imshow(image)
+plt.subplot(222)
+plt.imshow(labels)
+
+new_image, new_labels = data_aug(image,labels,angel=5,resize_rate=0.9)
+plt.subplot(223)
+plt.imshow(new_image)
+plt.subplot(224)
+plt.imshow(new_labels)
+
+
+# The following code is to save the augmented data locally.
+#  It is only useful for Linux operating system
+
+# In[ ]:
+
+
+def make_data_augmentation(image_ids,split_num):
+    for ax_index, image_id in tqdm(enumerate(image_ids),total=len(image_ids)):
+        image,labels = read_image_labels(image_id)
+        if not os.path.exists("../input/stage1_train/{}/augs/".format(image_id)):
+            os.makedirs("../input/stage1_train/{}/augs/".format(image_id))
+        if not os.path.exists("../input/stage1_train/{}/augs_masks/".format(image_id)):
+            os.makedirs("../input/stage1_train/{}/augs_masks/".format(image_id))
+            
+        # also save the original image in augmented file 
+        plt.imsave(fname="../input/stage1_train/{}/augs/{}.png".format(image_id,image_id), arr = image)
+        plt.imsave(fname="../input/stage1_train/{}/augs_masks/{}.png".format(image_id,image_id),arr = labels)
+
+        for i in range(split_num):
+            new_image, new_labels = data_aug(image,labels,angel=5,resize_rate=0.9)
+            aug_img_dir = "../input/stage1_train/{}/augs/{}_{}.png".format(image_id,image_id,i)
+            aug_mask_dir = "../input/stage1_train/{}/augs_masks/{}_{}.png".format(image_id,image_id,i)
+            plt.imsave(fname=aug_img_dir, arr = new_image)
+            plt.imsave(fname=aug_mask_dir,arr = new_labels)
+
+def clean_data_augmentation(image_ids):
+    for ax_index, image_id in tqdm(enumerate(image_ids),total=len(image_ids)):
+        if os.path.exists("../input/stage1_train/{}/augs/".format(image_id)):
+            shutil.rmtree("../input/stage1_train/{}/augs/".format(image_id))
+        if os.path.exists("../input/stage1_train/{}/augs_masks/".format(image_id)):
+            shutil.rmtree("../input/stage1_train/{}/augs_masks/".format(image_id))
+
+
+image_ids = check_output(["ls", "../input/stage1_train/"]).decode("utf8").split()
+split_num = 10
+#make_data_augmentation(image_ids,split_num)
+#clean_data_augmentation(image_ids)
+
+
+# Here we also provide our tensorflow version UNet, the visualization on tensorboard is shown as below:
+# ![graph](http://i67.tinypic.com/105v91z.png)
+
+# In[ ]:
+
+
+def get_variable(name,shape):
+    return tf.get_variable(name, shape, initializer = tf.contrib.layers.xavier_initializer())
+
+def UNet(X):
+    ### Unit 1 ###
+    with tf.name_scope('Unit1'):
+        W1_1 =   get_variable("W1_1", [3,3,3,16] )
+        Z1 = tf.nn.conv2d(X,W1_1, strides = [1,1,1,1], padding = 'SAME')
+        A1 = tf.nn.relu(Z1)
+        W1_2 =   get_variable("W1_2", [3,3,16,16] )
+        Z2 = tf.nn.conv2d(A1,W1_2, strides = [1,1,1,1], padding = 'SAME')
+        A2 = tf.nn.relu(Z2) 
+        P1 = tf.nn.max_pool(A2, ksize = [1,2,2,1], strides = [1,2,2,1], padding = 'SAME')
+    ### Unit 2 ###
+    with tf.name_scope('Unit2'):
+        W2_1 =   get_variable("W2_1", [3,3,16,32] )
+        Z3 = tf.nn.conv2d(P1,W2_1, strides = [1,1,1,1], padding = 'SAME')
+        A3 = tf.nn.relu(Z3)
+        W2_2 =   get_variable("W2_2", [3,3,32,32] )
+        Z4 = tf.nn.conv2d(A3,W2_2, strides = [1,1,1,1], padding = 'SAME')
+        A4 = tf.nn.relu(Z4) 
+        P2 = tf.nn.max_pool(A4, ksize = [1,2,2,1], strides = [1,2,2,1], padding = 'SAME')
+    ### Unit 3 ###
+    with tf.name_scope('Unit3'):
+        W3_1 =   get_variable("W3_1", [3,3,32,64] )
+        Z5 = tf.nn.conv2d(P2,W3_1, strides = [1,1,1,1], padding = 'SAME')
+        A5 = tf.nn.relu(Z5)
+        W3_2 =   get_variable("W3_2", [3,3,64,64] )
+        Z6 = tf.nn.conv2d(A5,W3_2, strides = [1,1,1,1], padding = 'SAME')
+        A6 = tf.nn.relu(Z6) 
+        P3 = tf.nn.max_pool(A6, ksize = [1,2,2,1], strides = [1,2,2,1], padding = 'SAME')
+    ### Unit 4 ###
+    with tf.name_scope('Unit4'):
+        W4_1 =   get_variable("W4_1", [3,3,64,128] )
+        Z7 = tf.nn.conv2d(P3,W4_1, strides = [1,1,1,1], padding = 'SAME')
+        A7 = tf.nn.relu(Z7)
+        W4_2 =   get_variable("W4_2", [3,3,128,128] )
+        Z8 = tf.nn.conv2d(A7,W4_2, strides = [1,1,1,1], padding = 'SAME')
+        A8 = tf.nn.relu(Z8) 
+        P4 = tf.nn.max_pool(A8, ksize = [1,2,2,1], strides = [1,2,2,1], padding = 'SAME')
+    ### Unit 5 ###
+    with tf.name_scope('Unit5'):
+        W5_1 =   get_variable("W5_1", [3,3,128,256] )
+        Z9 = tf.nn.conv2d(P4,W5_1, strides = [1,1,1,1], padding = 'SAME')
+        A9 = tf.nn.relu(Z9)
+        W5_2 =   get_variable("W5_2", [3,3,256,256] )
+        Z10 = tf.nn.conv2d(A9,W5_2, strides = [1,1,1,1], padding = 'SAME')
+        A10 = tf.nn.relu(Z10) 
+    ### Unit 6 ###
+    with tf.name_scope('Unit6'):
+        W6_1 =   get_variable("W6_1", [3,3,256,128] )
+        U1 = tf.layers.conv2d_transpose(A10, filters = 128, kernel_size = 2, strides = 2, padding = 'SAME')
+        U1 = tf.concat([U1, A8],3)
+        W6_2 =   get_variable("W6_2", [3,3,128,128] )
+        Z11 = tf.nn.conv2d(U1,W6_1, strides = [1,1,1,1], padding = 'SAME')
+        A11 = tf.nn.relu(Z11)
+        Z12 = tf.nn.conv2d(A11,W6_2, strides = [1,1,1,1], padding = 'SAME')
+        A12 = tf.nn.relu(Z12)
+    ### Unit 7 ###
+    with tf.name_scope('Unit7'):
+        W7_1 =   get_variable("W7_1", [3,3,128,64] )
+        U2 = tf.layers.conv2d_transpose(A12, filters = 64, kernel_size = 2, strides = 2, padding = 'SAME')
+        U2 = tf.concat([U2, A6],3)
+        Z13 = tf.nn.conv2d(U2,W7_1, strides = [1,1,1,1], padding = 'SAME')
+        A13 = tf.nn.relu(Z13)
+        W7_2 =   get_variable("W7_2", [3,3,64,64] )
+        Z14 = tf.nn.conv2d(A13,W7_2, strides = [1,1,1,1], padding = 'SAME')
+        A14 = tf.nn.relu(Z14)
+    ### Unit 8 ###
+    with tf.name_scope('Unit8'):
+        W8_1 =   get_variable("W8_1", [3,3,64,32] )
+        U3 = tf.layers.conv2d_transpose(A14, filters = 32, kernel_size = 2, strides = 2, padding = 'SAME')
+        U3 = tf.concat([U3, A4],3)
+        Z15 = tf.nn.conv2d(U3,W8_1, strides = [1,1,1,1], padding = 'SAME')
+        A15 = tf.nn.relu(Z15)
+        W8_2 =   get_variable("W8_2", [3,3,32,32] )
+        Z16 = tf.nn.conv2d(A15,W8_2, strides = [1,1,1,1], padding = 'SAME')
+        A16 = tf.nn.relu(Z16)
+    ### Unit 9 ###
+    with tf.name_scope('Unit9'):
+        W9_1 =   get_variable("W9_1", [3,3,32,16] )
+        U4 = tf.layers.conv2d_transpose(A16, filters = 16, kernel_size = 2, strides = 2, padding = 'SAME')
+        U4 = tf.concat([U4, A2],3)
+        Z17 = tf.nn.conv2d(U4,W9_1, strides = [1,1,1,1], padding = 'SAME')
+        A17 = tf.nn.relu(Z17)
+        W9_2 =   get_variable("W9_2", [3,3,16,16] )
+        Z18 = tf.nn.conv2d(A17,W9_2, strides = [1,1,1,1], padding = 'SAME')
+        A18 = tf.nn.relu(Z18)
+    ### Unit 10 ###
+    with tf.name_scope('out_put'):
+        W10 =    get_variable("W10", [1,1,16,1] )
+        Z19 = tf.nn.conv2d(A18,W10, strides = [1,1,1,1], padding = 'SAME')
+        A19 = tf.nn.sigmoid(Z19)
+        Y_pred = A19
+    return Y_pred
+
+def loss_function(y_pred, y_true):
+    cost = tf.reduce_mean(tf.keras.losses.binary_crossentropy(y_true,y_pred))
+    return cost
+
+def mean_iou(y_pred,y_true):
+    y_pred_ = tf.to_int64(y_pred > 0.5)
+    y_true_ = tf.to_int64(y_true > 0.5)
+    score, up_opt = tf.metrics.mean_iou(y_true_, y_pred_, 2)
+    with tf.control_dependencies([up_opt]):
+        score = tf.identity(score)
+    return score
+
+
+# To train the model we can use a graph dictionary like this:
+
+# In[ ]:
+
+
+# build the graph as a dictionary
+def build_graph():
+    with tf.Graph().as_default() as g:
+        with tf.device("/gpu:0"):
+            with tf.name_scope('input'):
+                x_ = tf.placeholder(tf.float32, shape=(None,IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS))
+                y_ = tf.placeholder(tf.float32, shape=(None,IMG_HEIGHT, IMG_WIDTH, 1))
+            y_pred = UNet(x_)
+            with tf.name_scope('loss'):
+                loss = loss_function(y_pred,y_)
+        with tf.device("/cpu:0"):
+            with tf.name_scope("metrics"):
+                iou = mean_iou(y_pred,y_)
+        model_dict = {'graph': g, 'inputs': [x_, y_],'Iou':iou,'Loss':loss, 'y_pred':y_pred}
+    return model_dict
+
+
+# **prediction result:**
 # 
-# *But filling missing values with mean/median/mode is also a prediction which may not be 100% accurate, instead you can use models like Decision Trees and Random Forest which handle missing values very well.*
-
-# **Embarked Column**
-
-# In[ ]:
-
-
-#Lets check which rows have null Embarked column
-titanic[titanic['Embarked'].isnull()]
-
-
-# **PassengerId 62 and 830** have missing embarked values
+# The model use one channel label to classify if a pixel is belong to mask or background.
 # 
-# Both have ***Passenger class 1*** and ***fare $80.***
+# After passing forward the network, the result is shown as below:
+# ![result](http://i64.tinypic.com/ruy7sz.png)
+# Fig[1],[2] is the ground truth and prediction of a vaildation image.
+# Fig[3],[4] is the input and the prediction on test image
 # 
-# Lets plot a graph to visualize and try to guess from where they embarked
+# The overall OUI on the validation set is near 90%
 
-# In[ ]:
-
-
-sns.boxplot(x="Embarked", y="Fare", hue="Pclass", data=titanic);
-
-
-# In[ ]:
-
-
-titanic["Embarked"] = titanic["Embarked"].fillna('C')
-
-
-# We can see that for ***1st class*** median line is coming around ***fare $80*** for ***embarked*** value ***'C'***.
-# So we can replace NA values in Embarked column with 'C'
-
-# In[ ]:
-
-
-#there is an empty fare column in test set
-titanic_test.describe()
-
-
-# ***Fare Column***
-
-# In[ ]:
-
-
-titanic_test[titanic_test['Fare'].isnull()]
-
-
-# In[ ]:
-
-
-#we can replace missing value in fare by taking median of all fares of those passengers 
-#who share 3rd Passenger class and Embarked from 'S' 
-def fill_missing_fare(df):
-    median_fare=df[(df['Pclass'] == 3) & (df['Embarked'] == 'S')]['Fare'].median()
-#'S'
-       #print(median_fare)
-    df["Fare"] = df["Fare"].fillna(median_fare)
-    return df
-
-titanic_test=fill_missing_fare(titanic_test)
-
-
-# Feature Engineering
-# ===================
-
-# ***Deck- Where exactly were passenger on the ship?***
-
-# In[ ]:
-
-
-titanic["Deck"]=titanic.Cabin.str[0]
-titanic_test["Deck"]=titanic_test.Cabin.str[0]
-titanic["Deck"].unique() # 0 is for null values
-
-
-# In[ ]:
-
-
-g = sns.factorplot("Survived", col="Deck", col_wrap=4,
-                    data=titanic[titanic.Deck.notnull()],
-                    kind="count", size=2.5, aspect=.8);
-
-
-# In[ ]:
-
-
-titanic = titanic.assign(Deck=titanic.Deck.astype(object)).sort("Deck")
-g = sns.FacetGrid(titanic, col="Pclass", sharex=False,
-                  gridspec_kws={"width_ratios": [5, 3, 3]})
-g.map(sns.boxplot, "Deck", "Age");
-
-
-# In[ ]:
-
-
-titanic.Deck.fillna('Z', inplace=True)
-titanic_test.Deck.fillna('Z', inplace=True)
-titanic["Deck"].unique() # Z is for null values
-
-
-# ***How Big is your family?***
-
-# In[ ]:
-
-
-# Create a family size variable including the passenger themselves
-titanic["FamilySize"] = titanic["SibSp"] + titanic["Parch"]+1
-titanic_test["FamilySize"] = titanic_test["SibSp"] + titanic_test["Parch"]+1
-print(titanic["FamilySize"].value_counts())
-
-
-# In[ ]:
-
-
-# Discretize family size
-titanic.loc[titanic["FamilySize"] == 1, "FsizeD"] = 'singleton'
-titanic.loc[(titanic["FamilySize"] > 1)  &  (titanic["FamilySize"] < 5) , "FsizeD"] = 'small'
-titanic.loc[titanic["FamilySize"] >4, "FsizeD"] = 'large'
-
-titanic_test.loc[titanic_test["FamilySize"] == 1, "FsizeD"] = 'singleton'
-titanic_test.loc[(titanic_test["FamilySize"] >1) & (titanic_test["FamilySize"] <5) , "FsizeD"] = 'small'
-titanic_test.loc[titanic_test["FamilySize"] >4, "FsizeD"] = 'large'
-print(titanic["FsizeD"].unique())
-print(titanic["FsizeD"].value_counts())
-
-
-# In[ ]:
-
-
-sns.factorplot(x="FsizeD", y="Survived", data=titanic);
-
-
-# ***Do you have longer names?***
-
-# In[ ]:
-
-
-#Create feture for length of name 
-# The .apply method generates a new series
-titanic["NameLength"] = titanic["Name"].apply(lambda x: len(x))
-
-titanic_test["NameLength"] = titanic_test["Name"].apply(lambda x: len(x))
-#print(titanic["NameLength"].value_counts())
-
-bins = [0, 20, 40, 57, 85]
-group_names = ['short', 'okay', 'good', 'long']
-titanic['NlengthD'] = pd.cut(titanic['NameLength'], bins, labels=group_names)
-titanic_test['NlengthD'] = pd.cut(titanic_test['NameLength'], bins, labels=group_names)
-
-sns.factorplot(x="NlengthD", y="Survived", data=titanic)
-print(titanic["NlengthD"].unique())
-
-
-# ***Whats in the name?***
-
-# In[ ]:
-
-
-import re
-
-#A function to get the title from a name.
-def get_title(name):
-    # Use a regular expression to search for a title.  Titles always consist of capital and lowercase letters, and end with a period.
-    title_search = re.search(' ([A-Za-z]+)\.', name)
-    #If the title exists, extract and return it.
-    if title_search:
-        return title_search.group(1)
-    return ""
-
-#Get all the titles and print how often each one occurs.
-titles = titanic["Name"].apply(get_title)
-print(pd.value_counts(titles))
-
-
-#Add in the title column.
-titanic["Title"] = titles
-
-# Titles with very low cell counts to be combined to "rare" level
-rare_title = ['Dona', 'Lady', 'Countess','Capt', 'Col', 'Don', 
-                'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer']
-
-# Also reassign mlle, ms, and mme accordingly
-titanic.loc[titanic["Title"] == "Mlle", "Title"] = 'Miss'
-titanic.loc[titanic["Title"] == "Ms", "Title"] = 'Miss'
-titanic.loc[titanic["Title"] == "Mme", "Title"] = 'Mrs'
-titanic.loc[titanic["Title"] == "Dona", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Lady", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Countess", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Capt", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Col", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Don", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Major", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Rev", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Sir", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Jonkheer", "Title"] = 'Rare Title'
-titanic.loc[titanic["Title"] == "Dr", "Title"] = 'Rare Title'
-
-#titanic.loc[titanic["Title"].isin(['Dona', 'Lady', 'Countess','Capt', 'Col', 'Don', 
-#                'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer']), "Title"] = 'Rare Title'
-
-#titanic[titanic['Title'].isin(['Dona', 'Lady', 'Countess'])]
-#titanic.query("Title in ('Dona', 'Lady', 'Countess')")
-
-titanic["Title"].value_counts()
-
-
-titles = titanic_test["Name"].apply(get_title)
-print(pd.value_counts(titles))
-
-#Add in the title column.
-titanic_test["Title"] = titles
-
-# Titles with very low cell counts to be combined to "rare" level
-rare_title = ['Dona', 'Lady', 'Countess','Capt', 'Col', 'Don', 
-                'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer']
-
-# Also reassign mlle, ms, and mme accordingly
-titanic_test.loc[titanic_test["Title"] == "Mlle", "Title"] = 'Miss'
-titanic_test.loc[titanic_test["Title"] == "Ms", "Title"] = 'Miss'
-titanic_test.loc[titanic_test["Title"] == "Mme", "Title"] = 'Mrs'
-titanic_test.loc[titanic_test["Title"] == "Dona", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Lady", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Countess", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Capt", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Col", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Don", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Major", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Rev", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Sir", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Jonkheer", "Title"] = 'Rare Title'
-titanic_test.loc[titanic_test["Title"] == "Dr", "Title"] = 'Rare Title'
-
-titanic_test["Title"].value_counts()
-
-
-# ***Ticket column***
-
-# In[ ]:
-
-
-titanic["Ticket"].tail()
-
-
-# In[ ]:
-
-
-titanic["TicketNumber"] = titanic["Ticket"].str.extract('(\d{2,})', expand=True)
-titanic["TicketNumber"] = titanic["TicketNumber"].apply(pd.to_numeric)
-
-
-titanic_test["TicketNumber"] = titanic_test["Ticket"].str.extract('(\d{2,})', expand=True)
-titanic_test["TicketNumber"] = titanic_test["TicketNumber"].apply(pd.to_numeric)
-
-
-# In[ ]:
-
-
-#some rows in ticket column dont have numeric value so we got NaN there
-titanic[titanic["TicketNumber"].isnull()]
-
-
-# In[ ]:
-
-
-titanic.TicketNumber.fillna(titanic["TicketNumber"].median(), inplace=True)
-titanic_test.TicketNumber.fillna(titanic_test["TicketNumber"].median(), inplace=True)
-
-
-# Convert Categorical variables into Numerical ones
-# =================================================
-
-# In[ ]:
-
-
-from sklearn.preprocessing import LabelEncoder,OneHotEncoder
-
-labelEnc=LabelEncoder()
-
-cat_vars=['Embarked','Sex',"Title","FsizeD","NlengthD",'Deck']
-for col in cat_vars:
-    titanic[col]=labelEnc.fit_transform(titanic[col])
-    titanic_test[col]=labelEnc.fit_transform(titanic_test[col])
-
-titanic.head()
-
-
-# ***Age Column***
+# **Three quesion remain for this network:**
 # 
-# Age seems to be promising feature.
-# So it doesnt make sense to simply fill null values out with median/mean/mode.
+# 1. The threshold of the prediction pixcel is hard to determined. I think the OSTU adative threshold could be useful for the prediction.
 # 
-# We will use ***Random Forest*** algorithm to predict ages. 
-
-# In[ ]:
-
-
-with sns.plotting_context("notebook",font_scale=1.5):
-    sns.set_style("whitegrid")
-    sns.distplot(titanic["Age"].dropna(),
-                 bins=80,
-                 kde=False,
-                 color="red")
-    sns.plt.title("Age Distribution")
-    plt.ylabel("Count");
-
-
-# In[ ]:
-
-
-from sklearn.ensemble import RandomForestRegressor
-#predicting missing values in age using Random Forest
-def fill_missing_age(df):
-    
-    #Feature set
-    age_df = df[['Age','Embarked','Fare', 'Parch', 'SibSp',
-                 'TicketNumber', 'Title','Pclass','FamilySize',
-                 'FsizeD','NameLength',"NlengthD",'Deck']]
-    # Split sets into train and test
-    train  = age_df.loc[ (df.Age.notnull()) ]# known Age values
-    test = age_df.loc[ (df.Age.isnull()) ]# null Ages
-    
-    # All age values are stored in a target array
-    y = train.values[:, 0]
-    
-    # All the other values are stored in the feature array
-    X = train.values[:, 1::]
-    
-    # Create and fit a model
-    rtr = RandomForestRegressor(n_estimators=2000, n_jobs=-1)
-    rtr.fit(X, y)
-    
-    # Use the fitted model to predict the missing values
-    predictedAges = rtr.predict(test.values[:, 1::])
-    
-    # Assign those predictions to the full data set
-    df.loc[ (df.Age.isnull()), 'Age' ] = predictedAges 
-    
-    return df
-
-
-# In[ ]:
-
-
-titanic=fill_missing_age(titanic)
-titanic_test=fill_missing_age(titanic_test)
-
-
-# In[ ]:
-
-
-with sns.plotting_context("notebook",font_scale=1.5):
-    sns.set_style("whitegrid")
-    sns.distplot(titanic["Age"].dropna(),
-                 bins=80,
-                 kde=False,
-                 color="tomato")
-    sns.plt.title("Age Distribution")
-    plt.ylabel("Count")
-    plt.xlim((15,100));
-
-
-# **Feature Scaling**
-# ===============
+# 2. The prediction would make some very sparse pixel which should not be consider as a Nuclei. Thus a Low pass filter or Markov Random Field could be apply to expel those pixels
 # 
-# We can see that Age, Fare are measured on different scales, so we need to do Feature Scaling first before we proceed with predictions.
-
-# In[ ]:
-
-
-from sklearn import preprocessing
-
-std_scale = preprocessing.StandardScaler().fit(titanic[['Age', 'Fare']])
-titanic[['Age', 'Fare']] = std_scale.transform(titanic[['Age', 'Fare']])
-
-
-std_scale = preprocessing.StandardScaler().fit(titanic_test[['Age', 'Fare']])
-titanic_test[['Age', 'Fare']] = std_scale.transform(titanic_test[['Age', 'Fare']])
-
-
-# Correlation of features with target 
-# =======================
-
-# In[ ]:
-
-
-titanic.corr()["Survived"]
-
-
-# Predict Survival
-# ================
-
-# *Linear Regression*
-# -------------------
-
-# In[ ]:
-
-
-# Import the linear regression class
-from sklearn.linear_model import LinearRegression
-# Sklearn also has a helper that makes it easy to do cross validation
-from sklearn.cross_validation import KFold
-
-# The columns we'll use to predict the target
-predictors = ["Pclass", "Sex", "Age","SibSp", "Parch", "Fare",
-              "Embarked","NlengthD", "FsizeD", "Title","Deck"]
-target="Survived"
-# Initialize our algorithm class
-alg = LinearRegression()
-
-# Generate cross validation folds for the titanic dataset.  It return the row indices corresponding to train and test.
-# We set random_state to ensure we get the same splits every time we run this.
-kf = KFold(titanic.shape[0], n_folds=3, random_state=1)
-
-predictions = []
-
-
-# In[ ]:
-
-
-for train, test in kf:
-    # The predictors we're using the train the algorithm.  Note how we only take the rows in the train folds.
-    train_predictors = (titanic[predictors].iloc[train,:])
-    # The target we're using to train the algorithm.
-    train_target = titanic[target].iloc[train]
-    # Training the algorithm using the predictors and target.
-    alg.fit(train_predictors, train_target)
-    # We can now make predictions on the test fold
-    test_predictions = alg.predict(titanic[predictors].iloc[test,:])
-    predictions.append(test_predictions)
-
-
-# In[ ]:
-
-
-predictions = np.concatenate(predictions, axis=0)
-# Map predictions to outcomes (only possible outcomes are 1 and 0)
-predictions[predictions > .5] = 1
-predictions[predictions <=.5] = 0
-
-
-accuracy=sum(titanic["Survived"]==predictions)/len(titanic["Survived"])
-accuracy
-
-
-# *Logistic Regression*
-# -------------------
-
-# In[ ]:
-
-
-from sklearn import cross_validation
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import cross_val_score
-from sklearn.model_selection import ShuffleSplit
-
-predictors = ["Pclass", "Sex", "Fare", "Embarked","Deck","Age",
-              "FsizeD", "NlengthD","Title","Parch"]
-
-# Initialize our algorithm
-lr = LogisticRegression(random_state=1)
-# Compute the accuracy score for all the cross validation folds.
-cv = ShuffleSplit(n_splits=10, test_size=0.3, random_state=50)
-
-scores = cross_val_score(lr, titanic[predictors], 
-                                          titanic["Survived"],scoring='f1', cv=cv)
-# Take the mean of the scores (because we have one for each fold)
-print(scores.mean())
-
-
-# *Random Forest *
-# -------------------
-
-# In[ ]:
-
-
-from sklearn import cross_validation
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.cross_validation import KFold
-from sklearn.model_selection import cross_val_predict
-
-import numpy as np
-predictors = ["Pclass", "Sex", "Age",
-              "Fare","NlengthD","NameLength", "FsizeD", "Title","Deck"]
-
-# Initialize our algorithm with the default paramters
-# n_estimators is the number of trees we want to make
-# min_samples_split is the minimum number of rows we need to make a split
-# min_samples_leaf is the minimum number of samples we can have at the place where a tree branch ends (the bottom points of the tree)
-rf = RandomForestClassifier(random_state=1, n_estimators=10, min_samples_split=2, 
-                            min_samples_leaf=1)
-kf = KFold(titanic.shape[0], n_folds=5, random_state=1)
-cv = ShuffleSplit(n_splits=10, test_size=0.3, random_state=50)
-
-predictions = cross_validation.cross_val_predict(rf, titanic[predictors],titanic["Survived"],cv=kf)
-predictions = pd.Series(predictions)
-scores = cross_val_score(rf, titanic[predictors], titanic["Survived"],
-                                          scoring='f1', cv=kf)
-# Take the mean of the scores (because we have one for each fold)
-print(scores.mean())
-
-
-# In[ ]:
-
-
-predictors = ["Pclass", "Sex", "Age",
-              "Fare","NlengthD","NameLength", "FsizeD", "Title","Deck","TicketNumber"]
-rf = RandomForestClassifier(random_state=1, n_estimators=50, max_depth=9,min_samples_split=6, min_samples_leaf=4)
-rf.fit(titanic[predictors],titanic["Survived"])
-kf = KFold(titanic.shape[0], n_folds=5, random_state=1)
-predictions = cross_validation.cross_val_predict(rf, titanic[predictors],titanic["Survived"],cv=kf)
-predictions = pd.Series(predictions)
-scores = cross_val_score(rf, titanic[predictors], titanic["Survived"],scoring='f1', cv=kf)
-# Take the mean of the scores (because we have one for each fold)
-print(scores.mean())
-
-
-# Important features
-# ==================
-
-# In[ ]:
-
-
-importances=rf.feature_importances_
-std = np.std([rf.feature_importances_ for tree in rf.estimators_],
-             axis=0)
-indices = np.argsort(importances)[::-1]
-sorted_important_features=[]
-for i in indices:
-    sorted_important_features.append(predictors[i])
-#predictors=titanic.columns
-plt.figure()
-plt.title("Feature Importances By Random Forest Model")
-plt.bar(range(np.size(predictors)), importances[indices],
-       color="r", yerr=std[indices], align="center")
-plt.xticks(range(np.size(predictors)), sorted_important_features, rotation='vertical')
-
-plt.xlim([-1, np.size(predictors)]);
-
-
-# *Gradient Boosting*
-# -------------------
-
-# In[ ]:
-
-
-import numpy as np
-from sklearn.ensemble import GradientBoostingClassifier
-
-from sklearn.feature_selection import SelectKBest, f_classif
-from sklearn.cross_validation import KFold
-get_ipython().run_line_magic('matplotlib', 'inline')
-import matplotlib.pyplot as plt
-#predictors = ["Pclass", "Sex", "Age", "Fare",
- #             "FsizeD", "Embarked", "NlengthD","Deck","TicketNumber"]
-predictors = ["Pclass", "Sex", "Age",
-              "Fare","NlengthD", "FsizeD","NameLength","Deck","Embarked"]
-# Perform feature selection
-selector = SelectKBest(f_classif, k=5)
-selector.fit(titanic[predictors], titanic["Survived"])
-
-# Get the raw p-values for each feature, and transform from p-values into scores
-scores = -np.log10(selector.pvalues_)
-
-indices = np.argsort(scores)[::-1]
-
-sorted_important_features=[]
-for i in indices:
-    sorted_important_features.append(predictors[i])
-
-plt.figure()
-plt.title("Feature Importances By SelectKBest")
-plt.bar(range(np.size(predictors)), scores[indices],
-       color="seagreen", yerr=std[indices], align="center")
-plt.xticks(range(np.size(predictors)), sorted_important_features, rotation='vertical')
-
-plt.xlim([-1, np.size(predictors)]);
-
-
-# In[ ]:
-
-
-from sklearn import cross_validation
-from sklearn.linear_model import LogisticRegression
-predictors = ["Pclass", "Sex", "Age", "Fare", "Embarked","NlengthD",
-              "FsizeD", "Title","Deck"]
-
-# Initialize our algorithm
-lr = LogisticRegression(random_state=1)
-# Compute the accuracy score for all the cross validation folds.  
-cv = ShuffleSplit(n_splits=10, test_size=0.3, random_state=50)
-scores = cross_val_score(lr, titanic[predictors], titanic["Survived"], scoring='f1',cv=cv)
-print(scores.mean())
-
-
-# *AdaBoost *
-# --------------------
-
-# In[ ]:
-
-
-from sklearn.ensemble import AdaBoostClassifier
-predictors = ["Pclass", "Sex", "Age", "Fare", "Embarked","NlengthD",
-              "FsizeD", "Title","Deck","TicketNumber"]
-adb=AdaBoostClassifier()
-adb.fit(titanic[predictors],titanic["Survived"])
-cv = ShuffleSplit(n_splits=10, test_size=0.3, random_state=50)
-scores = cross_val_score(adb, titanic[predictors], titanic["Survived"], scoring='f1',cv=cv)
-print(scores.mean())
-
-
-# Maximum Voting ensemble and Submission
-# =======
-
-# In[ ]:
-
-
-predictions=["Pclass", "Sex", "Age", "Fare", "Embarked","NlengthD",
-              "FsizeD", "Title","Deck","NameLength","TicketNumber"]
-from sklearn.ensemble import VotingClassifier
-eclf1 = VotingClassifier(estimators=[
-        ('lr', lr), ('rf', rf), ('adb', adb)], voting='soft')
-eclf1 = eclf1.fit(titanic[predictors], titanic["Survived"])
-predictions=eclf1.predict(titanic[predictors])
-predictions
-
-test_predictions=eclf1.predict(titanic_test[predictors])
-
-test_predictions=test_predictions.astype(int)
-submission = pd.DataFrame({
-        "PassengerId": titanic_test["PassengerId"],
-        "Survived": test_predictions
-    })
-
-submission.to_csv("titanic_submission.csv", index=False)
-
-
-# ***To do: stacking!. Watch this space…***
-
-# ***Hope you find it useful. :)please upvote***
+# 3. How to regenerate a reliable seperated mask from the concatenated mask. the result generated by morphology from skimage is not reliable for cell that has interception.
+#  
+# I would be happy if someone could share their points of view on the question above.

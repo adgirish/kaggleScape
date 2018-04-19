@@ -4,217 +4,382 @@
 # In[ ]:
 
 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
+import seaborn as sns
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-
-# # Digit Recognizer in Python using Convolutional Neural Nets
-# by [Koba Khitalishvili](http://www.kobakhit.com/)
-# ## Introduction
-# I used Mathematica and a standard Neural Network model to get ~0.98 accuracy score after 40 minutes of computing. Starting with a brief benchmark Python code [found in the forums](https://www.kaggle.com/c/digit-recognizer/forums/t/2299/getting-started-python-sample-code-random-forest) one can jump into solving the Digit Recognizer
-# problem right away. Below code that uses Random Forest algorithm to classify images as digits will give you 
-# around 0.96 accuracy score in less than a minute which is great. However, this score will put you lower than the 200th place. 
-# According to [MNIST web page](http://yann.lecun.com/exdb/mnist/), convolutional neural networks algorithm yields good results.
-# I will try a simple neural network algorithm out in Python, expand it into a convolutional neural network and see if I can break into the top 100.
-
-# In[ ]:
-
-
+from sklearn.cross_validation import cross_val_score
 from sklearn.ensemble import RandomForestClassifier
-import numpy as np
-import pandas as pd
 
-# create the training & test sets, skipping the header row with [1:]
-dataset = pd.read_csv("../input/train.csv")
-target = dataset[[0]].values.ravel()
-train = dataset.iloc[:,1:].values
-test = pd.read_csv("../input/test.csv").values
-
-# create and train the random forest
-# multi-core CPUs can use: rf = RandomForestClassifier(n_estimators=100, n_jobs=2)
-rf = RandomForestClassifier(n_estimators=100)
-rf.fit(train, target)
-pred = rf.predict(test)
-
-np.savetxt('submission_rand_forest.csv', np.c_[range(1,len(test)+1),pred], delimiter=',', header = 'ImageId,Label', comments = '', fmt='%d')
-
-
-# ## Table of contents
-# 1. Data Preprocessing
-# 2. Train, Predict and Save
-# 3. Conclusion
-# 
-# ## Data Preprocessing
-# First, lets prepare the data. The `train.csv` has 42k rows. The first column is the digit labels. The rest 784 columns
-# are pixel color values that go from 0 to 255. After loading in the csv files in code section above, I saved the digit labels in the `target` variable and rows of pixel color values  in the `train` variable. 
-# The `test.csv` contains 28k rows of just the pixel color values which we need to classify as digits. Here is the preview of the complete MNIST dataset.
 
 # In[ ]:
 
 
-print(dataset.head())
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+df = pd.read_csv('../input/data.csv')
+df.info()
 
-
-# I convert each data variable from a python list into a numpy array. For the `target` array I specify the integer data type.
-# The train set has 42k rows and 784 columns, so its shape is `(42k,784)`. Each row is a 28 by 28 pixel
-# picture. I will reshape the train set to have `(42k,1)` shape, i.e. each row will contain a 28 by 28 matrix of pixel color values. Same for the test set.
 
 # In[ ]:
 
 
-# convert to array, specify data type, and reshape
-target = target.astype(np.uint8)
-train = np.array(train).reshape((-1, 1, 28, 28)).astype(np.uint8)
-test = np.array(test).reshape((-1, 1, 28, 28)).astype(np.uint8)
+# Court visualization of misses and shots
+court_scale, alpha = 7, 0.05
+plt.figure(figsize=(2 * court_scale, court_scale*(84.0/50.0)))
+# hit
+plt.subplot(121)
+h = df.loc[df.shot_made_flag == 1]
+plt.scatter(h.loc_x, h.loc_y, color='green', alpha=alpha)
+plt.title('Shots Made')
+ax = plt.gca()
+ax.set_ylim([-50, 900])
+# miss
+plt.subplot(122)
+h = df.loc[df.shot_made_flag == 0]
+plt.scatter(h.loc_x, h.loc_y, color='red', alpha=alpha)
+plt.title('Shots missed')
+ax = plt.gca()
+ax.set_ylim([-50, 900])
+plt.savefig('shots_made_and_missed.png')
 
 
-# Now, we can actually plot those pixel color values and see what a sample picture of a digit looks like. Below is the picture of a digit in the 1729th row:
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-
-plt.imshow(train[1729][0], cmap=cm.binary) # draw the picture
-
-
-# ## Train, Predict and Save
-# Below is a simple NN set up. Supposedly, it should give >0.9 accuracy score. I had trouble with figuring out
-# the training part in that the accuracy I was getting would not change during the training process. All I had to 
-# do was to decrease the learning rate from 0.01 to 0.0001, nota bene.
-
-# In[ ]:
-
-
-import lasagne
-from lasagne import layers
-from lasagne.updates import nesterov_momentum
-from nolearn.lasagne import NeuralNet
-from nolearn.lasagne import visualize
-
-net1 = NeuralNet(
-        layers=[('input', layers.InputLayer),
-                ('hidden', layers.DenseLayer),
-                ('output', layers.DenseLayer),
-                ],
-        # layer parameters:
-        input_shape=(None,1,28,28),
-        hidden_num_units=1000, # number of units in 'hidden' layer
-        output_nonlinearity=lasagne.nonlinearities.softmax,
-        output_num_units=10,  # 10 target values for the digits 0, 1, 2, ..., 9
-
-        # optimization method:
-        update=nesterov_momentum,
-        update_learning_rate=0.0001,
-        update_momentum=0.9,
-
-        max_epochs=15,
-        verbose=1,
-        )
-
-
-# Now, lets train the model. 
+# Notice the red dot at where the basket should be? He misses a lot of shots from under the basket. Must be those common ball scenarios.
 
 # In[ ]:
 
 
-# Train the network
-net1.fit(train, target)
+# combined shot types
+groups = df.groupby('combined_shot_type')
 
 
-# You can see the output associated with the training process. Right off the bat this set up gives us ~0.95 accuracy
-# score in just 15 epochs which completes in less 3 minuts. Unfortunately, one layer neural network does not improve 
-# beyond 0.96 accuracy score ragardless of how many neurons in a layer is specified (1000 in case above).
-# 
-# I will try out the convolutional neural network. To set up the CNN I added two convolutional layers and one pooling layer. 
-# I would add another pooling layer and a dropout layer, but training such a model would last for over 20 minutes and kaggle notebook is only allowed to run for 1200 seconds (20 minutes). 
-# As a result, below is the CNN model I will use for demonstration.
+fig, ax = plt.subplots(figsize=(court_scale, court_scale*(84.0/50.0)))
+ax.margins(0.05) # Optional, just adds 5% padding to the autoscaling
+alpha = 0.2
+alphas, n = [], float(len(df.combined_shot_type))
+for u in [i[0] for i in groups]:
+    d = len(df.loc[df.combined_shot_type == u, 'combined_shot_type'])
+    alphas.append(np.log1p(d))
+for (name, group), alp in zip(groups, alphas):
+    ax.plot(group.loc_x, group.loc_y,
+            marker='.', linestyle='', ms=12,
+            label=name, alpha=alp)
+ax.legend()
+plt.savefig('combined_shot_type_layout.png')
+
 
 # In[ ]:
 
 
-def CNN(n_epochs):
-    net1 = NeuralNet(
-        layers=[
-        ('input', layers.InputLayer),
-        ('conv1', layers.Conv2DLayer),      #Convolutional layer.  Params defined below
-        ('pool1', layers.MaxPool2DLayer),   # Like downsampling, for execution speed
-        ('conv2', layers.Conv2DLayer),
-        ('hidden3', layers.DenseLayer),
-        ('output', layers.DenseLayer),
-        ],
+court_scale, alpha = 5, 0.5
+df['unique_first_words'] = df.action_type.str.split(' ').str[0]
+uq_count = len(df['unique_first_words'].unique())
+a = int(uq_count / 2) + 1
 
-    input_shape=(None, 1, 28, 28),
-    conv1_num_filters=7, 
-    conv1_filter_size=(3, 3), 
-    conv1_nonlinearity=lasagne.nonlinearities.rectify,
-        
-    pool1_pool_size=(2, 2),
-        
-    conv2_num_filters=12, 
-    conv2_filter_size=(2, 2),    
-    conv2_nonlinearity=lasagne.nonlinearities.rectify,
-        
-    hidden3_num_units=1000,
-    output_num_units=10, 
-    output_nonlinearity=lasagne.nonlinearities.softmax,
+groups = df.groupby('unique_first_words')
+fig, ax = plt.subplots(figsize=(2 * court_scale, a * 1.1 * court_scale*(84.0/50.0)))
+X, Y = np.array([(i, 0) for i in np.arange(-400, 400, 0.1)]), np.array([(0, i) for i in np.arange(-60, 1000, 0.1)])
+for index, (name, group) in enumerate(groups):
+    plt.subplot(a, 2, index + 1)
+    h = group.loc[group.shot_made_flag == 1, ['loc_y', 'loc_x']]
+    m = group.loc[group.shot_made_flag == 0, ['loc_y', 'loc_x']]
+    
+    plt.plot(h.loc_x, h.loc_y,
+            marker='.', linestyle='', ms=12,
+            label=name, alpha=alpha, color='green')
+    
+    plt.plot(m.loc_x, m.loc_y,
+            marker='.', linestyle='', ms=12,
+            label=name, alpha=alpha, color='red')
+    x_lim = group.loc_x.mean() + 3* group.loc_x.std()
+    y_lim = group.loc_y.mean() + 3* group.loc_y.std()
+    plt.plot(X[:, 0], X[:, 1], 'black')
+    plt.plot(Y[:, 0], Y[:, 1], 'black')
+    plt.xlim([-x_lim, x_lim])
+    plt.ylim([-y_lim, y_lim])
+    
+    plt.title(name)
+    plt.savefig('action_type_first_words.png')
 
-    update_learning_rate=0.0001,
-    update_momentum=0.9,
-
-    max_epochs=n_epochs,
-    verbose=1,
-    )
-    return net1
-
-cnn = CNN(15).fit(train,target) # train the CNN model for 15 epochs
-
-
-# Looks like this CNN model produces a slightly better result than a simple NN model for the same number of epochs and neurons in the hidden layer. 
-# The CNN model was more time consuming though. If you think that it is not worth it to use the CNN model over the NN you are wrong.
-# NN model like any other has an upper bound on the best accuracy score it can produce. After 20 epochs 
-# NN model does not improve beyond ~0.97 whereas a CNN model gets closer to one. I was able to break into
-# top 100 and get the 94th place by using two convolutional layers and two pooling layers which gave me 0.98614 accuracy
-# in about 5 hours. I will provide the code in the post scriptum section.
-# 
-# So there you go. You have a starting point for using neural nets for image classification. 
-# If you expand on the info here and reach a score greater than 0.99 please drop a comment.
-# Now, lets use it on the test set and save the results.
-# 
 
 # In[ ]:
 
 
-# use the NN model to classify test data
-pred = cnn.predict(test)
+# Shot location by seconds remaining.
+# farther shots are made only when next to zero seconds are left
+# The greener the dot, the less the time left
+court_scale, alpha = 7, 0.1
 
-# save results
-np.savetxt('submission_cnn.csv', np.c_[range(1,len(test)+1),pred], delimiter=',', header = 'ImageId,Label', comments = '', fmt='%d')
+fig = plt.figure(figsize=(2 * court_scale, court_scale*(84.0/50.0)))
+plt.subplot(121)
+plt.scatter(df.loc_x, df.loc_y, alpha=alpha, c=df.seconds_remaining, cmap='Greens_r')
+plt.title('Seconds Remaining')
+plt.subplot(122)
+plt.scatter(df.loc_x, df.loc_y, alpha=alpha, c=df.minutes_remaining, cmap='Greens_r')
+plt.title('Minutes Remaining')
+plt.savefig('time_remaining_shot_layout.png')
 
 
-# ## Conclusion
-# Python really stands out when it comes to solving data problems. Its quick, intuitive, well documented and has a big community.
-# However, its biggest drawback in my opinion is setting up the environment. My set up is [Jupyter Notebook](http://jupyter.org/) coupled 
-# with [Anaconda](https://www.continuum.io/downloads). Both are great tools, howeverm I ended up spending 
-# couple hours taking care of the dependencies theano and lasagne and the Windows environment variables. In contrast to Mathematica which 
-# has superb report generating options, setting up Python environment can be and was for me a tiring experience. Nevertheless, it pays off because 
-# Python framework is well developed for solving data problems. For instance, Mathematica does not even have a CNN
-# implementation available as of 11/4/2015 and everything is done under the hood whereas in a Python framework one 
-# can find almost any algorithm imaginable.
-# 
-# Among Python, R and Julia I beleive Python and R are most competitive data science technologies with Julia being 
-# in the process of maturing. Choosing Python over R and vica versa really has to do with either individual preference or
-# the suitability of the technology for the problem at hand. Python is more efficient than R. But Julia is more 
-# efficient than both Python and R.
-# 
+# In[ ]:
 
-# ### Resources Used:
-# [Convolutional Neural Networks (LeNet)](http://deeplearning.net/tutorial/lenet.html)
+
+# Shooting accuracy with shot distance
+def get_acc(df, against):
+    ct = pd.crosstab(df.shot_made_flag, df[against]).apply(lambda x:x/x.sum(), axis=0)
+    x, y = ct.columns, ct.values[1, :]
+    plt.figure(figsize=(7, 5))
+    plt.plot(x, y)
+    plt.xlabel(against)
+    plt.ylabel('% shots made')
+    plt.savefig(against + '_vs_accuracy.png')
+get_acc(df, 'shot_distance')
+
+
+# In[ ]:
+
+
+data = df[['loc_x', 'loc_y', 'shot_made_flag']]
+data = data.dropna()
+def test_it(data):
+    clf = RandomForestClassifier(n_jobs=-1)  # A super simple classifier
+    return cross_val_score(clf, data.drop('shot_made_flag', 1), data.shot_made_flag,
+                           scoring='roc_auc', cv=10
+                          )
+test_it(data).mean()
+
+
+# In[ ]:
+
+
+# A joint plot should give us some density measures
+# Looks like a classifier will do a terrible job at this.
+sns.jointplot(x="loc_x", y="loc_y", data=data, kind='kde')
+
+
+# In[ ]:
+
+
+# If we take only the y location into consideration, we should see some improvement
+data = df[['loc_y', 'shot_made_flag']]
+data = data.dropna()
+test_it(data).mean()
+
+
+# In[ ]:
+
+
+# That does make improvements, though a more accurate measure of what we are
+# trying to do here would be shot_distance
+data = df[['shot_distance', 'shot_made_flag']]
+data = data.dropna()
+test_it(data).mean()
+
+
+# In[ ]:
+
+
+# What can we learn from time?
+get_acc(df, 'seconds_remaining')
+
+
+# In[ ]:
+
+
+# Not much there, except perhapsin the < 5 second zone
+# Let's test it
+data = df[['seconds_remaining', 'shot_distance', 'shot_made_flag']].dropna()
+test_it(data).mean()
+
+
+# In[ ]:
+
+
+# Nope! as expected, this is not a good estimator feature.
+# Kobe would not change performance with pressure! He's better than that.
+# Let's see minutes remaining, simply because we can
+get_acc(df, 'minutes_remaining')
+
+
+# In[ ]:
+
+
+# Not much there either. Let's see which period is better for our man
+get_acc(df, 'period')
+
+
+# In[ ]:
+
+
+# Not much variation there either. Kobe is really consistent.
+# let's see season
+print(df.season.unique())
+df['season_start_year'] = df.season.str.split('-').str[0]
+df['season_start_year'] = df['season_start_year'].astype(int)
+get_acc(df, 'season_start_year')
+
+
+# In[ ]:
+
+
+# Although we are seeing some seasonality here, let's not forget the scale.
+# To be sure, we add this and test our classifier
+
+data = df[['season_start_year', 'shot_distance', 'shot_made_flag']].dropna()
+test_it(data).mean()
+
+
+# In[ ]:
+
+
+# As expected, our predictions decrease in effectiveness.
+# What about the action type field?
+action_map = {action: i for i, action in enumerate(df.action_type.unique())}
+df['action_type_enumerated'] = df.action_type.map(action_map)
+get_acc(df, 'action_type_enumerated')
+
+
+# In[ ]:
+
+
+# There is a lot of variation here. Probably if we could exploit the inherent
+# ordering of numbers and not depend on the enumeration values...(I degress)
+# Instead of one-hot encoding it let's create a map which sorts them in order of
+# increasing accuracy
+def sort_encode(df, field):
+    ct = pd.crosstab(df.shot_made_flag, df[field]).apply(lambda x:x/x.sum(), axis=0)
+    temp = list(zip(ct.values[1, :], ct.columns))
+    temp.sort()
+    new_map = {}
+    for index, (acc, old_number) in enumerate(temp):
+        new_map[old_number] = index
+    new_field = field + '_sort_enumerated'
+    df[new_field] = df[field].map(new_map)
+    get_acc(df, new_field)
+sort_encode(df, 'action_type_enumerated')
+
+
+# In[ ]:
+
+
+# Pretty neat now huh? Let's see if all this monkeying around has been useful or not.
+data = df[['action_type_enumerated', 'shot_distance', 'shot_made_flag']].dropna()
+x = test_it(data)
+data = df[['action_type_enumerated_sort_enumerated', 'shot_distance', 'shot_made_flag']].dropna()
+y = test_it(data)
+print(x.mean(), y.mean())
+
+
+# In[ ]:
+
+
+# Seems like action type gave a good kick to our prediction capability. The difference in
+# scores is negligible enough to have come from random seeds in the RNG
+# Ordering it only made our graph look nicer. It would impact another classifier though,
+# something like an SVM which works on kernel methods would be affected by the mapping.
+
+# Let's look at opponents. We do the same things as with action_types.
+opponent_map = {opp: i for i, opp in enumerate(df.opponent.unique())}
+df['opponent_enumerated'] = df.opponent.map(opponent_map)
+
+sort_encode(df, 'opponent_enumerated')
+
+
+# In[ ]:
+
+
+# this might have an effect. Let's see by throwing it in the mix.
+data = df[['action_type_enumerated', 'shot_distance',
+           'shot_made_flag', 'opponent_enumerated_sort_enumerated']].dropna()
+test_it(data).mean()
+
+
+# In[ ]:
+
+
+# And we lose improvement again. Let's see what matchup has to offer. We notice that there are two
+# things in this field. A vs. B and A @ B. Assuming that @ means away, let's see if it offers any
+# improvements
+df['away'] = df.matchup.str.contains('@')
+data = df[['action_type_enumerated', 'shot_distance',
+           'shot_made_flag', 'away']].dropna()
+test_it(data).mean()
+
+
+# In[ ]:
+
+
+# Some minor improvements have occured. Try forking this notebook and looking at other fields
+# See what combinations offer advantages. We now move to the classifier.
+# We focus our attention on tuning the classifier. To keep things simple we will use the same
+# one we have been using up till now.
+data = df[['action_type_enumerated', 'shot_distance',
+           'shot_made_flag', 'away']].dropna()
+
+# We see how score improves with estimators.
+estimators, scores = list(range(1, 100, 5)), []
+for i in estimators:
+    clf = RandomForestClassifier(n_jobs=-1, n_estimators=i, random_state=2016)
+    x = cross_val_score(clf, data.drop('shot_made_flag', 1), data.shot_made_flag,
+                              scoring='roc_auc', cv=10)
+    scores.append(x)
+x = [i for i in estimators for j in range(10)]
+sns.boxplot(x, np.array(scores).flatten())
+
+
+# In[ ]:
+
+
+# As seen, we probably need about 70 estimators to have a good enough estimator.
+# After that it's diminished results.
+# Let's look at tree depth.
+depth, scores = list(range(1, 20, 1)), []
+for i in depth:
+    clf = RandomForestClassifier(n_jobs=-1, n_estimators=70, max_depth=i, random_state=2016)
+    x = cross_val_score(clf, data.drop('shot_made_flag', 1), data.shot_made_flag,
+                              scoring='roc_auc', cv=10)
+    scores.append(x)
+x = [i for i in depth for j in range(10)]
+sns.boxplot(x, np.array(scores).flatten())
+
+
+# In[ ]:
+
+
+# So based on the peak of the boxplots we select 7 to be our maxdepth
+# Let's predict based on all this work for now. We avoid looking at Leakage for the time
+# being and move on..
+
+clf = RandomForestClassifier(n_jobs=-1, n_estimators=70, max_depth=7, random_state=2016) # a more powerful classifier
+
+train = df.loc[~df.shot_made_flag.isnull(), ['action_type_enumerated_sort_enumerated',
+                                             'shot_distance', 'shot_made_flag', 'away']]
+test = df.loc[df.shot_made_flag.isnull(), ['action_type_enumerated_sort_enumerated',
+                                           'shot_distance', 'shot_id', 'away']]
+# Impute
+mode = test.action_type_enumerated_sort_enumerated.mode()[0]
+test.action_type_enumerated_sort_enumerated.fillna(mode, inplace=True)
+
+# Train and predict
+clf.fit(train.drop('shot_made_flag', 1), train.shot_made_flag)
+predictions = clf.predict_proba(test.drop('shot_id', 1))
+
+
+# In[ ]:
+
+
+#print(check_output(["cat", "../input/sample_submission.csv"]).decode("utf8"))
+#shot_id,shot_made_flag
+#1,0
+
+submission = pd.DataFrame({'shot_id': test.shot_id,
+                           'shot_made_flag': predictions[:, 1]})
+submission[['shot_id', 'shot_made_flag']].to_csv('submission.csv', index=False)
+
+
+# # Something important though:
 # 
-# [CS231n Convolutional Neural Networks for Visual Recognition](http://cs231n.github.io/convolutional-networks/)
-# 
-# [Tutorial: Training convolutional neural networks with nolearn](http://nbviewer.ipython.org/github/dnouri/nolearn/blob/master/docs/notebooks/CNN_tutorial.ipynb)
-# 
-# [Using convolutional neural nets to detect facial keypoints tutorial](http://danielnouri.org/notes/2014/12/17/using-convolutional-neural-nets-to-detect-facial-keypoints-tutorial/)
-# 
-# [Deep learning – Convolutional neural networks and feature extraction with Python](http://blog.christianperone.com/2015/08/convolutional-neural-networks-and-feature-extraction-with-python/)
+# - a lot of our graphs were showing Kobe's accuracy below 0.5
+# - It reminds me of the illusion of skill as discussed in "Thinking, Fast and Slow" 
+# - It does go up(accuracy) to 1 in the action type graph but I suspect it is due to small sample size in that type of action.

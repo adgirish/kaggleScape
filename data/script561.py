@@ -1,731 +1,462 @@
 
 # coding: utf-8
 
-# # Introduction
+# # Part 0 - Intro
+
+# This notebook takes a lot of inspiration from:
+# - https://www.kaggle.com/keegil/keras-u-net-starter-lb-0-277
+# - https://www.kaggle.com/takuok/keras-generator-starter-lb-0-326/notebook
+# - and many others!
 # 
-# Solution outlined in the notebook can be arrived at by:
+# Other than tidying up the structure a little, and some verbose print messages and inline comments, I've also:
+# - Chose an input image size of (256,256) and increased the U-net's basin 'depth' by 1 extra layer.
+# - Added in a custom log loss + metric (mean_iou) plot based on [this](https://github.com/deepsense-ai/intel-ai-webinar-neural-networks/blob/master/live_loss_plot.py)
+# - Add in runtime data augmentation, credits to this [kernel](https://www.kaggle.com/aviwolfson/adding-augmentation-to-keras-u-net-starter) and this [kernel](https://www.kaggle.com/c0conuts/unet-imagedatagenerator-lb-0-336)!
+# - Add support for multiple GPUs
 # 
-# 1. Training XGboost model with context
-# 1. Generating class predictions from the trained model
-# 1. Create bag-of-words from training set to lookup normalized text of words available in test
-# 1. Create class-wise regex function for new words, after looking up from bag-of-words created above
-# 1. Normalize text and generate output**
-# 
-# This solution is an improvement to existing kernels and I would like to thank BingQing Wei, Neerja Doshi and Alvira for sharing starter codes on XGboost model and class-wise processing functions. 
-# 
-# 
-# ### I've worked on python 2.7 and the code doesn't work here (partially have to do with package dependency). You can leverage this to build your own notebook in 2.7
-# ### I've also uploaded the final results (output/sub2.csv) if anyone is interested in comparing the results.
+# TODO:
+# - Create computational graph visual of the keras model following [this](https://keras.io/visualization/)??
 
 # In[ ]:
 
 
-# Import necessary packages
-import pandas as pd
+# Set number of GPUs
+num_gpus = 1   #defaults to 1 if one-GPU or one-CPU. If 4 GPUs, set to 4.
+
+# Set height (y-axis length) and width (x-axis length) to train model on
+img_height, img_width = (256,256)  #Default to (256,266), use (None,None) if you do not want to resize imgs
+
+
+# In[ ]:
+
+
+# Import all the necessary libraries
+import os
+import datetime
+import glob
+import random
+import sys
+
+import matplotlib.pyplot as plt
+import skimage.io                                     #Used for imshow function
+import skimage.transform                              #Used for resize function
+from skimage.morphology import label                  #Used for Run-Length-Encoding RLE to create final submission
+
 import numpy as np
-import re
-from collections import defaultdict, Counter
-from datetime import datetime
-import string
-import roman
-import num2words
-import inflect
-p = inflect.engine()
+import pandas as pd
+
+import keras
+from keras.layers import Input, Dense, Activation, ZeroPadding2D, BatchNormalization, Flatten, Conv2D, Conv2DTranspose
+from keras.layers import AveragePooling2D, MaxPooling2D, Dropout, GlobalMaxPooling2D, GlobalAveragePooling2D, Lambda
+from keras.layers.advanced_activations import LeakyReLU
+from keras.models import load_model, Model
+from keras.preprocessing.image import ImageDataGenerator
+from keras.layers.merge import add, concatenate
+from keras.callbacks import EarlyStopping, ModelCheckpoint
+from keras.utils import multi_gpu_model, plot_model
+from keras import backend as K
+import tensorflow as tf
+import sklearn
+from sklearn.model_selection import train_test_split
 
 
-# # Step 1: XGboost Model Creation
-# 
-# Refer to https://www.kaggle.com/alphasis/xgboost-with-context-label-data-acc-99-637 for training XGboost model
-
-# # Step 2: Class Perdictions
-# 
-# I've uploaded data set with predictions from trained model that can be used for further processing.
-
-# In[ ]:
-
-
-get_ipython().system('ls ../input')
-
-
-# In[ ]:
-
-
-test_df = pd.read_csv("../input/classpredictions/test_rf.csv")
-test_df.drop("Unnamed: 0", axis=1,inplace=True)
-train = pd.read_csv("../input/text-normalization-challenge-english-language/en_train.csv")
-
-
-# Create id column that is required for final submission
-
-# In[ ]:
-
-
-test_df['id'] = test_df[['sentence_id','token_id']].apply(lambda x: str(x[0])+"_"+str(x[1]),axis=1)
+print('Python       :', sys.version.split('\n')[0])
+print('Numpy        :', np.__version__)
+print('Skimage      :', skimage.__version__)
+print('Scikit-learn :', sklearn.__version__)
+print('Keras        :', keras.__version__)
+print('Tensorflow   :', tf.__version__)
 
 
 # In[ ]:
 
 
-test_df.head()
+# Set seed values
+seed = 42
+random.seed = seed
+np.random.seed(seed=seed)
 
-
-# # Step 3: Create bag-of-words
 
 # In[ ]:
 
 
-def bagOfWords(cls):
-    d = defaultdict(list)
-    train_cls = train[train["class"]==cls]
-    train_list = [(train_cls.iloc[i,3],train_cls.iloc[i,4]) for i in range(train_cls.shape[0])]
-    for k,v in train_list:
-        d[k].append(v)
-    counter_dict = {}
-    for key in d:
-        c = Counter(d[key]).most_common(1)[0][0]
-        counter_dict[key] = c
-    return counter_dict
+# Have a look at our data folder
+topDir = '/kaggle' #defaults to '/kaggle' in kaggle kernels, different if on own system e.g. '/home/user/kaggle/dsbowl'
+os.chdir(topDir)    #changes our python working directory to the top directory of our kaggle files
+print(os.listdir(os.path.join(topDir, 'input')))  #see what's in the input folder (where data is in)
 
-
-# Create a bag-of-words dictionary for each class 
 
 # In[ ]:
 
 
-plain_trained = bagOfWords("PLAIN")
-punt_trained = bagOfWords("PUNCT")
-time_trained = bagOfWords("TIME")
-frac_trained = bagOfWords('FRACTION')
-add_trained = bagOfWords('ADDRESS')
-tel_trained = bagOfWords('TELEPHONE')
-dec_trained = bagOfWords('DECIMAL')
-mon_trained = bagOfWords('MONEY')
-digit_trained = bagOfWords('DIGIT')
-mes_trained = bagOfWords('MEASURE')
-ord_trained = bagOfWords('ORDINAL')
-elec_trained = bagOfWords('ELECTRONIC')
-verb_trained = bagOfWords('VERBATIM')
-card_trained = bagOfWords('CARDINAL')
-let_trained = bagOfWords('LETTERS')
-date_trained = bagOfWords('DATE')
+train_path = os.path.join(topDir, 'input/stage1_train')  #path to training data file/folder
+test_path = os.path.join(topDir, 'input/stage1_test')   #path to test data file/folder
 
 
-# # Step 4: Create Class-wise regex Functions
-
-# Generic function definition
+# # Part 1 - Data Input
 
 # In[ ]:
 
 
-# Checking if key is decimal or digit or general numeric
-def is_num(key):
-    if is_float(key) or re.match(r'^-?[0-9]\d*?$', key.replace(',','')): return True
-    else: return False
+get_ipython().run_cell_magic('time', '', "# Get training data\ndef get_X_data(path, output_shape=(None, None)):\n    '''\n    Loads images from path/{id}/images/{id}.png into a numpy array\n    '''\n    img_paths = ['{0}/{1}/images/{1}.png'.format(path, id) for id in os.listdir(path)]\n    X_data = np.array([skimage.transform.resize(skimage.io.imread(path)[:,:,:3], output_shape=output_shape, mode='constant', preserve_range=True) for path in img_paths], dtype=np.uint8)  #take only 3 channels/bands\n    \n    return X_data\nX_train = get_X_data(train_path, output_shape=(img_height,img_width))\nprint(X_train.shape, X_train.dtype)")
 
-def is_float(string):
-    try:
-        return float(string.replace(',','')) and "." in string # True if string is a number contains a dot
-    except ValueError:  # String is not a number
-        return False
-
-def bag2word(key,bag_dict):
-    try:
-        return bag_dict[key]
-    except:
-        return key
-
-
-# ## Generic Numeric
 
 # In[ ]:
 
 
-def num2word(key):
-    bag_res = bag2word(key, digit_trained)
-    if bag_res != key: return bag_res
-    if re.match(r'^-?\d+$', key.replace(',','')):
-        return digit2word(key)
-    if is_float(key):
-        return float2word(key)
+get_ipython().run_cell_magic('time', '', "# Get training data labels\ndef get_Y_data(path, output_shape=(None, None)):\n    '''\n    Loads and concatenates images from path/{id}/masks/{id}.png into a numpy array\n    '''\n    img_paths = [glob.glob('{0}/{1}/masks/*.png'.format(path, id)) for id in os.listdir(path)]\n    \n    Y_data = []\n    for i, img_masks in enumerate(img_paths):  #loop through each individual nuclei for an image and combine them together\n        masks = skimage.io.imread_collection(img_masks).concatenate()  #masks.shape = (num_masks, img_height, img_width)\n        mask = np.max(masks, axis=0)                                   #mask.shape = (img_height, img_width)\n        mask = skimage.transform.resize(mask, output_shape=output_shape+(1,), mode='constant', preserve_range=True)  #need to add an extra dimension so mask.shape = (img_height, img_width, 1)\n        Y_data.append(mask)\n    Y_data = np.array(Y_data, dtype=np.bool)\n    \n    return Y_data\nY_train = get_Y_data(train_path, output_shape=(img_height,img_width))\nprint(Y_train.shape, Y_train.dtype)")
 
 
-# ## Ordinal
+# ## Visualize masks on the training data
 
 # In[ ]:
 
 
-def ordinal2word(key):
-    bag_res = bag2word(key, ord_trained)
-    if bag_res != key: return bag_res
-    num = re.sub(r'[^0-9]',"",key).strip()
-    if len(num)!=0: return num2words(int(num),ordinal=True)
-    try:
-        num = roman.fromRoman(key)
-        return "the "+ num2words(int(num),ordinal=True)
-    except:
-        return key
+id = 64
+print(X_train[id].shape)
+skimage.io.imshow(X_train[id])
+plt.show()
+skimage.io.imshow(Y_train[id][:,:,0])
+plt.show()
 
 
-# ## Measures
+# # Part 2 - Build model
 
 # In[ ]:
 
 
-#Comprehensive list of all measures
-dict_m = {'"': 'inches', "'": 'feet', 'km/s': 'kilometers per second', 'AU': 'units', 'BAR': 'bars',
-          'CM': 'centimeters', 'mm': 'millimeters', 'FT': 'feet', 'G': 'grams', 'GAL': 'gallons', 'GB': 'gigabytes',
-          'GHZ': 'gigahertz', 'HA': 'hectares', 'HP': 'horsepower', 'HZ': 'hertz', 'KM':'kilometers',
-          'km3': 'cubic kilometers','KA':'kilo amperes', 'KB': 'kilobytes', 'KG': 'kilograms', 'KHZ': 'kilohertz',
-          'KM²': 'square kilometers', 'KT': 'knots', 'KV': 'kilo volts', 'M': 'meters','KM2': 'square kilometers',
-          'Kw':'kilowatts', 'KWH': 'kilo watt hours', 'LB': 'pounds', 'LBS': 'pounds', 'MA': 'mega amperes',
-          'MB': 'megabytes','KW': 'kilowatts', 'MPH': 'miles per hour', 'MS': 'milliseconds', 'MV': 'milli volts',
-          'kJ':'kilojoules', 'km/h': 'kilometers per hour',  'V': 'volts', 'M2': 'square meters', 'M3': 'cubic meters',
-          'MW': 'megawatts', 'M²': 'square meters', 'M³': 'cubic meters', 'OZ': 'ounces',  'MHZ': 'megahertz',
-          'MI': 'miles','MB/S': 'megabytes per second', 'MG': 'milligrams', 'ML': 'milliliters', 'YD': 'yards',
-          'au': 'units', 'bar': 'bars', 'cm': 'centimeters', 'ft': 'feet', 'g': 'grams', 'gal': 'gallons',
-          'gb': 'gigabytes', 'ghz': 'gigahertz', 'ha': 'hectares', 'hp': 'horsepower', 'hz': 'hertz',
-          'kWh': 'kilo watt hours', 'ka': 'kilo amperes', 'kb': 'kilobytes', 'kg': 'kilograms', 'khz': 'kilohertz',
-          'km': 'kilometers', 'km2': 'square kilometers', 'km²': 'square kilometers', 'kt': 'knots',
-          'kv': 'kilo volts','kw': 'kilowatts', 'lb': 'pounds', 'lbs': 'pounds', 'm': 'meters', 'm2': 'square meters',
-          'm3': 'cubic meters', 'ma': 'mega amperes', 'mb': 'megabytes', 'mb/s': 'megabytes per second', 
-          'mg': 'milligrams', 'mhz': 'megahertz', 'mi': 'miles', 'ml': 'milliliters', 'mph': 'miles per hour',
-          'ms': 'milliseconds', 'mv': 'milli volts', 'mw': 'megawatts', 'm²': 'square meters','m³': 'cubic meters',
-          'oz': 'ounces', 'v': 'volts', 'yd': 'yards', 'µg': 'micrograms', 'ΜG': 'micrograms',"sq mi":"square miles",
-          'kg/m3': 'kilograms per cubic meter', "mg/kg":"milli grams per kilogram"}
+# Design our model architecture here
+def keras_model(img_width=256, img_height=256):
+    '''
+    Modified from https://keunwoochoi.wordpress.com/2017/10/11/u-net-on-keras-2-0/
+    '''
+    n_ch_exps = [4, 5, 6, 7, 8, 9]   #the n-th deep channel's exponent i.e. 2**n 16,32,64,128,256
+    k_size = (3, 3)                  #size of filter kernel
+    k_init = 'he_normal'             #kernel initializer
 
-def measure2word(key):
-    bag_res = bag2word(key, mes_trained)
-    if bag_res != key: return bag_res
-    if "%" in key: unit = "percent"; val = key[:len(key)-1]
-    elif "/" in key and key.split("/")[0].replace(".","").isdigit():
-        try:
-            unit = "per " + dict_m[key.split("/")[-1]]
-        except KeyError:
-            unit = "per " + key.split("/")[-1].lower()
-        
-        val = key.split("/")[0]
+    if K.image_data_format() == 'channels_first':
+        ch_axis = 1
+        input_shape = (3, img_width, img_height)
+    elif K.image_data_format() == 'channels_last':
+        ch_axis = 3
+        input_shape = (img_width, img_height, 3)
+
+    inp = Input(shape=input_shape)
+    encodeds = []
+
+    # encoder
+    enc = inp
+    print(n_ch_exps)
+    for l_idx, n_ch in enumerate(n_ch_exps):
+        enc = Conv2D(filters=2**n_ch, kernel_size=k_size, activation='relu', padding='same', kernel_initializer=k_init)(enc)
+        enc = Dropout(0.1*l_idx,)(enc)
+        enc = Conv2D(filters=2**n_ch, kernel_size=k_size, activation='relu', padding='same', kernel_initializer=k_init)(enc)
+        encodeds.append(enc)
+        #print(l_idx, enc)
+        if n_ch < n_ch_exps[-1]:  #do not run max pooling on the last encoding/downsampling step
+            enc = MaxPooling2D(pool_size=(2,2))(enc)
+    
+    # decoder
+    dec = enc
+    print(n_ch_exps[::-1][1:])
+    decoder_n_chs = n_ch_exps[::-1][1:]
+    for l_idx, n_ch in enumerate(decoder_n_chs):
+        l_idx_rev = len(n_ch_exps) - l_idx - 2  #
+        dec = Conv2DTranspose(filters=2**n_ch, kernel_size=k_size, strides=(2,2), activation='relu', padding='same', kernel_initializer=k_init)(dec)
+        dec = concatenate([dec, encodeds[l_idx_rev]], axis=ch_axis)
+        dec = Conv2D(filters=2**n_ch, kernel_size=k_size, activation='relu', padding='same', kernel_initializer=k_init)(dec)
+        dec = Dropout(0.1*l_idx)(dec)
+        dec = Conv2D(filters=2**n_ch, kernel_size=k_size, activation='relu', padding='same', kernel_initializer=k_init)(dec)
+
+    outp = Conv2DTranspose(filters=1, kernel_size=k_size, activation='sigmoid', padding='same', kernel_initializer='glorot_normal')(dec)
+
+    model = Model(inputs=[inp], outputs=[outp])
+    
+    return model
+
+
+# In[ ]:
+
+
+# Custom IoU metric
+def mean_iou(y_true, y_pred):
+    prec = []
+    for t in np.arange(0.5, 1.0, 0.05):
+        y_pred_ = tf.to_int32(y_pred > t)
+        score, up_opt = tf.metrics.mean_iou(y_true, y_pred_, 2)
+        K.get_session().run(tf.local_variables_initializer())
+        with tf.control_dependencies([up_opt]):
+            score = tf.identity(score)
+        prec.append(score)
+    return K.mean(K.stack(prec), axis=0)
+
+# Custom loss function
+def dice_coef(y_true, y_pred):
+    smooth = 1.
+    y_true_f = K.flatten(y_true)
+    y_pred_f = K.flatten(y_pred)
+    intersection = K.sum(y_true_f * y_pred_f)
+    return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
+
+def bce_dice_loss(y_true, y_pred):
+    return 0.5 * keras.losses.binary_crossentropy(y_true, y_pred) - dice_coef(y_true, y_pred)
+
+
+# In[ ]:
+
+
+# Set some model compile parameters
+optimizer = 'adam'
+loss      = bce_dice_loss
+metrics   = [mean_iou]
+
+# Compile our model
+model = keras_model(img_width=img_width, img_height=img_height)
+model.summary()
+
+# For more GPUs
+if num_gpus > 1:
+    model = multi_gpu_model(model, gpus=num_gpus)
+
+model.compile(optimizer=optimizer, loss=loss, metrics=metrics)
+
+
+# # Part 3 - Run model
+
+# In[ ]:
+
+
+# Runtime data augmentation
+def get_train_test_augmented(X_data=X_train, Y_data=Y_train, validation_split=0.25, batch_size=32, seed=seed):
+    X_train, X_test, Y_train, Y_test = train_test_split(X_data,
+                                                        Y_data,
+                                                        train_size=1-validation_split,
+                                                        test_size=validation_split,
+                                                        random_state=seed)
+    
+    # Image data generator distortion options
+    data_gen_args = dict(rotation_range=45.,
+                         width_shift_range=0.1,
+                         height_shift_range=0.1,
+                         shear_range=0.2,
+                         zoom_range=0.2,
+                         horizontal_flip=True,
+                         vertical_flip=True,
+                         fill_mode='reflect')  #use 'constant'??
+
+
+    # Train data, provide the same seed and keyword arguments to the fit and flow methods
+    X_datagen = ImageDataGenerator(**data_gen_args)
+    Y_datagen = ImageDataGenerator(**data_gen_args)
+    X_datagen.fit(X_train, augment=True, seed=seed)
+    Y_datagen.fit(Y_train, augment=True, seed=seed)
+    X_train_augmented = X_datagen.flow(X_train, batch_size=batch_size, shuffle=True, seed=seed)
+    Y_train_augmented = Y_datagen.flow(Y_train, batch_size=batch_size, shuffle=True, seed=seed)
+     
+    
+    # Test data, no data augmentation, but we create a generator anyway
+    X_datagen_val = ImageDataGenerator()
+    Y_datagen_val = ImageDataGenerator()
+    X_datagen_val.fit(X_test, augment=True, seed=seed)
+    Y_datagen_val.fit(Y_test, augment=True, seed=seed)
+    X_test_augmented = X_datagen_val.flow(X_test, batch_size=batch_size, shuffle=True, seed=seed)
+    Y_test_augmented = Y_datagen_val.flow(Y_test, batch_size=batch_size, shuffle=True, seed=seed)
+    
+    
+    # combine generators into one which yields image and masks
+    train_generator = zip(X_train_augmented, Y_train_augmented)
+    test_generator = zip(X_test_augmented, Y_test_augmented)
+    
+    return train_generator, test_generator
+
+
+# In[ ]:
+
+
+# Runtime custom callbacks
+#%% https://github.com/deepsense-ai/intel-ai-webinar-neural-networks/blob/master/live_loss_plot.py
+# Fixed code to enable non-flat loss plots on keras model.fit_generator()
+import matplotlib.pyplot as plt
+from keras.callbacks import Callback
+from IPython.display import clear_output
+#from matplotlib.ticker import FormatStrFormatter
+
+def translate_metric(x):
+    translations = {'acc': "Accuracy", 'loss': "Log-loss (cost function)"}
+    if x in translations:
+        return translations[x]
     else:
-        v = key.split()
-        if len(v)>2:
-            try:
-                unit = " ".join(v[1:-1])+" "+dict_m[v[-1]]
-            except KeyError:
-                unit = " ".join(v[1:-1])+" "+v[-1].lower()
-        else:
-            try:
-                unit = dict_m[v[-1]]
-            except KeyError:
-                unit = v[-1].lower()
-        val = v[0]
-    if is_num(val):
-        val = p.number_to_words(val,andword='').replace("-"," ").replace(',','')
-        text = val + ' ' + unit
-    else: text = key
-    return text
+        return x
 
+class PlotLosses(Callback):
+    def __init__(self, figsize=None):
+        super(PlotLosses, self).__init__()
+        self.figsize = figsize
 
-# ## Electronic
+    def on_train_begin(self, logs={}):
 
-# In[ ]:
+        self.base_metrics = [metric for metric in self.params['metrics'] if not metric.startswith('val_')]
+        self.logs = []
 
+    def on_epoch_end(self, epoch, logs={}):
+        self.logs.append(logs.copy())
 
-def url2word(key):
-    bag_res = bag2word(key, elec_trained)
-    if bag_res != key: return bag_res
-    key = key.replace('.',' dot ').replace('/',' slash ').replace('-',' dash ').replace(':',' colon ').replace('_',' underscore ').replace('#',' hashtag ')
-    key = key.split()
-    if "hashtag" in key: return "hash tag " + " ".join(key[1:]).lower()
-    lis2 = ['dot','slash','dash','colon']
-    for i in range(len(key)):
-        if key[i] not in lis2:
-            key[i]=" ".join(key[i])
-    text = " ".join(key)
-    return text.lower()
-
-
-# ## Verbatim
-
-# In[ ]:
-
-
-def verb2word(key):
-    bag_res = bag2word(key, verb_trained)
-    if bag_res != key: return bag_res
-    dict_verb = {"#":"number","&":"and","α":"alpha","Α":"alpha","β":"beta","Β":"beta","γ":"gamma","Γ":"gamma",
-                 "δ":"delta","Δ":"delta","ε":"epsilon","Ε":"epsilon","Ζ":"zeta","ζ":"zeta","η":"eta","Η":"eta",
-                 "θ":"theta","Θ":"theta","ι":"iota","Ι":"iota","κ":"kappa","Κ":"kappa","λ":"lambda","Λ":"lambda",
-                 "Μ":"mu","μ":"mu","ν":"nu","Ν":"nu","Ξ":"xi","ξ":"xi","Ο":"omicron","ο":"omicron","π":"pi","Π":"pi",
-                 "ρ":"rho","Ρ":"rho","σ":"sigma","Σ":"sigma","ς":"sigma","Φ":"phi","φ":"phi","τ":"tau","Τ":"tau",
-                 "υ":"upsilon","Υ":"upsilon","Χ":"chi","χ":"chi","Ψ":"psi","ψ":"psi","ω":"omega","Ω":"omega",
-                 "$":"dollar","€":"euro","~":"tilde","_":"underscore","ₐ":"sil","%":"percent","³":"cubed"}
-    if key in dict_verb: return dict_verb[key]
-    if len(key)==1 or not(key.isalpha()): return key
-    return letter2word(key)
-
-
-# ## Telephone
-
-# In[ ]:
-
-
-def telephone2word(key):
-    bag_res = bag2word(key, tel_trained)
-    if bag_res != key: return bag_res
-    key = key.replace('-','.').replace(')','.')
-    text = p.number_to_words(key,group =1, decimal = "sil",zero = 'o').replace(',','')
-    return text.lower()
-
-
-# ## Dates
-
-# In[ ]:
-
-
-dict_mon = {'jan': "January", "feb": "February", "mar ": "march", "apr": "april", "may": "may ","jun": "june", "jul": "july", "aug": "august","sep": "september",
-            "oct": "october","nov": "november","dec": "december", "january":"January", "february":"February", "march":"march","april":"april", "may": "may", 
-            "june":"june","july":"july", "august":"august", "september":"september", "october":"october", "november":"november", "december":"december",
-           "bc":"b c", "bc.":"b c","bce":"b c e","ad":"a d"}
-def date2word(key):
-    bag_res = bag2word(key, date_trained)
-    if bag_res != key: return bag_res
-    key = key.strip(string.punctuation)
-    if key.isdigit(): return digit2word(key)
-        #if (int(key)>=2000 and int(key) < 2010) or int(key)<1000:
-        #    text = digit2word(key)
-        #else:
-        #    if int(key)%100 < 10 and int(key)/100<20:
-        #        text = digit2word(key[0:2]) + ' o ' + digit2word(key[2:])
-        #    else:
-        #        text = digit2word(key[0:2]) + ' ' + digit2word(key[2:])
-        #return text
-    
-    if key.lower().replace("s","").isdigit():
-        v = key.lower().replace("s","")
-        if (int(v)>=2000 and int(v) < 2010) or int(v)<1000:
-            text = digit2word(v)
-        else:
-            if int(v)%100 < 10 and int(v)/100<20:
-                text = digit2word(v[0:2]) + ' o ' + digit2word(v[2:])
-            else:
-                text = digit2word(v[0:2]) + ' ' + digit2word(v[2:])
-        return re.sub('ys$','ies',text+ 's')
-
-    key = key.replace("/","-")    
-    v =  key.split('-')
-    if len(v)==3:
-        if v[1].isdigit():
-            try:
-                date = datetime.strptime(key , '%Y-%m-%d')
-                text = 'the '+ p.ordinal(p.number_to_words(int(v[2]))).replace('-',' ')+' of '+datetime.date(date).strftime('%B')
-                if int(v[0])>=2000 and int(v[0]) < 2010:
-                    text = text  + ' '+digit2word(v[0])
-                else:
-                    if int(v[0])%100 < 10 and int(v[0])/100<20:
-                        text = text + ' ' + digit2word(v[0][0:2]) + ' o ' + digit2word(v[0][2:])
-                    else:
-                        text = text + ' ' + digit2word(v[0][0:2]) + ' ' + digit2word(v[0][2:])
-            except:
-                text = key
-            return text.lower()    
-    else:   
-        v = re.sub(r'[^\w]', ' ', key).split()
-        if v[0].isalpha():
-            try:
-                if len(v)==3:
-                    text = dict_mon[v[0].lower()] + ' '+ p.ordinal(p.number_to_words(int(v[1]))).replace('-',' ')
-                    if int(v[2])>=2000 and int(v[2]) < 2010:
-                        text = text  + ' '+digit2word(v[2])
-                    else: 
-                        if int(v[2])%100 < 10 and int(v[2])/100<20:
-                            text = text + ' ' + digit2word(v[2][0:2]) + ' o ' + digit2word(v[2][2:])
-                        else:
-                            text = text + ' ' + digit2word(v[2][0:2]) + ' ' + digit2word(v[2][2:])   
-                elif len(v)==2:
-                    if int(v[1])>=2000 and int(v[1]) < 2010:
-                        text = dict_mon[v[0].lower()]  + ' '+ digit2word(v[1])
-                    else: 
-                        if len(v[1]) <=2:
-                            text = dict_mon[v[0].lower()] + ' ' + digit2word(v[1])
-                        else:
-                            if int(v[1])%100 < 10 and int(v[1])/100<20:
-                                text = dict_mon[v[0].lower()]+ ' ' +digit2word(v[1][0:2])+ ' o ' +digit2word(v[1][2:])
-                            else:
-                                text = dict_mon[v[0].lower()]+ ' ' +digit2word(v[1][0:2])+ ' ' +digit2word(v[1][2:])
-                
-                else: text = key
-            except: text = key
-            return text.lower()
-        else:       
-            key = re.sub(r'[^\w]', ' ', key)
-            v = key.split()
-            if len(v)==2 and v[0].isdigit():
-                if v[1]=='s': return re.sub('ys$','ies',digit2word(v[0])+ 's')
-                if v[1] not in dict_mon: return digit2word(v[0])+ ' ' + v[1].lower()
-                return digit2word(v[0])+ ' ' + dict_mon[v[1].lower()]
-            
-            try:
-                date = datetime.strptime(key , '%d %b %Y')
-                val =1
-                text = 'the '+ p.ordinal(p.number_to_words(int(v[0]))).replace('-',' ')+' of '+ dict_mon[v[1].lower()]
-            except:
-                try:
-                    date = datetime.strptime(key , '%d %b %y')
-                    val = 2
-                    text = 'the '+ p.ordinal(p.number_to_words(int(v[0]))).replace('-',' ')+' of '+ dict_mon[v[1].lower()]
-                    v[2] = datetime.date(date).strftime('%Y')
-                except:
-                    try:
-                        date = datetime.strptime(key , '%d %B %Y')
-                        val = 3
-                        text = 'the '+ p.ordinal(p.number_to_words(int(v[0]))).replace('-',' ')+' of '+ dict_mon[v[1].lower()]
-                    except:
-                        try:
-                            date = datetime.strptime(key , '%d %B %y')
-                            val = 4
-                            text = 'the '+ p.ordinal(p.number_to_words(int(v[0]))).replace('-',' ')+' of '+ dict_mon[v[1].lower()]
-                            v[2] = datetime.date(date).strftime('%Y')
-                        except:
-                            try:
-                                date = datetime.strptime(key , '%d %m %Y')
-                                val = 5
-                                text = 'the '+ p.ordinal(p.number_to_words(int(v[0]))).replace('-',' ')+' of '+datetime.date(date).strftime('%B')
-                            except:
-                                try:
-                                    date = datetime.strptime(key , '%d %m %y')
-                                    val = 6
-                                    text = 'the '+ p.ordinal(p.number_to_words(int(v[0]))).replace('-',' ')+' of '+datetime.date(date).strftime('%B')
-                                    v[2] = datetime.date(date).strftime('%Y')
-                                except:
-                                    text = key
-                                    val = -1
-            if val != -1:
-                if (int(v[2])>=2000 and int(v[2]) < 2010) or int(v[2])<1000:
-                    text = text  + ' '+digit2word(v[2])
-                else: 
-                    if int(v[2])%100 < 10 and int(v[2])/100<20:
-                        text = text + ' ' + digit2word(v[2][0:2]) + ' o ' + digit2word(v[2][2:])
-                    else:
-                        text = text + ' ' + digit2word(v[2][0:2]) + ' ' + digit2word(v[2][2:])
-
-            return text.lower()
-
-
-# ## Money
-
-# In[ ]:
-
-
-def currency2word(key):
-    bag_res = bag2word(key, mon_trained)
-    if bag_res != key: return bag_res
-    dict_mon = {"$":"dollars","€":"euros","£":"pounds","¥":"yen"}
-    dict_unit = {"m":"million","b":"billion","k":"thousand","h":"hundered","usd":"united states dollars",
-                 "aud":"australian dollars","gbp":"british pounds","usdm":"million united states dollars",
-                 "gbpm":"million british pounds","audm":"million australian dollars",
-                 "usdb":"billion united states dollars","usdk":"thousand united states dollars",
-                 "gbpb":"billion british pounds","audb":"billion australian dollars",
-                 "gbpk":"thousand british pounds","audk":"thousand australian dollars",
-                 "nok":"norwegian kroner"}
-    final = []
-    num = p.number_to_words(re.sub(r'[^\d]','',key).strip(),andword='').replace("-"," ").replace(',','')
-    final.append(num)
-    v = re.sub(r'[!\"#$€££%&\'()*+,-./:;<=>?@\[\\\]\^_`{\|}~]',"",key).split()
-    flag = [a.isalpha() for a in v]
-    if any(flag):
-        if len(v)==2:
-            try:
-                text = dict_unit[v[1].strip().lower()]
-            except KeyError:
-                text = v[1].strip().lower()
-        else:
-            text = " ".join([x.lower() for i,x in zip(flag,v) if i])
-        final.append(text)
-    elif len(v)==1:
-        try:
-            text = dict_unit[re.sub(r'[\d]','',v[0]).strip().lower()]
-        except KeyError:
-            text = re.sub(r'[\d]','',v[0]).strip().lower()
-        final.append(text)
+        clear_output(wait=True)
+        plt.figure(figsize=self.figsize)
         
-    try:
-        unit = dict_mon[re.sub(r'[^$€£₦￥]','',key).strip()]
-    except KeyError:
-        unit = re.sub(r'[^$€£₦￥]','',key).strip()
-    final.append(unit)
-    
-    return " ".join(final)
-
-
-# ## Fraction
-
-# In[ ]:
-
-
-def fraction2word(x):
-    bag_res = bag2word(x, frac_trained)
-    if bag_res != x: return bag_res
-    if x.find("½") != -1:
-        x = x.replace("½","").strip()
-        if len(x) != 0: return p.number_to_words(x,andword='').replace("-"," ").replace(',','')+" and a half"
-        else: return "one half"
-    elif x.find("¼") != -1:
-        x = x.replace("¼","").strip()
-        if len(x) != 0: return p.number_to_words(x,andword='').replace("-"," ").replace(',','')+" and a quarter"
-        else: return "one quarter"
-    elif x.find("⅓") != -1:
-        x = x.replace("⅓","").strip()
-        if len(x) != 0: return p.number_to_words(x,andword='').replace("-"," ").replace(',','')+" and a third"
-        else: return "one third"
-    elif x.find("⅔") != -1:
-        x = x.replace("⅔","").strip()
-        if len(x) != 0: return p.number_to_words(x,andword='').replace("-"," ").replace(',','')+" and two thirds"
-        else: return "two third"
-    elif x.find("⅞") != -1:
-        x = x.replace("⅞","").strip()
-        if len(x) != 0: return p.number_to_words(x,andword='').replace("-"," ").replace(',','')+" and seven eighths"
-        else: return "seven eighth"
-    elif x.find(" ") != -1:
-        v = x.split(" ")
-        res = " and ".join([fraction2word(val) for val in v])
-        return res.replace("and one","and a")
-    
-    try:
-        y = x.split('/')
-        result_string = ''
-        if len(y)==1 and y[0].isdigit(): return p.number_to_words(y[0],andword='').replace("-"," ").replace(',','')
-        y[0] = p.number_to_words(y[0],andword='').replace("-"," ").replace(',','')
-        y[1] = ordinal2word(y[1]).replace("-"," ").replace(" and "," ").replace(',','')
-        if y[1] == "first":
-            return y[0]+" over one"
-        if y[1] == 'fourth':
-            if y[0]=='one': result_string = y[0] + ' quarter'
-            else: result_string = y[0] + ' quarters'
-        elif y[1] == 'second':
-            if y[0]=='one': result_string = y[0] + ' half'
-            else: result_string = y[0] + ' halves'
-        else:
-            if y[0]=='one': result_string = y[0] + " "+ y[1]
-            else: result_string = y[0] + ' ' + y[1] + 's'
-        return(result_string)
-    except:    
-        return(x)
-
-
-# ## Plain
-
-# In[ ]:
-
-
-def plain2word(key):
-    bag_res = bag2word(key, plain_trained)
-    if bag_res != key: return bag_res
-    if key.find(".") != -1: return url2word(key)
-    return key
-
-
-# ## Address
-
-# In[ ]:
-
-
-def address(key):
-    bag_res = bag2word(key, add_trained)
-    if bag_res != key: return bag_res
-    if len(key)==1: return key
-    try:
-        text = re.sub('[^a-zA-Z]+', '', key)
-        num = re.sub('[^0-9]+', '', key)
-        result_string = ''
-        if len(text)>0: result_string = ' '.join(list(text.lower()))
-        if num.isdigit():
-            if int(num)<1000:
-                result_string = result_string + " " + digit2word(num)
-            else:
-                result_string = result_string + " " + telephone2word(num)
-        return(result_string.strip())        
-    except:    
-        return(key)
-
-
-# ## Letters
-
-# In[ ]:
-
-
-def letter2word(key):
-    bag_res = bag2word(key, let_trained)
-    if bag_res != key: return bag_res
-    if len(key)==1: return key
-    key = re.sub(r'[!\"#$€££%&\()*+,-./:;<=>?@\[\\\]\^_`{\|}~]',"",key)
-    if key.replace("'","").isalpha():
-        result = ' '.join(list(key.strip(string.punctuation).lower()))
-        return result.replace(" ' s","'s")
-    return key
-
-
-# ## Cardinal
-
-# In[ ]:
-
-
-def digit2word(key):
-    bag_res = bag2word(key,card_trained)
-    if bag_res != key: return bag_res
-    #if key.isalpha(): return ordinal2word(key)
-    try:
-        text = p.number_to_words(key,decimal='point',andword='', zero='o')
-        if re.match(r'^0\.',key): 
-            text = 'zero '+text[2:]
-        if re.match(r'.*\.0$',key): text = text[:-2]+' zero'
-        text = text.replace('-',' ').replace(',','')
-        return text.lower()
-    except: return key
-
-
-# ## Decimal
-
-# In[ ]:
-
-
-def float2word(key):
-    bag_res = bag2word(key, dec_trained)
-    if bag_res != key: return bag_res
-    if key.find(" ") != (-1): return measure2word(key)
-    try:
-        key = float(key.replace(',',''))
-    except ValueError:
-        return measure2word(key)
-    key = p.number_to_words(key,decimal='point',andword='', zero='o')
-    if 'o' == key.split()[0]:
-        key = key[2:]
-    key = key.replace('-',' ').replace(',','')
-
-    return key.lower()
-
-
-# # Step 5: Normalize text and generate output
-
-# In[ ]:
-
-
-df_num = test_df[test_df['class']=="CARDINAL"]
-out = []
-for i in range(df_num.shape[0]):
-    out.append(digit2word(df_num.iloc[i,2]))
-
-df_num['after'] = out
-
-df_date = test_df[test_df['class']=="DATE"]
-out = []
-for i in range(df_date.shape[0]):
-    out.append(date2word(df_date.iloc[i,2]))
-
-df_date['after'] = out
-
-df_let = test_df[test_df['class']=="LETTERS"]
-out = []
-for i in range(df_let.shape[0]):
-    out.append(letter2word(df_let.iloc[i,2]))
-
-df_let['after'] = out
-
-df_verb = test_df[test_df['class']=="VERBATIM"]
-out = []
-for i in range(df_verb.shape[0]):
-    out.append(verb2word(df_verb.iloc[i,2]))
-
-df_verb['after'] = out
-
-df_elec = test_df[test_df['class']=="ELECTRONIC"]
-out = []
-for i in range(df_elec.shape[0]):
-    out.append(url2word(df_elec.iloc[i,2]))
-
-df_elec['after'] = out
-
-df_ord = test_df[test_df['class']=="ORDINAL"]
-out = []
-for i in range(df_ord.shape[0]):
-    out.append(ordinal2word(df_ord.iloc[i,2]))
-
-df_ord['after'] = out
-
-df_mes = test_df[test_df['class']=="MEASURE"]
-out = []
-for i in range(df_mes.shape[0]):
-    out.append(measure2word(df_mes.iloc[i,2]))
-
-df_mes['after'] = out
-
-df_dig = test_df[test_df['class']=="DIGIT"]
-out = []
-for i in range(df_dig.shape[0]):
-    out.append(digit2word(df_dig.iloc[i,2]))
-
-df_dig['after'] = out
-
-df_mon = test_df[test_df['class']=="MONEY"]
-out = []
-for i in range(df_mon.shape[0]):
-    out.append(currency2word(df_mon.iloc[i,2]))
-
-df_mon['after'] = out
-
-df_dec = test_df[test_df['class']=="DECIMAL"]
-out = []
-for i in range(df_dec.shape[0]):
-    out.append(float2word(df_dec.iloc[i,2]))
-
-df_dec['after'] = out
-
-df_tel = test_df[test_df['class']=="TELEPHONE"]
-out = []
-for i in range(df_tel.shape[0]):
-    out.append(telephone2word(df_tel.iloc[i,2]))
-
-df_tel['after'] = out
-
-df_frac = test_df[test_df['class']=="FRACTION"]
-out = []
-for i in range(df_frac.shape[0]):
-    out.append(fraction2word(df_frac.iloc[i,2]))
-
-df_frac['after'] = out
-
-df_add = test_df[test_df['class']=="ADDRESS"]
-out = []
-for i in range(df_add.shape[0]):
-    out.append(address(df_add.iloc[i,2]))
-
-df_add['after'] = out
-
-df_plain = test_df[test_df['class'] == "PLAIN"]
-df_plain['after'] = df_plain['before'].apply(lambda x: plain2word(x))
-
-df_punct = test_df[test_df['class'] == "PUNCT"]
-df_punct['after'] = df_punct['before'].apply(lambda x: bag2word(x,punt_trained))
-
-df_time = test_df[test_df['class'] == "TIME"]
-df_time['after'] = df_time['before'].apply(lambda x: bag2word(x,time_trained))
+        for metric_id, metric in enumerate(self.base_metrics):
+            plt.subplot(1, len(self.base_metrics), metric_id + 1)
+            
+            plt.plot(range(1, len(self.logs) + 1),
+                     [log[metric] for log in self.logs],
+                     label="training")
+            if self.params['do_validation']:
+                plt.plot(range(1, len(self.logs) + 1),
+                         [log['val_' + metric] for log in self.logs],
+                         label="validation")
+            plt.title(translate_metric(metric))
+            plt.xlabel('epoch')
+            plt.legend(loc='center left')
+        
+        plt.tight_layout()
+        plt.show();
+
+plot_losses = PlotLosses(figsize=(16, 4))
 
 
 # In[ ]:
 
 
-# Append output dataframes
-result_df = df_plain.append(df_date).append(df_punct).append(df_time)
-result_df = result_df.append(df_let).append(df_num).append(df_verb)
-result_df = result_df.append(df_elec).append(df_ord).append(df_mes)
-result_df = result_df.append(df_dig).append(df_mon).append(df_dec)
-result_df = result_df.append(df_tel).append(df_frac).append(df_add)
+# Finally train the model!!
+batch_size = 16
+
+train_generator, test_generator = get_train_test_augmented(X_data=X_train, Y_data=Y_train, validation_split=0.11, batch_size=batch_size)
+model.fit_generator(train_generator, validation_data=test_generator, validation_steps=batch_size/2, steps_per_epoch=len(X_train)/(batch_size*2), epochs=5, callbacks=[plot_losses])
 
 
 # In[ ]:
 
 
-result_df[['id','after']].to_csv("submission.csv",index=False)
+# Save the model weights to a hdf5 file
+if num_gpus > 1:
+    #Refer to https://stackoverflow.com/questions/41342098/keras-load-checkpoint-weights-hdf5-generated-by-multiple-gpus
+    #model.summary()
+    model_out = model.layers[-2]  #get second last layer in multi_gpu_model i.e. model.get_layer('model_1')
+else:
+    model_out = model
+model_out.save_weights(filepath=topDir+"/working/model-weights.hdf5")
 
 
-# # Possible Improvements:
-# 
-# As can be seen above, the function are not capable of handling all possible inputs. If you're patient enough, you can look at updating Date/Measure/Money/Time.
+# # Part 4 - Evaluate output
+
+# In[ ]:
+
+
+# Reload the model
+model_loaded = keras_model(img_width=img_width, img_height=img_height)
+model_loaded.load_weights(topDir+"/working/model-weights.hdf5")
+
+
+# In[ ]:
+
+
+# Get test data
+X_test = get_X_data(test_path, output_shape=(img_height,img_width))
+
+
+# In[ ]:
+
+
+# Use model to predict test labels
+Y_hat = model_loaded.predict(X_test, verbose=1)
+Y_hat.shape
+
+
+# ## Visualize predictions on the test data
+
+# In[ ]:
+
+
+id = 32
+print(X_test[id].shape)
+skimage.io.imshow(X_test[id])
+plt.show()
+skimage.io.imshow(Y_hat[id][:,:,0])
+plt.show()
+
+
+# # Part 5 - Submit results
+
+# In[ ]:
+
+
+# Upsample Y_hat back to the original X_test size (height and width)
+Y_hat_upsampled = []
+for i, test_id in enumerate(os.listdir(test_path)):  #loop through test_ids in the test_path
+    img = skimage.io.imread('{0}/{1}/images/{1}.png'.format(test_path, test_id))  #read original test image directly from path
+    img_upscaled = skimage.transform.resize(Y_hat[i], (img.shape[0], img.shape[1]), mode='constant', preserve_range=True)  #upscale Y_hat image according to original test image
+    Y_hat_upsampled.append(img_upscaled)   #append upscaled image to Y_hat_upsampled
+len(Y_hat_upsampled)
+
+
+# ## Visualize upscaled predictions on the test data
+
+# In[ ]:
+
+
+id = 32
+print(Y_hat_upsampled[id].shape)
+skimage.io.imshow(Y_hat_upsampled[id][:,:,0])
+
+
+# In[ ]:
+
+
+# Run-length encoding stolen from https://www.kaggle.com/rakhlin/fast-run-length-encoding-python
+def rle_encoding(x):
+    dots = np.where(x.T.flatten() == 1)[0]
+    run_lengths = []
+    prev = -2
+    for b in dots:
+        if (b>prev+1): run_lengths.extend((b + 1, 0))
+        run_lengths[-1] += 1
+        prev = b
+    return run_lengths
+
+def prob_to_rles(x, cutoff=0.5):
+    lab_img = label(x > cutoff)
+    for i in range(1, lab_img.max() + 1):
+        yield rle_encoding(lab_img == i)
+
+
+# In[ ]:
+
+
+# Apply Run-Length Encoding on our Y_hat_upscaled
+new_test_ids = []
+rles = []
+for n, id_ in enumerate(os.listdir(test_path)):
+    rle = list(prob_to_rles(Y_hat_upsampled[n]))
+    rles.extend(rle)
+    new_test_ids.extend([id_] * len(rle))
+len(new_test_ids)  #note that for each test_image, we can have multiple entries of encoded pixels
+
+
+# In[ ]:
+
+
+# Create submission DataFrame
+sub = pd.DataFrame()
+sub['ImageId'] = new_test_ids
+sub['EncodedPixels'] = pd.Series(rles).apply(lambda x: ' '.join(str(y) for y in x))
+timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M")
+print('Submission output to: sub-{}.csv'.format(timestamp))
+sub.to_csv(topDir+"/working/sub-{}.csv".format(timestamp), index=False)
+
+
+# In[ ]:
+
+
+# Have a look at our submission pandas dataframe
+sub.head()
+

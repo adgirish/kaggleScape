@@ -1,583 +1,364 @@
 
 # coding: utf-8
 
-# **Just planning to add the explorations that I am going to do for this competition. Happy Kaggling.!**
+# Intro
+# -----
+# 
+# Hello! This is a short guide on how to set up basic classifiers for the "Leaf Classification" dataset. I'm still a novice in the field, I've been poking around Kaggle for a while now, so this is more of a notebook for myself, to keep track of what I am learning, than an actual guide. Suggestions and comments are more than welcome!  
+# I will use three of the simplest classification methods (Naïve Bayes, Random Forest and Logistic Regression) and, given the high number of features in this dataset, I will briefly comment on how to reduce their correlation with Principal Component Analysis.
+
+# Here are some of the kernels on Kaggle that I used to learn and to build my code:  
+# [10 Classifier Showdown][1],
+# [Random Forest][2],
+# [Logistic Regression][3].
+# 
+# 
+# 
+# [1]: https://www.kaggle.com/jeffd23/leaf-classification/10-classifier-showdown-in-scikit-learn
+# [2]: https://www.kaggle.com/sunnyrain/leaf-classification/random-forests-with-0-68-score/code
+# [3]: https://www.kaggle.com/bmetka/leaf-classification/logistic-regression/code
+
+# Import Libraries and Define Functions
+# -------------------------------------
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+#Let's start importing the libraries that we will use
+import csv as csv 
+import numpy as np
+import pandas as pd
+import matplotlib.cm as cm
+import matplotlib.pyplot as plt
+import matplotlib.gridspec as gridspec
+#from random import randint
+from scipy import stats  
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from matplotlib import pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
+#Here are the sklearn libaries
+from sklearn.preprocessing import StandardScaler, LabelEncoder
+from sklearn.naive_bayes import GaussianNB
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import KFold,GridSearchCV
+from sklearn.decomposition import PCA
 
-color = sns.color_palette()
-
-data_path = "../input/"
-train_file = data_path + "train_ver2.csv"
-test_file = data_path + "test_ver2.csv"
-
-
-# **Dataset Size:**
-# 
-# First let us check the number of rows in train and test file
-
-# In[ ]:
-
-
-train = pd.read_csv(data_path+train_file, usecols=['ncodpers'])
-test = pd.read_csv(data_path+test_file, usecols=['ncodpers'])
-print("Number of rows in train : ", train.shape[0])
-print("Number of rows in test : ", test.shape[0])
-
-
-# **No of Customers:**
-# 
-# Now let us look at the number of unique customers in train data and test data and also the number of customers common between both
-
-# In[ ]:
+#Here we define a function to calculate the Pearson's correlation coefficient
+#which we will use in a later part of the notebook
+def pearson(x,y):
+	if len(x)!=len(y):
+		print("I can't calculate Pearson's Coefficient, sets are not of the same length!")
+		return
+	else:
+		sumxy = 0
+		for i in range(len(x)):
+			sumxy = sumxy + x[i]*y[i]
+		return (sumxy - len(x)*np.mean(x)*np.mean(y))			/((len(x)-1)*np.std(x, ddof=1)*np.std(y, ddof=1))
 
 
-train_unique_customers = set(train.ncodpers.unique())
-test_unique_customers = set(test.ncodpers.unique())
-print("Number of customers in train : ", len(train_unique_customers))
-print("Number of customers in test : ", len(test_unique_customers))
-print("Number of common customers : ", len(train_unique_customers.intersection(test_unique_customers)))
-
-
-# Let us see the count of occurrences of each of the customers in train set
+# Import and Prepare the Data
+# ---------------------------
 
 # In[ ]:
 
 
-num_occur = train.groupby('ncodpers').agg('size').value_counts()
+#Import the dataset and do some basic manipulation
+traindf = pd.read_csv('../input/train.csv', header=0) 
+#testdf = pd.read_csv('../input/test.csv', header=0) I won't use the test set in this notebook
 
-plt.figure(figsize=(8,4))
-sns.barplot(num_occur.index, num_occur.values, alpha=0.8, color=color[0])
-plt.xlabel('Number of Occurrences of the customer', fontsize=12)
-plt.ylabel('Number of customers', fontsize=12)
-plt.show()
+#We can have a look at the data, shape and types, but I'll skip this step here
+#traindf.dtypes
+#traindf.info()
+#traindf.describe
+#The dataset is complete, so there's no need here to clean it from empty entries.
+#traindf = traindf.dropna() 
+
+#We separate the features from the classes, 
+#we can either put them in ndarrays or leave them as pandas dataframes, since sklearn can handle both. 
+#x_train = traindf.values[:, 2:] 
+#y_train = traindf.values[:, 1]
+x_train = traindf.drop(['id', 'species'], axis=1)
+y_train = traindf.pop('species')
+#x_test = traindf.drop(['id'], axis=1)
+
+#Sometimes it may be useful to encode labels with numeric values, but is unnecessary in this case 
+#le = LabelEncoder().fit(traindf['species']) 
+#y_train = le.transform(train['species'])
+#classes = list(le.classes_)
+
+#However, it's a good idea to standardize the data (namely to rescale it around zero 
+#and with unit variance) to avoid that certain unscaled features 
+#may weight more on the classifier decision 
+scaler = StandardScaler().fit(x_train) #find mean and std for the standardization
+x_train = scaler.transform(x_train) #standardize the training values
+#x_test = scaler.transform(x_test)
 
 
-# We have 17 months of data present in our train and we can clearly see that majority of the customers are present for all 17 months. There is also a small spike at '11 month' compared to other months.! 
+# First Classifiers
+# ---------------
+# 
+# We can now start setting up our classifiers and naively apply them to the dataset as it is. Ideally, one should first look at the data in depth and think how to reduce it or manipulate it to get the most out of the classifiers. However, we will need these results later, to compare how effective the Features Reduction is in each case. 
+# To compare performance and efficacy of each technique we will use a  **K-fold cross validation**. This technique randomly splits the training dataset in k subsets. While one subset is kept to test the model, the remaining k-1 sets are used to train the data.
 
 # In[ ]:
 
 
-del train_unique_customers
-del test_unique_customers
+#Initialise the K-fold with k=5
+kfold = KFold(n_splits=5, shuffle=True, random_state=4)
 
 
-# **Target Variables distribution:**
-# 
-# There are 24 target variables present in this dataset are as follows:
-# 
-# 1. ind_ahor_fin_ult1	  - Saving Account
-# 
-# 2. ind_aval_fin_ult1	  - Guarantees
-# 
-# 3. ind_cco_fin_ult1	  - Current Accounts
-# 
-# 4. ind_cder_fin_ult1	  - Derivada Account
-# 
-# 5. ind_cno_fin_ult1	  - Payroll Account
-# 
-# 6. ind_ctju_fin_ult1	  - Junior Account
-# 
-# 7. ind_ctma_fin_ult1 - Más particular Account
-# 
-# 8. ind_ctop_fin_ult1 - particular Account
-# 
-# 9. ind_ctpp_fin_ult1 - particular Plus Account
-# 
-# 10. ind_deco_fin_ult1 - Short-term deposits
-# 
-# 11. ind_deme_fin_ult1 - Medium-term deposits
-# 
-# 12. ind_dela_fin_ult1 - Long-term deposits
-# 
-# 13. ind_ecue_fin_ult1 - e-account
-# 
-# 14. ind_fond_fin_ult1 - Funds
-# 
-# 15. ind_hip_fin_ult1 - Mortgage
-# 
-# 16. ind_plan_fin_ult1 - Pensions
-# 
-# 17. ind_pres_fin_ult1 - Loans
-# 
-# 18. ind_reca_fin_ult1 - Taxes
-# 
-# 19. ind_tjcr_fin_ult1 - Credit Card
-# 
-# 20. ind_valo_fin_ult1 - Securities
-# 
-# 21. ind_viv_fin_ult1 - Home Account
-# 
-# 22. ind_nomina_ult1 - Payroll
-# 
-# 23. ind_nom_pens_ult1 - Pensions
-# 
-# 24. ind_recibo_ult1 - Direct Debit
-# 
-# Let us check the number of times the given product has been bought in the train dataset
+# We start with **Naïve Bayes**, one of the most basic classifiers. Here the Bayesian probability theorem is used to predict the classes, with the "naïve" assumption that the features are independent. In the *sklearn* library implementation **Gaussian Naïve Bayes**, the likelihood of the features is Gaussian-shaped and its parameters are calculated with the maximum likelihood method.   
 
 # In[ ]:
 
 
-train = pd.read_csv(data_path+"train_ver2.csv", dtype='float16', 
-                    usecols=['ind_ahor_fin_ult1', 'ind_aval_fin_ult1', 
-                             'ind_cco_fin_ult1', 'ind_cder_fin_ult1',
-                             'ind_cno_fin_ult1', 'ind_ctju_fin_ult1',
-                             'ind_ctma_fin_ult1', 'ind_ctop_fin_ult1',
-                             'ind_ctpp_fin_ult1', 'ind_deco_fin_ult1',
-                             'ind_deme_fin_ult1', 'ind_dela_fin_ult1',
-                             'ind_ecue_fin_ult1', 'ind_fond_fin_ult1',
-                             'ind_hip_fin_ult1', 'ind_plan_fin_ult1',
-                             'ind_pres_fin_ult1', 'ind_reca_fin_ult1',
-                             'ind_tjcr_fin_ult1', 'ind_valo_fin_ult1',
-                             'ind_viv_fin_ult1', 'ind_nomina_ult1',
-                             'ind_nom_pens_ult1', 'ind_recibo_ult1'])
+#Initialise Naive Bayes
+nb = GaussianNB()
+#We can now run the K-fold validation on the dataset with Naive Bayes
+#this will output an array of scores, so we can check the mean and standard deviation
+nb_validation=[nb.fit(x_train[train], y_train[train]).score(x_train[test], y_train[test]).mean()            for train, test in kfold.split(x_train)]
 
+
+# We repeat the process, this time with **Random Forest**, one of the most popular classifiers here on Kaggle. An high number of decision trees (or *forest*) are built and trained on the dataset and the mode of the results is then given as output. 
+# To improve statistics and avoid over-fitting, the **Extremely Randomized Trees** (or *Extra-Trees*) found in *sklearn* is used here. This implementation generates randomised decision trees which are then fitted on random sub-sets of the data and finally averaged. 
 
 # In[ ]:
 
 
-target_counts = train.astype('float64').sum(axis=0)
-#print(target_counts)
-plt.figure(figsize=(8,4))
-sns.barplot(target_counts.index, target_counts.values, alpha=0.8, color=color[0])
-plt.xlabel('Product Name', fontsize=12)
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
+#Initialise Extra-Trees Random Forest
+rf = ExtraTreesClassifier(n_estimators=500, random_state=0)
+#Run K-fold validation with RF
+#Again the classifier is trained on the k-1 sub-sets and then tested on the remaining k-th subset
+#and scores are calcualted
+rf_validation=[rf.fit(x_train[train], y_train[train]).score(x_train[test], y_train[test]).mean()                for train, test in kfold.split(x_train)]
 
 
-# Product "ind_cco_fin_ult1 " is the most bought one and "ind_aval_fin_ult1" is the least bought one.
+# The *sklearn* implementation of **Random Forest** allows to get information on which features are the most important in the classification; although not that useful here, it can usually be beneficial in the features reduction phase, to identify which descriptor are more likely to lead to loss of valuable information if dropped.
 
-# **Exploring Dates:**
+# In[ ]:
+
+
+#We extract the importances, their indices and standard deviations
+importances = rf.feature_importances_
+indices = np.argsort(importances)[::-1]
+imp_std = np.std([est.feature_importances_ for est in rf.estimators_], axis=0)
+
+#And we plot the first and last 10 features out of curiosity
+fig = plt.figure(figsize=(8, 6))
+gs1 = gridspec.GridSpec(1, 2)#, height_ratios=[1, 1]) 
+ax1, ax2 = fig.add_subplot(gs1[0]), fig.add_subplot(gs1[1])
+ax1.margins(0.05), ax2.margins(0.05) 
+ax1.bar(range(10), importances[indices][:10],        color="#6480e5", yerr=imp_std[indices][:10], ecolor='#31427e', align="center")
+ax2.bar(range(10), importances[indices][-10:],        color="#e56464", yerr=imp_std[indices][-10:], ecolor='#7e3131', align="center")
+ax1.set_xticks(range(10)), ax2.set_xticks(range(10))
+ax1.set_xticklabels(indices[:10]), ax2.set_xticklabels(indices[-10:])
+ax1.set_xlim([-1, 10]), ax2.set_xlim([-1, 10])
+ax1.set_ylim([0, 0.035]), ax2.set_ylim([0, 0.035])
+ax1.set_xlabel('Feature #'), ax2.set_xlabel('Feature #')
+ax1.set_ylabel('Random Forest Normalized Importance') 
+ax2.set_ylabel('Random Forest Normalized Importance')
+ax1.set_title('First 10 Important Features'), ax2.set_title('Last 10 Important Features')
+gs1.tight_layout(fig)
+#plt.show()
+
+
+# Finally we try **Logistic Regression**, another very popular classifier. It's a **Generalized Linear Model** (the target values is expected to be a linear combination of the input variables) for classification, where a logistic (or *sigmoid*) function is fitted on the data to describe the probability of an outcome at each trial. This model requires in input set of *hyper-parameters*, that can't be learned by the model.  **Exhaustive Grid Search** comes to the rescue: given a range for each parameter,  it explores the hyper-space of the parameters within the boundaries set by these ranges and finds the values that maximise specific scoring functions.
+
+# In[ ]:
+
+
+#We first define the ranges for each parameter we are interested in searching 
+#(while the others are left as default):
+#C is the inverse of the regularization strength
+#tol is the tolerance for stopping the criteria
+params = {'C':[100, 1000], 'tol': [0.001, 0.0001]}
+#We initialise the Logistic Regression
+lr = LogisticRegression(solver='lbfgs', multi_class='multinomial')
+#We initialise the Exhaustive Grid Search, we leave the scoring as the default function of 
+#the classifier singe log loss gives an error when running with K-fold cross validation
+#add n_jobs=-1 in a parallel computing calculation to use all CPUs available
+#cv=3 increasing this parameter makes it too difficult for kaggle to run the script
+gs = GridSearchCV(lr, params, scoring=None, refit='True', cv=3) 
+gs_validation=[gs.fit(x_train[train], y_train[train]).score(x_train[test], y_train[test]).mean()                for train, test in kfold.split(x_train)]
+
+
+# Now that we set up our three classifiers we can check the validation results and compare their performances looking at the averages of their cross validation results.
+
+# In[ ]:
+
+
+print("Validation Results\n==========================================")
+print("Naive Bayes: " + '{:1.3f}'.format(np.mean(nb_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(nb_validation)))
+print("Random Forest: " + '{:1.3f}'.format(np.mean(rf_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(rf_validation)))
+print("Logistic Regression: " + '{:1.3f}'.format(np.mean(gs_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(gs_validation)))
+
+
+# The results are very interesting, while both Random Forest and Logistic Regression perform fairly well (with the latter slightly better than the former), Naïve Bayes validation result is extremely low. 
+# This could be due to the fact that the initial assumption of independent features doesn't hold of this dataset. It would be worth at this point to polish a bit the features, and see if by reducing their number we can improve the results of our classifiers.
+
+# Features Reduction
+# ------------------
+
+# A straightforward way to simplify the features is to remove possible correlations. We can intuitively assume that Naïve Bayes results will improve significantly, but it would be good to see if this choice will also improve the validation results for the other two classifiers. 
 # 
-# Let us explore the dates now and see if there are any insights. There are 2 date fields present in the data.
+# The dataset contains  total of 192 descriptors, subdivided in three categories: margin, shape and texture. We can first check if within each one of these categories the features are correlated by calculating correlation scores between couples of features (in this case we will use the *Pearson's correlation coefficient*), and then if one of the categories has highly correlated results, we can build a correlation matrix among all the descriptors within such category.
+
+# In[ ]:
+
+
+#First we find the sets of margin, shape and texture columns 
+margin_cols = [col for col in traindf.columns if 'margin' in col]
+shape_cols = [col for col in traindf.columns if 'shape' in col] 
+texture_cols = [col for col in traindf.columns if 'texture' in col] 
+margin_pear, shape_pear, texture_pear = [],[],[]
+
+#Then we calculate the correlation coefficients for each couple of columns: we can either do this
+#between random columns of between consecutive columns, the difference won't matter much since we are
+#just exploring the data
+for i in range(len(margin_cols)-1):
+    margin_pear.append(pearson(traindf[margin_cols[i]],traindf[margin_cols[i+1]]))
+	#margin_pear.append(pearson(traindf[margin_cols[randint(0,len(margin_cols)-1)]],\
+        #traindf[margin_cols[randint(0,len(margin_cols)-1)]]))
+for i in range(len(shape_cols)-1):
+	shape_pear.append(pearson(traindf[shape_cols[i]],traindf[shape_cols[i+1]]))
+	#shape_pear.append(pearson(traindf[shape_cols[randint(0,len(shape_cols)-1)]],\
+        #traindf[shape_cols[randint(0,len(shape_cols)-1)]]))
+for i in range(len(texture_cols)-1):
+	texture_pear.append(pearson(traindf[texture_cols[i]],traindf[texture_cols[i+1]]))
+	#texture_pear.append(pearson(traindf[texture_cols[randint(0,len(texture_cols)-1)]],\
+        #traindf[texture_cols[randint(0,len(texture_cols)-1)]]))
+
+#We calculate average and standard deviation for each cathergory 
+#and we give it a position on the X axis of the graph
+margin_mean, margin_std = np.mean(margin_pear), np.std(margin_pear, ddof=1)
+margin_x=[0]*len(margin_pear)
+shape_mean, shape_std =	np.mean(shape_pear), np.std(shape_pear, ddof=1)
+shape_x=[1]*len(shape_pear)	
+texture_mean, texture_std =	np.mean(texture_pear), np.std(texture_pear, ddof=1)	
+texture_x=[2]*len(texture_pear)
+
+#We set up the graph
+fig = plt.figure(figsize=(8, 6))
+gs1 = gridspec.GridSpec(1, 2)#, height_ratios=[1, 1]) 
+ax1, ax2 = fig.add_subplot(gs1[0]), fig.add_subplot(gs1[1])
+ax1.margins(0.05), ax2.margins(0.05) 
+
+#We fill the first graph with a scatter plot on a single axis for each category and we add
+#mean and standard deviation, which we can also print to screen as a reference
+ax1.scatter(margin_x, margin_pear, color='blue', alpha=.3, s=100)
+ax1.errorbar([0],margin_mean, yerr=margin_std, color='white', alpha=1, fmt='o', mec='white', lw=2)
+ax1.scatter(shape_x, shape_pear, color='red', alpha=.3, s=100)
+ax1.errorbar([1],shape_mean, yerr=shape_std, color='white', alpha=1, fmt='o', mec='white', lw=2)
+ax1.scatter(texture_x, texture_pear, color='green', alpha=.3, s=100)
+ax1.errorbar([2],texture_mean, yerr=texture_std, color='white', alpha=1, fmt='o', mec='white', lw=2)
+ax1.set_ylim(-1.25, 1.25), ax1.set_xlim(-0.25, 2.25)
+ax1.set_xticks([0,1,2]), ax1.set_xticklabels(['margin','shape','texture'], rotation='vertical')
+ax1.set_xlabel('Category'), ax1.set_ylabel('Pearson\'s Correlation')
+ax1.set_title('Neighbours Correlation')
+ax1.set_aspect(2.5)
+
+print("Pearson's Correlation between neighbours\n==========================================")
+print("Margin: " + '{:1.3f}'.format(margin_mean) + u' \u00B1 '        + '{:1.3f}'.format(margin_std))
+print("Shape: " + '{:1.3f}'.format(shape_mean) + u' \u00B1 '        + '{:1.3f}'.format(shape_std))
+print("Texture: " + '{:1.3f}'.format(texture_mean) + u' \u00B1 '        + '{:1.3f}'.format(texture_std))
+
+#And now, we build a more detailed (and expensive!) correlation matrix, 
+#but only for the shape category, which, as we will see, is highly correlated
+shape_mat=[]
+
+for i in range(traindf[shape_cols].shape[1]):
+    shape_mat.append([])
+    for j in range(traindf[shape_cols].shape[1]):
+        shape_mat[i].append(pearson(traindf[shape_cols[i]],traindf[shape_cols[j]]))
+
+cmap = cm.RdBu_r
+MS= ax2.imshow(shape_mat, interpolation='none', cmap=cmap, vmin=-1, vmax=1)
+ax2.set_xlabel('Shape Feature'), ax2.set_ylabel('Shape Feature')
+cbar = plt.colorbar(MS, ticks=np.arange(-1.0,1.1,0.2))
+cbar.set_label('Pearson\'s Correlation')
+ax2.set_title('Shape Category Correlation Matrix')
+
+#And we have a look at the resulting graphs
+gs1.tight_layout(fig)
+#plt.show()
+
+
+# The *Pearson's Coefficient* goes from 1 for perfectly correlated arrays, to -1 for perfectly anti-correlated arrays. The midpoint 0 represents uncorrelated data. The results shown in the graph are very interesting. From the plot on the left it's possible to observe that couples of features categorised under "texture" (in green) are fairly uncorrelated, the mean is close to zero and the variance is low, with only one case with correlation higher then 0.5. Similarly,  the "margin" features are centred in zero, but their variance is higher and we can observe a few points with about 0.8 of correlation.
 # 
-# 1. fecha_dato - The date of observation
-# 2. fecha_alta - The date in which the customer became as the first holder of a contract in the bank
-
-# In[ ]:
-
-
-train = pd.read_csv(data_path+"train_ver2.csv", usecols=['fecha_dato', 'fecha_alta'], parse_dates=['fecha_dato', 'fecha_alta'])
-train['fecha_dato_yearmonth'] = train['fecha_dato'].apply(lambda x: (100*x.year) + x.month)
-yearmonth = train['fecha_dato_yearmonth'].value_counts()
-
-plt.figure(figsize=(8,4))
-sns.barplot(yearmonth.index, yearmonth.values, alpha=0.8, color=color[0])
-plt.xlabel('Year and month of observation', fontsize=12)
-plt.ylabel('Number of customers', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# For the first six months of the given train data, the number of customers / observations remain almost same and then there is a sudden spike in the number of customers / observations during July 2015.
-
-# In[ ]:
-
-
-train['fecha_alta_yearmonth'] = train['fecha_alta'].apply(lambda x: (100*x.year) + x.month)
-yearmonth = train['fecha_alta_yearmonth'].value_counts()
-print("Minimum value of fetcha_alta : ", min(yearmonth.index))
-print("Maximum value of fetcha_alta : ", max(yearmonth.index))
-
-plt.figure(figsize=(12,4))
-sns.barplot(yearmonth.index, yearmonth.values, alpha=0.8, color=color[1])
-plt.xlabel('Year and month of joining', fontsize=12)
-plt.ylabel('Number of customers', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# So the first holder date starts from January 1995. But as we can see, the number is high during the recent years.! 
+# The most striking result is however observed with the "shape" category, where close couples of features are highly correlated. Taking random couples of descriptors doesn't improve the situation much, and this can be easily understood by looking in detail at the second graph, where the correlation matrix of all the features is shown. The descriptors are highly correlated with their closest neighbours, but also with other features periodically. This data forms a nice pattern, yes, but can lead to bad results if not properly taken care of. This also confirms our theory that the starting assumption of Naïve Bayes was wrong. 
 # 
-# Also it seems there are some seasonal peaks in the data. Let us have a close look at them.!
+# Obviously correlation is not the only parameter one should look at when cleaning the data, but for this notebook we are going to focus only on this problem.
 
-# In[ ]:
-
-
-year_month = yearmonth.sort_index().reset_index()
-year_month = year_month.ix[185:]
-year_month.columns = ['yearmonth', 'number_of_customers']
-
-plt.figure(figsize=(12,4))
-sns.barplot(year_month.yearmonth.astype('int'), year_month.number_of_customers, alpha=0.8, color=color[2])
-plt.xlabel('Year and month of joining', fontsize=12)
-plt.ylabel('Number of customers', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# From 2011, the number of customers becoming the first folder of a contract in **the second six months is much higher than the first six months** in a calendar year and it is across all years after that. Looks interesting to me from a business standpoint.!  
+# Principal Component Analysis
+# ----------------------------
 # 
-# **Numerical variables exploration:**
+# **Principal Component Analysis**  (or *PCA* in short) allows to transform sets of correlated variables, like our leaves features, into linearly uncorrelated, orthogonal, vectors (the principal components). The output sets are ordered so that the first principal component accounts for as much variability (and thus information) as possible from the input data, and it has the largest variance, while the following vectors have the highest possible variance allowed by their orthogonality.  
 # 
-# Let us explore the 3 numerical variables present in the data.
+# The number of sets in output can be lower than the number of input features, sometimes all information from our descriptors can be contained in a lower number of vectors, and for this reason **PCA** is often used as a dimensionality reduction method. It implementation in *sklearn* is based on the **Singular Value Decomposition** (or *SVD*),  a method to extract the eigenvectors, the orthogonal vectors, by means of a factorisation of the matrix of the input features. 
 # 
-# 1. Age
-# 2. Antiguedad - customer seniority
-# 3. Renta
-# 
-# We can check the number of missing values, distribution of the data, distribution of the target variables based on the numerical variables in this notebook.
-# 
-# **Age:**
+# Although in principle we could apply **PCA** it only to a subset of the training data, given that some of the categories don't have much correlation among their members, we will apply here to the whole data set, to make sure that all features are orthogonal.
 
 # In[ ]:
 
 
-train = pd.read_csv(train_file, usecols=['age'])
-train.head()
+#We initialise pca choosing Minka’s MLE to guess the minimum number of output components necessary
+#to maintain the same information coming from the input descriptors and we ask to solve SVD in full
+pca = PCA(n_components = 'mle', svd_solver = 'full')
+#Then we fit pca on our training set and we apply to the same entire set
+x_train_pca=pca.fit_transform(x_train)
+
+#Now we can compare the dimensions of the training set before and after applying PCA and see if we 
+#managed to reduce the number of features. 
+print("Number of descriptors before PCA: " + '{:1.0f}'.format(x_train.shape[1]))
+print("Number of descriptors after PCA: " + '{:1.0f}'.format(x_train_pca.shape[1]))
 
 
-# In[ ]:
-
-
-print(list(train.age.unique()))
-
-
-# There are quite a few different formats for age (number, string with leading spaces, string). 
-# 
-# Also if we see, there is a **' NA'** value present in this field. So let us first take care of that by changing it to np.nan.
-
-# In[ ]:
-
-
-train['age'] = train['age'].replace(to_replace=[' NA'], value=np.nan)
-
-
-# We can now convert the field to dtype 'float' and then get the counts
+# As we can see, **PCA** only reduced the features by one element. This doesn't mean, however, that the results won't be improved. We can now apply again our classifiers to this new set and see if anything has changed.
 
 # In[ ]:
 
 
-train['age'] = train['age'].astype('float64')
+#Naive Bayes
+nb_validation=[nb.fit(x_train_pca[train], y_train[train]).score(x_train_pca[test], y_train[test]).mean()            for train, test in kfold.split(x_train)]
+#Random Forest
+rf_validation=[rf.fit(x_train_pca[train], y_train[train]).score(x_train_pca[test], y_train[test]).mean()                for train, test in kfold.split(x_train)]
+#Logistic Regression
+gs_validation=[gs.fit(x_train_pca[train], y_train[train]).score(x_train_pca[test], y_train[test]).mean()                for train, test in kfold.split(x_train)]
 
-age_series = train.age.value_counts()
-plt.figure(figsize=(12,4))
-sns.barplot(age_series.index.astype('int'), age_series.values, alpha=0.8)
-plt.ylabel('Number of Occurrences of the customer', fontsize=12)
-plt.xlabel('Age', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# We could see that there is a very long tail at both the ends. So we can have min and max cap at some points respectively (I would use 20 and 86 from the graph). 
-
-# In[ ]:
+#And we print the results
+print("Validation Results After PCA\n==========================================")
+print("Naive Bayes: " + '{:1.3f}'.format(np.mean(nb_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(nb_validation)))
+print("Random Forest: " + '{:1.3f}'.format(np.mean(rf_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(rf_validation)))
+print("Logistic Regression: " + '{:1.3f}'.format(np.mean(gs_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(gs_validation)))
 
 
-train.age.isnull().sum()
-
+# As we expected, the validation results improve significantly for the Naïve Bayes classifier, since now the features independence assumption is correct. No difference is observed instead for the other two classifiers, where the results are consistent with those before **PCA** within a standard deviation. 
 
 # In[ ]:
 
 
-train.age.mean()
-
-
-# We have 27734 missing values and the mean age is 40. We could probably do a mean imputation here. 
-# 
-# We could look at test set age distribution to confirm both train and test have same distribution.
-
-# In[ ]:
-
-
-test = pd.read_csv(test_file, usecols=['age'])
-test['age'] = test['age'].replace(to_replace=[' NA'], value=np.nan)
-test['age'] = test['age'].astype('float64')
-
-age_series = test.age.value_counts()
-plt.figure(figsize=(12,4))
-sns.barplot(age_series.index.astype('int'), age_series.values, alpha=0.8)
-plt.ylabel('Number of Occurrences of the customer', fontsize=12)
-plt.xlabel('Age', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# Good to see that the distribution is similar between train and test.!
-# 
-# **ANTIGUEDAD:**
-# 
-# Customer seniority in months.
-
-# In[ ]:
-
-
-train = pd.read_csv(train_file, usecols=['antiguedad'])
-train.head()
-
-
-# In[ ]:
-
-
-print(list(train.antiguedad.unique()))
-
-
-# Here again we could see that there is a **'     NA'** value present in this field similar to age. Also we could see that there is a special value '-999999' present in the data. May be this special value also represent missing value?!
-# 
-# We shall first convert the NA value to np.nan value
-
-# In[ ]:
-
-
-train['antiguedad'] = train['antiguedad'].replace(to_replace=['     NA'], value=np.nan)
-train.antiguedad.isnull().sum()
-
-
-# So here again we have 27734 missing values.
-# 
-# We can convert the field to dtype 'float' and then check the count of special value -999999.
-
-# In[ ]:
-
-
-train['antiguedad'] = train['antiguedad'].astype('float64')
-(train['antiguedad'] == -999999.0).sum()
-
-
-# We have 38 special values. If we use a tree based model, we could probably leave it as such or if we use a linear model, we need to map it to mean or some value in the range of 0 to 256.
-# 
-# Now we can see the distribution plot of this variable.
-
-# In[ ]:
-
-
-col_series = train.antiguedad.value_counts()
-plt.figure(figsize=(12,4))
-sns.barplot(col_series.index.astype('int'), col_series.values, alpha=0.8)
-plt.ylabel('Number of Occurrences of the customer', fontsize=12)
-plt.xlabel('Customer Seniority', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# There are few peaks and troughs in the plot but there are no visible gaps or anything as such which is alarming (atleast to me.!)
-# 
-# So we can also see whether test follows a similar pattern and if it does then we are good.
-
-# In[ ]:
-
-
-test = pd.read_csv(test_file, usecols=['antiguedad'])
-test['antiguedad'] = test['antiguedad'].replace(to_replace=[' NA'], value=np.nan)
-test['antiguedad'] = test['antiguedad'].astype('float64')
-
-col_series = test.antiguedad.value_counts()
-plt.figure(figsize=(12,4))
-sns.barplot(col_series.index.astype('int'), col_series.values, alpha=0.8)
-plt.ylabel('Number of Occurrences of the customer', fontsize=12)
-plt.xlabel('Customer Seniority', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# Peaks are comparatively bigger than the train set. Any implications?
-# 
-# **RENTA:**
-# 
-# Gross income of the household.
-# 
-# To update
-
-# In[ ]:
-
-
-train = pd.read_csv(train_file, usecols=['renta'])
-train.head()
-
-
-# In[ ]:
-
-
-unique_values = np.sort(train.renta.unique())
-plt.scatter(range(len(unique_values)), unique_values)
-plt.show()
-
-
-# It seems the distribution of rent is highly skewed. There are few very high valued customers present in the data.
-# 
-# Let us get the mean and median value for this field.
-
-# In[ ]:
-
-
-train.renta.mean()
-
-
-# In[ ]:
-
-
-train.renta.median()
-
-
-# Now let us see the number of missing values in this field.
-
-# In[ ]:
-
-
-train.renta.isnull().sum()
-
-
-# There are quite a few number of missing values present in this field.! We can do some form of imputation for the same. One very good idea is given by Alan in this [script][1].
-# 
-# We can check the quantile distribution to see how the value changes in the last percentile.
-# 
-# 
-#   [1]: https://www.kaggle.com/apryor6/santander-product-recommendation/detailed-cleaning-visualization-python
-
-# In[ ]:
-
-
-train.fillna(101850., inplace=True) #filling NA as median for now
-quantile_series = train.renta.quantile(np.arange(0.99,1,0.001))
-plt.figure(figsize=(12,4))
-sns.barplot((quantile_series.index*100), quantile_series.values, alpha=0.8)
-plt.ylabel('Rent value', fontsize=12)
-plt.xlabel('Quantile value', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# As we can see there is a sudden increase in the rent value from 99.9% to 100%. So let us max cap the rent values at 99.9% and then get a box plot.
-
-# In[ ]:
-
-
-rent_max_cap = train.renta.quantile(0.999)
-train['renta'][train['renta']>rent_max_cap] = 101850.0 # assigining median value 
-sns.boxplot(train.renta.values)
-plt.show()
-
-
-# From the box plot, we can see that most of the rent values fall between 0 and 300,000.
-# 
-# Now we can see the distribution of rent in test data as well.
-
-# In[ ]:
-
-
-test = pd.read_csv(test_file, usecols=['renta'])
-test['renta'] = test['renta'].replace(to_replace=['         NA'], value=np.nan).astype('float') # note that there is NA value in test
-unique_values = np.sort(test.renta.unique())
-plt.scatter(range(len(unique_values)), unique_values)
-plt.show()
-
-
-# *Please note that there is a new value '   NA' present in the test data set while it is not in train data.*
-# 
-# The distribution looks similar to train though.
-
-# In[ ]:
-
-
-test.renta.mean()
-
-
-# In[ ]:
-
-
-test.fillna(101850., inplace=True) #filling NA as median for now
-quantile_series = test.renta.quantile(np.arange(0.99,1,0.001))
-plt.figure(figsize=(12,4))
-sns.barplot((quantile_series.index*100), quantile_series.values, alpha=0.8)
-plt.ylabel('Rent value', fontsize=12)
-plt.xlabel('Quantile value', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# In[ ]:
-
-
-test['renta'][test['renta']>rent_max_cap] = 101850.0 # assigining median value 
-sns.boxplot(test.renta.values)
-plt.show()
-
-
-# So box and quantile plots are similar to that of the train dataset for rent.!
-# 
-# **Numerical variables Vs Target variables:**
-# 
-# Now let us see how the targets are distributed based on the numerical variables present in the data. Let us subset the first 100K rows for the same. 
-
-# In[ ]:
-
-
-train = pd.read_csv(data_path+"train_ver2.csv", nrows=100000)
-target_cols = ['ind_cco_fin_ult1', 'ind_cder_fin_ult1',
-                             'ind_cno_fin_ult1', 'ind_ctju_fin_ult1',
-                             'ind_ctma_fin_ult1', 'ind_ctop_fin_ult1',
-                             'ind_ctpp_fin_ult1', 'ind_deco_fin_ult1',
-                             'ind_deme_fin_ult1', 'ind_dela_fin_ult1',
-                             'ind_ecue_fin_ult1', 'ind_fond_fin_ult1',
-                             'ind_hip_fin_ult1', 'ind_plan_fin_ult1',
-                             'ind_pres_fin_ult1', 'ind_reca_fin_ult1',
-                             'ind_tjcr_fin_ult1', 'ind_valo_fin_ult1',
-                             'ind_viv_fin_ult1', 'ind_nomina_ult1',
-                             'ind_nom_pens_ult1', 'ind_recibo_ult1']
-train[target_cols] = (train[target_cols].fillna(0))
-train["age"] = train['age'].map(str.strip).replace(['NA'], value=0).astype('float')
-train["antiguedad"] = train["antiguedad"].map(str.strip)
-train["antiguedad"] = train['antiguedad'].replace(['NA'], value=0).astype('float')
-train["antiguedad"].ix[train["antiguedad"]>65] = 65 # there is one very high skewing the graph
-train["renta"].ix[train["renta"]>1e6] = 1e6 # capping the higher values for better visualisation
-train.fillna(-1, inplace=True)
-
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(16, 120))
-numeric_cols = ['age', 'antiguedad', 'renta']
-#for ind1, numeric_col in enumerate(numeric_cols):
-plot_count = 0
-for ind, target_col in enumerate(target_cols):
-    for numeric_col in numeric_cols:
-        plot_count += 1
-        plt.subplot(22, 3, plot_count)
-        sns.boxplot(x=target_col, y=numeric_col, data=train)
-        plt.title(numeric_col+" Vs "+target_col)
-plt.show()
-
-
-# Seems all these numerical variables have some predictive power since they show some different behavior between 0's and 1's.
-# 
-# **Exploring categorical fields:**
-# 
-# Now let us look at the distribution of categorical fields present in the data by using the first 1 million rows.
-
-# In[ ]:
-
-
-cols = ["ind_empleado","pais_residencia","sexo","ind_nuevo","indrel","ult_fec_cli_1t","indrel_1mes","tiprel_1mes","indresi","indext","conyuemp","canal_entrada","indfall","tipodom","cod_prov","nomprov","ind_actividad_cliente","segmento"]
-for col in cols:
-    train = pd.read_csv("../input/train_ver2.csv", usecols = ["ncodpers", col], nrows=1000000)
-    train = train.fillna(-99)
-    len_unique = len(train[col].unique())
-    print("Number of unique values in ",col," : ",len_unique)
-    if len_unique < 200:
-        agg_df = train[col].value_counts()
-        plt.figure(figsize=(12,6))
-        sns.barplot(agg_df.index, np.log1p(agg_df.values), alpha=0.8, color=color[0])
-        plt.xlabel(col, fontsize=12)
-        plt.ylabel('Log(Number of customers)', fontsize=12)
-        plt.xticks(rotation='vertical')
-        plt.show()
-    print()
-    
-       
-
-
-# Hope this one is helpful.!
+#Again, we can check if anything changed in the features importance of our Random Forest classifier
+importances = rf.feature_importances_
+indices = np.argsort(importances)[::-1]
+imp_std = np.std([est.feature_importances_ for est in rf.estimators_], axis=0)
+
+fig = plt.figure(figsize=(8, 6))
+gs1 = gridspec.GridSpec(1, 2)#, height_ratios=[1, 1]) 
+ax1, ax2 = fig.add_subplot(gs1[0]), fig.add_subplot(gs1[1])
+ax1.margins(0.05), ax2.margins(0.05) 
+ax1.bar(range(10), importances[indices][:10],        color="#6480e5", yerr=imp_std[indices][:10], ecolor='#31427e', align="center")
+ax2.bar(range(10), importances[indices][-10:],        color="#e56464", yerr=imp_std[indices][-10:], ecolor='#7e3131', align="center")
+ax1.set_xticks(range(10)), ax2.set_xticks(range(10))
+ax1.set_xticklabels(indices[:10]) ,ax2.set_xticklabels(indices[-10:])
+ax1.set_xlim([-1, 10]), ax2.set_xlim([-1, 10])
+ax1.set_ylim([0, 0.035]), ax2.set_ylim([0, 0.035])
+ax1.set_xlabel('Feature #'), ax2.set_xlabel('Feature #')
+ax1.set_ylabel('Random Forest Normalized Importance'), ax2.set_ylabel('Random Forest Normalized Importance')
+ax1.set_title('First 10 Important Features (after PCA)'), ax2.set_title('Last 10 Important Features (after PCA)')
+gs1.tight_layout(fig)
+#plt.show()
+
+
+# However, looking at the feature importances of the **Random Forest** classifier we can see how the information has been restructured and divided among the features. The 10 first important features (on the left) are taken among the first in the first vectors of the **PCA**, the ones with highest variance, while the least important features for the classifier are mostly among the last vectors of our modified dataset, where the remaining information has been stored. Dropping them would lead to a modest loss of information. Moreover, the actual value of the importance is increased for the first ten vectors and equally low for the last ten.  
+# It is interesting to note how this rearrangement of the information through **PCA** and the elimination of just one descriptor doesn't significantly affect the results for the **Random Forest** classifier. 
+
+# These results gives us a nice example of how the results of different classifiers are highly dependent on the structure of our input data. One should consider carefully which classifier to use depending on the kind problem and data provided and only after an in depth analysis and proper cleaning of the dataset.

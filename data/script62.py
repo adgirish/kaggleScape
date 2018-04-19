@@ -1,217 +1,359 @@
 
 # coding: utf-8
 
-# ### *Use this one simple trick to get to the top of the leaderboard - Grandmasters hate him!*
-# 
-# Here's quite a high-level EDA - since the data is so huge, we want to get a better understanding of what we actually have.
-# 
-# If this EDA helps you, make sure to leave an upvote to motivate me to make more! :)
-# 
-# First off: What files do we have?
-
 # In[ ]:
 
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import os
-import gc # We're gonna be clearing memory a lot
 import matplotlib.pyplot as plt
 import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
+plt.style.use('ggplot')
 
-p = sns.color_palette()
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-print('# File sizes')
-for f in os.listdir('../input'):
-    if 'zip' not in f:
-        print(f.ljust(30) + str(round(os.path.getsize('../input/' + f) / 1000000, 2)) + 'MB')
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
-
-# Wow, that's a lot of data! Let's start off by looking at the clicks_train.csv and clicks_test.csv files, as these contain the main things we need.
-# 
-# Each display has a certain number of adverts. Let's look at the distribution of these advert counts, and see if they are consistent between train and test.
-
-# In[ ]:
-
-
-df_train = pd.read_csv('../input/clicks_train.csv')
-df_test = pd.read_csv('../input/clicks_test.csv')
+# Any results you write to the current directory are saved as output.
 
 
 # In[ ]:
 
 
-sizes_train = df_train.groupby('display_id')['ad_id'].count().value_counts()
-sizes_test = df_test.groupby('display_id')['ad_id'].count().value_counts()
-sizes_train = sizes_train / np.sum(sizes_train)
-sizes_test = sizes_test / np.sum(sizes_test)
-
-plt.figure(figsize=(12,4))
-sns.barplot(sizes_train.index, sizes_train.values, alpha=0.8, color=p[0], label='train')
-sns.barplot(sizes_test.index, sizes_test.values, alpha=0.6, color=p[1], label='test')
-plt.legend()
-plt.xlabel('Number of Ads in display', fontsize=12)
-plt.ylabel('Proportion of set', fontsize=12)
+df = pd.read_csv('../input/flavors_of_cacao.csv',na_values='\xa0')
 
 
-# This looks like a perfect split to me! So we can assume the distribution to be the same within the sets - no weird trickery going on here.
-# 
-# What about adverts? How many adverts are there that are very often used, and how many are rare?
+# let's check for some missing values first
 
 # In[ ]:
 
 
-ad_usage_train = df_train.groupby('ad_id')['ad_id'].count()
-
-for i in [2, 10, 50, 100, 1000]:
-    print('Ads that appear less than {} times: {}%'.format(i, round((ad_usage_train < i).mean() * 100, 2)))
-
-plt.figure(figsize=(12, 6))
-plt.hist(ad_usage_train.values, bins=50, log=True)
-plt.xlabel('Number of times ad appeared', fontsize=12)
-plt.ylabel('log(Count of displays with ad)', fontsize=12)
-plt.show()
-
-
-# Here we can see that a **huge** number of ads appear just a few times in the training set (so much that we have to use a log graph to show it), with two-thirds having less than 10 appearances. This shows us that we have to be able to predict whether someone will click on an ad not just based on the past data of that specific ad, but also by linking it to other adverts.
-# 
-# I think this is the underlying challenge that Outbrain has for us.
-# 
-# Before we move on, let's check how many ads in the test set are not in the training set.
-
-# In[ ]:
-
-
-ad_prop = len(set(df_test.ad_id.unique()).intersection(df_train.ad_id.unique())) / len(df_test.ad_id.unique())
-print('Proportion of test ads in test that are in training: {}%'.format(round(ad_prop * 100, 2)))
-
-
-# This number is a little more reasonable, with 88% of ads appearing in both sets.
-# 
-# ## Events
-# 
-# Let's move on to the events file. I'm not going to cover the [timestamp](https://www.kaggle.com/joconnor/outbrain-click-prediction/date-exploration-and-train-test-split) or the [location](https://www.kaggle.com/andreyg/outbrain-click-prediction/explore-user-base-by-geo), since these have already been beautifully explored - you can click the links to view those EDAs.
-
-# In[ ]:
-
-
-try:del df_train,df_test # Being nice to Azure
-except:pass;gc.collect()
-
-events = pd.read_csv('../input/events.csv')
-print('Shape:', events.shape)
-print('Columns', events.columns.tolist())
-events.head()
+b = pd.DataFrame(df.isnull().sum(), columns= ['Number of missing values'])
+b
 
 
 # In[ ]:
 
 
-plat = events.platform.value_counts()
+df.head()
 
-print(plat)
-print('\nUnique values of platform:', events.platform.unique())
-
-
-# This is very interesting, notice how 1, 2 and 3 are repeated twice in the platform, once as floats, and once as strings.
-# 
-# This might become useful in the future (leak? :P) - but for now, I'm just going to treat them as the same thing.
 
 # In[ ]:
 
 
-events.platform = events.platform.astype(str)
-plat = events.platform.value_counts()
-
-plt.figure(figsize=(12,4))
-sns.barplot(plat.index, plat.values, alpha=0.8, color=p[2])
-plt.xlabel('Platform', fontsize=12)
-plt.ylabel('Occurence count', fontsize=12)
+plt.figure(figsize=(8,6))
+sns.distplot(df['Rating'],bins=5,color='brown')
 
 
-# It's still unclear what the platform means, but it's possible that it's things like computers, phones, tablets etc. 
-# 
-# The `\\N`s and string numbers may have come from the way that a file was parsed while creating the dataset, but it's still a mystery. If anyone has any other ideas, I'd love to hear them!
-# 
-# Let's do some quick analysis on the UUID next.
+# The distribution of the ratings is somewhat skewed from normal. We see that there is a high number of  3 and 4 ratings. There are very few 1 and 5 ratings.
+
+# Extracted the Cocoa percentage and converted it into float for further analysis
 
 # In[ ]:
 
 
-uuid_counts = events.groupby('uuid')['uuid'].count().sort_values()
+df['Cocoa % as num'] = df['Cocoa\nPercent'].apply(lambda x: x.split('%')[0])
+df['Cocoa % as num'] = df['Cocoa % as num'].astype(float)
 
-print(uuid_counts.tail())
 
-for i in [2, 5, 10]:
-    print('Users that appear less than {} times: {}%'.format(i, round((uuid_counts < i).mean() * 100, 2)))
+# Cocoa is a key ingredient of any chocolate. Now, lets look at the distribution of cocoa percentage.
+# As expected, we see that the distribution of cocoa percentage in chocolates is normally distributed with a majority of the chocolates having 70% of cocoa.
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,6))
+sns.distplot(df['Cocoa % as num'],bins=20,color='Brown')
+
+
+# Let's have a look at the ratings by Review year, we would like to see if the review date has an effect on the Rating. Also, we would like to see if the outliers in the Rating. A boxplot would be very helpful in this case.
+
+# In[ ]:
+
+
+df['Review\nDate'] = df['Review\nDate'].astype(str)
+
+plt.figure(figsize=(12,6))
+sns.boxplot(x='Review\nDate', y='Rating',data=df)
+
+
+# There is an interesting trend in the Rating. From the years 2006 to 2009, the median of the Ratings is consistent around 3. There is a jump in the median to a value of 3.3 from 2010 and it remained around 3.3 until 2016. 
+
+# In[ ]:
+
+
+fig, (ax1, ax2, ax3) = plt.subplots(nrows=3,figsize=(12,15))
+
+
+a = df.groupby(['Company\nLocation'])['Rating'].mean()
+a = a.sort_values(ascending=False)
+
+b = df.groupby(['Company\nLocation'])['Rating'].median()
+b = b.sort_values(ascending=False)
+
+a = pd.DataFrame(a)
+b = pd.DataFrame(b)
+
+Ratings_by_location = a.join(b, how='left',lsuffix='_mean', rsuffix='_median')
+Ratings_by_location['Mean-Median'] = Ratings_by_location['Rating_mean']-Ratings_by_location['Rating_median']
+Rating_difference = sns.barplot(x=Ratings_by_location.index,y=Ratings_by_location['Mean-Median'], ax = ax3)
+Rating_difference.set_xticklabels(labels = Ratings_by_location.index, rotation =90)
+Rating_difference.set_ylabel("Mean-Median of ratings")
+
+
+#plt.figure(figsize=(12,6))
+ratings_mean = sns.barplot(x=Ratings_by_location.index,y=Ratings_by_location['Rating_mean'],ax=ax1)
+ratings_mean.set_xticklabels(labels = Ratings_by_location.index, rotation =90)
+ratings_mean.set_ylabel("Mean of Ratings")
+
+
+#plt.figure(figsize=(12,6))
+ratings_median = sns.barplot(x=Ratings_by_location.index,y=Ratings_by_location['Rating_median'], ax = ax2)
+ratings_median.set_xticklabels(labels = Ratings_by_location.index, rotation =90)
+ratings_median.set_ylabel("Median of ratings")
+
+plt.tight_layout()
+
+
+# From the above visualizations, we can see that there is no much difference between mean and median of the data except for the company that's located in Sao Tome.
+# 
+# A very important observation is that, Rating seems to be dependent on the country of company location.
+# We can spot several European and South American countries with a higher mean Rating, this could be due to the availability of Cocoa in these countries. The availability cocoa can influence the percentage of Cocoa used in the chocolates at these companies.
+
+# Lets looks at the Cocoa percentage used in Chocolates in different countries. 
+# From the below chart, the distribution of cocoa varied from 40% to around 80% in our dataset. 
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,6))
+
+c = df.groupby(['Company\nLocation'])['Cocoa % as num'].mean()
+c = c.sort_values(ascending=False)
+
+ratings = sns.barplot(x=c.index,y=c)
+ratings.set_xticklabels(labels = c.index, rotation =90)
+
+
+# The Ratings might be possibly influenced by the bean type and broad bean type used in the production.
+# Since we have these features in our dataset, we can plot the effect these features have on our ratings.
+# 
+# From the below visualizations, we can see that the distribution of ratings is different based on bean type and broad bean type.
+
+# In[ ]:
+
+
+
+fig, (ax1, ax2) = plt.subplots(ncols=2,figsize=(12,15))
+
+e = df.groupby(['Bean\nType'])['Rating'].mean()
+e = e.sort_values(ascending=False)
+Rating_beanType = sns.barplot(y=e.index,x=e,ax = ax1)
+
+
+f = df.groupby(['Broad Bean\nOrigin'])['Rating'].mean()
+f = f.sort_values(ascending=False)
+Rating_broadbean = sns.barplot(y=f.index,x=f,ax = ax2)
+
+plt.tight_layout()
+
+
+# Soon to be added: Will try to spot anomalies in this dataset using techniques like DBScan.
+# 
+# We have chosen Cocoa percentage, Review date, Rating, Broad bean origin, Company location to be included in the training data for our clustering model.
+# 
+# The clustering technique we will be using is DBScan
+# 
+# Density-based spatial clustering of applications with noise (DBSCAN) is a data clustering algorithm proposed by Martin Ester, Hans-Peter Kriegel, Jörg Sander and Xiaowei Xu in 1996. It is a density-based clustering algorithm: given a set of points in some space, it groups together points that are closely packed together (points with many nearby neighbors), marking as outliers points that lie alone in low-density regions (whose nearest neighbors are too far away). DBSCAN is one of the most common clustering algorithms and also most cited in scientific literature.
+# 
+# In 2014, the algorithm was awarded the test of time award (an award given to algorithms which have received substantial attention in theory and practice) at the leading data mining conference, KDD.
+# 
+# Source: Wikipedia
+# 
+# 
+# ![image.png](attachment:image.png)
+# 
+# 
+# The above figure is taken from https://stats.stackexchange.com/questions/194734/dbscan-what-is-a-core-point
+# 
+# Blue observations are noise
+# 
+# Red observations are core points
+# 
+# Yellow ones are non core point aka edges of the cluster
+# 
+# 
+
+# In[ ]:
+
+
+df1 = df[['Cocoa % as num','Rating','Review\nDate']]
+
+
+# In[ ]:
+
+
+#non_numerical_columns = ['Review\nDate','Bean\nType', 'Broad Bean\nOrigin','Company\nLocation']
+
+non_numerical_columns = ['Review\nDate']
+
+for i in non_numerical_columns:
+    x1 = pd.get_dummies(df1[i])
+    df1 = df1.join(x1,lsuffix='_l',rsuffix='_r')
+    df1.drop(i,axis=1,inplace=True)
+
+
+# Standardizing the data is key for most of the clustering techniques to avoid a feature biasing the results of clustering
+
+# In[ ]:
+
+
+from sklearn.cluster import DBSCAN
+from sklearn import metrics
+from sklearn.preprocessing import StandardScaler
+
+
+# In[ ]:
+
+
+df_num = StandardScaler().fit_transform(df1)
+
+
+# In[ ]:
+
+
+A = []
+B = []
+C = []
+
+for i in np.linspace(0.1,5,50):
+    db = DBSCAN(eps=i, min_samples=10).fit(df_num)
+
+    core_samples_mask = np.zeros_like(db.labels_, dtype=bool)
+    core_samples_mask[db.core_sample_indices_] = True
+    labels = db.labels_
+    n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
     
-plt.figure(figsize=(12, 4))
-plt.hist(uuid_counts.values, bins=50, log=True)
-plt.xlabel('Number of times user appeared in set', fontsize=12)
-plt.ylabel('log(Count of users)', fontsize=12)
-plt.show()
+    sum = 0
+    for t in labels:
+        if t == -1: 
+            sum = sum + 1
+    C.append(sum)
+            
+    
+    
+    A.append(i)
+    B.append(int(n_clusters_))
 
 
-# Here we see a distribution much like the ad ids, with 88% of users being unique - there will be little scope of building user-based recommendation profiles here.
+# labels are the label of the clusters.
+# If the label is -1, then the observation is an outlier/noise within our dataset.
 # 
-# I'd love to look at things like whether the same user ever clicks on the same ad twice, or whether a user transverses the training & testing set, but we're limited by the Kernels memory limit here :(
 # 
-# ## Categories
-# 
-# Outbrain has some content classification algorithms, and they have provided us with the output from these classifications. Let's take a look at some of the most popular classifications.
+# db.core_sample_indices_   are the indices of the core points in the cluster, the indices that are excluded here are of outliers and the edges of the clusters
 
 # In[ ]:
 
 
-try:del events
-except:pass;gc.collect()
+results = pd.DataFrame([A,B,C]).T
+results.columns = ['distance','Number of clusters','Number of outliers']
+results.plot(x='distance',y='Number of clusters',figsize=(10,6))
 
-topics = pd.read_csv('../input/documents_topics.csv')
-print('Columns:',topics.columns.tolist())
-print('Number of unique topics:', len(topics.topic_id.unique()))
 
-topics.head()
+# Based on the above plot, I decided to go forward with a distance (epsilon) value of 1
+
+# In[ ]:
+
+
+db = DBSCAN(eps=1, min_samples=10).fit(df_num)
+core_samples_mask = np.zeros_like(db.labels_, dtype=bool)
+core_samples_mask[db.core_sample_indices_] = True
+labels = db.labels_
+n_clusters_ = len(set(labels)) - (1 if -1 in labels else 0)
+n_clusters_
+
+
+# The number of clusters in our dataset is 12. Remember that the number of clusters does not include outliers/noise in the dataset.
+
+# In[ ]:
+
+
+df = df.join(pd.DataFrame(labels))
+df = df.rename(columns={0:'Cluster'})
+
+df['Cluster'].value_counts()
+
+
+# -1 stands for outliers/Noise, we see that there are 93 outliers in our dataset. 
+# 
+# The number of observations in our clusters range from 20 to 283.
+# 
+# Let's look at some statistics within our clusters.
+
+# In[ ]:
+
+
+df_clusters = df.groupby('Cluster')['Rating','Cocoa % as num']
+df_clusters.describe()
 
 
 # In[ ]:
 
 
-topic_ids = topics.groupby('topic_id')['confidence_level'].count().sort_values()
+fig, (ax1,ax2) = plt.subplots(nrows = 2,figsize=(12,12))
 
-for i in [10000, 50000, 100000, 200000]:
-    print('Number of topics that appear more than {} times: {}'
-          .format(i, (topic_ids > i).sum()))
+plt.figure(figsize=(12,8))
+plot1 = sns.boxplot(x=df['Cluster'],y=df['Rating'],data=df, ax = ax1)
 
-plt.figure(figsize=(12, 4))
-sns.barplot(topic_ids.index, topic_ids.values, order=topic_ids.index, alpha=1, color=p[5])
-plt.xlabel('Document Topics', fontsize=12)
-plt.ylabel('Total occurences', fontsize=12)
-plt.show()
 
+plt.figure(figsize=(12,8))
+plot2 = sns.boxplot(x=df['Cluster'],y=df['Cocoa % as num'],data=df, ax= ax2)
+
+
+# We can infer from the above plots that the rating as well as the Cocoa percentage is much different for our outliers from the remaining clusters within the dataset.
+# 
+# A high Cocoa percentage in a chocolate doesn't necessarily prompt higher ratings, looks like it actually worsens the ratings from our dataset.
+
+# The following code is actually taken from scikit learn for visualization of our clusters.
+# 
+# http://scikit-learn.org/stable/auto_examples/cluster/plot_dbscan.html#sphx-glr-auto-examples-cluster-plot-dbscan-py
 
 # In[ ]:
 
 
-cat = pd.read_csv('../input/documents_categories.csv')
-print('Columns:', cat.columns.tolist())
-print('Number of unique categories:', len(cat.category_id.unique()))
+plt.figure(figsize=(16,12))
+X = df_num
 
-cat_ids = cat.groupby('category_id')['confidence_level'].count().sort_values()
+unique_labels = set(labels)
+colors = [plt.cm.Spectral(each)
+          for each in np.linspace(0, 1, len(unique_labels))]
+for k, col in zip(unique_labels, colors):
+    if k == -1:
+        # Black used for noise.
+        col = [0, 0, 0, 1]
 
-for i in [1000, 10000, 50000, 100000]:
-    print('Number of categories that appear more than {} times: {}'
-          .format(i, (cat_ids > i).sum()))
+    class_member_mask = (labels == k)
 
-plt.figure(figsize=(12, 4))
-sns.barplot(cat_ids.index, cat_ids.values, order=cat_ids.index, alpha=1, color=p[3])
-plt.xlabel('Document Categories', fontsize=12)
-plt.ylabel('Total occurences', fontsize=12)
+    xy = X[class_member_mask & core_samples_mask]
+    plt.plot(xy[:, 0], xy[:, 1], 'o', markerfacecolor=tuple(col),
+             markeredgecolor='k', markersize=14)
+
+    xy = X[class_member_mask & ~core_samples_mask]
+    plt.plot(xy[:, 0], xy[:, 1], 'o', markerfacecolor=tuple(col),
+             markeredgecolor='k', markersize=6)
+
+plt.title('Estimated number of clusters: %d' % n_clusters_)
 plt.show()
 
 
-# That's it for today, folks!
+# The black markers in the above dataset is the noise/outliers in our dataset.
 # 
-# Hopefully this helps you think of some ideas - I'll continue updating this as I do more exploration over the next few days.
+# More analysis to follow soon. 
 # 
-# Once again, please upvote if this was useful :P
+# Thanks, upvote if you liked it :)

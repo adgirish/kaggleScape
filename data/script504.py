@@ -1,427 +1,575 @@
 
 # coding: utf-8
 
-# # House price prediction using multiple regression analysis
 # 
-# # Part 2: Regression Models
-# 
-# The following notebook presents a thought process of predicting a continuous variable through Machine Learning methods. More specifically, we want to predict house prices based on multiple features using regression analysis. 
-# 
-# As an example, we will use a dataset of house sales in King County, where Seattle is located.
-# 
-# In the [first][1] part of the analysis, we set up the context using map visualization, and highlighted the association between the variables in our dataset. 
-# 
-# This is, for example, a map of King County showing the average house price per zipcode. We can see the disparities between the different zipcodes. The location of the houses should play an important role in our regression model. 
-# 
-# ![price per zipcode][2]
-# 
-# In this second notebook we will apply multiple regression models. We will talk about model complexity and how we can select the best predictive model using a validation set or cross-validation techniques.
-# 
-# ## 1. Preparation
-# 
-# As in Part 1, Let's first load the libraries and the dataset
+# > "Of the 95% of Japanese that eat three meals a day, most people consider dinner to be the most important. More than 80% of them usually have dinner at home with their families. But as for what they actually eat, over 60% of Japanese rely on home meal replacement (ready-to-eat food bought elsewhere and taken home) at least once or twice a month. And more than 70% enjoy dining out at least once or twice monthly. This is the picture that emerged when Trends in Japan conducted an online survey concerning attitudes among Japanese people toward eating" [Japanese Online Survey] (http://)http://web-japan.org/trends01/article/020403fea_r.html 
 # 
 # 
-#   [1]: https://www.kaggle.com/harlfoxem/d/harlfoxem/housesalesprediction/house-price-prediction-part-1/notebook
-#   [2]: https://harlfoxem.github.io/img/King_County_House_Prediction_files/price.png
+# This notebook is exploratory data analysis and divided into the following:
+# 
+# Business Analysis:
+# 1. Geographical distribution of the store 
+# 2. Number of visitors  trend  
+# 3. Visitors by genre
+# 4. Visitors by weekdays trend and group size
+# 5. Reservations trends
+# 6. Productivity by air_store_id
+# 
+# Feature Engineering
+# 
+# Outliers
+# 
+
+# Basic information of the dataset:
 
 # In[ ]:
 
 
-import numpy as np # NumPy is the fundamental package for scientific computing
+import numpy as np
+import pandas as pd
+from sklearn import ensemble, neighbors, linear_model, metrics, preprocessing
+from datetime import datetime
+import glob, re
+import time, datetime
+from datetime import timedelta
 
-import pandas as pd # Pandas is an easy-to-use data structures and data analysis tools
-pd.set_option('display.max_columns', None) # To display all columns
+import matplotlib.pyplot as plt
+plt.style.use('fivethirtyeight')
+import seaborn as sns
+color = sns.color_palette()
 
-import matplotlib.pyplot as plt # Matplotlib is a python 2D plotting library
 get_ipython().run_line_magic('matplotlib', 'inline')
-# A magic command that tells matplotlib to render figures as static images in the Notebook.
 
-import seaborn as sns # Seaborn is a visualization library based on matplotlib (attractive statistical graphics).
-sns.set_style('whitegrid') # One of the five seaborn themes
 import warnings
-warnings.filterwarnings('ignore') # To ignore some of seaborn warning msg
-
-from scipy import stats
-
-from sklearn import linear_model # Scikit learn library that implements generalized linear models
-from sklearn import neighbors # provides functionality for unsupervised and supervised neighbors-based learning methods
-from sklearn.metrics import mean_squared_error # Mean squared error regression loss
-from sklearn import preprocessing # provides functions and classes to change raw feature vectors
-
-from math import log
-
-
-# In[ ]:
-
-
-data = pd.read_csv("../input/kc_house_data.csv", parse_dates = ['date']) # load the data into a pandas dataframe
-data.head(2) # Show the first 2 lines
-
-
-# ### Data Cleaning
-# 
-# Let's reduce the dataset by dropping columns that won't be used during the analysis.
-
-# In[ ]:
-
-
-data.drop(['id', 'date'], axis = 1, inplace = True)
-
-
-# ### Data Transformation
-# 
-# Following the correlation analysis in Part 1, let's create some new variables in our dataset. 
-
-# In[ ]:
-
-
-data['basement_present'] = data['sqft_basement'].apply(lambda x: 1 if x > 0 else 0) # Indicate whether there is a basement or not
-data['renovated'] = data['yr_renovated'].apply(lambda x: 1 if x > 0 else 0) # 1 if the house has been renovated
-
-
-# ### Encode categorical variables using dummies
-# 
-# A Dummy variable is an artificial variable created to represent an attribute with two or more distinct categories/levels. In this example, we will analyse *bedrooms* and *bathrooms* as continuous and therefore will encode the following:
-# 
-# * floors
-# * view
-# * condition and
-# * grade
-
-# In[ ]:
-
-
-categorial_cols = ['floors', 'view', 'condition', 'grade']
-
-for cc in categorial_cols:
-    dummies = pd.get_dummies(data[cc], drop_first=False)
-    dummies = dummies.add_prefix("{}#".format(cc))
-    data.drop(cc, axis=1, inplace=True)
-    data = data.join(dummies)
-
-
-# We saw that zipcodes are also related to price. However, encoded all zipcodes will add 70 dummies variables. Instead, we will only encode the 6 most expensive zipcodes as shown in the map.
-
-# In[ ]:
-
-
-dummies_zipcodes = pd.get_dummies(data['zipcode'], drop_first=False)
-dummies_zipcodes.reset_index(inplace=True)
-dummies_zipcodes = dummies_zipcodes.add_prefix("{}#".format('zipcode'))
-dummies_zipcodes = dummies_zipcodes[['zipcode#98004','zipcode#98102','zipcode#98109','zipcode#98112','zipcode#98039','zipcode#98040']]
-data.drop('zipcode', axis=1, inplace=True)
-data = data.join(dummies_zipcodes)
-
-data.dtypes
-
-
-# ### Split the data
-# 
-# We will split the dataframe into training and testing data using a 80%/20% ratio
-
-# In[ ]:
-
-
-from sklearn.cross_validation import train_test_split
-train_data, test_data = train_test_split(data, train_size = 0.8, random_state = 10)
-
-
-# ## 2. Regression Models
-# 
-# In this section, we will train numerous regression models on the train data (e.g., simple linear regression, lasso, nearest neighbor) and evaluate their performance using Root Mean Squared Error (RMSE) on the test data.
-# 
-# ### 2.1 Simple Linear Regression
-# 
-# Let's first predict house prices using simple (one input) linear regression.
-
-# In[ ]:
-
-
-# A function that take one input of the dataset and return the RMSE (of the test data), and the intercept and coefficient
-def simple_linear_model(train, test, input_feature):
-    regr = linear_model.LinearRegression() # Create a linear regression object
-    regr.fit(train.as_matrix(columns = [input_feature]), train.as_matrix(columns = ['price'])) # Train the model
-    RMSE = mean_squared_error(test.as_matrix(columns = ['price']), 
-                              regr.predict(test.as_matrix(columns = [input_feature])))**0.5 # Calculate the RMSE on test data
-    return RMSE, regr.intercept_[0], regr.coef_[0][0]
-
-
-# Let's create a simple linear regression model using sqft_living as input and calculate the RMSE on the test data.
-
-# In[ ]:
-
-
-RMSE, w0, w1 = simple_linear_model(train_data, test_data, 'sqft_living')
-print ('RMSE for sqft_living is: %s ' %RMSE)
-print ('intercept is: %s' %w0)
-print ('coefficient is: %s' %w1)
-
-
-# Similarly, we can run the same test on all the features in the dataset and assess which one would be the best estimator of house price using just a single linear regression model.
-
-# In[ ]:
-
-
-input_list = data.columns.values.tolist() # list of column name
-input_list.remove('price')
-simple_linear_result = pd.DataFrame(columns = ['feature', 'RMSE', 'intercept', 'coefficient'])
-
-# loop that calculate the RMSE of the test data for each input 
-for p in input_list:
-    RMSE, w1, w0 = simple_linear_model(train_data, test_data, p)
-    simple_linear_result = simple_linear_result.append({'feature':p, 'RMSE':RMSE, 'intercept':w0, 'coefficient': w1}
-                                                       ,ignore_index=True)
-simple_linear_result.sort_values('RMSE').head(10) # display the 10 best estimators
-
-
-# When using simple linear regression, sqft_living provides the smallest test error estimate of house price for the dataset considered.
-# 
-# ### 2.2 Multiple Regression
-# 
-# Now let's try to predict *price* using multiple features. We can modify the simple linear regression function above to take multiple features as input.
-
-# In[ ]:
-
-
-# A function that take multiple features as input and return the RMSE (of the test data), and the  intercept and coefficients
-def multiple_regression_model(train, test, input_features):
-    regr = linear_model.LinearRegression() # Create a linear regression object
-    regr.fit(train.as_matrix(columns = input_features), train.as_matrix(columns = ['price'])) # Train the model
-    RMSE = mean_squared_error(test.as_matrix(columns = ['price']), 
-                              regr.predict(test.as_matrix(columns = input_features)))**0.5 # Calculate the RMSE on test data
-    return RMSE, regr.intercept_[0], regr.coef_ 
-
-
-# Let's try with a few examples:
-
-# In[ ]:
-
-
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['sqft_living','bathrooms','bedrooms']))
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['sqft_above','view#0','bathrooms']))
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['bathrooms','bedrooms']))
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['view#0','grade#12','bedrooms','sqft_basement']))
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['sqft_living','bathrooms','view#0']))
-
-
-# We can also try to fit a higher-order polynomial on the input. For example, we can try to fit a qudratic function on sqft_living
-
-# In[ ]:
-
-
-train_data['sqft_living_squared'] = train_data['sqft_living'].apply(lambda x: x**2) # create a new column in train_data
-test_data['sqft_living_squared'] = test_data['sqft_living'].apply(lambda x: x**2) # create a new column in test_data
-print ('RMSE: %s, intercept: %s, coefficients: %s' %multiple_regression_model(train_data, 
-                                                                             test_data, ['sqft_living','sqft_living_squared']))
-
-
-# While we can get better performance than simple linear models, a few problems remain. 
-# 
-# * First, we don't know which feature to select. Obviously some combinations of features will yield smaller RMSE on the test set.
-# * Second, we don't know how many features to select. This is because the more features we incorporate in the train model, the more overfit we get on the train data, resulting in higher error on the test data.
-# 
-# One solution would be to test multiple features combinations (all?) and keep the solution with the smallest error value calculated on the test data. However, this is an overly optimistic approach, since the model complexity is selected to minimize the test error (error is biased). A more sophisticated approach is to use two sets for testing our models, a.k.a: a validation set and a test set. We select model complexity to minimize error on the validation set and approximate the generalization error based on the test set.
-# 
-# Going through all subsets of features combinations is most often computationally infeasible. For example, having 30 features yield more than 1 billion combinations. Another approach is to use a greedy technique like a forward stepwise algorithm where the best estimator feature is added to the set of already selected features at each iteration. For example, let's pretend that the best single estimator is sqft_living. In the 2nd step of the greedy algorithm, we test all the remaining features one by one in combinations with sqft_living (e.g., sqft_living and bedrooms, sqft_living and waterfront, etc) and select the best combination using training error. At the end, we select the model complexity (number of features) using the validation error and estimate the generalization error using the test set.
-# 
-# Let's try this method.
-
-# In[ ]:
-
-
-# we're first going to add more features into the dataset.
-
-# sqft_living cubed
-train_data['sqft_living_cubed'] = train_data['sqft_living'].apply(lambda x: x**3) 
-test_data['sqft_living_cubed'] = test_data['sqft_living'].apply(lambda x: x**3) 
-
-# bedrooms_squared: this feature will mostly affect houses with many bedrooms.
-train_data['bedrooms_squared'] = train_data['bedrooms'].apply(lambda x: x**2) 
-test_data['bedrooms_squared'] = test_data['bedrooms'].apply(lambda x: x**2)
-
-# bedrooms times bathrooms gives what's called an "interaction" feature. It is large when both of them are large.
-train_data['bed_bath_rooms'] = train_data['bedrooms']*train_data['bathrooms']
-test_data['bed_bath_rooms'] = test_data['bedrooms']*test_data['bathrooms']
-
-# Taking the log of squarefeet has the effect of bringing large values closer together and spreading out small values.
-train_data['log_sqft_living'] = train_data['sqft_living'].apply(lambda x: log(x))
-test_data['log_sqft_living'] = test_data['sqft_living'].apply(lambda x: log(x))
-
-train_data.shape
-
-
-# In[ ]:
-
-
-# split the train_data to include a validation set (train_data2 = 60%, validation_data = 20%, test_data = 20%)
-train_data_2, validation_data = train_test_split(train_data, train_size = 0.75, random_state = 50)
-
-
-# In[ ]:
-
-
-# A function that take multiple features as input and return the RMSE (of the train and validation data)
-def RMSE(train, validation, features, new_input):
-    features_list = list(features)
-    features_list.append(new_input)
-    regr = linear_model.LinearRegression() # Create a linear regression object
-    regr.fit(train.as_matrix(columns = features_list), train.as_matrix(columns = ['price'])) # Train the model
-    RMSE_train = mean_squared_error(train.as_matrix(columns = ['price']), 
-                              regr.predict(train.as_matrix(columns = features_list)))**0.5 # Calculate the RMSE on train data
-    RMSE_validation = mean_squared_error(validation.as_matrix(columns = ['price']), 
-                              regr.predict(validation.as_matrix(columns = features_list)))**0.5 # Calculate the RMSE on train data
-    return RMSE_train, RMSE_validation 
-
-
-# In[ ]:
-
-
-input_list = train_data_2.columns.values.tolist() # list of column name
-input_list.remove('price')
-
-# list of features included in the regression model and the calculated train and validation errors (RMSE)
-regression_greedy_algorithm = pd.DataFrame(columns = ['feature', 'train_error', 'validation_error'])  
-i = 0
-temp_list = []
-
-# a while loop going through all the features in the dataframe
-while i < len(train_data_2.columns)-1:
+warnings.filterwarnings("ignore")
+
+# from JdPaletto & the1owl1
+# JdPaletto - https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503?scriptVersionId=1867420
+# the1owl1 - https://www.kaggle.com/the1owl/surprise-me
+start1 =time.time()
+data = {
+    'tra': pd.read_csv('../input/air_visit_data.csv'),
+    'as': pd.read_csv('../input/air_store_info.csv'),
+    'hs': pd.read_csv('../input/hpg_store_info.csv'),
+    'ar': pd.read_csv('../input/air_reserve.csv'),
+    'hr': pd.read_csv('../input/hpg_reserve.csv'),
+    'id': pd.read_csv('../input/store_id_relation.csv'),
+    'tes': pd.read_csv('../input/sample_submission.csv'),
+    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
+    }
+
+data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])# bring air id to hpg reserve data
+data['hs'] = pd.merge(data['hs'], data['id'], how='inner', on=['hpg_store_id'])# bring air id to hpg stores
+
+print('Data structure.......................')
+print('Training data....',data['tra'].shape)
+print('Unique store id in training data',len(data['tra']['air_store_id'].unique()))
+print('Id data....',data['id'].shape)
+print('Air store data....',data['as'].shape,'& unique-',data['as']['air_store_id'].unique().shape)
+print('Hpg store data....',data['hs'].shape,'& unique-',data['hs']['hpg_store_id'].unique().shape)
+print('Air reserve data....',data['ar'].shape,'& unique-',data['ar']['air_store_id'].unique().shape)
+print('Hpg reserve data....',data['hr'].shape,'& unique-',data['hr']['air_store_id'].unique().shape)
+      
+#converting datetime to date for reservation data
+for df in ['ar','hr']:
+    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
+    data[df]['visit_hour'] = data[df]['visit_datetime'].dt.hour
+    data[df]['visit_date'] = data[df]['visit_datetime'].dt.date
+    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
+    data[df]['reserve_hour'] = data[df]['reserve_datetime'].dt.hour
+    data[df]['reserve_date'] = data[df]['reserve_datetime'].dt.date
     
-    # a temporary dataframe to select the best feature at each iteration
-    temp = pd.DataFrame(columns = ['feature', 'train_error', 'validation_error'])
-    
-    # a for loop to test all the remaining features
-    for p in input_list:
-        RMSE_train, RMSE_validation = RMSE(train_data_2, validation_data, temp_list, p)
-        temp = temp.append({'feature':p, 'train_error':RMSE_train, 'validation_error':RMSE_validation}, ignore_index=True)
+    data[df+'_hour'] = data[df]#keeping original
         
-    temp = temp.sort_values('train_error') # select the best feature using train error
-    best = temp.iloc[0,0]
-    temp_list.append(best)
-    regression_greedy_algorithm = regression_greedy_algorithm.append({'feature': best, 
-                                                  'train_error': temp.iloc[0,1], 'validation_error': temp.iloc[0,2]}, 
-                                                 ignore_index=True) # add the feature to the dataframe
-    input_list.remove(best) # remove the best feature from the list of available features
-    i += 1
-regression_greedy_algorithm
+    #calculate reserve time difference and summarizing ar,hr to date
+    data[df]['reserve_day_'+df] = data[df].apply(
+        lambda r: (r['visit_date'] - r['reserve_date']).days, axis=1)
+    data[df] = data[df].groupby(['air_store_id','visit_date'], as_index=False)[[
+        'reserve_day_'+df, 'reserve_visitors']].sum().rename(columns={'reserve_visitors':'reserve_visitors_'+df})
+    
+#breaking down dates on training data & summarizing 
+data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
+data['tra']['day'] = data['tra']['visit_date'].dt.day
+data['tra']['dow'] = data['tra']['visit_date'].dt.weekday
+data['tra']['dow_name'] = data['tra']['visit_date'].dt.weekday_name
+data['tra']['year'] = data['tra']['visit_date'].dt.year
+data['tra']['month'] = data['tra']['visit_date'].dt.month
+data['tra']['week'] = data['tra']['visit_date'].dt.week
+data['tra']['quarter'] = data['tra']['visit_date'].dt.quarter
+data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
+data['tra']['year_mth'] = data['tra']['year'].astype(str)+'-'+data['tra']['month'].astype(str)
 
 
-# We can see that the validation error is minimum when we reach 25 features in the model (condition#4). We stop the selection here even if the training error keeps getting smaller (overfitting).
-# 
-# Let's now calculate an estimation of the generalization error using test_data
+#extracting store id and date info from test data
+data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
+data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
+data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
+data['tes']['day'] = data['tes']['visit_date'].dt.day
+data['tes']['dow'] = data['tes']['visit_date'].dt.weekday
+data['tes']['dow_name'] = data['tes']['visit_date'].dt.weekday_name
+data['tes']['year'] = data['tes']['visit_date'].dt.year
+data['tes']['month'] = data['tes']['visit_date'].dt.month
+data['tes']['week'] = data['tes']['visit_date'].dt.week
+data['tes']['quarter'] = data['tes']['visit_date'].dt.quarter
+data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
+data['tes']['year_mth'] = data['tes']['year'].astype(str)+'-'+data['tes']['month'].astype(str)
+
+#extract unique stores based on test data and populate dow 1 to 6
+unique_stores = data['tes']['air_store_id'].unique()#extract unique stores id from test data
+
+store_7days = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': [i]*len(unique_stores)}) 
+                    for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
+store_sum = pd.DataFrame({'air_store_id': unique_stores})
+
+# mapping train data dow to stores(test data) - min, mean, median, max, count 
+tmp = data['tra'].groupby(['air_store_id'], as_index=False)[
+    'visitors'].sum().rename(columns={'visitors':'total_visitors'})
+store_7days = pd.merge(store_7days, tmp, how='left', on=['air_store_id']) 
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
+    'visitors'].mean().rename(columns={'visitors':'mean_visitors'})
+store_7days = pd.merge(store_7days, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
+    'visitors'].median().rename(columns={'visitors':'median_visitors'})
+store_7days = pd.merge(store_7days, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
+    'visitors'].max().rename(columns={'visitors':'max_visitors'})
+store_7days = pd.merge(store_7days, tmp, how='left', on=['air_store_id','dow'])
+tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
+    'visitors'].count().rename(columns={'visitors':'count_observations'})
+store_7days = pd.merge(store_7days, tmp, how='left', on=['air_store_id','dow']) 
+# map stores(test) to store genre and location detail
+store_7days = pd.merge(store_7days, data['as'], how='left', on=['air_store_id']) 
+#map to hpg genre and area
+store_7days = pd.merge(store_7days, data['hs'][['air_store_id','hpg_genre_name','hpg_area_name']], 
+                       how='left', on=['air_store_id']) 
+
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
+
+hf=data['hol']['holiday_flg']
+dw=data['hol']['day_of_week']
+data['hol']['long_wknd']=0
+
+for i in range(len(data['hol'])):
+    if (hf[i]==1)&(dw[i]=='Friday'):
+        data['hol']['long_wknd'][i]=1
+        data['hol']['long_wknd'][i+1]=1
+        data['hol']['long_wknd'][i+2]=1
+          
+    if (hf[i]==1)&(dw[i]=='Monday'):
+        data['hol']['long_wknd'][i]=1
+        data['hol']['long_wknd'][i-1]=1
+        data['hol']['long_wknd'][i-2]=1
+
+
+train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
+test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
+train = pd.merge(train, store_7days, how='left', on=['air_store_id','dow']) 
+test = pd.merge(test, store_7days, how='left', on=['air_store_id','dow'])
+
+for df in ['ar','hr']:
+    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
+    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
+
+#col = [c for c in train if c not in ['id', 'air_store_id','visit_date','visitors']]
+
+#calculate qoq
+qoq= train.groupby(['air_store_id','year','quarter'])['visitors'].sum()
+qoq=qoq.unstack(0)
+qoq=pd.DataFrame(qoq.to_records())
+qoq=qoq.transpose()
+qoq.drop(['year','quarter'],inplace=True)
+qoq['2016Q2']=qoq[1]/qoq[0]*100
+qoq['2016Q3']=qoq[2]/qoq[1]*100
+qoq['2016Q4']=qoq[3]/qoq[2]*100
+qoq['2017Q1']=qoq[4]/qoq[3]*100
+lst=['2016Q2','2016Q3','2016Q4','2017Q1']
+qoq=qoq[lst]
+qoq['qoq_count']=qoq.apply(lambda x: x.count(), axis=1) 
+qoq['qoq_growth']=qoq.apply(lambda x: x[x>100].count(), axis=1)
+qoq['qoq_growth_pct'] = round(qoq['qoq_growth'] /qoq['qoq_count'],2)
+qoq.index.names=['air_store_id']
+qoq.reset_index(inplace=True)
+
+train=pd.merge(train, qoq, how='left', on='air_store_id')
+
+train = train.fillna(0) #change to one for algo training
+test = test.fillna(0)
+#df=df.rename(columns = {'two':'new_name'})
+train['v_no_reservation']=train['visitors']-train['reserve_visitors_ar']-train['reserve_visitors_hr']
+print(round(time.time()-start1,4))
+
+
+# Time series of the data set
 
 # In[ ]:
 
 
-greedy_algo_features_list = regression_greedy_algorithm['feature'].tolist()[:24] # select the first 30 features
-test_error, _, _ = multiple_regression_model(train_data_2, test_data, greedy_algo_features_list)
-print ('test error (RMSE) is: %s' %test_error)
+print('Dates................')
+print('train date- ,',train['visit_date'].min(),' to ',train['visit_date'].max())
+print('test date - ,',test['visit_date'].min(),' to ',test['visit_date'].max())
+print('holiday df- ,',data['hol']['visit_date'].min(),' to ',data['hol']['visit_date'].max())
 
 
-# The test error is getting smaller.
-# 
-# * Note 1: We could have used k-fold cross validation instead of a validation set.
-# * Note 2: Other greedy algorithms exist (e.g., backward stepwise, combining forward and backward steps)
-# 
-# Now, instead of searching over a discrete set of solutions using greedy algorithms, we can use another technique called regularization. We start with all possible features in the model and shrink the coefficients (weights). Two main regularization techniques exist, Ridge regression (a.k.a L2 regularization) and Lasso regression (a.k.a L1 regularization).
-# 
-# ### 2.3 Ridge Regression
-# 
-# Ridge regression aims to avoid overfitting by adding a cost to the Residual Sum of Squares (RSS) term of standard least squares that depends on the 2-norm of the coefficients.  The result is penalizing fits with large coefficients.  The strength of this penalty, and thus the fit vs. model complexity, is controlled by a parameter alpha (here called "L2_penalty").
-# 
-# Let's test two models using alpha equal 1 and 10.
+# **1. Geographical distribution of the store and holidays in Japan**
+
+# Number of location of the stores- grouped by the same latitude + longitude
 
 # In[ ]:
 
 
-input_feature = train_data.columns.values.tolist() # list of column name
-input_feature.remove('price')
-
-for i in [1,10]:
-    ridge = linear_model.Ridge(alpha = i, normalize = True) # initialize the model
-    ridge.fit(train_data.as_matrix(columns = input_feature), train_data.as_matrix(columns = ['price'])) # fit the train data
-    print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
-                              ridge.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
+print(len(store_7days.groupby(['latitude','longitude'])['latitude','longitude'].size().reset_index()), 'physical stores')
 
 
-# Now the question is, how do we pick alpha to minimize the error?
-# 
-# Alpha is a measure of model complexity. So, as before, we could use a validation set to select it. However, that approach has a major disadvantage: it leaves fewer observations available for training. A better approach to overcome this issue is to use a cross-validation technique. It uses all of the training set in a smart way. k-fold cross-validation for example involves dividing the training set into k segments of roughly equal size. Similar to the validation set method, we measure the validation error with one of the segments designated as the validation set. The major difference is that we repeat the process k times. We then compute the average of the k validation errors, and use it as an estimate of the generalization error. We then select the alpha value that generate the smallest validation error. The best approximation occurs for validation sets of size 1, where k is equal to the number of observations. It is called leave-one-out cross validation. It is however computationally intensive.
-# 
-# In this example we'll use a ridge regression with an implemented cross-validation method from the scikit learn library. By default, it performs Generalized Cross-Validation, which is a form of efficient Leave-One-Out cross-validation.
+# Stores location accross Japan in geographical heatmap
 
 # In[ ]:
 
 
-ridgeCV = linear_model.RidgeCV(alphas = np.linspace(1.0e-10,1,num = 100), normalize = True, store_cv_values = True) # initialize the model
-ridgeCV.fit(train_data.as_matrix(columns = input_feature), train_data.as_matrix(columns = ['price'])) # fit the train data
-print ('best alpha is: %s' %ridgeCV.alpha_) # get the best alpha
-print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
-                              ridgeCV.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
+import folium
+from folium import plugins
+
+location =store_7days.groupby(['latitude', 'longitude']).size().reset_index()
+locationheat = location[['latitude', 'longitude']]
+locationheat = locationheat.values.tolist()
+
+map1 = folium.Map(location=[39, 139], 
+                        tiles = "Stamen Watercolor",# width=1000, height=500,
+                        zoom_start = 5)
+heatmap=plugins.HeatMap(locationheat).add_to(map1)
+map1
 
 
-# Using every features in the dataset and a ridge regression model with an efficient  LOO cross-validation method yield a test error of 171567.
-# 
-# ### 2.4 Lasso Regression
-# 
-# Lasso regression jointly shrinks coefficients to avoid overfitting, and implicitly performs feature selection by setting some coefficients exactly to 0 for sufficiently large penalty strength alpha (here called "L1_penalty"). In particular, lasso takes the RSS term of standard least squares and adds a 1-norm cost of the coefficients.
-# 
-# Let 's train multiple models using different alpha values and asses the test error.
-
-# In[ ]:
-
-
-for i in [0.01,0.1,1,250,500,1000]:
-    lasso = linear_model.Lasso(alpha = i, normalize = True) # initialize the model
-    lasso.fit(train_data.as_matrix(columns = input_feature), train_data.as_matrix(columns = ['price'])) # fit the train data
-    print (lasso.sparse_coef_.getnnz) # number of non zero weights
-    print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
-                              lasso.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
-
-
-# As alpha increases, the number of features included in the model decrease. As in Ridge regression, we also can use cross-validation methods that select the best alpha to provide the best predictive accuracy. However, this technique tends to favor less sparse solutions and smaller alpha than optimal choice for feature selection.
+# Store and their genres accross Japan. Probably a physical store has multiple genres with different air_store_id
 
 # In[ ]:
 
 
-lassoCV = linear_model.LassoCV(normalize = True) # initialize the model (alphas are set automatically)
-lassoCV.fit(train_data.as_matrix(columns = input_feature), np.ravel(train_data.as_matrix(columns = ['price']))) # fit the train data
-print ('best alpha is: %s' %lassoCV.alpha_) # get the best alpha
-print ('number of non zero weigths is: %s' %np.count_nonzero(lassoCV.coef_)) # number of non zero weights
-print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
-                              lassoCV.predict(test_data.as_matrix(columns = [input_feature])))**0.5) # predict price and test error
+location =store_7days.groupby(['air_store_id','air_genre_name'])['latitude','longitude'].mean().reset_index()
+locationlist = location[['latitude', 'longitude']]
+locationlist = locationlist.values.tolist()
+map2 = folium.Map(location=[39, 139], 
+                        tiles = "Stamen Toner",# width=1000, height=500,
+                        zoom_start = 5)
+marker_cluster=plugins.MarkerCluster().add_to(map2)
+for point in range(0, len(location)):
+    folium.Marker(locationlist[point], popup=location['air_genre_name'][point], 
+    icon=folium.Icon(color='white', icon_color='red', 
+                     #icon='fa fa-info-circle',
+                     icon='fa fa-circle-o-notch fa-spin',
+                     angle=0, 
+                     prefix='fa')).add_to(marker_cluster)
+map2
 
 
-# 39 features remain in the model, yielding a test error of 171369.
-# 
-# ### 2.5 k-Nearest Neighbors (NN) Regression
-# 
-# To finish, let's talk about another regression model, k-NN regression. The k-NN algorithm is used for estimating continuous variables. One such algorithm uses a weighted average of the k nearest neighbors, weighted by the inverse of their distance. It is the nonparamtric equivalent of ordinary least square regression.
+# Visualising holidays and weekend for the prediction period. There will be 3 consecutive holiday in May.
 
 # In[ ]:
 
 
-# normalize the data
-train_X = train_data.as_matrix(columns = input_feature)
-scaler = preprocessing.StandardScaler().fit(train_X)
-train_X_scaled = scaler.transform(train_X)
-test_X = test_data.as_matrix(columns = [input_feature])
-test_X_scaled = scaler.transform(test_X)
+data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
+data['hol']['day_month'] = data['hol']['visit_date'].dt.day
+data['hol']['day'] = data['hol']['visit_date'].dt.weekday
+data['hol']['week'] = data['hol']['visit_date'].dt.week
+data['hol']['month'] = data['hol']['visit_date'].dt.month
+data['hol']['quarter'] = data['hol']['visit_date'].dt.quarter
+data['hol']['year'] = data['hol']['visit_date'].dt.year
+data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
 
-knn = neighbors.KNeighborsRegressor(n_neighbors=10, weights='distance') # initialize the model
-knn.fit(train_X_scaled, train_data.as_matrix(columns = ['price'])) # fit the train data
-print ('test error (RMSE) is: %s' %mean_squared_error(test_data.as_matrix(columns = ['price']), 
-                              knn.predict(test_X_scaled))**0.5) # predict price and test error
+def wkn(x):
+    if x>4:
+        return 1
+    else:
+        return 0
+
+data['hol']['weekend']=data['hol']['day'].apply(wkn)
+
+hols201704=data['hol'][(data['hol']['year']==2017)&(data['hol']['month']==4)]
+hols=hols201704[['day_month','holiday_flg']].set_index('day_month')
+wknd=hols201704[['day_month','weekend']].set_index('day_month')
+hols201705=data['hol'][(data['hol']['year']==2017)&(data['hol']['month']==5)]
+hols2=hols201705[['day_month','holiday_flg']].set_index('day_month')
+wknd2=hols201705[['day_month','weekend']].set_index('day_month')
+
+f, ax=plt.subplots(2,1, figsize=(15,4))
+hols.plot(kind='bar', ax=ax[0], color='b')
+wknd.plot(kind='bar', ax=ax[0], color='grey')
+hols2.plot(kind='bar', ax=ax[1], color='b')
+wknd2.plot(kind='bar', ax=ax[1], color='grey')
+ax[0].set_title('April & May 2017 Holidays & Weekends')
 
 
-# Similarly, the number of neighbor k is related to the complexity of the regression model. We can optimize the model accuracy by running cross-validation on the number of k-neighbors to include. 
+# **2. Number of visitors and genres trend **
+
+# Visitors and reservation time series. Walk in visitors are far more than customers with reservation. A drastic drop in number of visitors during new year due to store closure at certain places.
 # 
-# ## Conclusion
+
+# In[ ]:
+
+
+#Visitor each day
+f,ax = plt.subplots(1,1,figsize=(15,8))
+plt1 = train.groupby(['visit_date'], as_index=False).agg({'visitors': np.sum})
+plt2 = train.groupby(['visit_date'], as_index=False).agg({'reserve_visitors_ar': np.sum})
+plt3 = train.groupby(['visit_date'], as_index=False).agg({'reserve_visitors_hr': np.sum})
+plt1=plt1.set_index('visit_date')
+plt2=plt2.set_index('visit_date')
+plt3=plt3.set_index('visit_date')
+plt1.plot(color='salmon', kind='area', ax=ax)
+plt2.plot(color='cornflowerblue', kind='line', ax=ax)
+plt3.plot(color='y', kind='line', ax=ax)
+plt.ylabel("Sum of Visitors")
+plt.title("Visitor and Reservations")
+
+
+# Number of air_store_id  increased by 150% in mid 2016
+
+# In[ ]:
+
+
+f,ax = plt.subplots(1,1, figsize=(15,5))
+genre= train.groupby(['visit_date'])['air_store_id'].size()
+genre.plot(kind='area',  color= 'chocolate', grid=True, ax=ax, legend=True)
+plt.ylabel("Number Stores")
+plt.title("Number Unique Store ID")
+
+
+# **3. Visitors by genre**
+
+# Total visitor by air_genre_name. Izakaya & Cafe/Sweets are the two  most populr genres
+
+# In[ ]:
+
+
+f,ax=plt.subplots(1,1, figsize=(10,8))
+genre=train.groupby(['air_genre_name'],as_index=False)['visitors'].sum()
+genre.sort_values(by='visitors', ascending=True, inplace=True)
+genre['air_genre'] =[i for i,x in enumerate(genre['air_genre_name'])] 
+genre = genre.sort_values(by='visitors', ascending=False)#.reset_index()
+my_range = genre['air_genre']
+plt.hlines(y=my_range, xmin=0, xmax=genre['visitors'], color='goldenrod',alpha=0.8) #[‘solid’ | ‘dashed’ | ‘dashdot’ | ‘dotted’]
+plt.plot(genre['visitors'], my_range, "o",markersize=25,label='visitors',color='orangered')
+
+# Add titles and axis names
+plt.yticks(my_range, genre['air_genre_name'],fontsize=15)
+plt.title("Total visitors by air_genre_name", loc='center')
+plt.xlabel('Score')
+plt.ylabel('Features')
+#plt.legend()
+
+
 # 
-# In this notebook I tried to give on overview of regression methods using a dataset of house sales. Obviously, many other methods exit for regression (e.g., Elastic Net, kernel regression, Bayesian regression). Model selection should be based on your data and application.
+# - some of genres are new addition like - international cuisine, karaoke/party
+# - Yakiniku/korean genre is showing increasing demand
+# - Numbers of visitors for karaoke/party frequently surge in numbers on weekends
+
+# In[ ]:
+
+
+ax = sns.FacetGrid(train, col="air_genre_name", col_wrap=4, size=3, hue='air_genre_name',margin_titles=True,
+                  aspect=1.5, palette='husl', ylim=(0,150))
+ax = ax.map(plt.plot, "visit_date", "visitors",  marker=".", linewidth = 0.5)
+
+
+# **4. Visitors by weekdays trend and their group size**
+
+# Friday, Saturday and Sunday are the busiest days of the week
+
+# In[ ]:
+
+
+pvt=pd.pivot_table(train, index=['year','week'], columns='dow',values='visitors',aggfunc=[np.mean],fill_value=0)
+pvt=pd.DataFrame(pvt.to_records())
+pvt.columns=[pvt.replace("('mean', ", "").replace(")", "") for pvt in pvt.columns]
+pvt['year_week']=pvt['year'].astype(str) +'-'+ pvt['week'].astype(str)
+pvt=pvt.set_index('year_week')
+pvt.drop(['year','week'], axis=1,inplace=True)
+f, ax=plt.subplots(1,1, figsize=(15,8))
+pvt.plot(kind='line', ax=ax,cmap='inferno')
+plt.ylabel("Sum of Visitors")
+plt.xlabel("Week")
+plt.title("Visitors by Day of the Week ")
+
+
+# In[ ]:
+
+
+print('Number of total visitors- ', train['visitors'].sum())
+print('Number of stores- ', )
+print('Number of average daily visitors per air_store_id-', round(train['visitors'].mean(),2))
+
+
+# Visitors, group size and daily trend:
+# Generally, highest number of visitors is on Friday, Saturday and Sunday. The peak day of the week is Saturday, while if it is holiday the peak day will be Thursday and Friday. 
+
+# In[ ]:
+
+
+max_date=max(train['visit_date'])
+one_year = datetime.timedelta(days=364)
+cmap='inferno'
+year_ago= max_date - one_year
+train2=train#[train['visit_date']>year_ago]
+pvt=train2.groupby(['dow','dow_name'])['visitors'].mean().reset_index()
+
+train2=train.loc[(train['day']<8)&(train['holiday_flg']==1)]
+pvt2=train2.groupby(['dow','dow_name'])['visitors'].mean().reset_index()
+
+train3=train.loc[train['holiday_flg']==1]
+pvt3=train3.groupby(['dow','dow_name'])['visitors'].mean().reset_index()
+train4=train.loc[(train['long_wknd']==1)]
+pvt4=train4.groupby(['dow','dow_name'])['visitors'].mean().reset_index()
+
+pvt5=pd.pivot_table(train, index=['dow'], columns='month',values='visitors',aggfunc=[np.mean],fill_value=0)#.reset_index()
+pvt5=pd.DataFrame(pvt5.to_records())
+pvt5.columns=[pvt5.replace("('mean', ", "").replace(")", "") for pvt5 in pvt5.columns]
+pvt5=pvt5.set_index('dow')
+
+f, ax=plt.subplots(2,2, figsize=(15,10), sharey=False)
+ax[0,0].bar(pvt['dow'] ,pvt['visitors'],color='darkturquoise')
+ax[0,1].bar(pvt2['dow'] ,pvt2['visitors'],color='slategrey')
+ax[1,0].bar(pvt3['dow'] ,pvt3['visitors'],color='thistle')
+sns.heatmap(pvt5, ax=ax[1,1],cmap=cmap)
+ax[0,0].set_title('Mean Daily Visitors')
+ax[0,1].set_title('Mean Daily Visitors on first 7 days of the Month')
+ax[1,0].set_title('Mean Daily Visitors on holiday')
+ax[1,1].set_title('DOW vs Month mean visitors')
+
+ax[0,0].set_ylim(0,30)
+ax[0,1].set_ylim(0,30)
+ax[1,0].set_ylim(0,30)
+#ax[1,1].set_xlim(0,100)
+#plt.xlabel("Month")
+
+
+# Larger mean visitors on holiday except day 5 - Saturday.
+
+# In[ ]:
+
+
+plt1=train['visitors'].value_counts().reset_index().sort_index()
+fig, ax = plt.subplots(figsize=(15, 6), nrows=1, ncols=2, sharex=False, sharey=False)
+ax[0].bar(plt1['index'] ,plt1['visitors'],color='limegreen')
+ax[1]= sns.boxplot(y='visitors',x='dow', data=train,hue='holiday_flg',palette="Set3")
+ax[1].set_title('Number of daily visitors by day of the week')
+ax[0].bar(plt1['index'] ,plt1['visitors'],color='limegreen')
+ax[0].set_title('Frequency')
+ax[0].set_xlim(0,100)
+ax[1].set_ylim(0,100)
+ax[1].legend(loc=1)
+
+
+# **5. Reservations trends**
+
+# In[ ]:
+
+
+print('Total air reserve visitors - ',data['ar_hour']['reserve_visitors'].sum())
+print('Total hpg reserve visitors - ',data['hr_hour']['reserve_visitors'].sum())
+
+
+# Most of the customers are making reservation for the period of one week or visited restaurant on day 4 (Friday) & day 5 (Saturday) the most. There is noticably different reservation behaviour between air and hpg customers, where hpg visitors tend to book reservation throughout the day but air visitors doing it at later part of the day
+
+# In[ ]:
+
+
+data['ar_hour']['dow_reserve'] = data['ar_hour']['reserve_datetime'].dt.weekday
+data['ar_hour']['dow_visit'] = data['ar_hour']['visit_datetime'].dt.weekday
+data['hr_hour']['dow_reserve'] = data['hr_hour']['reserve_datetime'].dt.weekday
+data['hr_hour']['dow_visit'] = data['hr_hour']['visit_datetime'].dt.weekday
+air_res= data['ar_hour'].groupby(['reserve_day_ar'],as_index=False)['reserve_visitors'].sum()[:40]
+hpg_res= data['hr_hour'].groupby(['reserve_day_hr'],as_index=False)['reserve_visitors'].sum()[:40]
+air_res2=data['ar_hour'].groupby(['dow_visit',],as_index=False)['reserve_visitors'].sum()
+hpg_res2=data['hr_hour'].groupby(['dow_visit',],as_index=False)['reserve_visitors'].sum()
+air_res3=data['ar_hour'].groupby(['reserve_hour','visit_hour'])['reserve_visitors'].sum().unstack()
+hpg_res3=data['hr_hour'].groupby(['reserve_hour','visit_hour'])['reserve_visitors'].sum().unstack()
+
+f, ax=plt.subplots(3,2, figsize=(15,12),sharey=False)
+ax[0,0].bar(air_res['reserve_day_ar'] ,air_res['reserve_visitors'],color='royalblue')
+ax[0,1].bar(hpg_res['reserve_day_hr'] ,hpg_res['reserve_visitors'],color='tomato')
+ax[1,0].bar(air_res2['dow_visit'] ,air_res2['reserve_visitors'],color='royalblue')
+ax[1,1].bar(hpg_res2['dow_visit'] ,hpg_res2['reserve_visitors'],color='tomato')
+sns.heatmap(air_res3, ax=ax[2,0],cmap='inferno')
+sns.heatmap(hpg_res3, ax=ax[2,1],cmap='inferno')
+ax[0,0].set_title('Air Reservation in Number of Days')
+ax[0,1].set_title('Hpg Reservation in Number of Days')
+ax[1,0].set_title('Air reserve visitors by dow')
+ax[1,1].set_title('Hpg reserve visitors by dow')
+ax[2,0].set_title('Air Reserve Hour vs Visit hour')
+ax[2,1].set_title('Hpg Reserve Hour vs Visit hour')
+
+
+# **6. Productivity by air_store_id**
+
+# In[ ]:
+
+
+store_mean= train.groupby(['air_store_id'], as_index=False)['visitors'].mean().rename(columns={'visitors':'overall_mean'})
+train=pd.merge(train, store_mean, how = 'left',on='air_store_id')
+
+train['vis_qtl']=pd.qcut(train['overall_mean'], 4, labels=['Quartile 4','Quartile 3','Quartile 2','Quartile 1'])
+quartile=train.groupby(['vis_qtl'],as_index=False).agg({'air_store_id':lambda x: len(x.unique()),
+                                               'mean_visitors':lambda x: x.mean(),
+                                               'visitors':lambda x: x.sum()})
+quartile.rename(columns={'air_store_id':'stores', 'visitors':'total_visitors'},inplace=True)
+quartile.sort_values(by='total_visitors', ascending=False,inplace=True)
+quartile['cumulative_visitors'] = quartile['total_visitors'].cumsum()/quartile['total_visitors'].sum()
+quartile
+
+
+# We stacked and ordered the store according to average productiviy per day and arrange it form best to the lowest and cut the number of air_store_id into 4. "air_store_id" in Quartile 1 and Quartile 2 (412 which 50% of the total) contribute to 70% of the total visitors.
+
+# In[ ]:
+
+
+tot_visitors = quartile[['vis_qtl','total_visitors']]
+tot_visitors2 = quartile[['vis_qtl','cumulative_visitors']]
+tot_visitors.set_index('vis_qtl',inplace=True)
+tot_visitors2.set_index('vis_qtl',inplace=True)
+quartile.sort_values(by='total_visitors', ascending=False,inplace=True)
+f, ax=plt.subplots(1,2, figsize=(12,4))
+tot_visitors.plot(kind='bar',  ax=ax[0],color='y',width=0.8)
+tot_visitors2.plot(kind='bar',  ax=ax[1],color='darkseagreen',width=0.8)
+ax[0].set_title('Total visitors by Store Productivity Quartile')
+ax[1].set_title('%Cumulative visitors  by Store Productivity Quartile')
+
+
+# **Feature Engineering**
+# 
+# Visualising feature engineering. We are exploring options and will test all of them in our model. 
+
+# 
+# Outliers
+# Identifying outliers and treating them accordingly in our model building. Intuitively, area and dow are probably a good grouping to programatically find outliers. I believe that area and dow are among two most important factors that determines business traffic as it has similar holiday, celebration, culture and daily traffic.
+# note: ol_1 shows number of observations that have number visitors 1 standard deviation above the mean for air_are_name and dow grouping.
+
+# In[ ]:
+
+
+# outliers based on air_area_name & dow grouping
+area_dow_std_df=train.groupby(['air_area_name','dow'])['visitors'].std().reset_index().rename(columns={'visitors':'std_area_dow'})
+area_dow_mean_df=train.groupby(['air_area_name','dow'])['visitors'].mean().reset_index().rename(columns={'visitors':'mean_area_dow'})
+train2=pd.merge(train, area_dow_std_df, how="left", on=['air_area_name','dow'])
+train2=pd.merge(train2, area_dow_mean_df, how="left", on=['air_area_name','dow'])
+
+x=train2['visitors']
+y=train2['mean_area_dow']
+z=train2['std_area_dow']
+ol_df=[]
+for n in range(10):
+    train2['ol_{}'.format(n)]= [1 if (x>y+z*n) else 0 for x, y, z in zip(x,y,z)]
+    ol_dfs=train2['ol_{}'.format(n)].value_counts()
+    ol_df.append(ol_dfs)
+    
+ol_df=pd.DataFrame(ol_df)   
+ol_df.index.name='outliers'
+
+f, ax=plt.subplots(1,1, figsize=(8,5))
+ol_df.plot(kind='barh',width=1,ax=ax, color=['dodgerblue','violet'])
+ax.set_title('Count of Outliers Base on multiple std from mean - grouped by air_area_name & dow')
+ax.set_ylabel('X* Standard Deviation From Mean')
+# Adding a title and a subtitle
+plt.text(x = 100000, y = 11, s = "Outliers",fontsize = 25, weight = 'bold', alpha = .75)
+
+
+# **Please Upvote if you find it useful**

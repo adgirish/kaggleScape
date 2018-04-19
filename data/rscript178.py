@@ -1,168 +1,526 @@
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import matplotlib
-matplotlib.use("Agg") #Needed to save figures
-from sklearn import cross_validation
+# Mostly a lot of silliness at this point:
+#   Main contribution (50%) is based on Reynaldo's script with a linear transformation of y_train
+#      that happens to fit the public test data well
+#      and may also fit the private test data well
+#      if it reflects a macro effect
+#      but almost certainly won't generalize to later data
+#   Second contribution (20%) is based on Bruno do Amaral's very early entry but
+#      with an outlier that I deleted early in the competition
+#   Third contribution (30%) is based on a legitimate data cleaning,
+#      probably by gunja agarwal (or actually by Jason Benner, it seems,
+#      but there's also a small transformation applied ot the predictions,
+#      so also probably not generalizable),
+#   This combo being run by Andy Harless on June 4
+
+import numpy as np
+import pandas as pd
+#import matplotlib.pyplot as plt
+#import seaborn as sns
+from sklearn import model_selection, preprocessing
 import xgboost as xgb
-from sklearn.metrics import roc_auc_score
+import datetime
+import warnings
+warnings.filterwarnings("ignore")
 
-training = pd.read_csv("../input/train.csv", index_col=0)
-test = pd.read_csv("../input/test.csv", index_col=0)
+#load files
+train = pd.read_csv('../input/train.csv', parse_dates=['timestamp'])
+test = pd.read_csv('../input/test.csv', parse_dates=['timestamp'])
+id_test = test['id']
 
-print(training.shape)
-print(test.shape)
+#clean data
+bad_index = train[train.life_sq > train.full_sq].index
+train.loc[bad_index, "life_sq"] = np.NaN
+equal_index = [601,1896,2791]
+test.loc[equal_index, "life_sq"] = test.loc[equal_index, "full_sq"]
+bad_index = test[test.life_sq > test.full_sq].index
+test.loc[bad_index, "life_sq"] = np.NaN
+bad_index = train[train.life_sq < 5].index
+train.loc[bad_index, "life_sq"] = np.NaN
+bad_index = test[test.life_sq < 5].index
+test.loc[bad_index, "life_sq"] = np.NaN
+bad_index = train[train.full_sq < 5].index
+train.loc[bad_index, "full_sq"] = np.NaN
+bad_index = test[test.full_sq < 5].index
+test.loc[bad_index, "full_sq"] = np.NaN
+kitch_is_build_year = [13117]
+train.loc[kitch_is_build_year, "build_year"] = train.loc[kitch_is_build_year, "kitch_sq"]
+bad_index = train[train.kitch_sq >= train.life_sq].index
+train.loc[bad_index, "kitch_sq"] = np.NaN
+bad_index = test[test.kitch_sq >= test.life_sq].index
+test.loc[bad_index, "kitch_sq"] = np.NaN
+bad_index = train[(train.kitch_sq == 0).values + (train.kitch_sq == 1).values].index
+train.loc[bad_index, "kitch_sq"] = np.NaN
+bad_index = test[(test.kitch_sq == 0).values + (test.kitch_sq == 1).values].index
+test.loc[bad_index, "kitch_sq"] = np.NaN
+bad_index = train[(train.full_sq > 210) & (train.life_sq / train.full_sq < 0.3)].index
+train.loc[bad_index, "full_sq"] = np.NaN
+bad_index = test[(test.full_sq > 150) & (test.life_sq / test.full_sq < 0.3)].index
+test.loc[bad_index, "full_sq"] = np.NaN
+bad_index = train[train.life_sq > 300].index
+train.loc[bad_index, ["life_sq", "full_sq"]] = np.NaN
+bad_index = test[test.life_sq > 200].index
+test.loc[bad_index, ["life_sq", "full_sq"]] = np.NaN
+train.product_type.value_counts(normalize= True)
+test.product_type.value_counts(normalize= True)
+bad_index = train[train.build_year < 1500].index
+train.loc[bad_index, "build_year"] = np.NaN
+bad_index = test[test.build_year < 1500].index
+test.loc[bad_index, "build_year"] = np.NaN
+bad_index = train[train.num_room == 0].index
+train.loc[bad_index, "num_room"] = np.NaN
+bad_index = test[test.num_room == 0].index
+test.loc[bad_index, "num_room"] = np.NaN
+bad_index = [10076, 11621, 17764, 19390, 24007, 26713, 29172]
+train.loc[bad_index, "num_room"] = np.NaN
+bad_index = [3174, 7313]
+test.loc[bad_index, "num_room"] = np.NaN
+bad_index = train[(train.floor == 0).values * (train.max_floor == 0).values].index
+train.loc[bad_index, ["max_floor", "floor"]] = np.NaN
+bad_index = train[train.floor == 0].index
+train.loc[bad_index, "floor"] = np.NaN
+bad_index = train[train.max_floor == 0].index
+train.loc[bad_index, "max_floor"] = np.NaN
+bad_index = test[test.max_floor == 0].index
+test.loc[bad_index, "max_floor"] = np.NaN
+bad_index = train[train.floor > train.max_floor].index
+train.loc[bad_index, "max_floor"] = np.NaN
+bad_index = test[test.floor > test.max_floor].index
+test.loc[bad_index, "max_floor"] = np.NaN
+train.floor.describe(percentiles= [0.9999])
+bad_index = [23584]
+train.loc[bad_index, "floor"] = np.NaN
+train.material.value_counts()
+test.material.value_counts()
+train.state.value_counts()
+bad_index = train[train.state == 33].index
+train.loc[bad_index, "state"] = np.NaN
+test.state.value_counts()
 
-# Replace -999999 in var3 column with most common value 2 
-# See https://www.kaggle.com/cast42/santander-customer-satisfaction/debugging-var3-999999
-# for details
-training = training.replace(-999999,2)
+# brings error down a lot by removing extreme price per sqm
+train.loc[train.full_sq == 0, 'full_sq'] = 50
+train = train[train.price_doc/train.full_sq <= 600000]
+train = train[train.price_doc/train.full_sq >= 10000]
+
+# Add month-year
+month_year = (train.timestamp.dt.month + train.timestamp.dt.year * 100)
+month_year_cnt_map = month_year.value_counts().to_dict()
+train['month_year_cnt'] = month_year.map(month_year_cnt_map)
+
+month_year = (test.timestamp.dt.month + test.timestamp.dt.year * 100)
+month_year_cnt_map = month_year.value_counts().to_dict()
+test['month_year_cnt'] = month_year.map(month_year_cnt_map)
+
+# Add week-year count
+week_year = (train.timestamp.dt.weekofyear + train.timestamp.dt.year * 100)
+week_year_cnt_map = week_year.value_counts().to_dict()
+train['week_year_cnt'] = week_year.map(week_year_cnt_map)
+
+week_year = (test.timestamp.dt.weekofyear + test.timestamp.dt.year * 100)
+week_year_cnt_map = week_year.value_counts().to_dict()
+test['week_year_cnt'] = week_year.map(week_year_cnt_map)
+
+# Add month and day-of-week
+train['month'] = train.timestamp.dt.month
+train['dow'] = train.timestamp.dt.dayofweek
+
+test['month'] = test.timestamp.dt.month
+test['dow'] = test.timestamp.dt.dayofweek
+
+# Other feature engineering
+train['rel_floor'] = train['floor'] / train['max_floor'].astype(float)
+train['rel_kitch_sq'] = train['kitch_sq'] / train['full_sq'].astype(float)
+
+test['rel_floor'] = test['floor'] / test['max_floor'].astype(float)
+test['rel_kitch_sq'] = test['kitch_sq'] / test['full_sq'].astype(float)
+
+train.apartment_name=train.sub_area + train['metro_km_avto'].astype(str)
+test.apartment_name=test.sub_area + train['metro_km_avto'].astype(str)
+
+train['room_size'] = train['life_sq'] / train['num_room'].astype(float)
+test['room_size'] = test['life_sq'] / test['num_room'].astype(float)
+
+rate_2016_q2 = 1
+rate_2016_q1 = rate_2016_q2 / .99903
+rate_2015_q4 = rate_2016_q1 / .9831
+rate_2015_q3 = rate_2015_q4 / .9834
+rate_2015_q2 = rate_2015_q3 / .9815
+rate_2015_q1 = rate_2015_q2 / .9932
+rate_2014_q4 = rate_2015_q1 / 1.0112
+rate_2014_q3 = rate_2014_q4 / 1.0169
+rate_2014_q2 = rate_2014_q3 / 1.0086
+rate_2014_q1 = rate_2014_q2 / 1.0126
+rate_2013_q4 = rate_2014_q1 / 0.9902
+rate_2013_q3 = rate_2013_q4 / 1.0041
+rate_2013_q2 = rate_2013_q3 / 1.0044
+rate_2013_q1 = rate_2013_q2 / 1.0104
+rate_2012_q4 = rate_2013_q1 / 0.9832
+rate_2012_q3 = rate_2012_q4 / 1.0277
+rate_2012_q2 = rate_2012_q3 / 1.0279
+rate_2012_q1 = rate_2012_q2 / 1.0279
+rate_2011_q4 = rate_2012_q1 / 1.076
+rate_2011_q3 = rate_2011_q4 / 1.0236
+rate_2011_q2 = rate_2011_q3 / 1
+rate_2011_q1 = rate_2011_q2 / 1.011
+
+# test data
+test['average_q_price'] = 1
+
+test_2016_q2_index = test.loc[test['timestamp'].dt.year == 2016].loc[test['timestamp'].dt.month >= 4].loc[test['timestamp'].dt.month <= 7].index
+test.loc[test_2016_q2_index, 'average_q_price'] = rate_2016_q2
+# test.loc[test_2016_q2_index, 'year_q'] = '2016_q2'
+
+test_2016_q1_index = test.loc[test['timestamp'].dt.year == 2016].loc[test['timestamp'].dt.month >= 1].loc[test['timestamp'].dt.month < 4].index
+test.loc[test_2016_q1_index, 'average_q_price'] = rate_2016_q1
+# test.loc[test_2016_q2_index, 'year_q'] = '2016_q1'
+
+test_2015_q4_index = test.loc[test['timestamp'].dt.year == 2015].loc[test['timestamp'].dt.month >= 10].loc[test['timestamp'].dt.month < 12].index
+test.loc[test_2015_q4_index, 'average_q_price'] = rate_2015_q4
+# test.loc[test_2015_q4_index, 'year_q'] = '2015_q4'
+
+test_2015_q3_index = test.loc[test['timestamp'].dt.year == 2015].loc[test['timestamp'].dt.month >= 7].loc[test['timestamp'].dt.month < 10].index
+test.loc[test_2015_q3_index, 'average_q_price'] = rate_2015_q3
+# test.loc[test_2015_q3_index, 'year_q'] = '2015_q3'
+
+# test_2015_q2_index = test.loc[test['timestamp'].dt.year == 2015].loc[test['timestamp'].dt.month >= 4].loc[test['timestamp'].dt.month < 7].index
+# test.loc[test_2015_q2_index, 'average_q_price'] = rate_2015_q2
+
+# test_2015_q1_index = test.loc[test['timestamp'].dt.year == 2015].loc[test['timestamp'].dt.month >= 4].loc[test['timestamp'].dt.month < 7].index
+# test.loc[test_2015_q1_index, 'average_q_price'] = rate_2015_q1
 
 
-# Replace 9999999999 with NaN
-# See https://www.kaggle.com/c/santander-customer-satisfaction/forums/t/19291/data-dictionary/111360#post111360
-# training = training.replace(9999999999, np.nan)
-# training.dropna(inplace=True)
-# Leads to validation_0-auc:0.839577
+# train 2015
+train['average_q_price'] = 1
 
-X = training.iloc[:,:-1]
-y = training.TARGET
+train_2015_q4_index = train.loc[train['timestamp'].dt.year == 2015].loc[train['timestamp'].dt.month >= 10].loc[train['timestamp'].dt.month <= 12].index
+# train.loc[train_2015_q4_index, 'price_doc'] = train.loc[train_2015_q4_index, 'price_doc'] * rate_2015_q4
+train.loc[train_2015_q4_index, 'average_q_price'] = rate_2015_q4
 
-# Add zeros per row as extra feature
-X['n0'] = (X == 0).sum(axis=1)
-# # Add log of var38
-# X['logvar38'] = X['var38'].map(np.log1p)
-# # Encode var36 as category
-# X['var36'] = X['var36'].astype('category')
-# X = pd.get_dummies(X)
+train_2015_q3_index = train.loc[train['timestamp'].dt.year == 2015].loc[train['timestamp'].dt.month >= 7].loc[train['timestamp'].dt.month < 10].index
+#train.loc[train_2015_q3_index, 'price_doc'] = train.loc[train_2015_q3_index, 'price_doc'] * rate_2015_q3
+train.loc[train_2015_q3_index, 'average_q_price'] = rate_2015_q3
 
-# Add PCA components as features
-from sklearn.preprocessing import normalize
-from sklearn.decomposition import PCA
+train_2015_q2_index = train.loc[train['timestamp'].dt.year == 2015].loc[train['timestamp'].dt.month >= 4].loc[train['timestamp'].dt.month < 7].index
+#train.loc[train_2015_q2_index, 'price_doc'] = train.loc[train_2015_q2_index, 'price_doc'] * rate_2015_q2
+train.loc[train_2015_q2_index, 'average_q_price'] = rate_2015_q2
 
-X_normalized = normalize(X, axis=0)
-pca = PCA(n_components=2)
-X_pca = pca.fit_transform(X_normalized)
-X['PCA1'] = X_pca[:,0]
-X['PCA2'] = X_pca[:,1]
+train_2015_q1_index = train.loc[train['timestamp'].dt.year == 2015].loc[train['timestamp'].dt.month >= 1].loc[train['timestamp'].dt.month < 4].index
+#train.loc[train_2015_q1_index, 'price_doc'] = train.loc[train_2015_q1_index, 'price_doc'] * rate_2015_q1
+train.loc[train_2015_q1_index, 'average_q_price'] = rate_2015_q1
 
-from sklearn.feature_selection import SelectPercentile
-from sklearn.feature_selection import f_classif,chi2
-from sklearn.preprocessing import Binarizer, scale
 
-p = 86 # 308 features validation_1-auc:0.848039
-p = 80 # 284 features validation_1-auc:0.848414
-p = 77 # 267 features validation_1-auc:0.848000
-p = 75 # 261 features validation_1-auc:0.848642
-# p = 73 # 257 features validation_1-auc:0.848338
-# p = 70 # 259 features validation_1-auc:0.848588
-# p = 69 # 238 features validation_1-auc:0.848547
-# p = 67 # 247 features validation_1-auc:0.847925
-# p = 65 # 240 features validation_1-auc:0.846769
-# p = 60 # 222 features validation_1-auc:0.848581
+# train 2014
+train_2014_q4_index = train.loc[train['timestamp'].dt.year == 2014].loc[train['timestamp'].dt.month >= 10].loc[train['timestamp'].dt.month <= 12].index
+#train.loc[train_2014_q4_index, 'price_doc'] = train.loc[train_2014_q4_index, 'price_doc'] * rate_2014_q4
+train.loc[train_2014_q4_index, 'average_q_price'] = rate_2014_q4
 
-X_bin = Binarizer().fit_transform(scale(X))
-selectChi2 = SelectPercentile(chi2, percentile=p).fit(X_bin, y)
-selectF_classif = SelectPercentile(f_classif, percentile=p).fit(X, y)
+train_2014_q3_index = train.loc[train['timestamp'].dt.year == 2014].loc[train['timestamp'].dt.month >= 7].loc[train['timestamp'].dt.month < 10].index
+#train.loc[train_2014_q3_index, 'price_doc'] = train.loc[train_2014_q3_index, 'price_doc'] * rate_2014_q3
+train.loc[train_2014_q3_index, 'average_q_price'] = rate_2014_q3
 
-chi2_selected = selectChi2.get_support()
-chi2_selected_features = [ f for i,f in enumerate(X.columns) if chi2_selected[i]]
-print('Chi2 selected {} features {}.'.format(chi2_selected.sum(),
-   chi2_selected_features))
-f_classif_selected = selectF_classif.get_support()
-f_classif_selected_features = [ f for i,f in enumerate(X.columns) if f_classif_selected[i]]
-print('F_classif selected {} features {}.'.format(f_classif_selected.sum(),
-   f_classif_selected_features))
-selected = chi2_selected & f_classif_selected
-print('Chi2 & F_classif selected {} features'.format(selected.sum()))
-features = [ f for f,s in zip(X.columns, selected) if s]
-print (features)
+train_2014_q2_index = train.loc[train['timestamp'].dt.year == 2014].loc[train['timestamp'].dt.month >= 4].loc[train['timestamp'].dt.month < 7].index
+#train.loc[train_2014_q2_index, 'price_doc'] = train.loc[train_2014_q2_index, 'price_doc'] * rate_2014_q2
+train.loc[train_2014_q2_index, 'average_q_price'] = rate_2014_q2
 
-X_sel = X[features]
+train_2014_q1_index = train.loc[train['timestamp'].dt.year == 2014].loc[train['timestamp'].dt.month >= 1].loc[train['timestamp'].dt.month < 4].index
+#train.loc[train_2014_q1_index, 'price_doc'] = train.loc[train_2014_q1_index, 'price_doc'] * rate_2014_q1
+train.loc[train_2014_q1_index, 'average_q_price'] = rate_2014_q1
 
-X_train, X_test, y_train, y_test = \
-  cross_validation.train_test_split(X_sel, y, random_state=1301, stratify=y, test_size=0.4)
 
-# xgboost parameter tuning with p = 75
-# recipe: https://www.kaggle.com/c/bnp-paribas-cardif-claims-management/forums/t/19083/best-practices-for-parameter-tuning-on-models/108783#post108783
+# train 2013
+train_2013_q4_index = train.loc[train['timestamp'].dt.year == 2013].loc[train['timestamp'].dt.month >= 10].loc[train['timestamp'].dt.month <= 12].index
+# train.loc[train_2013_q4_index, 'price_doc'] = train.loc[train_2013_q4_index, 'price_doc'] * rate_2013_q4
+train.loc[train_2013_q4_index, 'average_q_price'] = rate_2013_q4
 
-ratio = float(np.sum(y == 1)) / np.sum(y==0)
-# Initial parameters for the parameter exploration
-# clf = xgb.XGBClassifier(missing=9999999999,
-#                 max_depth = 10,
-#                 n_estimators=1000,
-#                 learning_rate=0.1, 
-#                 nthread=4,
-#                 subsample=1.0,
-#                 colsample_bytree=0.5,
-#                 min_child_weight = 5,
-#                 scale_pos_weight = ratio,
-#                 seed=4242)
+train_2013_q3_index = train.loc[train['timestamp'].dt.year == 2013].loc[train['timestamp'].dt.month >= 7].loc[train['timestamp'].dt.month < 10].index
+# train.loc[train_2013_q3_index, 'price_doc'] = train.loc[train_2013_q3_index, 'price_doc'] * rate_2013_q3
+train.loc[train_2013_q3_index, 'average_q_price'] = rate_2013_q3
 
-# gives : validation_1-auc:0.845644
-# max_depth=8 -> validation_1-auc:0.846341
-# max_depth=6 -> validation_1-auc:0.845738
-# max_depth=7 -> validation_1-auc:0.846504
-# subsample=0.8 -> validation_1-auc:0.844440
-# subsample=0.9 -> validation_1-auc:0.844746
-# subsample=1.0,  min_child_weight=8 -> validation_1-auc:0.843393
-# min_child_weight=3 -> validation_1-auc:0.848534
-# min_child_weight=1 -> validation_1-auc:0.846311
-# min_child_weight=4 -> validation_1-auc:0.847994
-# min_child_weight=2 -> validation_1-auc:0.847934
-# min_child_weight=3, colsample_bytree=0.3 -> validation_1-auc:0.847498
-# colsample_bytree=0.7 -> validation_1-auc:0.846984
-# colsample_bytree=0.6 -> validation_1-auc:0.847856
-# colsample_bytree=0.5, learning_rate=0.05 -> validation_1-auc:0.847347
-# max_depth=8 -> validation_1-auc:0.847352
-# learning_rate = 0.07 -> validation_1-auc:0.847432
-# learning_rate = 0.2 -> validation_1-auc:0.846444
-# learning_rate = 0.15 -> validation_1-auc:0.846889
-# learning_rate = 0.09 -> validation_1-auc:0.846680
-# learning_rate = 0.1 -> validation_1-auc:0.847432
-# max_depth=7 -> validation_1-auc:0.848534
-# learning_rate = 0.05 -> validation_1-auc:0.847347
-# 
+train_2013_q2_index = train.loc[train['timestamp'].dt.year == 2013].loc[train['timestamp'].dt.month >= 4].loc[train['timestamp'].dt.month < 7].index
+# train.loc[train_2013_q2_index, 'price_doc'] = train.loc[train_2013_q2_index, 'price_doc'] * rate_2013_q2
+train.loc[train_2013_q2_index, 'average_q_price'] = rate_2013_q2
 
-clf = xgb.XGBClassifier(missing=9999999999,
-                max_depth = 5,
-                n_estimators=1000,
-                learning_rate=0.1, 
-                nthread=4,
-                subsample=1.0,
-                colsample_bytree=0.5,
-                min_child_weight = 3,
-                scale_pos_weight = ratio,
-                reg_alpha=0.03,
-                seed=1301)
-                
-clf.fit(X_train, y_train, early_stopping_rounds=50, eval_metric="auc",
-        eval_set=[(X_train, y_train), (X_test, y_test)])
-        
-print('Overall AUC:', roc_auc_score(y, clf.predict_proba(X_sel, ntree_limit=clf.best_iteration)[:,1]))
+train_2013_q1_index = train.loc[train['timestamp'].dt.year == 2013].loc[train['timestamp'].dt.month >= 1].loc[train['timestamp'].dt.month < 4].index
+# train.loc[train_2013_q1_index, 'price_doc'] = train.loc[train_2013_q1_index, 'price_doc'] * rate_2013_q1
+train.loc[train_2013_q1_index, 'average_q_price'] = rate_2013_q1
 
-test['n0'] = (test == 0).sum(axis=1)
-# test['logvar38'] = test['var38'].map(np.log1p)
-# # Encode var36 as category
-# test['var36'] = test['var36'].astype('category')
-# test = pd.get_dummies(test)
-test_normalized = normalize(test, axis=0)
-pca = PCA(n_components=2)
-test_pca = pca.fit_transform(test_normalized)
-test['PCA1'] = test_pca[:,0]
-test['PCA2'] = test_pca[:,1]
-sel_test = test[features]    
-y_pred = clf.predict_proba(sel_test, ntree_limit=clf.best_iteration)
 
-submission = pd.DataFrame({"ID":test.index, "TARGET":y_pred[:,1]})
-submission.to_csv("submission.csv", index=False)
+# train 2012
+train_2012_q4_index = train.loc[train['timestamp'].dt.year == 2012].loc[train['timestamp'].dt.month >= 10].loc[train['timestamp'].dt.month <= 12].index
+# train.loc[train_2012_q4_index, 'price_doc'] = train.loc[train_2012_q4_index, 'price_doc'] * rate_2012_q4
+train.loc[train_2012_q4_index, 'average_q_price'] = rate_2012_q4
 
-mapFeat = dict(zip(["f"+str(i) for i in range(len(features))],features))
-ts = pd.Series(clf.booster().get_fscore())
-#ts.index = ts.reset_index()['index'].map(mapFeat)
-ts.sort_values()[-15:].plot(kind="barh", title=("features importance"))
+train_2012_q3_index = train.loc[train['timestamp'].dt.year == 2012].loc[train['timestamp'].dt.month >= 7].loc[train['timestamp'].dt.month < 10].index
+# train.loc[train_2012_q3_index, 'price_doc'] = train.loc[train_2012_q3_index, 'price_doc'] * rate_2012_q3
+train.loc[train_2012_q3_index, 'average_q_price'] = rate_2012_q3
 
-featp = ts.sort_values()[-15:].plot(kind='barh', x='feature', y='fscore', legend=False, figsize=(6, 10))
-plt.title('XGBoost Feature Importance')
-fig_featp = featp.get_figure()
-fig_featp.savefig('feature_importance_xgb.png', bbox_inches='tight', pad_inches=1)
+train_2012_q2_index = train.loc[train['timestamp'].dt.year == 2012].loc[train['timestamp'].dt.month >= 4].loc[train['timestamp'].dt.month < 7].index
+# train.loc[train_2012_q2_index, 'price_doc'] = train.loc[train_2012_q2_index, 'price_doc'] * rate_2012_q2
+train.loc[train_2012_q2_index, 'average_q_price'] = rate_2012_q2
+
+train_2012_q1_index = train.loc[train['timestamp'].dt.year == 2012].loc[train['timestamp'].dt.month >= 1].loc[train['timestamp'].dt.month < 4].index
+# train.loc[train_2012_q1_index, 'price_doc'] = train.loc[train_2012_q1_index, 'price_doc'] * rate_2012_q1
+train.loc[train_2012_q1_index, 'average_q_price'] = rate_2012_q1
+
+
+# train 2011
+train_2011_q4_index = train.loc[train['timestamp'].dt.year == 2011].loc[train['timestamp'].dt.month >= 10].loc[train['timestamp'].dt.month <= 12].index
+# train.loc[train_2011_q4_index, 'price_doc'] = train.loc[train_2011_q4_index, 'price_doc'] * rate_2011_q4
+train.loc[train_2011_q4_index, 'average_q_price'] = rate_2011_q4
+
+train_2011_q3_index = train.loc[train['timestamp'].dt.year == 2011].loc[train['timestamp'].dt.month >= 7].loc[train['timestamp'].dt.month < 10].index
+# train.loc[train_2011_q3_index, 'price_doc'] = train.loc[train_2011_q3_index, 'price_doc'] * rate_2011_q3
+train.loc[train_2011_q3_index, 'average_q_price'] = rate_2011_q3
+
+train_2011_q2_index = train.loc[train['timestamp'].dt.year == 2011].loc[train['timestamp'].dt.month >= 4].loc[train['timestamp'].dt.month < 7].index
+# train.loc[train_2011_q2_index, 'price_doc'] = train.loc[train_2011_q2_index, 'price_doc'] * rate_2011_q2
+train.loc[train_2011_q2_index, 'average_q_price'] = rate_2011_q2
+
+train_2011_q1_index = train.loc[train['timestamp'].dt.year == 2011].loc[train['timestamp'].dt.month >= 1].loc[train['timestamp'].dt.month < 4].index
+# train.loc[train_2011_q1_index, 'price_doc'] = train.loc[train_2011_q1_index, 'price_doc'] * rate_2011_q1
+train.loc[train_2011_q1_index, 'average_q_price'] = rate_2011_q1
+
+train['price_doc'] = train['price_doc'] * train['average_q_price']
+# train.drop('average_q_price', axis=1, inplace=True)
+
+print('price changed done')
+
+y_train = train["price_doc"]
+id_train = train['id']
+
+x_train = train.drop(["id", "timestamp", "price_doc", "average_q_price"], axis=1)
+x_test = test.drop(["id", "timestamp", "average_q_price"], axis=1)
+
+num_train = len(x_train)
+x_all = pd.concat([x_train, x_test])
+
+for c in x_all.columns:
+    if x_all[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_all[c].values))
+        x_all[c] = lbl.transform(list(x_all[c].values))
+        #x_train.drop(c,axis=1,inplace=True)
+
+x_train = x_all[:num_train]
+x_test = x_all[num_train:]
+
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 6,
+    'subsample': 0.6,
+    'colsample_bytree': 1,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(x_train, y_train)
+dtest = xgb.DMatrix(x_test)
+
+# cv_output = xgb.cv(xgb_params, dtrain, num_boost_round=1000, early_stopping_rounds=20,
+#     verbose_eval=20, show_stdv=False)
+#cv_output[['train-rmse-mean', 'test-rmse-mean']].plot()
+# cv_output = xgb.cv(xgb_params, dtrain, num_boost_round=1000, early_stopping_rounds=20, verbose_eval=25, show_stdv=False)
+# print('best num_boost_rounds = ', len(cv_output))
+# num_boost_rounds = len(cv_output) 
+
+print('Training 1st model...')
+num_boost_rounds = 422
+model = xgb.train(dict(xgb_params, silent=1), dtrain, num_boost_round=num_boost_rounds, verbose_eval=False)
+
+#fig, ax = plt.subplots(1, 1, figsize=(8, 13))
+#xgb.plot_importance(model, max_num_features=50, height=0.5, ax=ax)
+
+y_predict = model.predict(dtest)
+# y_predict = np.round(y_predict)
+gunja_output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+sltrain1 =  pd.DataFrame({'id': id_train, 'mdl1': model.predict(dtrain)})
+print(sltrain1.shape)
+
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+id_test = test.id
+
+mult = .969
+
+y_train = train["price_doc"] * mult + 10
+id_train = train['id']
+x_train = train.drop(["id", "timestamp", "price_doc"], axis=1)
+x_test = test.drop(["id", "timestamp"], axis=1)
+
+for c in x_train.columns:
+    if x_train[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_train[c].values))
+        x_train[c] = lbl.transform(list(x_train[c].values))
+
+for c in x_test.columns:
+    if x_test[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_test[c].values))
+        x_test[c] = lbl.transform(list(x_test[c].values))
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 5,
+    'subsample': 0.7,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(x_train, y_train)
+dtest = xgb.DMatrix(x_test)
+
+# cv_output = xgb.cv(xgb_params, dtrain, num_boost_round=1000, early_stopping_rounds=20, verbose_eval=25, show_stdv=False)
+# print('best num_boost_rounds = ', len(cv_output))
+# num_boost_rounds = len(cv_output) # 382
+
+print('Training 2nd model...')
+num_boost_rounds = 391  # This was the CV output, as earlier version shows
+model = xgb.train(dict(xgb_params, silent=1), dtrain, num_boost_round=num_boost_rounds, verbose_eval=False)
+
+y_predict = model.predict(dtest)
+output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+sltrain2 =  pd.DataFrame({'id': id_train, 'mdl2': model.predict(dtrain)})
+print(sltrain2.shape)
+
+# Any results you write to the current directory are saved as output.
+df_train = pd.read_csv("../input/train.csv", parse_dates=['timestamp'])
+df_test = pd.read_csv("../input/test.csv", parse_dates=['timestamp'])
+df_macro = pd.read_csv("../input/macro.csv", parse_dates=['timestamp'])
+
+df_train.drop(df_train[df_train["life_sq"] > 7000].index, inplace=True)
+
+mult = 0.969
+y_train = df_train['price_doc'].values * mult + 10
+id_test = df_test['id']
+id_train = df_train['id']
+df_train.drop(['id', 'price_doc'], axis=1, inplace=True)
+df_test.drop(['id'], axis=1, inplace=True)
+
+num_train = len(df_train)
+df_all = pd.concat([df_train, df_test])
+# Next line just adds a lot of NA columns (becuase "join" only works on indexes)
+# but somewhow it seems to affect the result
+df_all = df_all.join(df_macro, on='timestamp', rsuffix='_macro')
+#print(df_all.shape)
+
+# Add month-year
+month_year = (df_all.timestamp.dt.month + df_all.timestamp.dt.year * 100)
+month_year_cnt_map = month_year.value_counts().to_dict()
+df_all['month_year_cnt'] = month_year.map(month_year_cnt_map)
+
+# Add week-year count
+week_year = (df_all.timestamp.dt.weekofyear + df_all.timestamp.dt.year * 100)
+week_year_cnt_map = week_year.value_counts().to_dict()
+df_all['week_year_cnt'] = week_year.map(week_year_cnt_map)
+
+# Add month and day-of-week
+df_all['month'] = df_all.timestamp.dt.month
+df_all['dow'] = df_all.timestamp.dt.dayofweek
+
+# Other feature engineering
+df_all['rel_floor'] = df_all['floor'] / df_all['max_floor'].astype(float)
+df_all['rel_kitch_sq'] = df_all['kitch_sq'] / df_all['full_sq'].astype(float)
+
+train['building_name'] = pd.factorize(train.sub_area + train['metro_km_avto'].astype(str))[0]
+test['building_name'] = pd.factorize(test.sub_area + test['metro_km_avto'].astype(str))[0]
+
+def add_time_features(col):
+   col_month_year = pd.Series(pd.factorize(train[col].astype(str) + month_year.astype(str))[0])
+   train[col + '_month_year_cnt'] = col_month_year.map(col_month_year.value_counts())
+
+   col_week_year = pd.Series(pd.factorize(train[col].astype(str) + week_year.astype(str))[0])
+   train[col + '_week_year_cnt'] = col_week_year.map(col_week_year.value_counts())
+
+add_time_features('building_name')
+add_time_features('sub_area')
+
+def add_time_features(col):
+   col_month_year = pd.Series(pd.factorize(test[col].astype(str) + month_year.astype(str))[0])
+   test[col + '_month_year_cnt'] = col_month_year.map(col_month_year.value_counts())
+
+   col_week_year = pd.Series(pd.factorize(test[col].astype(str) + week_year.astype(str))[0])
+   test[col + '_week_year_cnt'] = col_week_year.map(col_week_year.value_counts())
+
+add_time_features('building_name')
+add_time_features('sub_area')
+
+
+# Remove timestamp column (may overfit the model in train)
+df_all.drop(['timestamp', 'timestamp_macro'], axis=1, inplace=True)
+
+
+factorize = lambda t: pd.factorize(t[1])[0]
+
+df_obj = df_all.select_dtypes(include=['object'])
+
+X_all = np.c_[
+    df_all.select_dtypes(exclude=['object']).values,
+    np.array(list(map(factorize, df_obj.iteritems()))).T
+]
+#print(X_all.shape)
+
+X_train = X_all[:num_train]
+X_test = X_all[num_train:]
+
+
+# Deal with categorical values
+df_numeric = df_all.select_dtypes(exclude=['object'])
+df_obj = df_all.select_dtypes(include=['object']).copy()
+
+for c in df_obj:
+    df_obj[c] = pd.factorize(df_obj[c])[0]
+
+df_values = pd.concat([df_numeric, df_obj], axis=1)
+
+
+# Convert to numpy values
+X_all = df_values.values
+#print(X_all.shape)
+
+X_train = X_all[:num_train]
+X_test = X_all[num_train:]
+
+df_columns = df_values.columns
+
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 5,
+    'subsample': 0.7,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': True
+}
+
+dtrain = xgb.DMatrix(X_train, y_train, feature_names=df_columns)
+dtest = xgb.DMatrix(X_test, feature_names=df_columns)
+
+# cv_output = xgb.cv(xgb_params, dtrain, num_boost_round=1000, early_stopping_rounds=20, verbose_eval=25, show_stdv=False)
+# print('best num_boost_rounds = ', len(cv_output))
+# num_boost_rounds = len(cv_output) #
+print('Training 3rd model...')
+num_boost_rounds = 420  # From Bruno's original CV, I think
+model = xgb.train(dict(xgb_params, silent=1), dtrain, num_boost_round=num_boost_rounds, verbose_eval=False)
+
+y_pred = model.predict(dtest)
+
+df_sub = pd.DataFrame({'id': id_test, 'price_doc': y_pred})
+sltrain3 =  pd.DataFrame({'id': id_train, 'mdl3': model.predict(dtrain)})
+print(sltrain3.shape)
+
+df_sub.head()
+first_result = output.merge(df_sub, on="id", suffixes=['_louis','_bruno'])
+first_result["price_doc"] = np.exp( .714*np.log(first_result.price_doc_louis) +
+                                    .286*np.log(first_result.price_doc_bruno) )  # multiplies out to .5 & .2
+result = first_result.merge(gunja_output, on="id", suffixes=['_follow','_gunja'])
+
+result["price_doc"] = np.exp( .78*np.log(result.price_doc_follow) +
+                              .22*np.log(result.price_doc_gunja) )
+result.drop(["price_doc_louis","price_doc_bruno","price_doc_follow","price_doc_gunja"],axis=1,inplace=True)
+result.head()
+result.to_csv('sub-mix.csv', index=False)

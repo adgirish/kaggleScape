@@ -1,605 +1,938 @@
 
 # coding: utf-8
 
-# # <center>Beginner's Guide to Capsule Networks</center>
-# 
-# _Author: Zafar_
-# 
-# _Last Updated: 03/30/18_
-# 
-# --------
-# 
-# In the recently concluded [Toxic Comments Classification Challenge](https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge), Capsule Network (aka CapsNet) proved to be a huge success. This notebook introduces and implements a Capsule Network in Keras and evaluates its performance in the DonorsChoose.Org Application Screening Competition.
-# 
-# ## Contents
-# 1. [Introduction to Capsule Networks](#introduction)
-#     * 1.1 [Human Visual Recognition](#human)
-#     * 1.2 [Capsules](#capsules)
-#     * 1.3 [Routing by Agreement](#routing)
-#     * 1.4 [Mathematics behind CapsNet](#maths)
-#     * 1.5 [The Dyanmic Routing Algorithm](#algo)
-#     * 1.6 [A word about squash function](#squash)
-#     * 1.7 [The advantage of Capsule Networks](#advantage)
-# 2. [Boilerplate Code](#boilerplate)
-# 3. [CapsNet implementation](#capsnet_model)
-# 4. [Training](#training)
-# 5. [Submission](#submission)
-# 6. [Conclusion](#conclusion)
-# 7. [References](#references)
-# 
-# Before you read further, it is important to note that the examples presented here are just for the purpose of understanding.
+# # Competition description
+# > The sinking of the RMS Titanic is one of the most infamous shipwrecks in history.  On April 15, 1912, during her maiden voyage, the Titanic sank after colliding with an iceberg, killing 1502 out of 2224 passengers and crew. This sensational tragedy shocked the international community and led to better safety regulations for ships.
+# > 
+# > One of the reasons that the shipwreck led to such loss of life was that there were not enough lifeboats for the passengers and crew. Although there was some element of luck involved in surviving the sinking, some groups of people were more likely to survive than others, such as women, children, and the upper-class.
+# > 
+# > In this challenge, we ask you to complete the analysis of what sorts of people were likely to survive. In particular, we ask you to apply the tools of machine learning to predict which passengers survived the tragedy.
 
-# <a id="introduction"></a>
-# ## Introduction to Capsule Networks
-# <a id="human"></a>
-# #### Human Visual Recognition
-# Any real object is made up of several smaller objects. For example, a tree consists of a *trunk*, a *crown* and *roots*. These parts form a hierarchy. The crown of a tree further consists of branches and branches have leaves.
-# 
-# ![Parts of a tree](https://study.com/cimages/multimages/16/tree_parts_diagram.png)
-# 
-# Whenever we see some object, our eyes make some **fixation points** and the relative positions and natures of these fixation points help our brain in recognizing that object. By doing so, our brain does not have to process every detail. Just by seeing some leaves and branches, our brain recognizes there is a crown of a tree. And the crown is standing on a trunk below which are some roots. Combining this hierarchical information, our brain knows that there is a tree. From now on, we will call **the parts of the objects** as entities.
-# 
-# ![Parts of a tree](https://raw.githubusercontent.com/zaffnet/images/master/images/tree.png)
-# 
-# >*Each complex object can be thought of a hierarchy of simpler objects.*
-# <a id="capsules"></a>
-# #### Capsules
-# 
-# The assumption behind CapsNet is that there are capsules (groups of neurons) that tell whether certain objects (**entities**) are present in an image. Corresponding to each entity, there is a capsule which gives:
-# 1. the probability that the entity exists
-# 2. The **instantiation parameters** of that entity.
-# 
-# Instantiation parameters are the properties of that entity in an image (like "position", "size", "position", "hue", etc). For example, a **rectangle** is a simple geometric object. The capsule corresponding to a rectangle will tell us about its instantiation parameters. 
-# 
-# ![Rectangle capsule](https://raw.githubusercontent.com/zaffnet/images/master/images/rectangle.png)
-# 
-# 
-# From the figure above, our imaginary capsule consists of 6 neurons each corresponding to some property of the rectangle. The length of this vector will give us the probability of the presence of a rectangle. So, the probability that a rectangle is present will be: $$\sqrt[]{1.3^2 + 0.6^2 + 7.4^2 + 6.5^2 + 0.5^2 + 1.4^2} = 10.06$$
-# 
-# But wait a minute! If the length of the output vector represents the probability of the existence of an entity, shouldn't it be less than or equal to 1 (i.e., $0 \leq P \leq 1$)? Yes, and that is why we transform the capsule output $s$ like this:
-# 
-# ![squashing function](https://raw.githubusercontent.com/zaffnet/images/master/images/squash.png)
-# 
-# 
-# This non-linear transformation is called **squashing** function and it serves as an activation function for capsule networks (just like ReLU is used in CNNs).
-# 
-# >*A capsule is a group of neurons whose activation $v = <v_1, v_2, ..., v_n>$ represents the instantiation parameters of an entity and whose length represents the probability of the existence of that entity.*
-# <a id="routing"></a>
-# #### Routing by agreement
-# A CapsNet consists of several layers. Capsules in the lower layer correspond to simple entities (like rectangles, triangles, circles, etc). These low-level capsules bet on the presence of more complex entities and their bets are "combined" to get the output of high-level capsules (doors, windows, etc). For example, the presence of a *rectangle* (angle with x-axis = 0, size = 5, position = 0,...) and a *triangle* (angle with x-axis = 6, size = 5, position = 5,...) work together to bet on the presence of a *house* (a higher-level entity). 
-# 
-# There is a **coupling effect** too. When some low-level capsules agree on the presence of a high-level entity, the high-level capsule corresponding to that entity sends a feedback to these low-level capsules which *increases* their bet on that high-level capsule. To understand this, let's assume we have two levels of capsules: 
-# 1. Lower level corresponds to rectangles, triangles and circles
-# 2. High level corresponds to houses, boats, and cars
-# 
-# If there is an image of a house, the capsules corresponding to rectangles and triangles will have large activation vectors. Their relative positions (coded in their instantiation parameters) will bet on the presence of high-level objects. Since they will agree on the presence of house, the output vector of the house capsule will become large. This, in turn, will make the predictions by the rectangle and the traingle capsules larger. This cycle will repeat 4-5 times after which the bets on the presence of a house will be considerably larger than the bets on the presence of a boat or a car.
-# <a id="maths"></a>
-# #### Mathematics behind CapsNet
-# Suppose layer $l$ and $l+1$ have $m$ and $n$ capsules respectively. Our task is to calculate the activations of the capsules at layer $l+1$ given the activations at layer $l$. Let $u$ denotes the activations of capsules at layer $l$. We have to calculate $v$, the activations of capsules at layer $l+1$. 
-# 
-# For a capsule $j$ at layer $l+1$, 
-# 
-# 1. We first calculate the **prediction vectors** by the capsules at layer $l$. The prediction vector by a capsule $i$ (of layer $l$) for the capsule $j$ (of layer $l+1$) is given by:
-#     $$\boldsymbol{\hat{\textbf{u}}}_{j|i} = \boldsymbol{\textbf{W}}_{ij}\boldsymbol{\textbf{u}}_i$$ $\textbf{W}_{ij}$ is the weight matrix.
-# 
-# 2. We then calculate the **output vector** for the capsule $j$. The output vector is the weighted sum of all the prediction vectors given by the capsules of layer $l$ for the capsule $j$:
-#     $$s_j = \sum_{i=1}^{m}{c_{ij}\boldsymbol{\hat{\textbf{u}}}_{j|i}}$$ The scalar $\textbf{c}_{ij}$ is called **coupling coefficient** between capsule $i$ (of layer $l$) and $j$ (of layer $l+1$). These coefficients are determied by an algorithm called the **iterative dynamic routing algorithm**.
-# 
-# 3. We apply the **squashing** function on the output vector to get the activation $\textbf{v}_j$ of the capsule $j$:
-#     $$\textbf{v}_j = \textbf{squash}(\textbf{s}_j)$$
-#     
-# <a id="algo"></a>
-# #### The dynamic routing algorithm
-# The activation vectors of layer $l+1$ send feedback signals to the capsules at layer $l$. If the prediction vector of capsule $i$ (of layer $l$) for a capsule $j$ (of layer $l+1$) is in agreement with the activation vector of capsule $j$, their dot product should be high. Hence the "weight" of the prediction vector $\boldsymbol{\hat{\textbf{u}}}_{j|i}$ is increased in the output vector of $j$. In other words, those prediction vectors that helped the activation vector have a lot more weight in the output vector (and consequently the activation vector). This cycle of mutual help continues for 4-5 rounds. 
-# 
-# But the predictions of a low-level capsule for high-level capsules should sum to one. That is why for a capsule $i$ (of layer $l$), 
-# $$c_{ij} = \frac{\exp(b_{ij})}{\sum_{k}{\exp(b_{ik})}}$$ Clearly, $$\sum_{k}{c_{ik}} = 1$$ The logit $b_{ij}$ indicates whether capsules $i$ (of layer $l$) and $j$ (of layer $l+1$) have strong coupling. In other words, it is a measure of how much the presence of the capsule $j$ is explained by the capsule $i$. Initially, all $b_{ij}$ should be equal.
-# 
-# **Routing algorithm:**
-# >Given: Prediction vectors $\boldsymbol{\hat{\textbf{u}}}_{j|i}$, number of routing iterations $r$
-# 
-# >for all capsule $i$ in layer $l$ and capsule $j$ in layer $l+1$: $b_{ij} = 0$ 
-# 
-# >for $r$ iterations do:
-# 
-# >>for all capsules $i$ in the layer $l$: $c_i = softmax(b_i)$ 
-# >>**(the bets of a capsule on high-level capsules should sum to 1)**
-# 
-# >>for all capsules $j$ in the layer $l+1$: $s_j = \sum_{i=1}^{m}{c_{ij}\boldsymbol{\hat{\textbf{u}}}_{j|i}}$
-# >>**(the output vector is the weighted sum of prediction vectors)**
-# 
-# >>for all capsules $j$ in the layer $l+1$: $\textbf{v}_j = \textbf{squash}(\textbf{s}_j)$
-# >>**(apply the activation function)**
-# 
-# >> for all capsule $i$ in layer $l$ and capsule $j$ in layer $l+1$: $b_{ij} = b_{ij} + \boldsymbol{\hat{\textbf{u}}}_{j|i} \cdot \textbf{v}_j$
-# 
-# > return $\textbf{v}_j$
-# 
-# The last line in the loop is very important. It is here that the routing happens. If the product has $\boldsymbol{\hat{\textbf{u}}}_{j|i} \cdot \textbf{v}_j$ is large, it will increase $b_{ij}$ which will increase the corresponding coupling coefficient $c_{ij}$, which in turn, will make the product $\boldsymbol{\hat{\textbf{u}}}_{j|i} \cdot \textbf{v}_j$ even larger.
-# 
-# This is how CapsNet works. At this point, you will find no difficulty in reading the [original paper](https://arxiv.org/pdf/1710.09829.pdf) by Hinton.
-# <a id="squash"></a>
-# #### A word about squashing function:
-# The derivative of $\|\mathbf{s}\|$ is undefined when $\|\mathbf{s}\|=0$, and it may blow up during training: if a vector is zero, the gradients will be `nan`, so when the optimizer updates the variables, they will also become `nan`. The solution is to implement the norm manually by computing the square root of the sum of squares plus a tiny epsilon value: $\|\mathbf{s}\| \approx \sqrt{\sum\limits_i{{s_i}^2}\,\,+ \epsilon}$.
-# <a id="advantage"></a>
-# #### What is the advantage?
-# In a CNN, there are pooling layers. We generally use MaxPool which is a very primitive type of routing mechanism. The most active feature in a local pool (say 4x4 grid) is routed to the higher layer and the higher-level detectors don't have a say in the routing. Compare this with the routing-by-agreement mechanism introduced in the CapsNet. Only those features that agree with high-level detectors are routed. This is the advantage of CapsNet over CNN. It has a superior dynamic routing mechanism (dynamic because the information to be routed is determined in real time).
+# # Objectives
+# This is my first Kaggle competition and the first project that I will do by myself. I've completed the Andrew Ng course on ML and watched a bunch of videos about numpy, pandas and sci-kit learn. My objectives with this notebook is to keep learning putting into practice what I already "know" as well as what I will learn during participating in this competition. This notebook is highly inspired in other kernels that I saw as well. I hope I can learn writing this kernel.
 
-# <a id="boilerplate"></a>
-# ## Boilerplate Code
-# #### Essential imports
+# **This is a kernel under construction, any tips and comments are appreciated**
+
+# # Index
+# #### 0. Setting Environment  (Complete)  
+#     0.1 Loading Libraries  
+#     0.2 Loading Data  
+# #### 1. Preprocessing  (Very complete)  
+#     1.1 Missing Values  
+#     1.2 Feature Engineering  
+#         1.2.1 Family Name  
+#         1.2.2 Title  
+#         1.2.3 Fare and Age bins  
+#         1.2.4 IsChild, IsOld  
+#         1.2.5 FamilySize  
+#         1.2.6 IsAlone and LargeFamily  
+#         1.2.7 Tickets  
+#         1.2.8 Cabins  
+#     1.3 Converting Data  
+#     1.4 Creating Masks  
+# #### 2. Visualization  (In Progress)  
+#     2.1 Survival rates per features  
+#     2.2 Age, Fare, Sex Analysis  
+#     2.3 Fare and Class Analysis
+#     2.4 Tickets
+#     2.5 Correlation  
+# #### 3. Machine Learning  (In Progress - Need help with model selection)  
+#     3.1 Choosing a model  
+#     3.2 Learning  
+#     3.4 Predicting  
+
+# # 0. Setting Environment
+
+# ## 0.1 Loading Libraries
 
 # In[ ]:
 
 
-import gc
-import os
-import nltk
-import tqdm
+# Linear Algebra
 import numpy as np
+
+# Dataframes and Series
 import pandas as pd
-nltk.download("punkt")
+
+# Preprocessing
+from sklearn.preprocessing import LabelEncoder
+
+# Model Selection and Learning
+from sklearn.model_selection import train_test_split, RandomizedSearchCV
+from sklearn.preprocessing import PolynomialFeatures, StandardScaler
+from sklearn.feature_selection import RFECV
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import LogisticRegression
+from sklearn.base import BaseEstimator, TransformerMixin 
+
+#Visualization
+import seaborn as sns
+import matplotlib as mpl
+import matplotlib.pyplot as plt
+import matplotlib.pylab as pylab
+pylab.rcParams['figure.figsize'] = 14,10 # Big graphs unless specified
+sns.set(color_codes=True) # Set style and color of graphs
+
+
+# ## 0.2 Loading Data
+
+# I will create **copies** of the input data as I will modify it at cleaning and feature engineering stages. For easy manipulation of train and test sets I will create a list with both (**references** to the actual dataframes).
+
+# In[ ]:
+
+
+# Raw input dataframes
+raw_train = pd.read_csv("../input/train.csv")
+raw_test = pd.read_csv("../input/test.csv")
+
+# Copy for the preprocessing
+df_train = raw_train.copy()
+df_test = raw_test.copy()
+df_total = pd.concat([df_train, df_test])
+
+# Easy application of cleaning
+data_cleaner = [df_train, df_test]
 
 
 # In[ ]:
 
 
-def tokenize_sentences(sentences, words_dict):
-    tokenized_sentences = []
-    for sentence in tqdm.tqdm(sentences):
-        if hasattr(sentence, "decode"):
-            sentence = sentence.decode("utf-8")
-        tokens = nltk.tokenize.word_tokenize(sentence)
-        result = []
-        for word in tokens:
-            word = word.lower()
-            if word not in words_dict:
-                words_dict[word] = len(words_dict)
-            word_index = words_dict[word]
-            result.append(word_index)
-        tokenized_sentences.append(result)
-    return tokenized_sentences, words_dict
+df_train.head()
+
+
+# # 1. Preprocessing
+
+# We know that the features are:
+# * Survived: target binary value
+# * PassengerId:  identifier of passengers - can be discarded for the analysis
+# * Pclass: ordinal feature that probrably correlates with social class (can be used as is or as dummy variables)
+# * Name: text data, we can extract family name and title from here
+# * Sex: binary value (male, female)
+# * SibSp, Parch: we can use these as they are or create intervals
+# * Ticket: can have some hidden importance (maybe correlated with fare or pclass)
+# * Fare, Age: continuous values, can be used as is or as intervals
+# * Cabin: can be important for the analysis as it correlates with the localization of the passager in the ship
+# * Embarked: Where embarked. Categorical variable (C, Q or S)
+
+# We can discard PassengerId since we assume the passengers are sorted at random.
+
+# In[ ]:
+
+
+for df in data_cleaner:
+    df.drop(["PassengerId"], axis=1, inplace=True)
 
 
 # In[ ]:
 
 
-def read_embedding_list(file_path):
-    embedding_word_dict = {}
-    embedding_list = []
-    f = open(file_path)
+# Dataframe information
+print('-'*20, 'Train Set')
+df_train.info()
+print('-'*20, 'Test Set')
+df_test.info()
 
-    for index, line in enumerate(f):
-        if index == 0:
-            continue
-        values = line.split()
-        word = values[0]
-        try:
-            coefs = np.asarray(values[1:], dtype='float32')
-        except:
-            continue
-        embedding_list.append(coefs)
-        embedding_word_dict[word] = len(embedding_word_dict)
-    f.close()
-    embedding_list = np.array(embedding_list)
-    return embedding_list, embedding_word_dict
 
+# ## 1.1 Missing Values
+
+# We can see from the data loaded that there is missing values in Age, Fare, Embarked and (more critically) in Cabin features. For Fare and Age it is reasonable to pick the mean or the median (last will be used as it handles outliers better), for Embarked mode will be used. We couldn't use something similar with Cabin as it has so many missing data, so it will be assigned a letter M for missing in the examples without Cabin data for further analysis.
 
 # In[ ]:
 
 
-def clear_embedding_list(embedding_list, embedding_word_dict, words_dict):
-    cleared_embedding_list = []
-    cleared_embedding_word_dict = {}
-
-    for word in words_dict:
-        if word not in embedding_word_dict:
-            continue
-        word_id = embedding_word_dict[word]
-        row = embedding_list[word_id]
-        cleared_embedding_list.append(row)
-        cleared_embedding_word_dict[word] = len(cleared_embedding_word_dict)
-
-    return cleared_embedding_list, cleared_embedding_word_dict
-
-
-# In[ ]:
-
-
-def convert_tokens_to_ids(tokenized_sentences, words_list, embedding_word_dict, sentences_length):
-    words_train = []
-
-    for sentence in tokenized_sentences:
-        current_words = []
-        for word_index in sentence:
-            word = words_list[word_index]
-            word_id = embedding_word_dict.get(word, len(embedding_word_dict) - 2)
-            current_words.append(word_id)
-
-        if len(current_words) >= sentences_length:
-            current_words = current_words[:sentences_length]
-        else:
-            current_words += [len(embedding_word_dict) - 1] * (sentences_length - len(current_words))
-        words_train.append(current_words)
-    return words_train
-
-
-# <a id="capsnet_model"></a>
-# ### Capsule Network Model
-# The Architecture of our CapsNet is very similar to general architecture, except for an addition Capsule Layer.
-# 
-# ![Text Classification](https://raw.githubusercontent.com/zaffnet/images/master/images/comparison.jpg)
-# 
-# 
-# #### Advantage of Capsule Layer in Text Classification
-# As you can see, we have used Capsule layer instead of Pooling layer. Capsule Layer eliminates the need for forced pooling layers like MaxPool. In many cases, this is desired because we get translational invariance without losing minute details.
-
-# In[ ]:
-
-
-from keras.callbacks import Callback, EarlyStopping, ModelCheckpoint
-from keras.engine import Layer
-from keras.layers import Activation, Add, Bidirectional, Conv1D, Dense, Dropout, Embedding, Flatten
-from keras.layers import concatenate, GRU, Input, K, LSTM, MaxPooling1D
-from keras.layers import GlobalAveragePooling1D,  GlobalMaxPooling1D, SpatialDropout1D
-from keras.models import Model
-from keras.optimizers import Adam
-from keras.preprocessing import text, sequence
-from sklearn.metrics import accuracy_score, roc_auc_score, log_loss
-from sklearn.model_selection import train_test_split
-from keras import initializers, regularizers, constraints, optimizers, layers, callbacks
-
-
-# #### CapsNet parameters
-
-# In[ ]:
-
-
-gru_len = 128
-Routings = 5
-Num_capsule = 10
-Dim_capsule = 16
-dropout_p = 0.3
-rate_drop_dense = 0.3
-
-
-# In[ ]:
-
-
-def squash(x, axis=-1):
-    s_squared_norm = K.sum(K.square(x), axis, keepdims=True)
-    scale = K.sqrt(s_squared_norm + K.epsilon())
-    return x / scale
-
-
-# #### Capsule Layer
-
-# In[ ]:
-
-
-class Capsule(Layer):
-    def __init__(self, num_capsule, dim_capsule, routings=3, kernel_size=(9, 1), share_weights=True,
-                 activation='default', **kwargs):
-        super(Capsule, self).__init__(**kwargs)
-        self.num_capsule = num_capsule
-        self.dim_capsule = dim_capsule
-        self.routings = routings
-        self.kernel_size = kernel_size
-        self.share_weights = share_weights
-        if activation == 'default':
-            self.activation = squash
-        else:
-            self.activation = Activation(activation)
-
-    def build(self, input_shape):
-        super(Capsule, self).build(input_shape)
-        input_dim_capsule = input_shape[-1]
-        if self.share_weights:
-            self.W = self.add_weight(name='capsule_kernel',
-                                     shape=(1, input_dim_capsule,
-                                            self.num_capsule * self.dim_capsule),
-                                     # shape=self.kernel_size,
-                                     initializer='glorot_uniform',
-                                     trainable=True)
-        else:
-            input_num_capsule = input_shape[-2]
-            self.W = self.add_weight(name='capsule_kernel',
-                                     shape=(input_num_capsule,
-                                            input_dim_capsule,
-                                            self.num_capsule * self.dim_capsule),
-                                     initializer='glorot_uniform',
-                                     trainable=True)
-
-    def call(self, u_vecs):
-        if self.share_weights:
-            u_hat_vecs = K.conv1d(u_vecs, self.W)
-        else:
-            u_hat_vecs = K.local_conv1d(u_vecs, self.W, [1], [1])
-
-        batch_size = K.shape(u_vecs)[0]
-        input_num_capsule = K.shape(u_vecs)[1]
-        u_hat_vecs = K.reshape(u_hat_vecs, (batch_size, input_num_capsule,
-                                            self.num_capsule, self.dim_capsule))
-        u_hat_vecs = K.permute_dimensions(u_hat_vecs, (0, 2, 1, 3))
-        # final u_hat_vecs.shape = [None, num_capsule, input_num_capsule, dim_capsule]
-
-        b = K.zeros_like(u_hat_vecs[:, :, :, 0])  # shape = [None, num_capsule, input_num_capsule]
-        for i in range(self.routings):
-            b = K.permute_dimensions(b, (0, 2, 1))  # shape = [None, input_num_capsule, num_capsule]
-            c = K.softmax(b)
-            c = K.permute_dimensions(c, (0, 2, 1))
-            b = K.permute_dimensions(b, (0, 2, 1))
-            outputs = self.activation(K.batch_dot(c, u_hat_vecs, [2, 2]))
-            if i < self.routings - 1:
-                b = K.batch_dot(outputs, u_hat_vecs, [2, 3])
-
-        return outputs
-
-    def compute_output_shape(self, input_shape):
-        return (None, self.num_capsule, self.dim_capsule)
-
-
-# In[ ]:
-
-
-def get_model(embedding_matrix, sequence_length, dropout_rate, recurrent_units, dense_size):
-    input1 = Input(shape=(sequence_length,))
-    embed_layer = Embedding(embedding_matrix.shape[0], embedding_matrix.shape[1],
-                                weights=[embedding_matrix], trainable=False)(input1)
-    embed_layer = SpatialDropout1D(rate_drop_dense)(embed_layer)
-
-    x = Bidirectional(
-        GRU(gru_len, activation='relu', dropout=dropout_p, recurrent_dropout=dropout_p, return_sequences=True))(
-        embed_layer)
-    capsule = Capsule(num_capsule=Num_capsule, dim_capsule=Dim_capsule, routings=Routings,
-                      share_weights=True)(x)
-    capsule = Flatten()(capsule)
-    capsule = Dropout(dropout_p)(capsule)
-    output = Dense(1, activation='sigmoid')(capsule)
-    model = Model(inputs=input1, outputs=output)
-    model.compile(
-        loss='binary_crossentropy',
-        optimizer='adam',
-        metrics=['accuracy'])
-    return model
-
-
-# In[ ]:
-
-
-def _train_model(model, batch_size, train_x, train_y, val_x, val_y):
-    num_labels = train_y.shape[1]
-    patience = 5
-    best_loss = -1
-    best_weights = None
-    best_epoch = 0
+# Simple imputation
+for df in data_cleaner:
+    df["Age"].fillna(df_train.Age.median(), inplace=True)
+    df["Fare"].fillna(df_train.Fare.median(), inplace=True)
+    df["Embarked"].fillna(df_train.Embarked.mode()[0], inplace=True)
     
-    current_epoch = 0
+    # Cant impute anything because of number of missing values
+    df["Cabin"].fillna('M', inplace=True)
+
+
+# In[ ]:
+
+
+# Check if there are still any missing value
+print('-'*20, 'Train Set')
+print(df_train.isnull().any())
+print('-'*20, 'Test Set')
+print(df_test.isnull().any())
+
+
+# # 1.2 Feature Engineering
+
+# We can extract title and family names from the Name feature
+
+# In[ ]:
+
+
+def extract_name(f):
+    return f.split(', ')[0]
+
+def extract_title(f):
+    return (f.split(", ")[1]).split(".")[0]
+
+
+# In[ ]:
+
+
+for df in data_cleaner:
+    df["FamilyName"] = df.Name.apply(extract_name)
+    df["Title"] = df.Name.apply(extract_title)
+
+
+# ### 1.2.1 Family Name
+
+# In[ ]:
+
+
+df_train.FamilyName.value_counts().head(10)
+
+
+# We can pick categories for names with at least 2 individuals:
+
+# In[ ]:
+
+
+family_names = df_train.FamilyName
+
+for df in data_cleaner:
+    df["FamilyName"] = df.FamilyName.apply(lambda f: f if f in family_names.unique() and
+                                     family_names.value_counts()[f] > 1 else 'Unique')
+
+
+# In[ ]:
+
+
+df_train['FamilyName'].value_counts()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(14,6))
+df_names = df_train.copy()
+df_names['UniqueName'] = df_names['FamilyName'] == 'Unique'
+sns.barplot("UniqueName", "Survived", data=df_names)
+plt.show()
+
+
+# In[ ]:
+
+
+# For now I think these numbers has little to contribute
+for df in data_cleaner:
+    df.drop(["FamilyName"], axis=1, inplace=True)
+
+
+# ### 1.2.2 Title
+
+# In[ ]:
+
+
+titles = df_train.Title
+
+
+# In[ ]:
+
+
+titles.value_counts()
+
+
+# We first can group some of the classes togheter and then realize the same analysis as the above.
+
+# In[ ]:
+
+
+miss = ["Ms", "Mlle"]
+mrs = ["Mme"]
+
+for df in data_cleaner:
+    df["Title"] = df.Title.apply(lambda f: 'Miss' if f in miss else f)
+    df["Title"] = df.Title.apply(lambda f: 'Mrs' if f in mrs else f)
+
+
+# In[ ]:
+
+
+titles = df_train.Title
+
+for df in data_cleaner:
+    df["Title"] = df.Title.apply(lambda f: f if f in titles.unique() and
+                                     titles.value_counts()[f] > 10 else 'Rare')
+
+
+# In[ ]:
+
+
+df_train['Title'].value_counts()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(14,6))
+sns.barplot('Title', 'Survived', data=df_train)
+plt.show()
+
+
+# From Mr, Mrs and Miss we see some intersection with the Sex feature. Master seems to indicate correlation with age, so maybe can be used to impute age.
+
+# ### 1.2.3 Age and Fare bins
+
+# In[ ]:
+
+
+plt.subplot(211)
+sns.distplot(df_train['Age'][df_train.Survived == 1], color='b')
+sns.distplot(df_train['Age'][df_train.Survived == 0], color='r')
+plt.legend(['Survived', 'Died']), plt.xticks(range(0,92,2))
+plt.subplot(212)
+sns.distplot(df_train['Fare'][df_train.Survived == 1], color='b')
+sns.distplot(df_train['Fare'][df_train.Survived == 0], color='r')
+plt.legend(['Survived', 'Died'])
+plt.show()
+
+
+# For age we can create equally spaced bins, but for fare it makes more sense to divide into parts with same amount of individuals:
+
+# In[ ]:
+
+
+_, fare_bins = pd.qcut(df_total['Fare'], 4, retbins=True)
+fare_bins[0] -= 0.001 # dirty fix
+_, age_bins = pd.cut(df_total['Age'], 5, retbins=True)
+for df in data_cleaner:
+    df["FareBin"] = pd.cut(df['Fare'], fare_bins)
+    df["AgeBin"] = pd.cut(df['Age'], age_bins)
+
+
+# ### 1.2.4 IsChild
+
+# In[ ]:
+
+
+plt.figure(figsize=(14,5))
+sns.distplot(df_train['Age'][df_train.Survived == 1], range(26), color='b')
+sns.distplot(df_train['Age'][df_train.Survived == 0], range(26), color='r')
+plt.xlim((0,26)), plt.xticks(range(0,26,1))
+plt.legend(['Survived', 'Died'])
+plt.show()
+
+
+# From the plot 16 seems to be a good point for determining as a child
+
+# In[ ]:
+
+
+for df in data_cleaner:
+    df['IsChild'] = df['Age'] < 16
+
+
+# In[ ]:
+
+
+sns.barplot('IsChild', 'Survived', data=df_train)
+plt.show()
+
+
+# ### 1.2.5 Family Size
+
+# In[ ]:
+
+
+plt.subplot(121)
+sns.barplot('SibSp', 'Survived', data=df_train)
+plt.subplot(122)
+sns.barplot('Parch', 'Survived', data=df_train)
+plt.show()
+
+
+# We can easily create a new feature called family size for Parch + SibSp + Himself/Herself
+
+# In[ ]:
+
+
+for df in data_cleaner:
+    df["FamilySize"] = df.Parch + df.SibSp +1
+
+
+# In[ ]:
+
+
+sns.distplot(df_train['FamilySize'][df_train.Survived == 1], range(26), color='b')
+sns.distplot(df_train['FamilySize'][df_train.Survived == 0], range(26), color='r')
+plt.legend(['Survived', 'Died'])
+plt.show()
+
+
+# We can also define binary variables for alone individuals and individuals with a large family as these seems to be related with less chance of surviving.
+
+# ### 1.2.6 - IsAlone and LargeFamily
+
+# In[ ]:
+
+
+for df in data_cleaner:
+    df["IsAlone"] = df["FamilySize"] == 1
+    df["LargeFamily"] = df["FamilySize"] >= 5
+
+
+# In[ ]:
+
+
+plt.subplot(121)
+sns.barplot('IsAlone', 'Survived', data=df_train)
+plt.subplot(122)
+sns.barplot('LargeFamily', 'Survived', data=df_train)
+plt.show()
+
+
+# ### 1.2.7 Exploring Tickets
+
+# In[ ]:
+
+
+ticket_values = pd.concat([df_train['Ticket'], df_test['Ticket']]).value_counts()
+ticket_values.head()
+
+
+# In[ ]:
+
+
+for df in data_cleaner:
+    df['N_ticket'] = df['Ticket'].apply(lambda f: ticket_values[f])
+
+
+# In[ ]:
+
+
+sns.distplot(df_train['N_ticket'][df_train.Survived == 1], range(26), color='b')
+sns.distplot(df_train['N_ticket'][df_train.Survived == 0], range(26), color='r')
+plt.legend(['Survived', 'Died'])
+plt.show()
+
+
+# ### 1.2.8 Exploring Cabin
+
+# I will limit my analysis to the letter of the Cabin.
+
+# In[ ]:
+
+
+for df in data_cleaner:
+    df["Cabin"] = df["Cabin"].apply(lambda f: f[0])
+
+
+# Let's see if there is hiding information in the missingness of Cabin
+
+# In[ ]:
+
+
+# Mask for cabin missing
+cabin_M = df_train["Cabin"] == 'M'
+cabin_Mn = df_train["Cabin"] != 'M'
+
+plt.subplot(211)
+sns.barplot("Cabin", "Survived", data=df_train)
+plt.subplot(223)
+plt.bar('Missing', df_train.Cabin[cabin_M].count())
+plt.bar('Not Missing', df_train.Cabin[cabin_Mn].count())
+plt.subplot(224)
+df_cabin = df_train.copy()
+df_cabin["Cabin_Missing"] = df_train["Cabin"].apply(lambda f: 1 if f == 'M' else 0)
+sns.barplot("Cabin_Missing", "Survived", data=df_cabin)
+plt.show()
+
+
+# As missing the value seems to be related to surviving, let's create a feature for this as it may be more relevant than the Cabin itself as there is such a large number of missing Cabins.
+
+# In[ ]:
+
+
+for df in data_cleaner:
+    df['CabinMissing'] = df.Cabin == 'M'
+
+
+# ## 1.3 Cleaning
+
+# In[ ]:
+
+
+# Double check missing values
+for df in data_cleaner:
+    print('-'*20)
+    print(df.isnull().any())
+
+
+# Create code variables for the categorical data
+
+# In[ ]:
+
+
+# Encode categorical data
+label = LabelEncoder()
+for df in data_cleaner:    
+    df['Sex_Code'] = label.fit_transform(df['Sex'])
+    df['Embarked_Code'] = label.fit_transform(df['Embarked'])
+    df['Title_Code'] = label.fit_transform(df['Title'])
+    df['AgeBin_Code'] = label.fit_transform(df['AgeBin'])
+    df['FareBin_Code'] = label.fit_transform(df['FareBin'])
+    df['Cabin_Code'] = label.fit_transform(df["Cabin"])
     
-    while True:
-        model.fit(train_x, train_y, batch_size=batch_size, epochs=1)
-        y_pred = model.predict(val_x, batch_size=batch_size)
-
-        total_loss = 0
-        for j in range(num_labels):
-            loss = log_loss(val_y[:, j], y_pred[:, j])
-            total_loss += loss
-
-        total_loss /= num_labels
-
-        print("Epoch {0} loss {1} best_loss {2}".format(current_epoch, total_loss, best_loss))
-
-        current_epoch += 1
-        if total_loss < best_loss or best_loss == -1:
-            best_loss = total_loss
-            best_weights = model.get_weights()
-            best_epoch = current_epoch
-        else:
-            if current_epoch - best_epoch == patience:
-                break
-
-    model.set_weights(best_weights)
-    return model
-
-
-# In[ ]:
-
-
-def train_folds(X, y, X_test, fold_count, batch_size, get_model_func):
-    print("="*75)
-    fold_size = len(X) // fold_count
-    models = []
-    result_path = "predictions"
-    if not os.path.exists(result_path):
-        os.mkdir(result_path)
-    for fold_id in range(0, fold_count):
-        fold_start = fold_size * fold_id
-        fold_end = fold_start + fold_size
-
-        if fold_id == fold_size - 1:
-            fold_end = len(X)
-
-        train_x = np.concatenate([X[:fold_start], X[fold_end:]])
-        train_y = np.concatenate([y[:fold_start], y[fold_end:]])
-
-        val_x = np.array(X[fold_start:fold_end])
-        val_y = np.array(y[fold_start:fold_end])
-
-        model = _train_model(get_model_func(), batch_size, train_x, train_y, val_x, val_y)
-        train_predicts_path = os.path.join(result_path, "train_predicts{0}.npy".format(fold_id))
-        test_predicts_path = os.path.join(result_path, "test_predicts{0}.npy".format(fold_id))
-        train_predicts = model.predict(X, batch_size=512, verbose=1)
-        test_predicts = model.predict(X_test, batch_size=512, verbose=1)
-        np.save(train_predicts_path, train_predicts)
-        np.save(test_predicts_path, test_predicts)
-
-    return models
-
-
-# <a id="training"></a>
-# ### Training
-# 
-# #### IMPORTANT
-# Due to time limit in Kaggle kernels, I have restricted the model size and trained it on a small part of the  dataset. The commented values are those for which this model is trained.
-# 
-# 
-
-# In[ ]:
-
-
-# train_file_path = "../input/donorschooseorg-preprocessed-data/train_preprocessed.csv"
-train_file_path = "../input/donorschooseorg-preprocessed-data/train_small.csv"
-
-# test_file_path = "../input/donorschooseorg-preprocessed-data/test_preprocessed.csv"
-test_file_path = "../input/donorschooseorg-preprocessed-data/test_small.csv"
-
-# embedding_path = "../input/fatsttext-common-crawl/crawl-300d-2M/crawl-300d-2M.vec"
-embedding_path = "../input/donorschooseorg-preprocessed-data/embeddings_small.vec"
-
-batch_size = 128 # 256
-recurrent_units = 16 # 64
-dropout_rate = 0.3 
-dense_size = 8 # 32
-sentences_length = 10 # 300
-fold_count = 2 # 10
-
-
-# In[ ]:
-
-
-UNKNOWN_WORD = "_UNK_"
-END_WORD = "_END_"
-NAN_WORD = "_NAN_"
-CLASSES = ["project_is_approved"]
-
-
-# In[ ]:
-
-
-# Load data
-print("Loading data...")
-train_data = pd.read_csv(train_file_path)
-test_data = pd.read_csv(test_file_path)
-list_sentences_train = train_data["application_text"].fillna(NAN_WORD).values
-list_sentences_test = test_data["application_text"].fillna(NAN_WORD).values
-y_train = train_data[CLASSES].values
-
-
-# In[ ]:
-
-
-print("Tokenizing sentences in train set...")
-tokenized_sentences_train, words_dict = tokenize_sentences(list_sentences_train, {})
-print("Tokenizing sentences in test set...")
-tokenized_sentences_test, words_dict = tokenize_sentences(list_sentences_test, words_dict)
-
-
-# In[ ]:
-
-
-# Embedding
-words_dict[UNKNOWN_WORD] = len(words_dict)
-print("Loading embeddings...")
-embedding_list, embedding_word_dict = read_embedding_list(embedding_path)
-embedding_size = len(embedding_list[0])
-
-
-# In[ ]:
-
-
-print("Preparing data...")
-embedding_list, embedding_word_dict = clear_embedding_list(embedding_list, embedding_word_dict, words_dict)
-
-embedding_word_dict[UNKNOWN_WORD] = len(embedding_word_dict)
-embedding_list.append([0.] * embedding_size)
-embedding_word_dict[END_WORD] = len(embedding_word_dict)
-embedding_list.append([-1.] * embedding_size)
-
-embedding_matrix = np.array(embedding_list)
-
-id_to_word = dict((id, word) for word, id in words_dict.items())
-train_list_of_token_ids = convert_tokens_to_ids(
-    tokenized_sentences_train,
-    id_to_word,
-    embedding_word_dict,
-    sentences_length)
-test_list_of_token_ids = convert_tokens_to_ids(
-    tokenized_sentences_test,
-    id_to_word,
-    embedding_word_dict,
-    sentences_length)
-X_train = np.array(train_list_of_token_ids)
-X_test = np.array(test_list_of_token_ids)
-
-
-# In[ ]:
-
-
-get_model_func = lambda: get_model(
-    embedding_matrix,
-    sentences_length,
-    dropout_rate,
-    recurrent_units,
-    dense_size)
-
-
-# In[ ]:
-
-
-del train_data, test_data, list_sentences_train, list_sentences_test
-del tokenized_sentences_train, tokenized_sentences_test, words_dict
-del embedding_list, embedding_word_dict
-del train_list_of_token_ids, test_list_of_token_ids
-gc.collect();
-
-
-# In[ ]:
-
-
-print("Starting to train models...")
-models = train_folds(X_train, y_train, X_test, fold_count, batch_size, get_model_func)
-
-
-# <a id="submission"></a>
-# ### Submission
-# 
-# We trained the model for 10 folds using default parameters. We will make a rank-averaged submission.
-
-# In[ ]:
-
-
-from scipy.stats import rankdata
-
-LABELS = ["project_is_approved"]
-
-base = "../input/donorschooseorg-application-screening-predictions/predictions/predictions/"
-predict_list = []
-for j in range(10):
-    predict_list.append(np.load(base + "predictions_001/test_predicts%d.npy"%j))
+     # Pclass can be viewed as categorical or simply an integer variable, which is best?
+    df['Pclass'] = df.Pclass.astype('category')
     
-print("Rank averaging on ", len(predict_list), " files")
-predcitions = np.zeros_like(predict_list[0])
-for predict in predict_list:
-    predcitions = np.add(predcitions.flatten(), rankdata(predict)/predcitions.shape[0])  
-predcitions /= len(predict_list)
+    # Bool to int
+    df['IsChild'] = df['IsChild'].apply(int)
+    df['IsAlone'] = df['IsAlone'].apply(int)
+    df['LargeFamily'] = df['LargeFamily'].apply(int)
+    df['CabinMissing'] = df['CabinMissing'].apply(int)
 
-submission = pd.read_csv('../input/donorschoose-application-screening/sample_submission.csv')
-submission[LABELS] = predcitions
-submission.to_csv('submission.csv', index=False)
-
-
-# <a id="conclusion"></a>
-# ### Conclusion
-# We can see that a Capsule Network can be helpful in Text Classification. Even without any hyperparameter tuning, one can build a strong baseline using CapsNet. 
-# <a id="references"></a>
-# ### References
-# * [Dynamic Routing Between Capsules](https://arxiv.org/abs/1710.09829)
-# * [Understanding Hinton’s Capsule Networks](https://medium.com/ai%C2%B3-theory-practice-business/understanding-hintons-capsule-networks-part-i-intuition-b4b559d1159b)
-# * [Capsule Networks (CapsNets) – Tutorial](https://www.youtube.com/watch?v=pPN8d0E3900)
 
 # In[ ]:
 
 
-from IPython.lib.display import YouTubeVideo
-YouTubeVideo('pPN8d0E3900', width=800, height=450)
+df_train.columns
+
+
+# In[ ]:
+
+
+# define masks
+
+# target variable
+target = ['Survived']
+
+# pretty categorical names
+data_pretty = ['Age', 'Pclass', 'Title', 'Sex', 'SibSp', 'Parch', 'Fare', 'Cabin', 'Embarked',
+                'FamilySize', 'FareBin', 'AgeBin', 'IsAlone', 'IsChild', 'LargeFamily',
+                'N_ticket', 'CabinMissing']
+
+# continuous and integer variables
+data_numbers = ['Age', 'SibSp', 'Parch', 'Fare', 'FamilySize', 'N_ticket']
+
+# age and fare bins
+data_bins = ['AgeBin_Code', 'FareBin_Code']
+
+# categorical variables
+data_cat = ['Pclass', 'Title', 'Sex', 'Cabin', 'Embarked' 'IsAlone',
+            'CabinMissing', 'IsChild', 'LargeFamily']
+
+# encoded categorical variables
+data_code = ['Pclass', 'Title_Code', 'Sex_Code', 'Cabin_Code', 'Embarked_Code',
+             'IsAlone', 'CabinMissing', 'IsChild', 'LargeFamily']
+
+
+# Create a dummy df of the categorical data
+
+# In[ ]:
+
+
+dummy_train = pd.get_dummies(df_train[data_pretty + target])
+dummy_test = pd.get_dummies(df_test[data_pretty])
+
+# mask for dummy variables
+dummy_labels = dummy_test.columns.tolist()
+
+# easily assign things to train and testing
+dummy = [dummy_train, dummy_test]
+
+
+# In[ ]:
+
+
+dummy_train.head()
+
+
+# In[ ]:
+
+
+df_train[data_numbers].describe()
+
+
+# # 2. Visualization
+
+# ## 1.2 Surviving rates per feature
+
+# In[ ]:
+
+
+# Histogram of each feature count and survival count
+df_train[data_numbers + data_code].hist(color='g')
+df_train[data_numbers + data_code][df_train["Survived"] == 1].hist()
+plt.show()
+
+
+# In[ ]:
+
+
+# Who survived per group (Pivot tables)
+for x in data_pretty:
+    if df_train[x].dtype != 'float64' :
+        print('Survival Correlation by:', x)
+        print(df_train[[x, target[0]]].groupby(x, as_index=False).mean())
+        print('-'*10, '\n')
+
+
+# In[ ]:
+
+
+# % Survivors per groups
+plt.figure(figsize=(14,10))
+plt.suptitle("Percentage of survivors per group", fontsize=18)
+plt.subplot(231)
+sns.barplot('Sex', 'Survived', data=df_train)
+plt.subplot(232)
+sns.barplot('AgeBin_Code', 'Survived', data=df_train)
+plt.subplot(233)
+sns.barplot('Embarked', 'Survived', data=df_train)
+plt.subplot(234)
+sns.barplot('FareBin_Code', 'Survived', data=df_train)
+plt.subplot(235)
+sns.barplot('FamilySize', 'Survived', data=df_train)
+plt.subplot(236)
+sns.barplot('Pclass', 'Survived', data=df_train)
+plt.show()
+
+
+# ## 2.2 Sex, Age and Fare analysis
+
+# In[ ]:
+
+
+# Violin plots for sex-age-fare analysis
+
+fig, (axis1,axis2,axis3) = plt.subplots(1,3,figsize=(14,10))
+sns.violinplot(x = 'Sex', y = 'Age', hue = 'Survived', data = df_train, split = True, ax = axis1, palette="Set1")
+axis1.set_title('Sex vs Age Survival Comparison')
+sns.violinplot(x = 'Pclass', y = 'Age', hue = 'Survived', data = df_train, split = True, ax = axis2, palette="Set1")
+axis2.set_title('Pclass vs Age Survival Comparison')
+sns.violinplot(x = 'Sex', y = 'Fare', hue = 'Survived', data = df_train, split = True, ax = axis3, palette="Set1")
+axis3.set_title('Sex vs Fare Survival Comparison')
+fig.suptitle("Sex, Age, Fare Analysis", fontsize=18)
+plt.show()
+
+
+# In[ ]:
+
+
+survived = df_train['Survived'] == 1
+died = df_train['Survived'] == 0
+sns.factorplot('Sex', 'Age', 'Survived', data=df_train, col='Pclass')
+sns.factorplot('Sex', 'Fare', 'Survived', data=df_train, col='Pclass')
+plt.show()
+
+
+# # 2.3 Fare analysis
+
+# In[ ]:
+
+
+# Embarked - Fare
+sns.factorplot('Embarked', 'Fare', 'Survived', data=df_train, col='Sex')
+
+
+# In[ ]:
+
+
+# Fare analysis
+plt.suptitle("Fare Analysis", fontsize=18)
+plt.subplot(121)
+sns.boxplot('Pclass', 'Fare', 'Survived', df_train, orient='v')
+plt.ylim((0,150))
+ax1 = plt.subplot(122)
+tab = pd.crosstab(df_train['Pclass'], df_train['FareBin'])
+tab.div(tab.sum(1).astype(float), axis=0).plot(kind="bar", stacked=True, ax=ax1)
+plt.xlabel('Pclass')
+plt.ylabel('FareBin')
+plt.legend(frameon=True)
+
+plt.show()
+
+
+# ## 2.4 Tickets
+
+# In[ ]:
+
+
+sns.factorplot('N_ticket', 'Survived', data=df_train, col='Sex')
+sns.factorplot('N_ticket', 'Survived', data=df_train, col='Pclass')
+plt.show()
+
+
+# ## 3.5 Correlation of features
+
+# In[ ]:
+
+
+# Correlation Matrix
+df_train.corr()
+
+
+# In[ ]:
+
+
+# Correlation Heatmap
+
+def correlation_heatmap(df):
+    _ , ax = plt.subplots(figsize =(14, 12))
+    colormap = sns.diverging_palette(220, 10, as_cmap = True)
+    colormap = sns.color_palette("coolwarm", 100)
+    
+    _ = sns.heatmap(
+        df.corr(), 
+        cmap = colormap,
+        square=True, 
+        cbar_kws={'shrink':.9 }, 
+        ax=ax,
+        annot=True, 
+        linewidths=0.1,vmax=1.0, linecolor='white',
+        annot_kws={'fontsize':12 }
+    )
+    
+    plt.title('Pearson Correlation of Features', y=1.05, size=15)
+
+correlation_heatmap(df_train)
+
+
+# # 3. Learning: Logistic Regression
+
+# In[ ]:
+
+
+# Check columns
+for e in dummy_train.columns:
+    if e not in dummy_test.columns:
+        print(e)
+print('-'*10)
+for e in dummy_test.columns:
+    if e not in dummy_train.columns:
+        print(e)
+
+
+# In[ ]:
+
+
+dummy_test['Cabin_T'] = 0 #dirty fix
+
+
+# ## 3.1 Model Selection
+
+# In[ ]:
+
+
+dummy_test.columns
+
+
+# In[ ]:
+
+
+# Features mask (Selected by intuition)
+
+features = ['IsChild',
+            'IsAlone',
+            'LargeFamily',
+            'SibSp', 'Parch',
+            'FamilySize',
+            'N_ticket',
+            'Title_Rare',
+            'Sex_female',
+            'Age',
+            'Fare',
+            "Pclass_1", "Pclass_2",
+            "Embarked_C", "Embarked_S",
+            'AgeBin_(16.136, 32.102]', 'AgeBin_(32.102, 48.068]',
+            'AgeBin_(48.068, 64.034]', 'AgeBin_(64.034, 80.0]',
+            "FareBin_(7.896, 14.454]", "FareBin_(14.454, 31.275]", "FareBin_(31.275, 512.329]",
+            'CabinMissing']
+
+features1 = ['IsChild', 'IsAlone', "LargeFamily", 'SibSp', 'Parch', 'Sex_female',"Pclass_1", "Pclass_2",
+            "Embarked_C", "Embarked_S", 'CabinMissing', 'Age', 'Fare']
+
+features2 = ['IsChild', 'IsAlone', 'SibSp', 'Parch', 'Sex_female',"Pclass_1", "Pclass_2",
+            "Embarked_C", "Embarked_S", 'CabinMissing', 'Age', "LargeFamily",
+            "FareBin_(7.896, 14.454]", "FareBin_(14.454, 31.275]", "FareBin_(31.275, 512.329]"]
+
+features3 = ['IsChild', 'IsAlone', 'SibSp', 'Parch', 'Sex_female',"Pclass_1", "Pclass_2",
+            "Embarked_C", "Embarked_S", 'CabinMissing', "LargeFamily"]
+
+features4 = ['Sex_female',"Pclass_1", "Pclass_2", 'IsChild', 'FamilySize', 'Fare',
+            "Embarked_C", "Embarked_S", 'CabinMissing', "LargeFamily"]
+
+feature_options = [features1, features2, features3, features4]
+
+
+# In[ ]:
+
+
+# Create train and test set
+train_set = dummy_train[features + target].copy()
+test_set = dummy_test[features].copy()
+
+# Scaling
+for e in train_set.columns:
+    if e in data_numbers:
+        test_set[e] = StandardScaler().fit_transform(test_set[e].values.reshape(-1,1)).ravel()
+
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegressionCV
+import statsmodels.api as sm
+from scipy import stats
+
+stats.chisqprob = lambda chisq, df: stats.chi2.sf(chisq, df)
+
+for f in feature_options:
+    print("\n", "Features: ", f)
+    logit_model=sm.Logit(train_set[target], train_set[f])
+    result=logit_model.fit()
+    print(result.summary())
+    print("-"*20)
+
+
+# In[ ]:
+
+
+features_ = features2
+
+logit_model=sm.Logit(train_set[target], train_set[features_])
+result=logit_model.fit()
+print(result.summary())
+print("-"*20)
+
+
+# In[ ]:
+
+
+# Another approuch
+logreg = LogisticRegression()
+rfe = RFECV(logreg, 1, 10, verbose=3)
+X_rfe = rfe.fit_transform(train_set[features], train_set[target])
+
+
+# In[ ]:
+
+
+print(rfe.support_)
+print(rfe.ranking_)
+
+
+# In[ ]:
+
+
+features_rfe = train_set.iloc[:,[0,2,8,11,12,14,17,18,20,21,22]].columns.tolist()
+train_set[features_rfe].head()
+
+
+# In[ ]:
+
+
+logit_model=sm.Logit(train_set[target], train_set[features_rfe])
+result=logit_model.fit()
+print(result.summary())
+print("-"*20)
+
+
+# In[ ]:
+
+
+logit_model=sm.Logit(train_set[target], train_set[features2])
+result=logit_model.fit()
+print(result.summary())
+print("-"*20)
+
+
+# ## 3.2 Learning
+
+# In[ ]:
+
+
+X, X_test, y, y_test = train_test_split(train_set[features_].values, train_set[target].values,
+                                        test_size=0.25, stratify=train_set[target].values, random_state=42)
+X.shape, X_test.shape, y.shape, y_test.shape
+
+
+# In[ ]:
+
+
+params = {
+    #'polynomialfeatures__degree': [1, 2, 3],
+    'classification__penalty': ['l1', 'l2'],
+    'classification__C': np.linspace(0.05,50,100),
+    'classification__random_state': [42]
+}
+
+pipe = Pipeline([
+    #('polynomialfeatures', PolynomialFeatures()),
+    ('classification', LogisticRegression())
+])
+    
+grid = RandomizedSearchCV(pipe, params, 100, n_jobs=-1, cv=10, verbose=3, random_state=42)
+
+
+# In[ ]:
+
+
+grid.fit(X, y.ravel())
+
+
+# In[ ]:
+
+
+grid.best_score_
+
+
+# In[ ]:
+
+
+grid.best_params_
+
+
+# In[ ]:
+
+
+grid.score(X_test, y_test)
+
+
+# In[ ]:
+
+
+lg = grid.best_estimator_
+
+
+# ## 3.3 Predicting
+
+# In[ ]:
+
+
+lg.fit(train_set[features_], train_set[target])
+
+
+# In[ ]:
+
+
+pred = lg.predict(test_set[features_])
+
+
+# In[ ]:
+
+
+df_pred = pd.concat([raw_test["PassengerId"], pd.Series(pred, name="Survived")], axis=1)
+
+
+# In[ ]:
+
+
+df_pred['Survived'] = df_pred.Survived.astype(int)
+df_pred.head()
+
+
+# In[ ]:
+
+
+df_pred.to_csv("out.csv", index=False)
 

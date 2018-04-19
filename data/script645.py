@@ -1,221 +1,182 @@
 
 # coding: utf-8
 
-# # Exploring Player Stats
+# Here we use Python to visualize how certain machine learning algorithms classify certain data points in the Iris dataset. Let's begin by importing the Iris dataset and splitting it into features and labels. We will use only the petal length and width for this analysis.
 # 
-# > * Author: Eric Couto
-# > * Date: 17 July 2016
-# 
-# -------------------
-# ### Topics:
-# > 1. Loading Data
-# > 2. Player Tables
-# > 3. t-SNE of Players (FIFA Stats)
-# > 4. Evolution of the Best Players (top 20)
-# 
-
-# ## 1. Loading Data
-# 
-# >* Connecting to the database and looking at the available tables
+# These visualizations and their code can be found in Sebastian Raschka's book, Python Machine Learning.
 
 # In[ ]:
 
 
-import sqlite3
+
+# Import data and modules
 import pandas as pd
-from sklearn.manifold import TSNE
+import numpy as np
+from sklearn import datasets
+get_ipython().run_line_magic('pylab', 'inline')
+pylab.rcParams['figure.figsize'] = (10, 6)
+
+iris = datasets.load_iris()
+
+# We'll use the petal length and width only for this analysis
+X = iris.data[:, [2, 3]]
+y = iris.target
+
+# Place the iris data into a pandas dataframe
+iris_df = pd.DataFrame(iris.data[:, [2, 3]], columns=iris.feature_names[2:])
+
+# View the first 5 rows of the data
+print(iris_df.head())
+
+# Print the unique labels of the dataset
+print('\n' + 'The unique labels in this data are ' + str(np.unique(y)))
+
+
+# Next, we'll split the data into training and test datasets.
+# -----------------------------------------------------------
+
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=.3, random_state=0)
+
+print('There are {} samples in the training set and {} samples in the test set'.format(
+X_train.shape[0], X_test.shape[0]))
+print()
+
+
+# For many machine learning algorithms, it is important to scale the data. Let's do that now using sklearn.
+
+# In[ ]:
+
+
 from sklearn.preprocessing import StandardScaler
-from bokeh.plotting import figure, ColumnDataSource, show
-from bokeh.models import HoverTool
-from bokeh.io import output_notebook
+
+sc = StandardScaler()
+
+sc.fit(X_train)
+
+X_train_std = sc.transform(X_train)
+X_test_std = sc.transform(X_test)
+
+print('After standardizing our features, the first 5 rows of our data now look like this:\n')
+print(pd.DataFrame(X_train_std, columns=iris_df.columns).head())
+
+
+# If we plot the original data, we can see that one of the classes is linearly separable, but the other two are not.
+
+# In[ ]:
+
+
+from matplotlib.colors import ListedColormap
 import matplotlib.pyplot as plt
-import seaborn as sns
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-output_notebook()
-
-database = '../input/database.sqlite'
-conn = sqlite3.connect(database)
-
-query = "SELECT name FROM sqlite_master WHERE type='table';"
-pd.read_sql(query, conn)
+markers = ('s', 'x', 'o')
+colors = ('red', 'blue', 'lightgreen')
+cmap = ListedColormap(colors[:len(np.unique(y_test))])
+for idx, cl in enumerate(np.unique(y)):
+    plt.scatter(x=X[y == cl, 0], y=X[y == cl, 1],
+               c=cmap(idx), marker=markers[idx], label=cl)
 
 
-# ## 2. Player Tables
+# Let's try to use a Linear SVC to predict the the labels of our test data.
+
+# In[ ]:
+
+
+from sklearn.svm import SVC
+
+svm = SVC(kernel='rbf', random_state=0, gamma=.10, C=1.0)
+svm.fit(X_train_std, y_train)
+
+print('The accuracy of the svm classifier on training data is {:.2f} out of 1'.format(svm.score(X_train_std, y_train)))
+
+print('The accuracy of the svm classifier on test data is {:.2f} out of 1'.format(svm.score(X_test_std, y_test)))
+
+
+# It looks like our classifier performs pretty well. Let's visualize how the model classified the samples in our test data. 
 # 
-# > * Checking what kind of data are available
 
 # In[ ]:
 
 
-query = "SELECT * FROM Player;"
-a = pd.read_sql(query, conn)
-a.head()
+import warnings
 
 
-# In[ ]:
+def versiontuple(v):
+    return tuple(map(int, (v.split("."))))
 
 
-query = "SELECT * FROM Player_Stats;"
-a = pd.read_sql(query, conn)
-a.head()
+def plot_decision_regions(X, y, classifier, test_idx=None, resolution=0.02):
 
+    # setup marker generator and color map
+    markers = ('s', 'x', 'o', '^', 'v')
+    colors = ('red', 'blue', 'lightgreen', 'gray', 'cyan')
+    cmap = ListedColormap(colors[:len(np.unique(y))])
 
-# In[ ]:
+    # plot the decision surface
+    x1_min, x1_max = X[:, 0].min() - 1, X[:, 0].max() + 1
+    x2_min, x2_max = X[:, 1].min() - 1, X[:, 1].max() + 1
+    xx1, xx2 = np.meshgrid(np.arange(x1_min, x1_max, resolution),
+                           np.arange(x2_min, x2_max, resolution))
+    Z = classifier.predict(np.array([xx1.ravel(), xx2.ravel()]).T)
+    Z = Z.reshape(xx1.shape)
+    plt.contourf(xx1, xx2, Z, alpha=0.4, cmap=cmap)
+    plt.xlim(xx1.min(), xx1.max())
+    plt.ylim(xx2.min(), xx2.max())
 
-
-query = """SELECT * FROM Player_Stats a
-           INNER JOIN (SELECT player_name, player_api_id AS p_id FROM Player) b ON a.player_api_id = b.p_id;"""
-
-drop_cols = ['id','player_fifa_api_id','date_stat','preferred_foot',
-             'attacking_work_rate','defensive_work_rate']
-
-players = pd.read_sql(query, conn)
-players['date_stat'] = pd.to_datetime(players['date_stat'])
-players = players[players.date_stat > pd.datetime(2015,1,1)]
-players = players[~players.overall_rating.isnull()].sort_values('date_stat', ascending=False)
-players = players.drop_duplicates(subset='player_api_id', keep='first')
-players = players.drop(drop_cols, axis=1)
-
-players.info()
-
-
-# ## 3. t-SNE of Players (FIFA Stats)
-# 
-# > * Standardization of stats
-# > * Dimensionality Reduction using t-SNE: 2 components
-# > * Plotting the best players (Overall Rating >=80) in the new space (interactive plots)
-# > * Best Players were grouped by attributes -> well separated in clusters of positions: GK, FW, etc
-
-# In[ ]:
-
-
-players = players.fillna(0)
-
-cols = ['player_api_id','player_name','overall_rating','potential']
-stats_cols = [col for col in players.columns if col not in (cols)]
-
-ss = StandardScaler()
-tmp = ss.fit_transform(players[stats_cols])
-model = TSNE(n_components=2, random_state=0)
-tsne_comp = model.fit_transform(tmp)
+    for idx, cl in enumerate(np.unique(y)):
+        plt.scatter(x=X[y == cl, 0], y=X[y == cl, 1],
+                    alpha=0.8, c=cmap(idx),
+                    marker=markers[idx], label=cl)
 
 
 # In[ ]:
 
 
-tmp = players[cols]
-tmp['comp1'], tmp['comp2'] = tsne_comp[:,0], tsne_comp[:,1]
-tmp = tmp[tmp.overall_rating >= 80]
-
-_tools = 'box_zoom,pan,save,resize,reset,tap,wheel_zoom'
-fig = figure(tools=_tools, title='t-SNE of Players (FIFA stats)', responsive=True,
-             x_axis_label='Component 1', y_axis_label='Component 2')
-
-source = ColumnDataSource(tmp)
-hover = HoverTool()
-hover.tooltips=[('Jogador','@player_name'),]
-fig.scatter(tmp['comp1'], tmp['comp2'], source=source, size=8, alpha=0.6,
-            line_color='red', fill_color='red')
-
-fig.add_tools(hover)
-
-show(fig)
+plot_decision_regions(X_test_std, y_test, svm)
 
 
-# ### Distribution of Overall Rating, Potential and Potential Growth
-# > * Checking distributions
-# > * Plotting potential top players in the new space (interactive plots)
+# Now, let's test out a KNN classifier.
 
 # In[ ]:
 
 
-sns.kdeplot(players.overall_rating, shade=True, color="r")
+from sklearn.neighbors import KNeighborsClassifier
+
+knn = KNeighborsClassifier(n_neighbors=5, p=2, metric='minkowski')
+knn.fit(X_train_std, y_train)
+
+print('The accuracy of the knn classifier is {:.2f} out of 1 on training data'.format(knn.score(X_train_std, y_train)))
+print('The accuracy of the knn classifier is {:.2f} out of 1 on test data'.format(knn.score(X_test_std, y_test)))
 
 
 # In[ ]:
 
 
-sns.kdeplot(players.potential, shade=True, color="r")
+plot_decision_regions(X_test_std, y_test, knn)
+
+
+# And just for fun, we'll plot an XGBoost classifier.
+
+# In[ ]:
+
+
+import xgboost as xgb
+
+xgb_clf = xgb.XGBClassifier()
+xgb_clf = xgb_clf.fit(X_train_std, y_train)
+
+print('The accuracy of the xgb classifier is {:.2f} out of 1 on training data'.format(xgb_clf.score(X_train_std, y_train)))
+print('The accuracy of the xgb classifier is {:.2f} out of 1 on test data'.format(xgb_clf.score(X_test_std, y_test)))
 
 
 # In[ ]:
 
 
-players['potential_growth'] = players.potential - players.overall_rating
-sns.kdeplot(players.potential_growth, shade=True, color="r")
+plot_decision_regions(X_test_std, y_test, xgb_clf)
 
 
-# In[ ]:
-
-
-tmp = players[cols]
-tmp['comp1'], tmp['comp2'] = tsne_comp[:,0], tsne_comp[:,1]
-tmp['potential_growth'] = tmp.potential - tmp.overall_rating
-tmp = tmp[(tmp.potential_growth >= 5) & (tmp.overall_rating >= 75)]
-
-_tools = 'box_zoom,pan,save,resize,reset,tap,wheel_zoom'
-fig = figure(tools=_tools, title='t-SNE of Potential Top Players (FIFA stats)', responsive=True,
-             x_axis_label='Component 1', y_axis_label='Component 2')
-
-source = ColumnDataSource(tmp)
-hover = HoverTool()
-hover.tooltips=[('Jogador','@player_name'),]
-fig.scatter(tmp['comp1'], tmp['comp2'], source=source, size=8, alpha=0.6,
-            line_color='red', fill_color='red')
-
-fig.add_tools(hover)
-
-show(fig)
-
-
-# ## 3. Evolution of the Best Players (top20)
-# 
-# > * How was the evolution of the best players?
-
-# In[ ]:
-
-
-players = players.sort_values('overall_rating', ascending=False)
-best_players = players[['player_api_id','player_name']].head(20)
-ids = tuple(best_players.player_api_id.unique())
-
-query = '''SELECT player_api_id, date_stat, overall_rating, potential
-           FROM Player_Stats WHERE player_api_id in %s''' % (ids,)
-
-evolution = pd.read_sql(query, conn)
-evolution = pd.merge(evolution, best_players)
-evolution['year'] = evolution.date_stat.str[:4].apply(int)
-evolution = evolution.groupby(['year','player_api_id','player_name']).overall_rating.mean()
-evolution = evolution.reset_index()
-
-evolution.head()
-
-
-# In[ ]:
-
-
-a = sns.factorplot(data=evolution[evolution.player_api_id.isin(ids[0:5])], x='year',
-                   y='overall_rating', hue='player_name', size=6, aspect=2)
-
-
-# In[ ]:
-
-
-a = sns.factorplot(data=evolution[evolution.player_api_id.isin(ids[5:10])], x='year',
-                   y='overall_rating', hue='player_name', size=6, aspect=2)
-
-
-# In[ ]:
-
-
-a = sns.factorplot(data=evolution[evolution.player_api_id.isin(ids[10:15])], x='year',
-                   y='overall_rating', hue='player_name', size=6, aspect=2)
-
-
-# In[ ]:
-
-
-a = sns.factorplot(data=evolution[evolution.player_api_id.isin(ids[15:20])], x='year',
-                   y='overall_rating', hue='player_name', size=6, aspect=2)
-
+# In all classifiers, the performance on the test data was better than the training data. At least with the parameters specified in this very simple approach, the KNN algorithm seems to have performed the best. However, this may not be the case depending on the dataset and more careful parameter tuning.

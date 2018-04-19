@@ -1,1234 +1,316 @@
 
 # coding: utf-8
 
-# # Web Traffic Time Series Forecasting (Experimenting with different method)
+# **In this notebook, we are going to tackle the same toxic classification problem just like my previous notebooks but this time round, we are going deeper with the use of Character-level features and Convolutional Neural Network (CNNs). **
 # 
-# By Lai Yiu Ming, Tom
+# ***Updated with saved model and submission below***
 # 
-# 1. Introduction
-#     1. Competition details
-#     2. Load libraries and data files, file structure and content
-#     3. Missing values
-#     4. Data visualization
-#     5. Extreme data
-# 2. Data transformation and helper functions
-#     1. Article names and metadata
-#     2. Split into train and validation dataset
-# 3. Forecast methods
-#     1. SMAPE, the measurement
-#     2. Simple median model
-#     3. Median model - weekday, weekend and holiday
-#     4. ARIMA model
-#     5. Facebook prophet model
-#     6. Sample series analysis (For script reconciliation)
-# 4. Selected model performance (validation score) over train dataset
-#     1. Simple median model
-#     2. Median model - weekday, weekend, holiday
-#     3. ARIMA model
-#     4. Facebook model
-#     5. mixed model
+# 
+# ![](https://i.imgur.com/okCCLAU.jpg)
+# 
+# 
+# **Why do we consider the idea of using char-gram features?**
+# 
+# 
+# You might noticed that there are a lot of sparse misspellings due to the nature of the dataset. When we train our model using the word vectors from our training set, we might be missing out some genuine words and mispellings that are not present in the training set but yet present in our prediction set. Sometimes that wouldn't affect the model's capability to make good judgement, but most of the time, it's unable to correctly classify because the misspelt words are not in the model's "dictionary". 
+# 
+# Hence, if we could "go deeper" by splitting the sentence into a list of characters instead of words, the chances that the same characters that are present in both training and prediction set are much higher. You could imagine that this approach introduce another problem: an explosion of dimensions. One of the ways to tackle this problem is to use CNN as it's designed to solve high-dimensional dataset like images. Traditionally, CNN is used to solve computer vision problems but there's an increased trend of using CNN not just in Kaggle competitions but also in papers written by researchers too. Therefore, I believe it deserve a writeup and without much ado, let's see how we can apply CNN to our competition at hand.
+# 
+# I have skipped some elaboration of some concepts like embeddings which I have went through in my previous notebooks, so take a look at these if you are interested in learning more:
+# 
+# * [Do Pretrained Embeddings Give You The Extra Edge?](https://www.kaggle.com/sbongo/do-pretrained-embeddings-give-you-the-extra-edge)
+# * [[For Beginners] Tackling Toxic Using Keras](https://www.kaggle.com/sbongo/for-beginners-tackling-toxic-using-keras)
 
-# # 1. Introduction 
+# **A brief glance at Convolutional Neural Network (CNNs)**
 # 
-# ## A. Competition details
+# CNN is basically a feed-forward neural network that consists of several layers such as the convolution, pooling and some densely connected layers that we are familiar with.
 # 
-# ### First stage
-# * Training data from 2015-07-01 to 2016-12-29
-# * Testing data from 2017-01-01 to 2017-03-01
-# * Length of training vs length of testing = 547 days vs 59 days
-# * Predict interval is ~10.7% of the training interval
+# ![](https://i.imgur.com/aa46tRe.png)
 # 
-# ### Second stage
-# * Training data from 2015-07-01 to 2017-09-01
-# * Testing data from 2017-09-10 to 2017-11-10
-# * Length of training vs length of testing = 793 days vs 61 days
-# * Predict interval is ~7.7% of the training interval
+# Firstly, as seen in the above picture, we feed the data(image in this case) into the convolution layer. The convolution layer works by sliding a window across the input data and as it slides, the window(filter) applies some matrix operations with the underlying data that falls in the window. And when you eventually collect all the result of the matrix operations, you will have a condensed output in another matrix(we call it a feature map).
+# 
+# ![](https://i.imgur.com/wSbiLCi.gif)
+# 
+# With the resulting matrix at hand, you do a max pooling that basically down-samples or in another words decrease the number of dimensions without losing the essence. 
+# 
+# ![](https://i.imgur.com/Cphci9k.png)
+# 
+# Consider this simplified image of max pooling operation above. In the above example, we slide a 2 X 2 filter window across our dataset in strides of 2. As it's sliding, it grabs the maximum value and put it into a smaller-sized matrix.
+# 
+# There are different ways to down-sample the data such as min-pooling, average-pooling and in max-pooling, you simply take the maximum value of the matrix. Imagine that you have a list: [1,4,0,8,5]. When you do max-pooling on this list, you will only retain the value "8". Indirectly, we are only concerned about the existence of 8, and not the location of it. Despite it's simplicity, it's works quite well and it's a pretty niffy way to reduce the data size.
+# 
+# Again, with the down-sized "after-pooled" matrix, you could feed it to a densely connected layer which eventually leads to prediction.
+# 
+# **How does this apply to NLP in our case?**
+# 
+# Now, forget about real pixels about a minute and imagine using each tokenized character as a form of pixel in our input matrix. Just like word vectors, we could also have character vectors that gives a lower-dimension representation. So for a list of 10 sentences that consists of 50 characters each, using a 30-dimensional embedding will allow us to feed in a 10x50x30 matrix into our convolution layer.
+# ![](https://i.imgur.com/g59nKYc.jpg)
+# Looking at the above picture, let's just focus(for now) on 1 sentence instead of a list. Each character is represented in a row (8 characters), and each embedding dimension is represented in a column (5 dimensions) in this starting matrix.
+# 
+# You would begin the convolution process by using filters of different dimensions to "slide" across your initial matrix to get a lower-dimension feature map. There's something I deliberately missed out earlier: filters. 
+# 
+# ![](https://i.imgur.com/Lwa7wBG.gif)
+# The sliding window that I mention earlier are actually filters that are designed to capture different distinctive features in the input data. By defining the dimension of the filter, you can control the window of infomation you want to "summarize". To translate back in the picture, each of the feature maps could contain 1 high level representation of the embeddings for each character.
+# 
+# 
+# Next, we would apply a max pooling to get the maximum value in each feature map. In our context, some characters in each filter would be selected through this max pooling process based on their values. As usual, we would then feed into a normal densely connected layer that outputs to a softmax function which gives the probabilities of each class.
+# 
+# Note that my explanation hides some technical details to facilitate understanding. There's a whole load of things that you could tweak with CNN. For instance, the stride size which determine how often the filter will be applied, narrow VS wide CNN, etc.
+# 
+# **Okay! Let's see how we could implement CNN in our competition.**
 
-# ## B. Load libraries and data files, file structure and content
+# As always, we start off with the importing of relevant libraries and dataset:
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from fbprophet import Prophet
+import sys, os, re, csv, codecs, numpy as np, pandas as pd
 import matplotlib.pyplot as plt
-import math as math
-
 get_ipython().run_line_magic('matplotlib', 'inline')
+from keras.preprocessing.text import Tokenizer
+from keras.preprocessing.sequence import pad_sequences
+from keras.layers import Dense, Input, LSTM, Embedding, Dropout, Activation, GRU,Conv1D,MaxPooling1D
+from keras.layers import Bidirectional, GlobalMaxPool1D,Bidirectional
+from keras.models import Model
+from keras import initializers, regularizers, constraints, optimizers, layers
+from keras.callbacks import EarlyStopping, ModelCheckpoint
+import gc
+from sklearn.model_selection import train_test_split
+from keras.models import load_model
 
 
 # In[ ]:
 
 
-# Load the data
-train = pd.read_csv("../input/web-traffic-time-series-forecasting/train_1.csv")
-keys = pd.read_csv("../input/web-traffic-time-series-forecasting/key_1.csv")
-ss = pd.read_csv("../input/web-traffic-time-series-forecasting/sample_submission_1.csv")
+train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
+submit = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
+submit_template = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv', header = 0)
 
 
-# In[ ]:
-
-
-train.head()
-
-
-# ## C. Missing values
+# Split into training and test set:
 
 # In[ ]:
 
 
-# Check the data
-print("Check the number of records")
-print("Number of records: ", train.shape[0], "\n")
+X_train, X_test, y_train, y_test = train_test_split(train, train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]], test_size = 0.10, random_state = 42)
 
-print("Null analysis")
-empty_sample = train[train.isnull().any(axis=1)]
-print("Number of records contain 1+ null: ", empty_sample.shape[0], "\n")
 
+# Store the comments as seperate variables for further processing.
 
 # In[ ]:
 
 
-empty_sample.iloc[np.r_[0:10, len(empty_sample)-10:len(empty_sample)]]
+list_sentences_train = X_train["comment_text"]
+list_sentences_test = X_test["comment_text"]
+list_sentences_submit = submit["comment_text"]
 
 
-# ## D. Data visualization
-
-# In[ ]:
-
-
-# plot 3 the time series
-def plot_time_series(df, row_num, start_col =1, ax=None):
-    if ax is None:
-            fig = plt.figure(facecolor='w', figsize=(10, 6))
-            ax = fig.add_subplot(111)
-    else:
-        fig = ax.get_figure()
-        
-    series_title = df.iloc[row_num, 0]
-    sample_series = df.iloc[row_num, start_col:]
-    sample_series.plot(style=".", ax=ax)
-    ax.set_title("Series: %s" % series_title)
-
-fig, axs  = plt.subplots(4,1,figsize=(12,12))
-plot_time_series(empty_sample, 1, ax=axs[0])
-plot_time_series(empty_sample, 10, ax=axs[1])
-plot_time_series(empty_sample, 100, ax=axs[2])
-plot_time_series(empty_sample, 1005, ax=axs[3])
-
-plt.tight_layout()
-
-
-# ## E. Extreme data
+# In our previous notebook, we have began using Kera's helpful Tokenizer class to help us do the gritty text processing work. We are going to use it again to help us split the text into characters by setting the "char_level" parameter to true.
 
 # In[ ]:
 
 
-# series with all NaN
-empty_sample.iloc[1000:1010]
+max_features = 20000
+tokenizer = Tokenizer(num_words=max_features,char_level=True)
 
 
-# # 2. Data transformation and helper functions
-# ## A. Article names and metadata
-
-# In[ ]:
-
-
-import re
-
-def breakdown_topic(str):
-    m = re.search('(.*)\_(.*).wikipedia.org\_(.*)\_(.*)', str)
-    if m is not None:
-        return m.group(1), m.group(2), m.group(3), m.group(4)
-    else:
-        return "", "", "", ""
-
-print(breakdown_topic("Рудова,_Наталья_Александровна_ru.wikipedia.org_all-access_spider"))
-print(breakdown_topic("台灣災難列表_zh.wikipedia.org_all-access_spider"))
-print(breakdown_topic("File:Memphis_Blues_Tour_2010.jpg_commons.wikimedia.org_mobile-web_all-agents"))
-
+# This function allows Tokenizer to create an index of the tokenized unique characters. Eg. a=1, b=2, etc
 
 # In[ ]:
 
 
-page_details = train.Page.str.extract(r'(?P<topic>.*)\_(?P<lang>.*).wikipedia.org\_(?P<access>.*)\_(?P<type>.*)')
-
-page_details[0:10]
+tokenizer.fit_on_texts(list(list_sentences_train))
 
 
-# In[ ]:
-
-
-unique_topic = page_details["topic"].unique()
-print(unique_topic)
-print("Number of distinct topics: ", unique_topic.shape[0])
-
+# Then we get back a list of sentences with the sequence of indexes which represent each character.
 
 # In[ ]:
 
 
-fig, axs  = plt.subplots(3,1,figsize=(12,12))
-
-page_details["lang"].value_counts().sort_index().plot.bar(ax=axs[0])
-axs[0].set_title('Language - distribution')
-
-page_details["access"].value_counts().sort_index().plot.bar(ax=axs[1])
-axs[1].set_title('Access - distribution')
-
-page_details["type"].value_counts().sort_index().plot.bar(ax=axs[2])
-axs[2].set_title('Type - distribution')
-
-plt.tight_layout()
+list_tokenized_train = tokenizer.texts_to_sequences(list_sentences_train)
+list_sentences_test = tokenizer.texts_to_sequences(list_sentences_test)
+list_tokenized_submit = tokenizer.texts_to_sequences(list_sentences_submit)
 
 
-# ## B. Split into train and validation dataset
+# Since there are sentences with varying length of characters, we have to get them on a constant size. Let's put them to a length of 500 characters for each sentence:
 
 # In[ ]:
 
 
-# Generate train and validate dataset
-train_df = pd.concat([page_details, train], axis=1)
-
-def get_train_validate_set(train_df, test_percent):
-    train_end = math.floor((train_df.shape[1]-5) * (1-test_percent))
-    train_ds = train_df.iloc[:, np.r_[0,1,2,3,4,5:train_end]]
-    test_ds = train_df.iloc[:, np.r_[0,1,2,3,4,train_end:train_df.shape[1]]]
-    
-    return train_ds, test_ds
-
-X_train, y_train = get_train_validate_set(train_df, 0.1)
-
-print("The training set sample:")
-print(X_train[0:10])
-print("The validation set sample:")
-print(y_train[0:10])
+maxlen = 500
+X_t = pad_sequences(list_tokenized_train, maxlen=maxlen)
+X_te = pad_sequences(list_sentences_test, maxlen=maxlen)
+X_sub = pad_sequences(list_tokenized_submit, maxlen=maxlen)
 
 
-# # 3 Forecast methods
+# Just in case you are wondering, the reason why I used 500 is because most of the number of characters in a sentence falls within 0 to 500:
+
+# In[ ]:
+
+
+totalNumWords = [len(one_comment) for one_comment in list_tokenized_train]
+plt.hist(totalNumWords)
+plt.show()
+
+
+# Finally, we can start buliding our model.
+
+# First, we set up our input layer. As mentioned in the Keras documentation, we have to include the shape for the very first layer and Keras will automatically derive the shape for the rest of the layers.
+
+# In[ ]:
+
+
+inp = Input(shape=(maxlen, ))
+
+
+# We use an embedding size of 240. That also means that we are projecting characters on a 240-dimension vector space. It will output a (num of sentences X 500 X 240) matrix. We have talked about embedding layer in my previous notebooks, so feel free to check them out.
+
+# In[ ]:
+
+
+embed_size = 240
+x = Embedding(len(tokenizer.word_index)+1, embed_size)(inp)
+
+
+# Here's the meat of our notebook. With the output of embedding layer, we feed it into a convolution layer. We use a window size of 4 (remember it's 5 in the earlier picture above) and 100 filters (it's 6 in the earlier picture above) to extract the features in our data. That also means we slides a window across the 240 dimensions of embeddings for each of the 500 characters and it will result in a (num of sentences X 500 X 100) matrix. Notice that we have set padding to "same". What does this padding means?
+# ![](https://i.imgur.com/hITQent.png)
+# For simplicity sake, let's imagine we have a 32 x 32 x 3 input matrix and a 5 x 5 x 3 filter, if you apply the filter on the matrix with 1 stride, you will end up with a 28 x 28 x 3 matrix. In the early stages, you would want to preserve as much information as possible, so you will want to have a 32 x 32 x 3 matrix back. If we add(padding) some zeros around the original input matrix, we will be sure that the result output matrix dimension will be the same. But if you really want to have the resulting matrix to be reduced, you can set the padding parameter to "valid".
+
+# In[ ]:
+
+
+x = Conv1D(filters=100,kernel_size=4,padding='same', activation='relu')(x)
+
+
+# Then we pass it to the max pooling layer that applies the max pool operation on a window of every 4 characters. And that is why we get an output of (num of sentences X 125 X 100) matrix.
+
+# In[ ]:
+
+
+x=MaxPooling1D(pool_size=4)(x)
+
+
+# Next, we pass it to the Bidriectional LSTM that we are famliar with, since the previous notebook. 
+
+# In[ ]:
+
+
+x = Bidirectional(GRU(60, return_sequences=True,name='lstm_layer',dropout=0.2,recurrent_dropout=0.2))(x)
+
+
+# Afterwhich, we apply a max pooling again but this time round, it's a global max pooling. What's the difference between this and the previous max pooling attempt?
 # 
-# In this section, I will show some popular methods in predicting time series. (Will work on XGBoost if I finish my study).
-
-# In[ ]:
-
-
-def extract_series(df, row_num, start_idx):
-    y = df.iloc[row_num, start_idx:]
-    df = pd.DataFrame({ 'ds': y.index, 'y': y.values})
-    return df
-
-
-# ## A. SMAPE, the measurement
+# In the previous max pooling attempt, we merely down-sampled a single 2nd dimension, which contains the number of characters. From a matrix of:
+# (num of sentences X 500 X 100)
+# it becomes:
+# (num of sentences X 125 X 100)
+# which is still a 3d matrix.
 # 
-# SMAPE is harsh when the series is near zero.
-# A notebook https://www.kaggle.com/cpmpml/smape-weirdness give a very good visualization of the SMAPE function.
+# But in global max pooling, we perform pooling operation across several dimensions(2nd and 3rd dimension) into a single dimension. So it outputs a:
+# (num of sentences X 120) 2D matrix.
+
+# In[ ]:
+
+
+x = GlobalMaxPool1D()(x)
+
+
+# Now that we have a 2D matrix, it's convenient to plug it into the densely connected layer, followed by a relu activation function.
+
+# In[ ]:
+
+
+x = Dense(50, activation="relu")(x)
+
+
+# We'll pass it through a dropout layer and a densely connected layer that eventually passes to a sigmoid function.
+
+# In[ ]:
+
+
+x = Dropout(0.2)(x)
+x = Dense(6, activation="sigmoid")(x)
+
+
+# You could experiment with the dropout rate and size of the dense connected layer to see it could decrease overfitting.
 # 
-# After you find that there is no way to further improve quality of the result, you may consider doing a little bit hacking on SMAPE to give you better score.
+# Finally, we move on to train the model with 6 epochs and the results seems pretty decent. The training loss decreases steadily along with validation loss until at the 5th or 6th epoch where traces of overfitting starts to emerge.
 
 # In[ ]:
 
 
-def smape(predict, actual, debug=False):
-    '''
-    predict and actual is a panda series.
-    In this implementation I will skip all the datapoint with actual is null
-    '''
-    actual = actual.fillna(0)
-    data = pd.concat([predict, actual], axis=1, keys=['predict', 'actual'])
-    data = data[data.actual.notnull()]
-    if debug:
-        print('debug', data)
-    
-    evals = abs(data.predict - data.actual) * 1.0 / (abs(data.predict) + abs(data.actual)) * 2
-    evals[evals.isnull()] = 0
-    #print(np.sum(evals), len(data), np.sum(evals) * 1.0 / len(data))
-    
-    result = np.sum(evals) / len(data)
-    
-    return result
-
-# create testing series
-testing_series_1 = X_train.iloc[0, 5:494]
-testing_series_2 = X_train.iloc[0, 5:494].shift(-1)
-testing_series_3 = X_train.iloc[1, 5:494]
-testing_series_4 = pd.Series([0,0,0,0])
+model = Model(inputs=inp, outputs=x)
+model.compile(loss='binary_crossentropy',
+                  optimizer='adam',
+                 metrics=['accuracy'])
 
 
 # In[ ]:
 
 
-random_series_1 = pd.Series(np.repeat(3, 500))
-random_series_2 = pd.Series(np.random.normal(3, 1, 500))
-random_series_3 = pd.Series(np.random.normal(500, 20, 500))
-random_series_4 = pd.Series(np.repeat(500, 500))
+model.summary()
 
-# testing 1 same series
-print("\nSMAPE score to predict a constant array of 3")
-print("Score (same series): %.3f" % smape(random_series_1, random_series_1))
-print("Score (same series - 1) %.3f" % smape(random_series_1, random_series_1-1))
-print("Score (same series + 1) %.3f" % smape(random_series_1, random_series_1+1))
 
-# testing 2 same series shift by one
-print("\nSMAPE score to predict a array of normal distribution around 3")
-print("Score (random vs mean) %.3f" % smape(random_series_2, random_series_1))
-print("Score (random vs mean-1) %.3f" % smape(random_series_2, random_series_2-1))
-print("Score (random vs mean+1) %.3f" % smape(random_series_2, random_series_2+1))
-print("Score (random vs mean*0.9) %.3f" % smape(random_series_2, random_series_2*0.9))
-print("Score (random vs mean*1.1) %.3f" % smape(random_series_2, random_series_2*1.1))
-
-# testing 3 totally different series
-print("\nSMAPE score to predict a array of normal distribution around 500")
-print("Score (random vs mean) %.3f" % smape(random_series_3, random_series_4))
-print("Score (random vs mean-20) %.3f" % smape(random_series_3, random_series_3-20))
-print("Score (random vs mean+20) %.3f" % smape(random_series_3, random_series_3+20))
-print("Score (random vs mean*0.9) %.3f" % smape(random_series_3, random_series_3*0.9))
-print("Score (random vs mean*1.1) %.3f" % smape(random_series_3, random_series_3*1.1))
-
+# Due to Kaggle kernel time limit, I have pasted the training output of these 6 epochs.
 
 # In[ ]:
 
 
-y_true_1 = pd.Series(np.random.normal(1, 1, 500))
-y_true_2 = pd.Series(np.random.normal(2, 1, 500))
-y_true_3 = pd.Series(np.random.normal(3, 1, 500))
-y_pred = pd.Series(np.ones(500))
-x = np.linspace(0,10,1000)
-res_1 = list([smape(y_true_1, i * y_pred) for i in x])
-res_2 = list([smape(y_true_2, i * y_pred) for i in x])
-res_3 = list([smape(y_true_3, i * y_pred) for i in x])
-plt.plot(x, res_1, color='b')
-plt.plot(x, res_2, color='r')
-plt.plot(x, res_3, color='g')
-plt.axvline(x=1, color='k')
-plt.axvline(x=2, color='k')
-plt.axvline(x=3, color='k')
+batch_size = 32
+epochs = 6
+#uncomment below to train in your local machine
+#hist = model.fit(X_t,y_train, batch_size=batch_size, epochs=epochs,validation_data=(X_te,y_test),callbacks=callbacks_list)
 
 
-# ## B. Simple median model
-
-# In[ ]:
-
-
-def plot_prediction_and_actual_2(train, forecast, actual, xlim=None, ylim=None, figSize=None, title=None):
-    fig, ax  = plt.subplots(1,1,figsize=figSize)
-    ax.plot(pd.to_datetime(train.index), train.values, 'k.')
-    ax.plot(pd.to_datetime(actual.index), actual.values, 'r.')
-    ax.plot(pd.to_datetime(forecast.index), forecast.values, 'b-')
-    ax.set_title(title)
-    plt.show()
-
-
-# In[ ]:
-
-
-def median_model(df_train, df_actual, p, review=False, figSize=(12, 4)):
-    
-    def nanmedian_zero(a):
-        return np.nan_to_num(np.nanmedian(a))
-    
-    df_train['y'] = df_train['y'].convert_objects(convert_numeric=True)
-    df_actual['y'] = df_actual['y'].convert_objects(convert_numeric=True)
-    visits = nanmedian_zero(df_train['y'].values[-p:])
-    train_series = df_train['y']
-    train_series.index = df_train.ds
-    
-    idx = np.arange( p) + np.arange(len(df_train)- p+1)[:,None]
-    b = [row[row>=0] for row in df_train.y.values[idx]]
-    pre_forecast = pd.Series(np.append(([float('nan')] * (p-1)), list(map(nanmedian_zero,b))))
-    pre_forecast.index = df_train.ds
-    
-    forecast_series = pd.Series(np.repeat(visits, len(df_actual)))
-    forecast_series.index = df_actual.ds
-    
-    forecast_series = pre_forecast.append(forecast_series)
-    
-    actual_series = df_actual.y
-    actual_series.index = df_actual.ds
-    
-    if(review):
-        plot_prediction_and_actual_2(train_series, forecast_series, actual_series, figSize=figSize, title='Median model')
-    
-    return smape(forecast_series, actual_series)
-
-
-# In[ ]:
-
-
-# This is to demo the median model
-print(train.iloc[[2]])
-
-df_train = extract_series(X_train, 2, 5)
-df_actual = extract_series(y_train, 2, 5)
-lang = X_train.iloc[2, 1]
-score = median_model(df_train.copy(), df_actual.copy(), 15, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-
-# ## C. Median model - weekday, weekend and holiday
-
-# In[ ]:
-
-
-# holiday variable
-#holiday_en = ['2015-01-01', '2015-01-19', '2015-04-03', '2015-05-04', '2015-05-25', '2015-07-01', '2015-07-03', '2015-09-07', '2015-11-26', '2015-11-27', '2015-12-25', '2015-12-26', '2015-12-28', '2016-01-01', '2016-01-18', '2016-03-25', '2016-05-02', '2016-05-30', '2016-07-01', '2016-07-04', '2016-09-05', '2016-11-11', '2016-11-24', '2016-12-25', '2016-12-26', '2016-12-27', '2017-01-01', '2017-01-02', '2017-01-16', '2017-04-14', '2017-05-01', '2017-05-29', '2017-07-01', '2017-07-03', '2017-07-04', '2017-09-04', '2017-11-10', '2017-11-23', '2017-12-25', '2017-12-26']
-
-holiday_en_us = ['2015-01-01', '2015-01-19', '2015-05-25', '2015-07-03', '2015-09-07', '2015-11-26', '2015-11-27', '2015-12-25', '2016-01-01', '2016-01-18', '2016-05-30', '2016-07-04', '2016-09-05', '2016-11-11', '2016-11-24', '2016-12-26', '2017-01-01', '2017-01-02', '2017-01-16', '2017-05-29', '2017-07-04', '2017-09-04', '2017-11-10', '2017-11-23', '2017-12-25']
-holiday_en_uk = ['2015-01-01', '2015-04-03', '2015-05-04', '2015-05-25', '2015-12-25', '2015-12-26', '2015-12-28', '2016-01-01', '2016-03-25', '2016-05-02', '2016-05-30', '2016-12-26', '2016-12-27', '2017-01-01', '2017-04-14', '2017-05-01', '2017-05-29', '2017-12-25', '2017-12-26']
-holiday_en_canada = ['2015-01-01', '2015-07-01', '2015-09-07', '2015-12-25', '2016-01-01', '2016-07-01', '2016-09-05', '2016-12-25', '2017-01-01', '2017-07-01', '2017-07-03', '2017-09-04', '2017-12-25']
-
-holiday_ru_russia = ['2015-01-01', '2015-01-02', '2015-01-05', '2015-01-06', '2015-01-07', '2015-01-08', '2015-01-09', '2015-02-23', '2015-03-09', '2015-05-01', '2015-05-04', '2015-05-09', '2015-05-11', '2015-06-12', '2015-11-04', '2016-01-01', '2016-01-04', '2016-01-05', '2016-01-06', '2016-01-07', '2016-02-22', '2016-02-23', '2016-03-08', '2016-05-01', '2016-05-09', '2016-06-12', '2016-06-13', '2016-11-04', '2017-01-01', '2017-01-02', '2017-01-03', '2017-01-04', '2017-01-05', '2017-01-06', '2017-01-07', '2017-02-23', '2017-02-24', '2017-03-08', '2017-05-01', '2017-05-08', '2017-05-09', '2017-06-12', '2017-11-04', '2017-11-06']
-#holiday_es = ['2015-01-01', '2015-01-06', '2015-01-12', '2015-02-02', '2015-03-16', '2015-03-23', '2015-04-02', '2015-04-03', '2015-05-01', '2015-05-18', '2015-06-08', '2015-06-15', '2015-06-29', '2015-07-20', '2015-08-07', '2015-08-17', '2015-09-16', '2015-10-12', '2015-11-01', '2015-11-02', '2015-11-16', '2015-12-06', '2015-12-08', '2015-12-12', '2015-12-25', '2016-01-01', '2016-01-06', '2016-01-11', '2016-02-01', '2016-03-21', '2016-03-24', '2016-03-25', '2016-05-01', '2016-05-09', '2016-05-30', '2016-06-06', '2016-07-04', '2016-07-20', '2016-08-07', '2016-08-15', '2016-09-16', '2016-10-12', '2016-10-17', '2016-11-01', '2016-11-02', '2016-11-07', '2016-11-14', '2016-11-21', '2016-12-06', '2016-12-08', '2016-12-12', '2016-12-25', '2016-12-26', '2017-01-01', '2017-01-02', '2017-01-06', '2017-01-09', '2017-02-06', '2017-03-20', '2017-04-13', '2017-04-14', '2017-05-01', '2017-05-29', '2017-06-19', '2017-06-26', '2017-07-03', '2017-07-20', '2017-08-07', '2017-08-15', '2017-09-16', '2017-10-12', '2017-10-16', '2017-11-01', '2017-11-02', '2017-11-06', '2017-11-13', '2017-11-20', '2017-12-06', '2017-12-08', '2017-12-12', '2017-12-25']
-
-holiday_es_mexico = ['2015-01-01', '2015-02-02', '2015-03-16', '2015-04-02', '2015-04-03', '2015-05-01', '2015-09-16', '2015-10-12', '2015-11-02', '2015-11-16', '2015-12-12', '2015-12-25', '2016-01-01', '2016-02-01', '2016-03-21', '2016-03-24', '2016-03-25', '2016-05-01', '2016-09-16', '2016-10-12', '2016-11-02', '2016-11-21', '2016-12-12', '2016-12-25', '2016-12-26', '2017-01-01', '2017-01-02', '2017-02-06', '2017-03-20', '2017-04-13', '2017-04-14', '2017-05-01', '2017-09-16', '2017-10-12', '2017-11-02', '2017-11-20', '2017-12-12', '2017-12-25']
-holiday_es_spain = ['2017-01-01', '2017-01-06', '2017-04-14', '2017-05-01', '2017-08-15', '2017-10-12', '2017-11-01', '2017-12-06', '2017-12-08', '2017-12-25', '2016-01-01', '2016-01-06', '2016-03-25', '2016-05-01', '2016-08-15', '2016-10-12', '2016-11-01', '2016-12-06', '2016-12-08', '2016-12-25', '2015-01-01', '2015-01-06', '2015-04-03', '2015-05-01', '2015-10-12', '2015-11-01', '2015-12-06', '2015-12-08', '2015-12-25']
-holiday_es_colombia = ['2015-01-01', '2015-01-12', '2015-03-23', '2015-04-02', '2015-04-03', '2015-05-01', '2015-05-18', '2015-06-08', '2015-06-15', '2015-06-29', '2015-07-20', '2015-08-07', '2015-08-17', '2015-10-12', '2015-11-02', '2015-11-16', '2015-12-08', '2015-12-25', '2016-01-01', '2016-01-11', '2016-03-21', '2016-03-24', '2016-03-25', '2016-05-01', '2016-05-09', '2016-05-30', '2016-06-06', '2016-07-04', '2016-07-20', '2016-08-07', '2016-08-15', '2016-10-17', '2016-11-07', '2016-11-14', '2016-12-08', '2016-12-25', '2017-01-01', '2017-01-09', '2017-03-20', '2017-04-13', '2017-04-14', '2017-05-01', '2017-05-29', '2017-06-19', '2017-06-26', '2017-07-03', '2017-07-20', '2017-08-07', '2017-08-15', '2017-10-16', '2017-11-06', '2017-11-13', '2017-12-08', '2017-12-25']
-
-holiday_fr_france = ['2015-01-01', '2015-04-06', '2015-05-01', '2015-05-08', '2015-05-14', '2015-05-25', '2015-07-14', '2015-08-15', '2015-11-01', '2015-11-11', '2015-12-25', '2016-01-01', '2016-03-28', '2016-05-01', '2016-05-05', '2016-05-08', '2016-05-16', '2016-07-14', '2016-08-15', '2016-11-01', '2016-11-11', '2016-12-25', '2017-01-01', '2017-04-17', '2017-05-01', '2017-05-08', '2017-05-25', '2017-06-05', '2017-07-14', '2017-08-15', '2017-11-01', '2017-11-11', '2017-12-25']
-holiday_jp_japan = ['2015-01-01', '2015-01-12', '2015-02-11', '2015-03-21', '2015-04-29', '2015-05-03', '2015-05-04', '2015-05-05', '2015-05-06', '2015-07-20', '2015-09-21', '2015-09-22', '2015-09-23', '2015-10-12', '2015-11-03', '2015-11-23', '2015-12-23', '2016-01-01', '2016-01-11', '2016-02-11', '2016-03-21', '2016-04-29', '2016-05-03', '2016-05-04', '2016-05-05', '2016-07-18', '2016-08-11', '2016-09-19', '2016-09-22', '2016-10-10', '2016-11-03', '2016-11-23', '2016-12-23', '2017-01-01', '2017-01-09', '2017-02-11', '2017-03-20', '2017-04-29', '2017-05-03', '2017-05-04', '2017-05-05', '2017-07-17', '2017-08-11', '2017-09-18', '2017-09-22', '2017-10-09', '2017-11-03', '2017-11-23', '2017-12-23']
-
-#holiday_de = ['2015-01-01', '2015-01-06', '2015-04-03', '2015-04-06', '2015-05-01', '2015-05-14', '2015-05-25', '2015-06-04', '2015-08-01', '2015-08-15', '2015-10-03', '2015-10-26', '2015-11-01', '2015-12-08', '2015-12-25', '2015-12-26', '2016-01-01', '2016-01-06', '2016-03-25', '2016-03-28', '2016-05-01', '2016-05-05', '2016-05-16', '2016-05-26', '2016-08-01', '2016-08-15', '2016-10-03', '2016-10-26', '2016-11-01', '2016-12-08', '2016-12-25', '2016-12-26', '2017-01-01', '2017-01-06', '2017-04-14', '2017-04-17', '2017-05-01', '2017-05-25', '2017-06-05', '2017-06-15', '2017-08-01', '2017-08-15', '2017-10-03', '2017-10-26', '2017-10-31', '2017-11-01', '2017-12-08', '2017-12-25', '2017-12-26']
-
-holiday_de_germany = ['2015-01-01', '2015-04-03', '2015-04-06', '2015-05-01', '2015-05-14', '2015-05-14', '2015-05-25', '2015-10-03', '2015-12-25', '2015-12-26', '2016-01-01', '2016-03-25', '2016-03-28', '2016-05-01', '2016-05-05', '2016-05-16', '2016-10-03', '2016-12-25', '2016-12-26', '2017-01-01', '2017-04-14', '2017-04-17', '2017-05-01', '2017-05-25', '2017-06-05', '2017-10-03', '2017-10-31', '2017-12-25', '2017-12-26']
-holiday_de_austria = ['2015-01-01', '2015-01-06', '2015-04-06', '2015-05-01', '2015-05-14', '2015-05-25', '2015-06-04', '2015-08-15', '2015-10-26', '2015-11-01', '2015-12-08', '2015-12-25', '2015-12-26', '2016-01-01', '2016-01-06', '2016-03-28', '2016-05-01', '2016-05-05', '2016-05-16', '2016-05-26', '2016-08-15', '2016-10-26', '2016-11-01', '2016-12-08', '2016-12-25', '2016-12-26', '2017-01-01', '2017-01-06', '2017-04-17', '2017-05-01', '2017-05-25', '2017-06-05', '2017-06-15', '2017-08-15', '2017-10-26', '2017-11-01', '2017-12-08', '2017-12-25', '2017-12-26']
-holiday_de_switzerland = ['2015-01-01', '2015-04-03', '2015-05-14', '2015-08-01', '2015-12-25', '2016-01-01', '2016-03-25', '2016-05-05', '2016-08-01', '2016-12-25', '2017-01-01', '2017-04-14', '2017-05-25', '2017-08-01', '2017-12-25']
-
-#holiday_zh = ['2015-01-01', '2015-02-18', '2015-02-19', '2015-02-20', '2015-02-21', '2015-02-22', '2015-02-23', '2015-02-27', '2015-04-03', '2015-04-04', '2015-04-05', '2015-04-06', '2015-04-07', '2015-05-01', '2015-05-25', '2015-06-19', '2015-06-20', '2015-07-01', '2015-09-03', '2015-09-28', '2015-10-01', '2015-10-09', '2015-10-10', '2015-10-21', '2015-12-25', '2015-12-26', '2016-01-01', '2016-02-07', '2016-02-08', '2016-02-09', '2016-02-10', '2016-02-11', '2016-02-12', '2016-02-29', '2016-03-25', '2016-03-26', '2016-03-28', '2016-04-04', '2016-04-05', '2016-05-01', '2016-05-02', '2016-05-14', '2016-06-09', '2016-06-10', '2016-07-01', '2016-09-15', '2016-09-16', '2016-09-28', '2016-10-01', '2016-10-10', '2016-12-25', '2016-12-26', '2016-12-27', '2017-01-01', '2017-01-02', '2017-01-27', '2017-01-28', '2017-01-29', '2017-01-30', '2017-01-31', '2017-02-01', '2017-02-27', '2017-02-28', '2017-04-03', '2017-04-04', '2017-04-14', '2017-04-15', '2017-04-17', '2017-05-01', '2017-05-03', '2017-05-29', '2017-05-30', '2017-07-01', '2017-10-01', '2017-10-02', '2017-10-04', '2017-10-05', '2017-10-09', '2017-10-10', '2017-10-28', '2017-12-25', '2017-12-26']
-
-holiday_zh_hongkong = ['2015-01-01', '2015-02-19', '2015-02-20', '2015-04-03', '2015-04-04', '2015-04-05', '2015-04-06', '2015-04-07', '2015-05-01', '2015-05-25', '2015-06-20', '2015-07-01', '2015-09-03', '2015-09-28', '2015-10-01', '2015-10-21', '2015-12-25', '2015-12-26', '2016-01-01', '2016-02-08', '2016-02-09', '2016-02-10', '2016-03-25', '2016-03-26', '2016-03-28', '2016-04-04', '2016-05-01', '2016-05-02', '2016-05-14', '2016-06-09', '2016-07-01', '2016-09-16', '2016-10-01', '2016-10-10', '2016-12-25', '2016-12-26', '2016-12-27', '2017-01-01', '2017-01-02', '2017-01-28', '2017-01-30', '2017-01-31', '2017-04-04', '2017-04-14', '2017-04-15', '2017-04-17', '2017-05-01', '2017-05-03', '2017-05-30', '2017-07-01', '2017-10-01', '2017-10-02', '2017-10-05', '2017-10-28', '2017-12-25', '2017-12-26']
-holiday_zh_taiwan = ['2015-01-01', '2015-02-18', '2015-02-19', '2015-02-20', '2015-02-21', '2015-02-22', '2015-02-23', '2015-02-23', '2015-02-27', '2015-04-03', '2015-04-05', '2015-04-06', '2015-06-19', '2015-06-20', '2015-09-28', '2015-10-09', '2015-10-10', '2016-01-01', '2016-02-07', '2016-02-08', '2016-02-09', '2016-02-10', '2016-02-11', '2016-02-12', '2016-02-29', '2016-04-04', '2016-04-05', '2016-06-09', '2016-06-10', '2016-09-15', '2016-09-16', '2016-09-28', '2016-10-10', '2017-01-01', '2017-01-02', '2017-01-27', '2017-01-28', '2017-01-29', '2017-01-30', '2017-01-31', '2017-02-01', '2017-02-27', '2017-02-28', '2017-04-03', '2017-04-04', '2017-05-01', '2017-05-29', '2017-05-30', '2017-10-04', '2017-10-09', '2017-10-10']
-
-holidays_en_us = pd.DataFrame({
-  'holiday': 'US public holiday',
-  'ds': pd.to_datetime(holiday_en_us),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_en_uk = pd.DataFrame({
-  'holiday': 'UK public holiday',
-  'ds': pd.to_datetime(holiday_en_uk),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_en_canada = pd.DataFrame({
-  'holiday': 'Canada public holiday',
-  'ds': pd.to_datetime(holiday_en_canada),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_en = pd.concat((holidays_en_us, holidays_en_uk, holidays_en_canada))
-
-holidays_ru_russia = pd.DataFrame({
-  'holiday': 'Russia public holiday',
-  'ds': pd.to_datetime(holiday_ru_russia),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_ru = holidays_ru_russia
-
-holidays_es_mexico = pd.DataFrame({
-  'holiday': 'Mexico public holiday',
-  'ds': pd.to_datetime(holiday_es_mexico),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_es_spain = pd.DataFrame({
-  'holiday': 'Spain public holiday',
-  'ds': pd.to_datetime(holiday_es_spain),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_es_colombia = pd.DataFrame({
-  'holiday': 'Colombia public holiday',
-  'ds': pd.to_datetime(holiday_es_colombia),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_es = pd.concat((holidays_es_mexico, holidays_es_spain, holidays_es_colombia))
-
-holidays_fr_france = pd.DataFrame({
-  'holiday': 'France public holiday',
-  'ds': pd.to_datetime(holiday_fr_france),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_fr = holidays_fr_france
-
-holidays_jp_japan = pd.DataFrame({
-  'holiday': 'Japan public holiday',
-  'ds': pd.to_datetime(holiday_jp_japan),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_jp = holidays_jp_japan
-
-holidays_de_germany = pd.DataFrame({
-  'holiday': 'Germany public holiday',
-  'ds': pd.to_datetime(holiday_de_germany),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_de_austria = pd.DataFrame({
-  'holiday': 'Austria public holiday',
-  'ds': pd.to_datetime(holiday_de_austria),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_de_switzerland = pd.DataFrame({
-  'holiday': 'Switzerland public holiday',
-  'ds': pd.to_datetime(holiday_de_switzerland),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_de = pd.concat((holidays_de_germany, holidays_de_austria, holidays_de_switzerland))
-
-holidays_zh_hongkong = pd.DataFrame({
-  'holiday': 'HK public holiday',
-  'ds': pd.to_datetime(holiday_zh_hongkong),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_zh_taiwan = pd.DataFrame({
-  'holiday': 'Taiwan public holiday',
-  'ds': pd.to_datetime(holiday_zh_taiwan),
-  'lower_window': 0,
-  'upper_window': 0,
-})
-
-holidays_zh = pd.concat((holidays_zh_hongkong, holidays_zh_taiwan))
-
-holidays_dict = {"en": holidays_en, 
-                 "ru": holidays_ru, 
-                 "es": holidays_es, 
-                 "fr": holidays_fr, 
-                 "ja": holidays_jp,
-                 "de": holidays_de,
-                 "zh": holidays_zh}
-
-
-# In[ ]:
-
-
-def median_holiday_model(df_train, df_actual, p, lang, review=False, figSize=(12, 4)):
-    # Split the train and actual set
-    
-        
-    df_train['ds'] = pd.to_datetime(df_train['ds'])
-    df_actual['ds'] = pd.to_datetime(df_actual['ds'])
-    train_series = df_train['y']
-    train_series.index = df_train.ds
-    
-    if(isinstance(lang, float) and math.isnan(lang)):
-        df_train['holiday'] = df_train.ds.dt.dayofweek >=5
-        df_actual['holiday'] = df_actual.ds.dt.dayofweek >=5
-    else:
-        df_train['holiday'] = (df_train.ds.dt.dayofweek >=5) | df_train.ds.isin(holidays_dict[lang].ds)
-        df_actual['holiday'] = (df_actual.ds.dt.dayofweek >=5) | df_actual.ds.isin(holidays_dict[lang].ds)
-     
-    # Combine the train and actual set
-    predict_holiday = median_holiday_helper(df_train, df_actual[df_actual.holiday], p, True)
-    predict_non_holiday = median_holiday_helper(df_train, df_actual[~df_actual.holiday], p, False)
-
-    forecast_series = predict_non_holiday.combine_first(predict_holiday)
-    
-    actual_series = df_actual.y
-    actual_series.index = df_actual.ds
-    
-    if(review):
-        plot_prediction_and_actual_2(train_series, forecast_series, actual_series, figSize=figSize, title='Median model with holiday')
-    
-    return smape(forecast_series, actual_series)
-
-
-def median_holiday_helper(df_train, df_actual, p, holiday):
-    def nanmedian_zero(a):
-        return np.nan_to_num(np.nanmedian(a))
-    
-    df_train['y'] = pd.to_numeric(df_train['y'])
-    df_actual['y'] = pd.to_numeric(df_actual['y'])
-    
-    sample = df_train[-p:]
-    if(holiday):
-        sample = sample[sample['holiday']]
-    else:
-        sample = sample[~sample['holiday']]
-
-    visits = nanmedian_zero(sample['y'])
-    
-    idx = np.arange( p) + np.arange(len(df_train)- p+1)[:,None]
-    b = [row[row>=0] for row in df_train.y.values[idx]]
-    pre_forecast = pd.Series(np.append(([float('nan')] * (p-1)), list(map(nanmedian_zero,b))))
-    pre_forecast.index = df_train.ds
-    
-    forecast_series = pd.Series(np.repeat(visits, len(df_actual)))
-    forecast_series.index = df_actual.ds
-    
-    forecast_series = pre_forecast.append(forecast_series)
-    
-    return forecast_series
-
-
-# In[ ]:
-
-
-# This is to demo the median model - weekday, weekend and 
-print(train.iloc[[2]])
-
-df_train = extract_series(X_train, 2, 5)
-df_actual = extract_series(y_train, 2, 5)
-lang = X_train.iloc[2, 1]
-score = median_holiday_model(df_train.copy(), df_actual.copy(), 15, lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-
-# ## D. ARIMA model
+# Train on 143613 samples, validate on 15958 samples
 # 
-# The below use the ARIMA from a Python library statsmodels. Please refer to http://www.statsmodels.org/dev/generated/statsmodels.tsa.arima_model.ARIMA.html for details.
+# Epoch 1/6
+# 143613/143613 [==============================] - 2580s 18ms/step - loss: 0.0786 - acc: 0.9763 - val_loss: 0.0585 - val_acc: 0.9806
 # 
-# The model is slow and may throw exception if the model cannot find a solution. (Make the model difficult to build for all series).
+# Epoch 2/6
+# 143613/143613 [==============================] - 2426s 17ms/step - loss: 0.0582 - acc: 0.9804 - val_loss: 0.0519 - val_acc: 0.9816
 # 
-# We will further investigate it performance in the later section.
-
-# In[ ]:
-
-
-from statsmodels.tsa.arima_model import ARIMA   
-import warnings
-
-def arima_model(df_train, df_actual, p, d, q, figSize=(12, 4), review=False):
-    df_train = df_train.fillna(0)
-    train_series = df_train.y
-    train_series.index = df_train.ds
-
-    result = None
-    with warnings.catch_warnings():
-        warnings.filterwarnings('ignore')
-        try:
-            arima = ARIMA(train_series ,[p, d, q])
-            result = arima.fit(disp=False)
-        except Exception as e:
-            print('\tARIMA failed', e)
-                
-    #print(result.params)
-    start_idx = df_train.ds[d]
-    end_idx = df_actual.ds.max()
-    forecast_series = result.predict(start_idx, end_idx,typ='levels')
-    
-    actual_series = df_actual.y
-    actual_series.index = pd.to_datetime(df_actual.ds)
-
-    if(review):
-        plot_prediction_and_actual_2(train_series, forecast_series, actual_series, figSize=figSize, title='ARIMA model')
-    
-    return smape(forecast_series, actual_series)
-
-
-# In[ ]:
-
-
-# This is to demo the ARIMA model
-print(train.iloc[[2]])
-
-df_train = extract_series(X_train, 2, 5)
-df_actual = extract_series(y_train, 2, 5)
-lang = X_train.iloc[2, 1]
-score = arima_model(df_train.copy(), df_actual.copy(), 2, 1, 2, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-
-# ## E. Facebook prophet library
+# Epoch 3/6
+# 143613/143613 [==============================] - 2471s 17ms/step - loss: 0.0531 - acc: 0.9816 - val_loss: 0.0489 - val_acc: 0.9823
 # 
-# Facebook prophet library is created by facebook and aims to create a human-friendly time series forecasting libary. For details, please refer to https://facebookincubator.github.io/prophet/
+# Epoch 4/6
+# 143613/143613 [==============================] - 2991s 21ms/step - loss: 0.0505 - acc: 0.9821 - val_loss: 0.0484 - val_acc: 0.9829
 # 
-# There are several favor, but I will focus on holiday, yearly and log model
-
-# In[ ]:
-
-
-def plot_prediction_and_actual(model, forecast, actual, xlim=None, ylim=None, figSize=None, title=None):
-    fig, ax  = plt.subplots(1,1,figsize=figSize)
-    ax.set_ylim(ylim)
-    ax.plot(pd.to_datetime(actual.ds), actual.y, 'r.')
-    model.plot(forecast, ax=ax);
-    ax.set_title(title)
-    plt.show()
-
-
-# In[ ]:
-
-
-# simple linear model
-def normal_model(df_train, df_actual, review=False):
-    start_date = df_actual.ds.min()
-    end_date = df_actual.ds.max()
-    
-    actual_series = df_actual.y.copy()
-    actual_series.index = df_actual.ds
-
-    df_train['y'] = df_train['y'].astype('float')
-    
-    df_actual['y'] = df_actual['y'].astype('float')
-    
-    m = Prophet()
-    m.fit(df_train)
-    future = m.make_future_dataframe(periods=60)
-    forecast = m.predict(future)
-        
-    if(review):
-        ymin = min(df_actual.y.min(), df_train.y.min()) -100
-        ymax = max(df_actual.y.max(), df_train.y.max()) +100
-        #
-        plot_prediction_and_actual(m, forecast, df_actual, ylim=[ymin, ymax], figSize=(12,4), title='Normal model')
-    
-    mask = (forecast['ds'] >= start_date) & (forecast['ds'] <= end_date)
-    forecast_series = forecast[mask].yhat
-    forecast_series.index = forecast[mask].ds
-    forecast_series[forecast_series < 0] = 0
-
-    return smape(forecast_series, actual_series)
-
-def holiday_model(df_train, df_actual, lang, review=False):
-    start_date = df_actual.ds.min()
-    end_date = df_actual.ds.max()
-    
-    actual_series = df_actual.y.copy()
-    actual_series.index = df_actual.ds
-
-    df_train['y'] = df_train['y'].astype('float')
-    
-    df_actual['y'] = df_actual['y'].astype('float')
-
-    if(isinstance(lang, float) and math.isnan(lang)):
-        holidays = None
-    else:
-        holidays = holidays_dict[lang]
-
-    m = Prophet(holidays=holidays)
-    m.fit(df_train)
-    future = m.make_future_dataframe(periods=60)
-    forecast = m.predict(future)
-        
-    if(review):
-        ymin = min(df_actual.y.min(), df_train.y.min()) -100
-        ymax = max(df_actual.y.max(), df_train.y.max()) +100
-        plot_prediction_and_actual(m, forecast, df_actual, ylim=[ymin, ymax], figSize=(12,4), title='Holiday model')
-    
-    mask = (forecast['ds'] >= start_date) & (forecast['ds'] <= end_date)
-    forecast_series = forecast[mask].yhat
-    forecast_series.index = forecast[mask].ds
-    forecast_series[forecast_series < 0] = 0
-
-    return smape(forecast_series, actual_series)
-
-def yearly_model(df_train, df_actual, lang, review=False):
-    start_date = df_actual.ds.min()
-    end_date = df_actual.ds.max()
-    
-    actual_series = df_actual.y.copy()
-    actual_series.index = df_actual.ds
-
-    df_train['y'] = df_train['y'].astype('float')
-    
-    df_actual['y'] = df_actual['y'].astype('float')
-
-    if(isinstance(lang, float) and math.isnan(lang)):
-        holidays = None
-    else:
-        holidays = holidays_dict[lang]
-
-    m = Prophet(holidays=holidays, yearly_seasonality=True)
-    m.fit(df_train)
-    future = m.make_future_dataframe(periods=60)
-    forecast = m.predict(future)
-        
-    if(review):
-        ymin = min(df_actual.y.min(), df_train.y.min()) -100
-        ymax = max(df_actual.y.max(), df_train.y.max()) +100
-        plot_prediction_and_actual(m, forecast, df_actual, ylim=[ymin, ymax], figSize=(12,4), title='Yealry model')
-    
-    mask = (forecast['ds'] >= start_date) & (forecast['ds'] <= end_date)
-    forecast_series = forecast[mask].yhat
-    forecast_series.index = forecast[mask].ds
-    forecast_series[forecast_series < 0] = 0
-
-    return smape(forecast_series, actual_series)
-
-
-# In[ ]:
-
-
-# log model
-def normal_model_log(df_train, df_actual, review=False):
-    start_date = df_actual.ds.min()
-    end_date = df_actual.ds.max()
-    
-    actual_series = df_actual.y.copy()
-    actual_series.index = df_actual.ds
-
-    df_train['y'] = df_train['y'].astype('float')
-    df_train.y = np.log1p(df_train.y)
-    
-    df_actual['y'] = df_actual['y'].astype('float')
-    df_actual.y = np.log1p(df_actual.y)
-    
-    m = Prophet()
-    m.fit(df_train)
-    future = m.make_future_dataframe(periods=60)
-    forecast = m.predict(future)
-    
-    if(review):
-        ymin = min(df_actual.y.min(), df_train.y.min()) -2
-        ymax = max(df_actual.y.max(), df_train.y.max()) +2
-        plot_prediction_and_actual(m, forecast, df_actual, ylim=[ymin, ymax], figSize=(12,4), title='Normal model in log')
-        
-    mask = (forecast['ds'] >= start_date) & (forecast['ds'] <= end_date)
-    forecast_series = np.expm1(forecast[mask].yhat)
-    forecast_series.index = forecast[mask].ds
-    forecast_series[forecast_series < 0] = 0
-
-    return smape(forecast_series, actual_series)
-
-def holiday_model_log(df_train, df_actual, lang, review=False):
-    start_date = df_actual.ds.min()
-    end_date = df_actual.ds.max()
-    
-    actual_series = df_actual.y.copy()
-    actual_series.index = df_actual.ds
-
-    df_train['y'] = df_train['y'].astype('float')
-    df_train.y = np.log1p(df_train.y)
-    
-    df_actual['y'] = df_actual['y'].astype('float')
-    df_actual.y = np.log1p(df_actual.y)
-
-    if(isinstance(lang, float) and math.isnan(lang)):
-        holidays = None
-    else:
-        holidays = holidays_dict[lang]
-    m = Prophet(holidays=holidays)
-    m.fit(df_train)
-    future = m.make_future_dataframe(periods=60)
-    forecast = m.predict(future)
-    
-    if(review):
-        ymin = min(df_actual.y.min(), df_train.y.min()) -2
-        ymax = max(df_actual.y.max(), df_train.y.max()) +2
-        plot_prediction_and_actual(m, forecast, df_actual, ylim=[ymin, ymax], figSize=(12,4), title='Holiday model in log')
-        
-    mask = (forecast['ds'] >= start_date) & (forecast['ds'] <= end_date)
-    forecast_series = np.expm1(forecast[mask].yhat)
-    forecast_series.index = forecast[mask].ds
-    forecast_series[forecast_series < 0] = 0
-    
-    return smape(forecast_series, actual_series)
-
-def yearly_model_log(df_train, df_actual, lang, review=False):
-    start_date = df_actual.ds.min()
-    end_date = df_actual.ds.max()
-    
-    actual_series = df_actual.y.copy()
-    actual_series.index = df_actual.ds
-
-    df_train['y'] = df_train['y'].astype('float')
-    df_train.y = np.log1p(df_train.y)
-    
-    df_actual['y'] = df_actual['y'].astype('float')
-    df_actual.y = np.log1p(df_actual.y)
-
-    if(isinstance(lang, float) and math.isnan(lang)):
-        holidays = None
-    else:
-        holidays = holidays_dict[lang]
-        
-    m = Prophet(holidays=holidays, yearly_seasonality=True)
-    m.fit(df_train)
-    future = m.make_future_dataframe(periods=60)
-    forecast = m.predict(future)
-
-    if(review):
-        ymin = min(df_actual.y.min(), df_train.y.min()) -2
-        ymax = max(df_actual.y.max(), df_train.y.max()) +2
-        plot_prediction_and_actual(m, forecast, df_actual, ylim=[ymin, ymax], figSize=(12,4), title='Yearly model in log')
-        
-    mask = (forecast['ds'] >= start_date) & (forecast['ds'] <= end_date)
-    forecast_series = np.expm1(forecast[mask].yhat)
-    forecast_series.index = forecast[mask].ds
-    forecast_series[forecast_series < 0] = 0
-    
-    return smape(forecast_series, actual_series)
-
-
-# In[ ]:
-
-
-# This is to demo the facebook prophet model
-print(train.iloc[[2]])
-
-df_train = extract_series(X_train, 2, 5)
-df_actual = extract_series(y_train, 2, 5)
-lang = X_train.iloc[2, 1]
-score = holiday_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-
-# ## F. Sample series analysis (For script reconciliation)
-
-# ### Case 1: SMAPE evaluation near zero and SMAPE score is too big
-
-# In[ ]:
-
-
-import warnings
-warnings.filterwarnings('ignore')
-
-
-# In[ ]:
-
-
-print(train.iloc[[2]])
-
-df_train = extract_series(X_train, 2, 5)
-df_actual = extract_series(y_train, 2, 5)
-lang = X_train.iloc[2, 1]
-score = holiday_model(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-
-# ### Case 2: Yearly model is the best model
-
-# In[ ]:
-
-
-print(train.iloc[[4464]])
-
-df_train = extract_series(X_train, 4464, 5)
-df_actual = extract_series(y_train, 4464, 5)
-lang = X_train.iloc[4464, 1]
-
-score = holiday_model(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = holiday_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = yearly_model(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = yearly_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = median_model(df_train.copy(), df_actual.copy(), 14, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-
-# ### Case 3: Non-yearly model is better
-
-# In[ ]:
-
-
-train.iloc[[6245]]
-
-df_train = extract_series(X_train, 6245, 5)
-df_actual = extract_series(y_train, 6245, 5)
-lang = X_train.iloc[6245, 1]
-score = holiday_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = yearly_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = median_model(df_train.copy(), df_actual.copy(), 14, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-
-# ### Case 4: SMAPE score is too high for all proposed models
-
-# In[ ]:
-
-
-train.iloc[[80002]]
-
-df_train = extract_series(X_train, 80002, 5)
-df_actual = extract_series(y_train, 80002, 5)
-lang = X_train.iloc[80002, 1]
-title = X_train.iloc[80002, 4]
-print(title)
-
-score = holiday_model(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = holiday_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = yearly_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-# Please use this case to check your implementation of SMAPE
-score = median_model(df_train.copy(), df_actual.copy(), 14, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-
-# ### Case 5: SMAPE score is too high for all proposed models
-
-# In[ ]:
-
-
-train.iloc[[80009]]
-
-df_train = extract_series(X_train, 80009, 5)
-df_actual = extract_series(y_train, 80009, 5)
-lang = X_train.iloc[80009, 1]
-title = X_train.iloc[80009, 4]
-print(title)
-
-score = holiday_model(df_train.copy(), df_actual.copy(), review=True,lang=lang)
-print("The SMAPE score is : %.5f" % score)
-
-score = holiday_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = yearly_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = median_model(df_train.copy(), df_actual.copy(), 14, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = arima_model(df_train.copy(), df_actual.copy(), 2, 1, 2, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-
-# ### Case 6: SMAPE score is too high for all proposed models
-
-# In[ ]:
-
-
-train.iloc[[14211]]
-
-df_train = extract_series(X_train, 14211, 5)
-df_actual = extract_series(y_train, 14211, 5)
-lang = X_train.iloc[14211, 1]
-title = X_train.iloc[14211, 4]
-print(title)
-score = holiday_model(df_train.copy(), df_actual.copy(), review=True,lang = lang)
-print("The SMAPE score is : %.5f" % score)
-
-score = holiday_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = yearly_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-# if there is too many zero, just use normal is OK.
-score = median_model(df_train.copy(), df_actual.copy(), 14, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-score = arima_model(df_train.copy(), df_actual.copy(), 7, 1, 2, review=True)
-print("The SMAPE score is : %.5f" % score)
-
-
-# ### Case ?: Adhoc study
-
-# In[ ]:
-
-
-series_num = 145033
-series_num = 145057
-
-print(train.iloc[[series_num]])
-
-df_train = extract_series(X_train, series_num, 5)
-df_actual = extract_series(y_train, series_num, 5)
-
-lang = X_train.iloc[series_num, 1]
-title = X_train.iloc[series_num, 4]
-print(title)
-
-try:
-    score = median_model(df_train.copy(), df_actual.copy(), 14, review=True)
-    print("The SMAPE score is : %.5f" % score)
-except Exception as e:
-    print("Error in calculating median model", e)
-
-try:
-    score = holiday_model(df_train.copy(), df_actual.copy(), review=True,lang = lang)
-    print("The SMAPE score is : %.5f" % score)
-except Exception as e:
-    print("Error in calculating holiday model", e)
-    
-try:
-    score = holiday_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-    print("The SMAPE score is : %.5f" % score)
-except Exception as e:
-    print("Error in calculating holiday model in log", e)
-    
-try:
-    score = yearly_model_log(df_train.copy(), df_actual.copy(), lang, review=True)
-    print("The SMAPE score is : %.5f" % score)
-except Exception as e:
-    print("Error in calculating yearly model in log", e)
-
-try:
-    score = arima_model(df_train.copy(), df_actual.copy(), 7, 1, 2, review=True)
-    print("The SMAPE score is : %.5f" % score)
-except Exception as e:
-    print("Error in calculating arima model", e)
-
-
-# In[ ]:
-
-
-warnings.resetwarnings()
-
-
-# ## 4. Selected model performance (validation score) over train dataset
+# Epoch 5/6
+# 143613/143613 [==============================] - 3023s 21ms/step - loss: 0.0487 - acc: 0.9826 - val_loss: 0.0463 - val_acc: 0.9829
 # 
-# In this session, we wil train the model and do prediction over 145000+ series in dataset. 
-# To find out the validation score for comparison
+# Epoch 6/6
+# 143613/143613 [==============================] - 2961s 21ms/step - loss: 0.0474 - acc: 0.9830 - val_loss: 0.0463 - val_acc: 0.9831
 
-# In[ ]:
-
-
-import glob
-
-def read_from_folder(path):
-    filenames = glob.glob(path + "/*.csv")
-
-    dfs = []
-    for filename in filenames:
-        dfs.append(pd.read_csv(filename, index_col=0))
-    
-    frame = pd.concat(dfs)
-    return frame.sort_index()
-
-
-# In[ ]:
-
-
-# TODO: overall validation score in one number.
-def validation_score(score_series):
-    return score_series.mean()
-
-
-# In[ ]:
-
-
-valid_fn = r"../input/wiktraffictimeseriesforecast/validation_score.csv"
-valid_score_data = pd.read_csv(valid_fn, index_col=0)
-
-print(valid_score_data[0:10])
-
-
-# ### A. Simple median model
+# **UPDATE**
 # 
-# We will train up the median model using popular choice 7 to 49, with step 7, and compare the overall score.
+# I have uploaded the saved model in this notebook so that you could even continue the training process. To load the model and do a prediction, you could do this:
 
 # In[ ]:
 
 
-# Check which model is the best
-print("Validation score for median model (7 days) is: %.6f" % validation_score(valid_score_data['median7']))
-print("Validation score for median model (14 days) is: %.6f" % validation_score(valid_score_data['median14']))
-print("Validation score for median model (21 days) is: %.6f" % validation_score(valid_score_data['median21']))
-print("Validation score for median model (28 days) is: %.6f" % validation_score(valid_score_data['median28']))
-print("Validation score for median model (35 days) is: %.6f" % validation_score(valid_score_data['median35']))
-print("Validation score for median model (42 days) is: %.6f" % validation_score(valid_score_data['median42']))
-print("Validation score for median model (49 days) is: %.6f" % validation_score(valid_score_data['median49']))
+model = load_model('../input/epoch-6-model/model-e6.hdf5')
 
-fig, axs  = plt.subplots(4,2,figsize=(12,12))
-valid_score_data['median7'].plot.hist(bins=40, ax=axs[0][0])
-valid_score_data['median14'].plot.hist(bins=40, ax=axs[0][1])
-valid_score_data['median21'].plot.hist(bins=40, ax=axs[1][0])
-valid_score_data['median28'].plot.hist(bins=40, ax=axs[1][1])
-valid_score_data['median35'].plot.hist(bins=40, ax=axs[2][0])
-valid_score_data['median42'].plot.hist(bins=40, ax=axs[2][1])
-valid_score_data['median49'].plot.hist(bins=40, ax=axs[3][0])
+batch_size = 32
+y_submit = model.predict(X_sub,batch_size=batch_size,verbose=1)
 
 
-# ### B. Median model - weekday, weekend, holiday
+# Getting the prediction data in a format ready for competition submission:
 
 # In[ ]:
 
 
-print("Validation score for median model w/holiday (7 days) is: %.6f" % validation_score(valid_score_data['median7_h']))
-print("Validation score for median model w/holiday (14 days) is: %.6f" % validation_score(valid_score_data['median14_h']))
-print("Validation score for median model w/holiday (21 days) is: %.6f" % validation_score(valid_score_data['median21_h']))
-print("Validation score for median model w/holiday (28 days) is: %.6f" % validation_score(valid_score_data['median28_h']))
-print("Validation score for median model w/holiday (35 days) is: %.6f" % validation_score(valid_score_data['median35_h']))
-print("Validation score for median model w/holiday (42 days) is: %.6f" % validation_score(valid_score_data['median42_h']))
-print("Validation score for median model w/holiday (49 days) is: %.6f" % validation_score(valid_score_data['median49_h']))
-
-fig, axs  = plt.subplots(4,2,figsize=(12,12))
-valid_score_data['median7_h'].plot.hist(bins=40, ax=axs[0][0])
-valid_score_data['median14_h'].plot.hist(bins=40, ax=axs[0][1])
-valid_score_data['median21_h'].plot.hist(bins=40, ax=axs[1][0])
-valid_score_data['median28_h'].plot.hist(bins=40, ax=axs[1][1])
-valid_score_data['median35_h'].plot.hist(bins=40, ax=axs[2][0])
-valid_score_data['median42_h'].plot.hist(bins=40, ax=axs[2][1])
-valid_score_data['median49_h'].plot.hist(bins=40, ax=axs[3][0])
+y_submit[np.isnan(y_submit)]=0
+sample_submission = submit_template
+sample_submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_submit
+sample_submission.to_csv('submission.csv', index=False)
 
 
-# ### C. ARIMA model
+# I hope this notebook serves as a good start for beginners who are interested in tackling NLP problems using the CNN angle. There are some ideas which you could use to push the performance further, such as :
+# 1. Tweak CNN parameters such as number of strides, different padding settings, window size.
+# 2. Hyper-parameter tunings
+# 3. Experiment with different architecture layers
 # 
-# Currently, it is no promising, and median seems a better base line, so I give up this section.
-
-# ### D. Facebook model
-# We will train up the model using model with yearly and non-yearly model to see the difference
-
-# In[ ]:
-
-
-print("Validation score for holiday model is: %.6f" % validation_score(valid_score_data['holiday']))
-print("Validation score for holiday model w/log is: %.6f" % validation_score(valid_score_data['holiday_log']))
-print("Validation score for yearly model w/log is: %.6f" % validation_score(valid_score_data['yearly_log']))
-
-fig, axs  = plt.subplots(3,1,figsize=(12,12))
-valid_score_data['holiday'].plot.hist(bins=40, ax=axs[0])
-axs[0].set_title("Holiday model")
-valid_score_data['holiday_log'].plot.hist(bins=40, ax=axs[1])
-axs[1].set_title("Holiday model w/log")
-valid_score_data['yearly_log'].plot.hist(bins=40, ax=axs[2])
-axs[2].set_title("Yearly model w/log")
-
-
-# ### E. mixed model
+# Thank you for your time in reading and if you like what I wrote, support me by upvoting my notebook..
 # 
-# In this section, we will try to mix the model together to give a better prediction model
-
-# In[ ]:
-
-
-def model_to_use( median, holiday_log, yearly_log):
-    result = median
-    if(median * 1 > yearly_log):
-        result = yearly_log
-    elif(median * 1 > holiday_log):
-        result = holiday_log
-        
-    return result
-
-model_score = valid_score_data.apply(lambda x: model_to_use( x['median14'], x['holiday_log'], x['yearly_log']), axis=1)
-
-print("Validation score for a proposed model is: %.6f" % validation_score(model_score))
-model_score.plot.hist(bins=40)
-
-
-# In[ ]:
-
-
-model_score_2 = valid_score_data.min(axis=1)
-print("Best possible Validation score for a mixed model is: %.6f" % validation_score(model_score_2))
-
-model_score_2.plot.hist(bins=40)
-
+# With the toxic competition coming to an end in a month, I wish everyone godspeed!

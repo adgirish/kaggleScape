@@ -1,49 +1,59 @@
-import numpy as np
+# Two questions:
+# 1. Can you improve on this benchmark?
+# 2. Can you beat the score obtained by this example kernel?
+
+from nltk.corpus import stopwords
 import pandas as pd
+import numpy as np
+from sklearn.metrics import log_loss
+from scipy.optimize import minimize
 
-print('Reading data...')
-key_1 = pd.read_csv('../input/key_1.csv')
-train_1 = pd.read_csv('../input/train_1.csv')
-ss_1 = pd.read_csv('../input/sample_submission_1.csv')
+stops = set(stopwords.words("english"))
 
-print('Preprocessing...')
-# train_1.fillna(0, inplace=True)
+def word_match_share(row):
+    q1words = {}
+    q2words = {}
+    for word in str(row['question1']).lower().replace("-","").split():
+        if word not in stops:
+            q1words[word] = 1
+    for word in str(row['question2']).lower().replace("-","").split():
+        if word not in stops:
+            q2words[word] = 1
+    if len(q1words) == 0 or len(q2words) == 0:
+        # The computer-generated chaff includes a few questions that are nothing but stopwords
+        return 0
+    shared_words_in_q1 = [w for w in q1words.keys() if w in q2words]
+    shared_words_in_q2 = [w for w in q2words.keys() if w in q1words]
+    R = (len(shared_words_in_q1) + len(shared_words_in_q2))/(len(q1words) + len(q2words))
+    return R
 
-print('Processing...')
-ids = key_1.Id.values
-pages = key_1.Page.values
 
-print('key_1...')
-d_pages = {}
-for id, page in zip(ids, pages):
-    d_pages[id] = page[:-11]
+#LOAD TRAINSET, TESTSET
+train = pd.read_csv("../input/train.csv")
+train[ 'R' ] = train.apply( word_match_share, axis=1, raw=True )
+print( train.head() ) 
 
-print('train_1...')
-pages = train_1.Page.values
-# visits = train_1['2016-12-31'].values # Version 1 score: 60.6
-# visits = np.round(np.mean(train_1.drop('Page', axis=1).values, axis=1)) # Version 2 score: 64.8
-# visits = np.round(np.mean(train_1.drop('Page', axis=1).values[:, -14:], axis=1)) # Version 3 score: 52.5
-# visits = np.round(np.mean(train_1.drop('Page', axis=1).values[:, -7:], axis=1)) # Version 4 score: 53.7
-# visits = np.round(np.mean(train_1.drop('Page', axis=1).values[:, -21:], axis=1)) # Version 5, 6 score: 51.3
-# visits = np.round(np.mean(train_1.drop('Page', axis=1).values[:, -28:], axis=1)) # Version 7 score: 51.1
-# visits = np.round(np.median(train_1.drop('Page', axis=1).values[:, -28:], axis=1)) # Version 8 score: 47.1 
-# visits = np.round(np.median(train_1.drop('Page', axis=1).values[:, -35:], axis=1)) # Version 9 score: 46.6
-# visits = np.round(np.median(train_1.drop('Page', axis=1).values[:, -42:], axis=1)) # Version 10 score: 46.3
-# visits = np.round(np.median(train_1.drop('Page', axis=1).values[:, -49:], axis=1)) # Version 11 score: 46.2
-# visits = np.nan_to_num(np.round(np.nanmedian(train_1.drop('Page', axis=1).values[:, -49:], axis=1))) # Version 12 score: 45.7
-visits = np.nan_to_num(np.round(np.nanmedian(train_1.drop('Page', axis=1).values[:, -56:], axis=1)))
+test = pd.read_csv("../input/test.csv", index_col=False )
+test['R'] = test.apply( word_match_share, axis=1, raw=True )
+print( test.head() )
 
-d_visits = {}
-for page, visits_number in zip(pages, visits):
-    d_visits[page] = visits_number
+#Mean target
+GLOBAL_MEAN = np.mean( train['is_duplicate'] ) 
+print( 'Mean is_duplicated', GLOBAL_MEAN )
 
-print('Modifying sample submission...')
-ss_ids = ss_1.Id.values
-ss_visits = ss_1.Visits.values
+#OPTIMIZE FUNCTIONS
+def minimize_train_log_loss( W ):
+    train["prediction"] = GLOBAL_MEAN + train["R"] * W[0] + W[1]
+    score = log_loss( train['is_duplicate'], train['prediction'] )
+    print(  score , W )
+    return( score )
 
-for i, ss_id in enumerate(ss_ids):
-    ss_visits[i] = d_visits[d_pages[ss_id]]
+res = minimize(minimize_train_log_loss, [0.00,  0.00], method='Nelder-Mead', tol=1e-4, options={'maxiter': 400})
+W = res.x
+print( 'Best weights: ',W )
 
-print('Saving submission...')
-subm = pd.DataFrame({'Id': ss_ids, 'Visits': ss_visits})
-subm.to_csv('submission.csv', index=False)
+
+#APPLY TO TESTSET
+test["is_duplicate"] = GLOBAL_MEAN + test["R"] * W[0] + W[1]
+test[ ['test_id','is_duplicate'] ].to_csv("count_words_benchmark.csv", header=True, index=False)
+

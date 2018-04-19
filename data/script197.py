@@ -1,276 +1,296 @@
 
 # coding: utf-8
 
-# Traffic Fatalities in 2015
-# --------------------------
-# 
-# &nbsp;...by [Latitude/Longitude][1]<br>
-# &nbsp;...by [Date][2]<br>
-# &nbsp;...by [State][3]/per [Capita][3]<br>
-# &nbsp;...by [State][4]/per [Capita][3] (Sober and Drunk Drivers)
-# 
-# [1]: https://www.kaggle.io/svf/486873/972c1b4beb9083fd42d59b0f3e45b302/__results__.html#Traffic-Fatalities-by-Latitude/Longitude
-# [2]: https://www.kaggle.io/svf/486873/972c1b4beb9083fd42d59b0f3e45b302/__results__.html#Traffic-Fatalities-by-Date
-# [3]: https://www.kaggle.io/svf/486873/972c1b4beb9083fd42d59b0f3e45b302/__results__.html#Traffic-Fatalities-per-Capita
-# [4]: https://www.kaggle.io/svf/486873/972c1b4beb9083fd42d59b0f3e45b302/__results__.html#Traffic-Fatalities-per-Capita:-Sober-and-Drunk-Drivers
-
-# Data Import
-# -----------------
+# I’m recently started to be interested in data analysis and it is my first visualization. 
 
 # In[ ]:
 
 
 import numpy as np
 import pandas as pd
-pd.options.mode.chained_assignment = None
-
-import plotly.plotly as py
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+import plotly.offline as py
+py.init_notebook_mode(connected=True)
 import plotly.graph_objs as go
-from plotly import tools
-from plotly.offline import iplot, init_notebook_mode
-init_notebook_mode()
+import plotly.tools as tls
+import seaborn as sns
+import time
+import warnings
+warnings.filterwarnings('ignore')
 
-traffic_data = pd.read_csv('../input/accident.csv',
-                           usecols=[0, 1, 11, 12, 13, 25, 26, 50, 51])
-traffic_data = traffic_data.rename(
-    columns={'ST_CASE':'case_id', 'LONGITUD':'longitude',
-             'DRUNK_DR':'drunk_drivers', 'FATALS':'fatalities'})
-traffic_data.columns = traffic_data.columns.str.lower()
-traffic_data['date'] = pd.to_datetime(traffic_data[['day', 'month', 'year']])
-traffic_data = traffic_data[['case_id', 'date', 'state', 'latitude', 'longitude',
-                             'drunk_drivers', 'fatalities']].sort_values('date')
+global_temp_country = pd.read_csv('../input/GlobalLandTemperaturesByCountry.csv')
 
 
-# Traffic Fatalities by Latitude/Longitude
-# ----------------------------------------
+# ##1) Mapping of average temperatures in the countries
 
 # In[ ]:
 
 
-traffic_data['text'] = traffic_data['date'].dt.strftime('%B %-d'
-                          ) + ', ' + traffic_data['fatalities'].astype(str) + ' Killed'
+#Let's remove the duplicated countries (in the analysis, we don't consider the presence of 
+#colonies at this the countries) and countries for which no information about the temperature
 
-data = [dict(
-        type = 'scattergeo',
-        locationmode = 'USA-states',
-        lon = traffic_data[traffic_data.longitude < 0]['longitude'],
-        lat = traffic_data[traffic_data.longitude < 0]['latitude'],
-        text = traffic_data[traffic_data.longitude < 0]['text'],
-        mode = 'markers',
-        marker = dict( 
-            size = traffic_data[traffic_data.longitude < 0]['fatalities'] ** 0.5 * 5,
-            opacity = 0.75,
-            color = 'rgb(215, 0, 0)')
-        )]
+global_temp_country_clear = global_temp_country[~global_temp_country['Country'].isin(
+    ['Denmark', 'Antarctica', 'France', 'Europe', 'Netherlands',
+     'United Kingdom', 'Africa', 'South America'])]
 
-layout = dict(
-         title = 'Traffic Fatalities by Latitude/Longitude in United States (2015)<br>'
-                 '<sub>Hover to View Collision Date and Deaths</sub>',
-         geo = dict(
-             scope = 'usa',
-             projection = dict(type = 'albers usa'),
-             showland = True,
-             landcolor = 'rgb(250, 250, 250)',
-             subunitwidth = 1,
-             subunitcolor = 'rgb(217, 217, 217)',
-             countrywidth = 1,
-             countrycolor = 'rgb(217, 217, 217)',
-             showlakes = True,
-             lakecolor = 'rgb(255, 255, 255)')
-         )
+global_temp_country_clear = global_temp_country_clear.replace(
+   ['Denmark (Europe)', 'France (Europe)', 'Netherlands (Europe)', 'United Kingdom (Europe)'],
+   ['Denmark', 'France', 'Netherlands', 'United Kingdom'])
 
-figure = dict(data = data, layout = layout)
-iplot(figure)
+#Let's average temperature for each country
+
+countries = np.unique(global_temp_country_clear['Country'])
+mean_temp = []
+for country in countries:
+    mean_temp.append(global_temp_country_clear[global_temp_country_clear['Country'] == 
+                                               country]['AverageTemperature'].mean())
 
 
-# Traffic Fatalities by Date
-# ---------------------------
-
-# In[ ]:
-
-
-# traffic fatalities by date
-traffic_perdate = np.asarray(traffic_data.groupby('date')['fatalities'].sum())
-
-# thirty day moving average of traffic fatalites by date
-traffic_average = pd.Series(traffic_perdate).rolling(window=30).mean()
-traffic_average = np.asarray(traffic_average.drop(traffic_average.index[:29]))
-traffic_average = np.round(traffic_average, 0)
-
-traffic_dates = np.arange('2015-01', '2016-01', dtype='datetime64[D]')
-traffic_range = traffic_dates[15:351]
-
-trace_date = go.Scatter(
-             x = traffic_dates,
-             y = traffic_perdate,
-             mode = 'lines',
-             name = 'Fatalities',
-             line = dict(
-                 color = 'rgb(215, 0, 0)',
-                 width = 3)
-             )
-
-trace_mean = go.Scatter(
-             x = traffic_range,
-             y = traffic_average,
-             mode = 'lines',
-             name = 'Average',
-             line = dict(
-                 color = 'rgb(215, 0, 0)',
-                 width = 5),
-             opacity = 0.33
-             )
-
-layout = go.Layout(
-         title = 'Traffic Fatalities by Date in United States (2015)',
-         showlegend = False,
-         xaxis = dict(
-             rangeslider = dict(thickness = 0.05),
-             type = 'date',
-             showline = True,
-             showgrid = False
-         ),
-         yaxis = dict(
-             range = [40.1, 165],
-             autotick = False,
-             tick0 = 20,
-             dtick = 20,
-             showline = True,
-             showgrid = False)
-         )
-
-data = [trace_date, trace_mean]
-figure = dict(data = data, layout = layout)
-iplot(figure)
-
-
-# Traffic Fatalities per Capita
-# -----------------------------
-# Which states reported the most traffic fatalities given their population?
-
-# In[ ]:
-
-
-us_states = np.asarray(['AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'DC', 'FL', 'GA',
-                        'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD', 'MA',
-                        'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY',
-                        'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX',
-                        'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY'])
-
-# state population estimates for July 2015 from US Census Bureau
-state_population = np.asarray([4858979, 738432, 6828065, 2978204, 39144818, 5456574,
-                               3590886, 945934, 646449, 20271272, 10214860, 1431603,
-                               1654930, 12859995, 6619680, 3123899, 2911641, 4425092,
-                               4670724, 1329328, 6006401, 6794422, 9922576, 5489594,
-                               2992333, 6083672, 1032949, 1896190,2890845, 1330608,
-                               8958013, 2085109, 19795791, 10042802, 756927, 11613423,
-                               3911338, 4028977, 12802503, 1056298, 4896146, 858469,
-                               6600299, 27469114, 2995919, 626042, 8382993, 7170351,
-                               1844128, 5771337, 586107])
-
-# traffic fatalities per 100,000 people in state
-traffic_perstate = np.asarray(traffic_data.groupby('state')['fatalities'].sum())
-traffic_percapita = np.round(traffic_perstate / state_population * 100000, 2)
-
-traffic_scale = [[0, 'rgb(248, 213, 213)'], [1, 'rgb(215, 0, 0)']]
-
-data = [dict(
+    
+data = [ dict(
         type = 'choropleth',
-        autocolorscale = False,
-        colorscale = traffic_scale,
-        showscale = False,
-        locations = us_states,
-        locationmode = 'USA-states',
-        z = traffic_percapita,
+        locations = countries,
+        z = mean_temp,
+        locationmode = 'country names',
+        text = countries,
         marker = dict(
-            line = dict(
-                color = 'rgb(255, 255, 255)',
-                width = 2)
+            line = dict(color = 'rgb(0,0,0)', width = 1)),
+            colorbar = dict(autotick = True, tickprefix = '', 
+            title = '# Average\nTemperature,\n°C')
             )
-        )]
+       ]
 
 layout = dict(
-         title = 'Traffic Fatalities per 100,000 People in United States (2015)',
-         geo = dict(
-             scope = 'usa',
-             projection = dict(type = 'albers usa'),
-             countrycolor = 'rgb(255, 255, 255)',
-             showlakes = True,
-             lakecolor = 'rgb(255, 255, 255)')
-         )
+    title = 'Average land temperature in countries',
+    geo = dict(
+        showframe = False,
+        showocean = True,
+        oceancolor = 'rgb(0,255,255)',
+        projection = dict(
+        type = 'orthographic',
+            rotation = dict(
+                    lon = 60,
+                    lat = 10),
+        ),
+        lonaxis =  dict(
+                showgrid = True,
+                gridcolor = 'rgb(102, 102, 102)'
+            ),
+        lataxis = dict(
+                showgrid = True,
+                gridcolor = 'rgb(102, 102, 102)'
+                )
+            ),
+        )
 
-figure = dict(data = data, layout = layout)
-iplot(figure)
+fig = dict(data=data, layout=layout)
+py.iplot(fig, validate=False, filename='worldmap')
 
 
-# States in the Northwest and Southeast reported the most traffic fatalities per person. Wyoming had the highest fatality rate in the nation -- 1 in 4,000 residents was killed in a traffic collision in 2015!
-
-# Traffic Fatalities per Capita: Sober and Drunk Drivers
-# -----------------------------------
-# Which states reported the highest proportion of traffic fatalities in collisions involving intoxicated drivers?
+# It is possible to notice that Russia has one of the lowest average temperature (like a Canada). The lowest temperature in Greenland (it is distinctly visible on the map). The hottest country in Africa, on the equator. It is quite natural.
+# 
+# ##2) Sort the countries by the average temperature and plot Horizontal Bar
 
 # In[ ]:
 
 
-# traffic fatalities from sober drivers per 100,000 people in state
-sober_perstate = np.asarray(traffic_data[traffic_data.drunk_drivers == 0].groupby(
-                                                            'state')['fatalities'].sum())
-sober_percapita = np.round(sober_perstate / state_population * 100000, 2)
+mean_temp_bar, countries_bar = (list(x) for x in zip(*sorted(zip(mean_temp, countries), 
+                                                             reverse = True)))
+sns.set(font_scale=0.9) 
+f, ax = plt.subplots(figsize=(4.5, 50))
+colors_cw = sns.color_palette('coolwarm', len(countries))
+sns.barplot(mean_temp_bar, countries_bar, palette = colors_cw[::-1])
+Text = ax.set(xlabel='Average temperature', title='Average land temperature in countries')
 
-# traffic fatalities from drunk drivers per 100,000 people in state
-drunk_perstate = np.asarray(traffic_data[traffic_data.drunk_drivers > 0].groupby(
-                                                            'state')['fatalities'].sum())
-drunk_percapita = np.round(drunk_perstate / state_population * 100000, 2)
 
-trace_dot = go.Scatter(
-            x = sober_percapita,
-            y = drunk_percapita,
-            text = us_states,
-            mode = 'markers+text',
-            textposition = 'bottom',
-            hoverinfo = 'x+y+text',
-            marker = dict(
-                color = 'rgb(215, 0, 0)',
-                size = 8)
-            )
+# ##3) Is there a global warming?
 
-trace_dash = go.Scatter(
-             x = [0.1, 10.5],
-             y = [0.1, 10.5],
-             mode = 'lines',
-             hoverinfo = 'none',
-             line = dict(
-                 color = 'rgb(68, 68, 68)',
-                 width = 1.5,
-                 dash = 'dot')
-             )
+# Let's read the data from the "GlobalTemperatures.csv" file, which has a monthly Earth’s temperature  and plot it on the chart.
+
+# In[ ]:
+
+
+global_temp = pd.read_csv("../input/GlobalTemperatures.csv")
+
+#Extract the year from a date
+years = np.unique(global_temp['dt'].apply(lambda x: x[:4]))
+mean_temp_world = []
+mean_temp_world_uncertainty = []
+
+for year in years:
+    mean_temp_world.append(global_temp[global_temp['dt'].apply(
+        lambda x: x[:4]) == year]['LandAverageTemperature'].mean())
+    mean_temp_world_uncertainty.append(global_temp[global_temp['dt'].apply(
+                lambda x: x[:4]) == year]['LandAverageTemperatureUncertainty'].mean())
+
+trace0 = go.Scatter(
+    x = years, 
+    y = np.array(mean_temp_world) + np.array(mean_temp_world_uncertainty),
+    fill= None,
+    mode='lines',
+    name='Uncertainty top',
+    line=dict(
+        color='rgb(0, 255, 255)',
+    )
+)
+trace1 = go.Scatter(
+    x = years, 
+    y = np.array(mean_temp_world) - np.array(mean_temp_world_uncertainty),
+    fill='tonexty',
+    mode='lines',
+    name='Uncertainty bot',
+    line=dict(
+        color='rgb(0, 255, 255)',
+    )
+)
+
+trace2 = go.Scatter(
+    x = years, 
+    y = mean_temp_world,
+    name='Average Temperature',
+    line=dict(
+        color='rgb(199, 121, 093)',
+    )
+)
+data = [trace0, trace1, trace2]
 
 layout = go.Layout(
-         title = 'Traffic Fatalities per Capita by Driver Intoxication '
-                 'in United States (2015)',
-         showlegend = False,
-         xaxis = dict(
-             title = 'Fatalities per 100,000 People (Sober Drivers)',
-             range = [0.1, 18.5],
-             autotick = False,
-             tick0 = 2,
-             dtick = 2,
-             showline = True,
-             showgrid = False
-         ),
-         yaxis = dict(
-             title = 'Fatalities per 100,000 People (Drunk Drivers)',
-             range = [0.1, 10],
-             autotick = False,
-             tick0 = 2,
-             dtick = 2,
-             showline = True,
-             showgrid = False)
-         )
+    xaxis=dict(title='year'),
+    yaxis=dict(title='Average Temperature, °C'),
+    title='Average land temperature in world',
+    showlegend = False)
 
-data = [trace_dot, trace_dash]
-figure = dict(data = data, layout = layout)
-iplot(figure)
+fig = go.Figure(data=data, layout=layout)
+py.iplot(fig)
 
 
-# Most states reported twice as many traffic fatalities from collisions with no driver intoxication as from those involving one or more drunk drivers. Wyoming had the highest fatality rate in alcohol-related collisions, followed by Montana and North Dakota.
+# From the charts you can see, that there is global warming nowadays. The average temperature of Earth surface has the highest value in the last three centuries. The fastest temperature growth occurred in the last 30 years! This worries me, I hope soon humanity will fully switch to ecological sources of energy, that will reduce CO2. If it’s will not happened, we will be in disaster. This charts also have confidence intervals, which shows that measurement of temperature has become more accurate in the last few years.
+# 
+# Let’s look at the chart of annual temperature changes in certain continents (we take into consideration one country per continent and mark Greenland as the coldest place on Earth).
+
+# In[ ]:
+
+
+continent = ['Russia', 'United States', 'Niger', 'Greenland', 'Australia', 'Bolivia']
+mean_temp_year_country = [ [0] * len(years[70:]) for i in range(len(continent))]
+j = 0
+for country in continent:
+    all_temp_country = global_temp_country_clear[global_temp_country_clear['Country'] == country]
+    i = 0
+    for year in years[70:]:
+        mean_temp_year_country[j][i] = all_temp_country[all_temp_country['dt'].apply(
+                lambda x: x[:4]) == year]['AverageTemperature'].mean()
+        i +=1
+    j += 1
+
+traces = []
+colors = ['rgb(0, 255, 255)', 'rgb(255, 0, 255)', 'rgb(0, 0, 0)',
+          'rgb(255, 0, 0)', 'rgb(0, 255, 0)', 'rgb(0, 0, 255)']
+for i in range(len(continent)):
+    traces.append(go.Scatter(
+        x=years[70:],
+        y=mean_temp_year_country[i],
+        mode='lines',
+        name=continent[i],
+        line=dict(color=colors[i]),
+    ))
+
+layout = go.Layout(
+    xaxis=dict(title='year'),
+    yaxis=dict(title='Average Temperature, °C'),
+    title='Average land temperature on the continents',)
+
+fig = go.Figure(data=traces, layout=layout)
+py.iplot(fig)
+
+
+# We can see that since the 1980 there has been a continuous increase in mean annual temperature for the countries, which we take into consideration (particularly strong dynamics can be seen in the cold countries). The interruption of the temperature values on the chart is due to the lack of observations in these years.
+
+# ##4) Dynamic map
+
+# I've done a visualization in Jupyter, using "plotly". When I tried to upload my research on the Kaggle there was a problem: the "Stream()" function doesn't work with "pyplot.offline". Therefore, to show a dynamically changing is not an easy task.
+# 
+# Let's create a map that shows changes in average temperature of countries with 10 years period.
+
+# In[ ]:
+
+
+#Extract the year from a date
+years = np.unique(global_temp_country_clear['dt'].apply(lambda x: x[:4]))
+
+#Let's create an array and add the values of average temperatures in the countries every 10 years
+mean_temp_year_country = [ [0] * len(countries) for i in range(len(years[::10]))]
+
+j = 0
+for country in countries:
+    all_temp_country = global_temp_country_clear[global_temp_country_clear['Country'] == country]
+    i = 0
+    for year in years[::10]:
+        mean_temp_year_country[i][j] = all_temp_country[all_temp_country['dt'].apply(
+                lambda x: x[:4]) == year]['AverageTemperature'].mean()
+        i +=1
+    j += 1
+
+
+# In[ ]:
+
+
+#Let's create a Streaming in Plotly (here, alas, does not work, so commented out)
+#stream_tokens = tls.get_credentials_file()['stream_ids']
+#token =  stream_tokens[-1]
+#stream_id = dict(token=token, maxpoints=60)
+
+data = [ dict(
+        type = 'choropleth',
+        locations = countries,
+        z = mean_temp,
+        locationmode = 'country names',
+        text = countries,
+        marker = dict(
+            line = dict(color = 'rgb(0,0,0)', width = 1)),
+            colorbar = dict(autotick = True, tickprefix = '',
+            title = '# Average\nTemperature,\n°C'),
+        #The following line is also needed to create Stream
+        #stream = stream_id
+            )
+       ]
+
+layout = dict(
+    title = 'Average land temperature in countries',
+    geo = dict(
+        showframe = False,
+        showocean = True,
+        oceancolor = 'rgb(0,255,255)',
+        type = 'equirectangular'
+    ),
+)
+
+fig = dict(data=data, layout=layout)
+py.iplot(fig, validate=False, filename='world_temp_map')
+
+
+# It’s a pity, but here you can only see a static map. On the dynamic map we would be seen that the European countries  started to measure temperature much more earlier than another countries. Perhaps this is due to more rapid economic development of the European countries in the 18th century. Russia and the United States began to measure the temperature only a half-century later.
+
+# In[ ]:
+
+
+#Let's run a Stream
+
+"""s = py.Stream(stream_id=token)
+i = 0
+s.open()
+while True:
+    ye = years[::10]
+    s.write(dict(z = mean_temp_year_country[i]), dict(
+            title = 'Average land temperature in countries.   Year: {0}'.format(ye[i])), validate=False)
+    time.sleep(1)
+    i += 1
+    if i == len(ye):
+        i = 0
+s.close()"""
+
+
+# ##The results
+
+# During my research it was found that there has been a global increase trend in temperature, particularly over the last 30 years. This is due to the violent activities of a humankind. In more developed countries the temperature began to register much earlier. Over time the accuracy of the observations is increased, that is quite natural. Mankind must reflect and take all necessary remedies to reduce emissions of greenhouse gases in the atmosphere. This work was entirely done using python and "plotly". I had received practical skills and knowledge in python and in awesome library for data visualisation.

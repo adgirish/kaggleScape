@@ -1,334 +1,192 @@
-import os
-os.environ['TF_CPP_MIN_LOG_LEVEL']='2'
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+# Based on Bojan's -> https://www.kaggle.com/tunguz/more-effective-ridge-lgbm-script-lb-0-44944
+# Changes:
+# 1. Split category_name into sub-categories
+# 2. Parallelize LGBM to 4 cores
+# 3. Increase the number of rounds in 1st LGBM
+# 4. Another LGBM with different seed for model and training split, slightly different hyper-parametes.
+# 5. Weights on ensemble
+# 6. SGDRegressor doesn't improve the result, going with only 1 Ridge and 2 LGBM
+#remove zero price items
+import pyximport; pyximport.install()
+import gc
+import time
+import numpy as np
+import pandas as pd
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import math as mt
-from pylab import savefig
+from joblib import Parallel, delayed
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+from scipy.sparse import csr_matrix, hstack
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+from sklearn.linear_model import Ridge
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.linear_model import SGDRegressor
+import lightgbm as lgb
 
-# Keras is a deep learning library that wraps the efficient numerical libraries Theano and TensorFlow.
-# It provides a clean and simple API that allows you to define and evaluate deep learning models in just a few lines of code.from keras.models import Sequential, load_model
-from keras.models import Sequential, load_model
-from keras.layers import Dense, Dropout, BatchNormalization, Activation
-from keras.wrappers.scikit_learn import KerasRegressor
-from keras.callbacks import EarlyStopping, ModelCheckpoint
+NUM_BRANDS = 4000
+NUM_CATEGORIES = 1000
+NAME_MIN_DF = 10
+MAX_FEATURES_ITEM_DESCRIPTION = 50000
 
-# define custom R2 metrics for Keras backend
-from keras import backend as K
 
-# model evaluation
-from sklearn.model_selection import KFold, train_test_split 
-from sklearn.metrics import r2_score, mean_squared_error
-
-# define path to save model
-model_path = 'keras_model.h5'
-
-# fix random seed for reproducibility
-seed = 42
-np.random.seed(seed)
-
-# Read datasets
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-
-# save IDs for submission
-id_test = test['ID'].copy()
-
-###########################
-# DATA PREPARATION
-###########################
-
-# glue datasets together
-total = pd.concat([train, test], axis=0)
-print('initial shape: {}'.format(total.shape))
-
-# binary indexes for train/test set split
-is_train = ~total.y.isnull()
-
-# find all categorical features
-cf = total.select_dtypes(include=['object']).columns
-
-# make one-hot-encoding convenient way - pandas.get_dummies(df) function
-dummies = pd.get_dummies(
-    total[cf],
-    drop_first=False # you can set it = True to ommit multicollinearity (crucial for linear models)
-)
-
-print('oh-encoded shape: {}'.format(dummies.shape))
-
-# get rid of old columns and append them encoded
-total = pd.concat(
-    [
-        total.drop(cf, axis=1), # drop old
-        dummies # append them one-hot-encoded
-    ],
-    axis=1 # column-wise
-)
-
-print('appended-encoded shape: {}'.format(total.shape))
-
-# recreate train/test again, now with dropped ID column
-train, test = total[is_train].drop(['ID'], axis=1), total[~is_train].drop(['ID', 'y'], axis=1)
-
-# drop redundant objects
-del total
-
-# check shape
-print('\nTrain shape: {}\nTest shape: {}'.format(train.shape, test.shape))
-
-#########################################################################################################################################
-# GENERATE MODEL
-# The Keras wrappers require a function as an argument. 
-# This function that we must define is responsible for creating the neural network model to be evaluated.
-# Below we define the function to create the baseline model to be evaluated. 
-# The network uses good practices such as the rectifier activation function for the hidden layer. 
-# No activation function is used for the output layer because it is a regression problem and we are interested in predicting numerical 
-# values directly without transform.# The efficient ADAM optimization algorithm is used and a mean squared error loss function is optimized. 
-# This will be the same metric that we will use to evaluate the performance of the model. 
-# It is a desirable metric because by taking the square root gives us an error value we can directly understand in the context of the problem.
-##########################################################################################################################################
-
-def r2_keras(y_true, y_pred):
-    SS_res =  K.sum(K.square( y_true - y_pred )) 
-    SS_tot = K.sum(K.square( y_true - K.mean(y_true) ) ) 
-    return ( 1 - SS_res/(SS_tot + K.epsilon()) )
+def rmsle(y, y0):
+     assert len(y) == len(y0)
+     return np.sqrt(np.mean(np.power(np.log1p(y)-np.log1p(y0), 2)))
     
-# Base model architecture definition.
-# Dropout is a technique where randomly selected neurons are ignored during training. 
-# They are dropped-out randomly. This means that their contribution to the activation.
-# of downstream neurons is temporally removed on the forward pass and any weight updates are
-# not applied to the neuron on the backward pass.
-# More info on Dropout here http://machinelearningmastery.com/dropout-regularization-deep-learning-models-keras/
-# BatchNormalization, Normalize the activations of the previous layer at each batch, i.e. applies a transformation 
-# that maintains the mean activation close to 0 and the activation standard deviation close to 1.
-def model():
-    model = Sequential()
-    #input layer
-    model.add(Dense(input_dims, input_dim=input_dims))
-    model.add(BatchNormalization())
-    model.add(Activation('relu'))
-    model.add(Dropout(0.4))
-    # hidden layers
-    model.add(Dense(input_dims))
-    model.add(BatchNormalization())
-    model.add(Activation(act_func))
-    model.add(Dropout(0.4))
+def split_cat(text):
+    try: return text.split("/")
+    except: return ("No Label", "No Label", "No Label")
     
-    model.add(Dense(input_dims//2))
-    model.add(BatchNormalization())
-    model.add(Activation(act_func))
-    model.add(Dropout(0.4))
+def handle_missing_inplace(dataset):
+    dataset['general_cat'].fillna(value='missing', inplace=True)
+    dataset['subcat_1'].fillna(value='missing', inplace=True)
+    dataset['subcat_2'].fillna(value='missing', inplace=True)
+    dataset['brand_name'].fillna(value='missing', inplace=True)
+    dataset['item_description'].fillna(value='missing', inplace=True)
+
+
+def cutting(dataset):
+    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
+    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
+    pop_category1 = dataset['general_cat'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    pop_category2 = dataset['subcat_1'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    pop_category3 = dataset['subcat_2'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    dataset.loc[~dataset['general_cat'].isin(pop_category1), 'general_cat'] = 'missing'
+    dataset.loc[~dataset['subcat_1'].isin(pop_category2), 'subcat_1'] = 'missing'
+    dataset.loc[~dataset['subcat_2'].isin(pop_category3), 'subcat_2'] = 'missing'
+
+
+def to_categorical(dataset):
+    dataset['general_cat'] = dataset['general_cat'].astype('category')
+    dataset['subcat_1'] = dataset['subcat_1'].astype('category')
+    dataset['subcat_2'] = dataset['subcat_2'].astype('category')
+    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
+
+
+def main():
+    start_time = time.time()
+
+    train = pd.read_table('../input/train.tsv', engine='c')
+    test = pd.read_table('../input/test.tsv', engine='c')
+    print('[{}] Finished to load data'.format(time.time() - start_time))
+    print('Train shape: ', train.shape)
+    print('Test shape: ', test.shape)
+    nrow_test = train.shape[0] #-dftt.shape[0]
+    dftt = train[(train.price < 1.0)]
+    train = train.drop(train[(train.price < 1.0)].index)
+    del dftt['price']
+    nrow_train = train.shape[0] #-dftt.shape[0]
+    #nrow_test = train.shape[0] + dftt.shape[0]
+    y = np.log1p(train["price"])
+    merge: pd.DataFrame = pd.concat([train, dftt, test])
+    submission: pd.DataFrame = test[['test_id']]
+
+    del train
+    del test
+    gc.collect()
     
-    model.add(Dense(input_dims//4, activation=act_func))
+    merge['general_cat'], merge['subcat_1'], merge['subcat_2'] = \
+    zip(*merge['category_name'].apply(lambda x: split_cat(x)))
+    merge.drop('category_name', axis=1, inplace=True)
+    print('[{}] Split categories completed.'.format(time.time() - start_time))
+
+    handle_missing_inplace(merge)
+    print('[{}] Handle missing completed.'.format(time.time() - start_time))
+
+    cutting(merge)
+    print('[{}] Cut completed.'.format(time.time() - start_time))
+
+    to_categorical(merge)
+    print('[{}] Convert categorical completed'.format(time.time() - start_time))
+
+    cv = CountVectorizer(min_df=NAME_MIN_DF)
+    X_name = cv.fit_transform(merge['name'])
+    print('[{}] Count vectorize `name` completed.'.format(time.time() - start_time))
+
+    cv = CountVectorizer()
+    X_category1 = cv.fit_transform(merge['general_cat'])
+    X_category2 = cv.fit_transform(merge['subcat_1'])
+    X_category3 = cv.fit_transform(merge['subcat_2'])
+    print('[{}] Count vectorize `categories` completed.'.format(time.time() - start_time))
+
+    tv = TfidfVectorizer(max_features=MAX_FEATURES_ITEM_DESCRIPTION,
+                         ngram_range=(1, 3),
+                         stop_words='english')
+    X_description = tv.fit_transform(merge['item_description'])
+    print('[{}] TFIDF vectorize `item_description` completed.'.format(time.time() - start_time))
+
+    lb = LabelBinarizer(sparse_output=True)
+    X_brand = lb.fit_transform(merge['brand_name'])
+    print('[{}] Label binarize `brand_name` completed.'.format(time.time() - start_time))
+
+    X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
+                                          sparse=True).values)
+    print('[{}] Get dummies on `item_condition_id` and `shipping` completed.'.format(time.time() - start_time))
+
+    sparse_merge = hstack((X_dummies, X_description, X_brand, X_category1, X_category2, X_category3, X_name)).tocsr()
+    print('[{}] Create sparse merge completed'.format(time.time() - start_time))
+
+    X = sparse_merge[:nrow_train]
+    X_test = sparse_merge[nrow_test:]
     
-    # output layer (y_pred)
-    model.add(Dense(1, activation='linear'))
+    model = Ridge(alpha=.5, copy_X=True, fit_intercept=True, max_iter=100,
+      normalize=False, random_state=101, solver='auto', tol=0.01)
+    model.fit(X, y)
+    print('[{}] Train ridge completed'.format(time.time() - start_time))
+    predsR = model.predict(X=X_test)
+    print('[{}] Predict ridge completed'.format(time.time() - start_time))
+
+    train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size = 0.1, random_state = 144) 
+    d_train = lgb.Dataset(train_X, label=train_y, max_bin=8192)
+    d_valid = lgb.Dataset(valid_X, label=valid_y, max_bin=8192)
+    watchlist = [d_train, d_valid]
     
-    # compile this model
-    model.compile(loss='mean_squared_error', # one may use 'mean_absolute_error' as alternative
-                  optimizer='adam',
-                  metrics=[r2_keras] # you can add several if needed
-                 )
-    # Visualize NN architecture
-    print(model.summary())
-    return model
+    params = {
+        'learning_rate': 0.65,
+        'application': 'regression',
+        'max_depth': 3,
+        'num_leaves': 60,
+        'verbosity': -1,
+        'metric': 'RMSE',
+        'data_random_seed': 1,
+        'bagging_fraction': 0.5,
+        'nthread': 4
+    }
 
-#activation functions for hidden layers
-act_func = 'tanh' # could be 'relu', 'sigmoid', ...tanh
+    params2 = {
+        'learning_rate': 0.85,
+        'application': 'regression',
+        'max_depth': 3,
+        'num_leaves': 140,
+        'verbosity': -1,
+        'metric': 'RMSE',
+        'data_random_seed': 2,
+        'bagging_fraction': 1,
+        'nthread': 4
+    }
 
-# initialize input dimension
-
-input_dims = train.shape[1]-1
-# input_dims = train_reduced.shape[1]
-
-# initialize estimator, wrap model in KerasRegressor
-estimator = KerasRegressor(
-    build_fn=model, 
-    nb_epoch=300, 
-    batch_size=30,
-    verbose=1
-)
-
-# X, y preparation
-X, y = train.drop('y', axis=1).copy().values, train.y.values
-X_test = test.values
-print('\nTrain shape No Feature Selection: {}\nTest shape No Feature Selection: {}'.format(X.shape, X_test.shape))
-
-###############
-# K-FOLD
-###############
-"""Return the sample arithmetic mean of data."""
-def mean(numbers):
-    return float(sum(numbers)) / max(len(numbers), 1)
-"""Return sum of square deviations of sequence data."""    
-def sum_of_square_deviation(numbers,mean):
-    return float(1/len(numbers) * sum((x - mean)** 2 for x in numbers))    
-  
-n_splits = 4
-kf = KFold(n_splits=n_splits, random_state=seed, shuffle=True)
-kf.get_n_splits(X)
-
-mse_scores = list()
-r2_scores = list()
-
-for fold, (train_index, test_index) in enumerate(kf.split(X)):
+    model = lgb.train(params, train_set=d_train, num_boost_round=8000, valid_sets=watchlist, \
+    early_stopping_rounds=1000, verbose_eval=1000) 
+    predsL = model.predict(X_test)
     
-    print("TRAIN:", train_index, "TEST:", test_index)
-    X_tr, X_val = X[train_index], X[test_index]
-    y_tr, y_val = y[train_index], y[test_index]
-
-    # prepare callbacks
-    callbacks = [
-        EarlyStopping(
-            monitor='val_r2_keras', 
-            patience=20,
-            mode='max',
-            verbose=1)
-    ]
-    # fit estimator
-    history = estimator.fit(
-        X_tr, 
-        y_tr, 
-        epochs=500,
-        validation_data=(X_val, y_val),
-        verbose=2,
-        callbacks=callbacks,
-        shuffle=True
-    )
+    print('[{}] Predict lgb 1 completed.'.format(time.time() - start_time))
     
-    pred = estimator.predict(X_val)
-    
-    mse = mean_squared_error(y_val, estimator.predict(X_val))**0.5
-    r2 = r2_score(y_val, estimator.predict(X_val))
-    mse_scores.append(mse)
-    r2_scores.append(r2)
-    
-    print('Fold %d: Mean Squared Error %f'%(fold, mse))
-    print('Fold %d: R^2 %f'%(fold, r2))
+    train_X2, valid_X2, train_y2, valid_y2 = train_test_split(X, y, test_size = 0.1, random_state = 101) 
+    d_train2 = lgb.Dataset(train_X2, label=train_y2, max_bin=8192)
+    d_valid2 = lgb.Dataset(valid_X2, label=valid_y2, max_bin=8192)
+    watchlist2 = [d_train2, d_valid2]
 
-    #save results
-    pred = estimator.predict(X_test)
-    output = pd.DataFrame({'id': id_test, 'y': pred})
-    output.to_csv(str(r2)+'_submission_keras.csv', index=False)
+    model = lgb.train(params2, train_set=d_train2, num_boost_round=5500, valid_sets=watchlist2, \
+    early_stopping_rounds=500, verbose_eval=500) 
+    predsL2 = model.predict(X_test)
 
-mean_mse = mean(mse_scores)
-mean_r2 = mean(r2_scores)
+    print('[{}] Predict lgb 2 completed.'.format(time.time() - start_time))
 
-standard_deviation_mse = mt.sqrt(sum_of_square_deviation(mse_scores,mean_mse))
-standard_deviation_r2 = mt.sqrt(sum_of_square_deviation(r2_scores,mean_r2))
+    preds = predsR*0.3 + predsL*0.35 + predsL2*0.35
 
-print('=====================')
-print( 'Mean Squared Error %f'%mean_mse)
-print('=====================')
-print('=====================')
-print( 'Stdev Squared Error %f'%standard_deviation_mse)
-print('=====================')
-print('=====================')
-print( 'Mean R^2 %f'%mean_r2)
-print('=====================')
-print('=====================')
-print( 'Stdev R^2 %f'%standard_deviation_r2)
-print('=====================')
+    submission['price'] = np.expm1(preds)
+    submission.to_csv("submission_ridge_2xlgbm.csv", index=False)
 
-# prepare callbacks
-callbacks = [
-    EarlyStopping(
-        monitor='val_r2_keras', 
-        patience=20,
-        mode='max',
-        verbose=1),
-    ModelCheckpoint(
-        model_path, 
-        monitor='val_r2_keras', 
-        save_best_only=True, 
-        mode='max',
-        verbose=0)
-]
-
-# train/validation split
-X_tr, X_val, y_tr, y_val = train_test_split(
-    X, 
-    y, 
-    test_size=0.2, 
-    random_state=seed
-)
-
-# fit estimator
-history = estimator.fit(
-    X_tr, 
-    y_tr, 
-    epochs=500,
-    validation_data=(X_val, y_val),
-    verbose=2,
-    callbacks=callbacks,
-    shuffle=True
-)
-
-# list all data in history
-print(history.history.keys())
-
-# summarize history for R^2
-fig_acc = plt.figure(figsize=(10, 10))
-plt.plot(history.history['r2_keras'])
-plt.plot(history.history['val_r2_keras'])
-plt.title('model accuracy')
-plt.ylabel('R^2')
-plt.xlabel('epoch')
-plt.legend(['train', 'test'], loc='upper left')
-plt.show()
-fig_acc.savefig("model_accuracy.png")
-
-# summarize history for loss
-fig_loss = plt.figure(figsize=(10, 10))
-plt.plot(history.history['loss'])
-plt.plot(history.history['val_loss'])
-plt.title('model loss')
-plt.ylabel('loss')
-plt.xlabel('epoch')
-plt.legend(['train', 'test'], loc='upper left')
-plt.show()
-fig_loss.savefig("model_loss.png")
-
-# if best iteration's model was saved then load and use it
-if os.path.isfile(model_path):
-    estimator = load_model(model_path, custom_objects={'r2_keras': r2_keras})
-
-# Plot in blue color the predicted data and in green color the
-# actual data to verify visually the accuracy of the model.
-predicted = estimator.predict(X_val)
-fig_verify = plt.figure(figsize=(100, 50))
-plt.plot(predicted, color="blue")
-plt.plot(y_val, color="green")
-plt.title('prediction')
-plt.ylabel('value')
-plt.xlabel('row')
-plt.legend(['predicted', 'actual data'], loc='upper left')
-plt.show()
-fig_verify.savefig("model_verify.png")
-
-# check performance on train set
-print('MSE train: {}'.format(mean_squared_error(y_tr, estimator.predict(X_tr))**0.5)) # mse train
-print('R^2 train: {}'.format(r2_score(y_tr, estimator.predict(X_tr)))) # R^2 train
-
-# check performance on validation set
-print('MSE val: {}'.format(mean_squared_error(y_val, estimator.predict(X_val))**0.5)) # mse val
-print('R^2 val: {}'.format(r2_score(y_val, estimator.predict(X_val)))) # R^2 val
-pass
-
-# predict results
-res = estimator.predict(X_test).ravel()
-print(res)
-
-# create df and convert it to csv
-output = pd.DataFrame({'id': id_test, 'y': res})
-output.to_csv('keras-baseline.csv', index=False)
+if __name__ == '__main__':
+    main()

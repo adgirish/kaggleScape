@@ -1,250 +1,297 @@
 
 # coding: utf-8
 
-# ## Preface
-# I found the [topic](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43384) started by [Yang Yu](https://www.kaggle.com/popyy0101) doubting about the significance of small improvement in Gini score. **Yang Yu** wrote that:
-# 
-# > Several years ago, one of my tutors told me that "any improvement within 0.001 level is just noise", which means it was just randomly switching 1 label out of 1000 samples in evaluation set (roughly).
-# 
-# The question is very interesting at least for **Yang Yu** and me so I decided to investigate that. Since I'm not a statistician but a software engineer I decided to use my programming skills to make Gini scoring on simulated data and answer the next very specific questions:
-# - How much samples it is needed to be correct to improve Gini from *0.286* to *0.287*?
-# - What is the probability to get from *0.286* to *0.287* by just random guessing?
-# 
-# Also I got a bit excited what I can do and played with public/private scoring. It's cool when you can simulate 0.290! :D
-# 
-# I would like to repeat that I'm not a statistician and I do not pretend on ultimate truth. The experiment I provide may be wrong and contain some things I am missing. Any criticism, suggestions, hints are very welcomed. The more I'm writing the more I'm doubting whether it's not a trash :)
-
-# ## Assumptions
-# We assume the next things:
-# - Imbalance of positive and negative classes in the test set is the same as in the training set.
-# - Our model outputs uniformly distributed probabilities.
-# - Public and private leaderboard scores are independent from each other. 
+# # Overview
+# The kernel goes through
+# 1. the preprocessing steps to load the data
+# 1. a quick visualization of the color-space
+# 1. training a simple CNN
+# 1. applying the model to the test data
+# 1. creating the RLE test data
 
 # In[ ]:
 
 
-import pandas as pd
-train = pd.read_csv("../input/train.csv")
-counts = train.target.value_counts()
-print("Class distribution:")
-counts / counts.sum()
-
-
-# Appoximately 96.4% of the data are negative class labels. Let's create perfect submission(oh, here we can!) and target vector that correspond to the test data size. 
-
-# In[ ]:
-
-
-import numpy as np
-test = pd.read_csv("../input/train.csv")
-length = len(test)
-np.random.seed(287)
-perfect_sub = np.random.rand(length)
-target = (perfect_sub > 0.963552).astype(dtype=int)
-print("Perfect submission looks like: ", perfect_sub)
-print("Target vector looks like: ", target)
-print("Target vector class distibution: ")
-counts = pd.Series(target).value_counts()
-counts / counts.sum()
-
-
-# Almost the same imbalance we have in the training set.
-# Now let's define Normalized Gini Score. [Sklearn](http://scikit-learn.org/stable/index.html) package has [roc_auc_score](http://scikit-learn.org/stable/modules/generated/sklearn.metrics.roc_auc_score.html) and we are going to compute Normalized Gini with *AUC* using the next formula:
-# \begin{align}
-# Gini & = 2 * AUC - 1
-# \end{align}
-# Let's see how our perfect submission is evaluated by Gini. Hold your breath!
-# 
-
-# In[ ]:
-
-
-from sklearn.metrics import roc_auc_score
-def gini(y_target, y_score):
-    return 2 * roc_auc_score(y_target, y_score) - 1
-print(f"Gini on perfect submission: {gini(target, perfect_sub):0.5f}")
-
-
-# Amazing! This is the highest score we can get from Gini and probably will never see on the leaderboard. Let's  also define completely random submission and test it.
-
-# In[ ]:
-
-
-np.random.seed(8888)
-random_sub = np.random.rand(length)
-print(f"Gini on random submission: {gini(target, random_sub):0.5f}")
-
-
-# Almost zero. That's what we expect from Gini when we have no idea about the data and use guessing.
-# 
-# We know that the public leaderboard is calculated on approximately 30% of the test data. So we should create private and public sets. Our generated answers are randomly distributed and we can just subset first 30% for public dataset and the rest 70% for private dataset. We also create function that evaluates public and private score.
-
-# In[ ]:
-
-
-first30percent = int(length * 0.3)
-target_pub = target[:first30percent]
-target_prv = target[first30percent:]
-
-def evaluate(submission):
-    return gini(target_pub, submission[:first30percent]),        gini(target_prv, submission[first30percent:])
-
-
-# Let's define **spoiler** function. It fills our perfect submission with *n* randomly distributed random answers i.e. imputes the error in the result. Also we will spoil our perfect submission an look how Gini changes. The calculations take some time, let's respect Kaggle for calculating our sometimes trashy submissions.
-
-# In[ ]:
-
-
-def spoiler(n, seed=None):
-    if seed is not None:
-        np.random.seed(seed)
-    tospoil = np.random.choice(range(length), size=n, replace=False)
-    submission = perfect_sub.copy()
-    submission[tospoil] = np.random.rand()
-    return submission
-
-submissions = []
-for spoil_n in range(0, length, 5000):
-    score_pub, score_priv = evaluate(spoiler(spoil_n, spoil_n))
-    submissions.append((spoil_n, score_pub, score_priv))
-submissions = pd.DataFrame(submissions, columns = ["n", "public_score", "private_score"])
-submissions.head()
-
-
-# The chart showing dependence between number of spoiled samples and Gini is the following:
-
-# In[ ]:
-
-
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from glob import glob
+import os
+from skimage.io import imread
 import matplotlib.pyplot as plt
-plt.figure(figsize=(11,6))
-plt.plot(submissions["n"], submissions["public_score"], label="Public")
-plt.plot(submissions["n"], submissions["private_score"], label = "Private")
-plt.xlabel("Samples spoiled")
-plt.ylabel("Gini Score")
-_ = plt.legend()
-
-
-# Let's plot the distribution of difference between public score and private score.
-
-# In[ ]:
-
-
 import seaborn as sns
-pub_prv_diff = submissions["public_score"] - submissions["private_score"]
-_ = sns.distplot(pub_prv_diff, hist=True)
-_ = plt.xlabel("Public-Private Difference")
-_ = plt.ylabel("Density")
-pub_prv_diff.describe()
+get_ipython().run_line_magic('matplotlib', 'inline')
+dsb_data_dir = os.path.join('..', 'input')
+stage_label = 'stage1'
 
 
-# Public score seems to be usually higher than a private score(slightly left-skewed distribution).
-# Let's see inverse cumulative plot of absolute difference.
+# # Read in the labels
+# Load the RLE-encoded output for the training set
 
 # In[ ]:
 
 
-_ = sns.distplot(abs(pub_prv_diff), bins=20,
-             hist_kws=dict(cumulative=-1),
-             kde_kws=dict(cumulative=True), kde=False, norm_hist=True)
-_ = plt.xlabel("Public-Private Absolute Difference")
-_ = plt.ylabel("Frequency")
+train_labels = pd.read_csv(os.path.join(dsb_data_dir,'{}_train_labels.csv'.format(stage_label)))
+train_labels['EncodedPixels'] = train_labels['EncodedPixels'].map(lambda ep: [int(x) for x in ep.split(' ')])
+train_labels.sample(3)
 
 
-# It says the absolute difference more than *0.005* appears in every third case. It is a lot!
-# But this has nothing to do with guessing. It just tells us we should expect difference in public-private outcome.
-# I manually found the submission where the public Gini score is close to *0.286*. It required predicting more that *170000* samples like in the perfect submission.
+# # Load in all Images
+# Here we load in the images and process the paths so we have the appropriate information for each image
 
 # In[ ]:
 
 
-np.random.seed(123)
-correct = 172560
-index = np.random.choice(range(length), size=(length-correct), replace=False)
-submission286 = perfect_sub.copy()
-spoiled_samples = np.random.rand(length-correct)
-submission286[index] = spoiled_samples
-public, private = evaluate(submission286)
-print(f"Public score: {public:0.4f}\nPrivate score: {private:0.4f}")
+all_images = glob(os.path.join(dsb_data_dir, 'stage1_*', '*', '*', '*'))
+img_df = pd.DataFrame({'path': all_images})
+img_id = lambda in_path: in_path.split('/')[-3]
+img_type = lambda in_path: in_path.split('/')[-2]
+img_group = lambda in_path: in_path.split('/')[-4].split('_')[1]
+img_stage = lambda in_path: in_path.split('/')[-4].split('_')[0]
+img_df['ImageId'] = img_df['path'].map(img_id)
+img_df['ImageType'] = img_df['path'].map(img_type)
+img_df['TrainingSplit'] = img_df['path'].map(img_group)
+img_df['Stage'] = img_df['path'].map(img_stage)
+img_df.sample(2)
 
 
-# We should steadily add correct samples to our *submission286* in order to get 0.287. Sounds easy, doesn't it?
-# We will steadily increase number of correct answers from 5 to infinity with step 5 and give 30 tries for each addition because our correct samples are selected in a random order. We will stop when we reach 0.287.
-
-# In[ ]:
-
-
-tries, fix = 30, 0
-found = False
-np.random.seed(10)
-while not found:
-    fix += 5
-    print(f"Fixing {fix} samples")
-    for t in range(tries):
-        new_submission = submission286.copy()
-        improve_index = np.random.choice(index, size=fix, replace=False)
-        new_submission[improve_index] = perfect_sub[improve_index]
-        public, _ = evaluate(new_submission)
-        if public >= 0.287:
-            print("0.287 reached!")
-            found = True
-            break
-
-
-# **It takes at least 85 samples to predict correctly to reach 0.287 in my dataset**. Now let's see if it is hard to predict 85 samples correctly by simple guessing. However guessing exactly *that* 85 samples may be a hard work if we don't know indexes. So it would be more fair to make guesses with variable number of samples. Since it is a time-consuming operation I decided to check only some certain number of samples to guess.
+# # Create Training Data
+# Here we make training data and load all the images into the dataframe. We take a simplification here of grouping all the regions together (rather than keeping them distinct).
 
 # In[ ]:
 
 
-# fix_samples contains number of samples to guess
-fix_samples = [85, 100, 150, 200, 250, 500, 1000, 2000, 3000, 4000, 
-               6000, 7000, 10000, 20000, 30000, 40000, 50000, 60000,
-              100000, 200000, 300000, 500000]
-# Number of tries for each group of samples
-tries = 300
-scores, types = [], []
-np.random.seed(888)
-for fix in fix_samples:
-    goal_counter = 0
-    # Let's guess and repeat!
-    for i in range(tries):
-        new_submission = submission286.copy()
-        guess = np.random.choice(range(length), size=fix, replace=False)
-        new_submission[guess] = np.random.rand()
-        public, _ = evaluate(new_submission)
-        if public >= 0.287:
-            goal_counter += 1
-        scores.append(public)
-        types.append(fix)
-    print(f"Frequency(score>=0.287 | Guessed={fix} samples, Tries={tries} times) = " + 
-          f"{goal_counter/tries:0.3f}")
-try_history = pd.DataFrame({"type": types, "score": scores})
-print("Done!")
+get_ipython().run_cell_magic('time', '', 'train_df = img_df.query(\'TrainingSplit=="train"\')\ntrain_rows = []\ngroup_cols = [\'Stage\', \'ImageId\']\nfor n_group, n_rows in train_df.groupby(group_cols):\n    c_row = {col_name: col_value for col_name, col_value in zip(group_cols, n_group)}\n    c_row[\'masks\'] = n_rows.query(\'ImageType == "masks"\')[\'path\'].values.tolist()\n    c_row[\'images\'] = n_rows.query(\'ImageType == "images"\')[\'path\'].values.tolist()\n    train_rows += [c_row]\ntrain_img_df = pd.DataFrame(train_rows)    \nIMG_CHANNELS = 3\ndef read_and_stack(in_img_list):\n    return np.sum(np.stack([imread(c_img) for c_img in in_img_list], 0), 0)/255.0\ntrain_img_df[\'images\'] = train_img_df[\'images\'].map(read_and_stack).map(lambda x: x[:,:,:IMG_CHANNELS])\ntrain_img_df[\'masks\'] = train_img_df[\'masks\'].map(read_and_stack).map(lambda x: x.astype(int))\ntrain_img_df.sample(1)')
 
 
-# Well, we see that **guessing sometimes works in order to get +0.001**! But it works extremely rarely. The best performance on guessing we achieved when our guesses touched ~2K-6K samples. For example, when we guessed 6K samples - we got 10 hits of 0.287 out of 300 tries. Is it feasable to achieve this when probing the leaderboard by the crowd? I believe yes. 
-# 
-# Now let's see the results on the plot.
+# # Show a few images
+# Here we show a few images of the cells where we see there is a mixture of brightfield and fluorescence which will probably make using a single segmentation algorithm difficult
 
 # In[ ]:
 
 
-sns.set(font_scale=0.9)
-plt.figure(figsize=(15, 10))
-ax = sns.stripplot(x="type", y="score", data=try_history, jitter=True, size=9, color="blue", alpha=.5)
-ax.set_ylim(0.280, 0.288)
-plt.axhline(0.2862, label="baseline", color="blue", linestyle="dashed")
-plt.axhline(0.287, label="goal", color="orange", linestyle="dashed")
-# Draw means for each group
-mean = try_history.groupby("type")["score"].agg(["mean"])["mean"]
-plt.plot(range(len(fix_samples)), mean, color="red")
-plt.legend()
-plt.grid()
+n_img = 6
+fig, m_axs = plt.subplots(2, n_img, figsize = (12, 4))
+for (_, c_row), (c_im, c_lab) in zip(train_img_df.sample(n_img).iterrows(), 
+                                     m_axs.T):
+    c_im.imshow(c_row['images'])
+    c_im.axis('off')
+    c_im.set_title('Microscope')
+    
+    c_lab.imshow(c_row['masks'])
+    c_lab.axis('off')
+    c_lab.set_title('Labeled')
 
 
-# The more samples we guess - the less our expected score and the larger the variance of our results. I would recommend to stay at 6K - the optimal number :-)
+# # Look at the intensity distribution
+# Here we look briefly at the distribution of intensity and see a few groups forming, they should probably be handled separately. 
 
-# # Instead of a Smart Conclusion
-# Please do not consider the analysis as exactly applicable to the current leaderboard. This is just a testing of the particular random example.
-# 
-# I learned something... and you?
+# In[ ]:
+
+
+train_img_df['Red'] = train_img_df['images'].map(lambda x: np.mean(x[:,:,0]))
+train_img_df['Green'] = train_img_df['images'].map(lambda x: np.mean(x[:,:,1]))
+train_img_df['Blue'] = train_img_df['images'].map(lambda x: np.mean(x[:,:,2]))
+train_img_df['Gray'] = train_img_df['images'].map(lambda x: np.mean(x))
+train_img_df['Red-Blue'] = train_img_df['images'].map(lambda x: np.mean(x[:,:,0]-x[:,:,2]))
+sns.pairplot(train_img_df[['Gray', 'Red', 'Green', 'Blue', 'Red-Blue']])
+
+
+# # Check Dimensions 
+# Here we show the dimensions of the data to see the variety in the input images
+
+# In[ ]:
+
+
+train_img_df['images'].map(lambda x: x.shape).value_counts()
+
+
+# ## Making a simple CNN
+# Here we make a very simple CNN just to get a quick idea of how well it works. For this we use a batch normalization to normalize the inputs. We cheat a bit with the padding to keep problems simple.
+
+# In[ ]:
+
+
+from keras.models import Sequential
+from keras.layers import BatchNormalization, Conv2D, UpSampling2D, Lambda
+simple_cnn = Sequential()
+simple_cnn.add(BatchNormalization(input_shape = (None, None, IMG_CHANNELS), 
+                                  name = 'NormalizeInput'))
+simple_cnn.add(Conv2D(8, kernel_size = (3,3), padding = 'same'))
+simple_cnn.add(Conv2D(8, kernel_size = (3,3), padding = 'same'))
+# use dilations to get a slightly larger field of view
+simple_cnn.add(Conv2D(16, kernel_size = (3,3), dilation_rate = 2, padding = 'same'))
+simple_cnn.add(Conv2D(16, kernel_size = (3,3), dilation_rate = 2, padding = 'same'))
+simple_cnn.add(Conv2D(32, kernel_size = (3,3), dilation_rate = 3, padding = 'same'))
+
+# the final processing
+simple_cnn.add(Conv2D(16, kernel_size = (1,1), padding = 'same'))
+simple_cnn.add(Conv2D(1, kernel_size = (1,1), padding = 'same', activation = 'sigmoid'))
+simple_cnn.summary()
+
+
+# # Loss
+# Since we are being evaulated with intersection over union we can use the inverse of the DICE score as the loss function to optimize
+
+# In[ ]:
+
+
+from keras import backend as K
+smooth = 1.
+def dice_coef(y_true, y_pred):
+    y_true_f = K.flatten(y_true)
+    y_pred_f = K.flatten(y_pred)
+    intersection = K.sum(y_true_f * y_pred_f)
+    return (2. * intersection + smooth) / (K.sum(y_true_f) + K.sum(y_pred_f) + smooth)
+def dice_coef_loss(y_true, y_pred):
+    return -dice_coef(y_true, y_pred)
+simple_cnn.compile(optimizer = 'adam', 
+                   loss = dice_coef_loss, 
+                   metrics = [dice_coef, 'acc', 'mse'])
+
+
+# # Simple Training
+# Here we run a simple training, with each image being it's own batch (not a very good idea), but it keeps the code simple
+
+# In[ ]:
+
+
+def simple_gen():
+    while True:
+        for _, c_row in train_img_df.iterrows():
+            yield np.expand_dims(c_row['images'],0), np.expand_dims(np.expand_dims(c_row['masks'],-1),0)
+
+simple_cnn.fit_generator(simple_gen(), 
+                         steps_per_epoch=train_img_df.shape[0],
+                        epochs = 3)
+
+
+# # Apply Model to Test
+# Here we apply the model to the test data
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'test_df = img_df.query(\'TrainingSplit=="test"\')\ntest_rows = []\ngroup_cols = [\'Stage\', \'ImageId\']\nfor n_group, n_rows in test_df.groupby(group_cols):\n    c_row = {col_name: col_value for col_name, col_value in zip(group_cols, n_group)}\n    c_row[\'images\'] = n_rows.query(\'ImageType == "images"\')[\'path\'].values.tolist()\n    test_rows += [c_row]\ntest_img_df = pd.DataFrame(test_rows)    \n\ntest_img_df[\'images\'] = test_img_df[\'images\'].map(read_and_stack).map(lambda x: x[:,:,:IMG_CHANNELS])\nprint(test_img_df.shape[0], \'images to process\')\ntest_img_df.sample(1)')
+
+
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', "test_img_df['masks'] = test_img_df['images'].map(lambda x: simple_cnn.predict(np.expand_dims(x, 0))[0, :, :, 0])")
+
+
+# ## Show a few predictions
+
+# In[ ]:
+
+
+n_img = 3
+from skimage.morphology import closing, opening, disk
+def clean_img(x):
+    return opening(closing(x, disk(1)), disk(3))
+fig, m_axs = plt.subplots(3, n_img, figsize = (12, 6))
+for (_, d_row), (c_im, c_lab, c_clean) in zip(test_img_df.sample(n_img).iterrows(), 
+                                     m_axs):
+    c_im.imshow(d_row['images'])
+    c_im.axis('off')
+    c_im.set_title('Microscope')
+    
+    c_lab.imshow(d_row['masks'])
+    c_lab.axis('off')
+    c_lab.set_title('Predicted')
+    
+    c_clean.imshow(clean_img(d_row['masks']))
+    c_clean.axis('off')
+    c_clean.set_title('Clean')
+
+
+# # Check RLE
+# Check that our approach for RLE encoding (stolen from [here](https://www.kaggle.com/rakhlin/fast-run-length-encoding-python)) works
+
+# In[ ]:
+
+
+from skimage.morphology import label # label regions
+def rle_encoding(x):
+    '''
+    x: numpy array of shape (height, width), 1 - mask, 0 - background
+    Returns run length as list
+    '''
+    dots = np.where(x.T.flatten()==1)[0] # .T sets Fortran order down-then-right
+    run_lengths = []
+    prev = -2
+    for b in dots:
+        if (b>prev+1): run_lengths.extend((b+1, 0))
+        run_lengths[-1] += 1
+        prev = b
+    return run_lengths
+
+def prob_to_rles(x, cut_off = 0.5):
+    lab_img = label(x>cut_off)
+    if lab_img.max()<1:
+        lab_img[0,0] = 1 # ensure at least one prediction per image
+    for i in range(1, lab_img.max()+1):
+        yield rle_encoding(lab_img==i)
+
+
+# ## Calculate the RLEs for a Train Image
+
+# In[ ]:
+
+
+_, train_rle_row = next(train_img_df.tail(5).iterrows()) 
+train_row_rles = list(prob_to_rles(train_rle_row['masks']))
+
+
+# ## Take the RLEs from the CSV
+
+# In[ ]:
+
+
+tl_rles = train_labels.query('ImageId=="{ImageId}"'.format(**train_rle_row))['EncodedPixels']
+
+
+# ## Check
+# Since we made some simplifications, we don't expect everything to be perfect, but pretty close
+
+# In[ ]:
+
+
+match, mismatch = 0, 0
+for img_rle, train_rle in zip(sorted(train_row_rles, key = lambda x: x[0]), 
+                             sorted(tl_rles, key = lambda x: x[0])):
+    for i_x, i_y in zip(img_rle, train_rle):
+        if i_x == i_y:
+            match += 1
+        else:
+            mismatch += 1
+print('Matches: %d, Mismatches: %d, Accuracy: %2.1f%%' % (match, mismatch, 100.0*match/(match+mismatch)))
+
+
+# # Calculate RLE for all the masks
+# Here we generate the RLE for all the masks and output the the results to a table. We use a few morphological operations to clean up the images before submission since they can be very messy (remove single pixels, connect nearby regions, etc)
+
+# In[ ]:
+
+
+test_img_df['rles'] = test_img_df['masks'].map(clean_img).map(lambda x: list(prob_to_rles(x)))
+
+
+# In[ ]:
+
+
+out_pred_list = []
+for _, c_row in test_img_df.iterrows():
+    for c_rle in c_row['rles']:
+        out_pred_list+=[dict(ImageId=c_row['ImageId'], 
+                             EncodedPixels = ' '.join(np.array(c_rle).astype(str)))]
+out_pred_df = pd.DataFrame(out_pred_list)
+print(out_pred_df.shape[0], 'regions found for', test_img_df.shape[0], 'images')
+out_pred_df.sample(3)
+
+
+# In[ ]:
+
+
+out_pred_df[['ImageId', 'EncodedPixels']].to_csv('predictions.csv', index = False)
+

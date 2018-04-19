@@ -1,263 +1,194 @@
 
 # coding: utf-8
 
-# Vladimir Demidov has [an excellent kernel](https://www.kaggle.com/yekenot/simple-stacker-lb-0-284) that shows how to do stacking elegantly and also shows (via its public leaderboard score) why to do stacking.  But there were a couple of things I wanted to do differently, so I decided to release my own version.  Aside from being a notebook, this is almost identical to the original, except for two substantive changes (and a few minor cosmetic ones).
+# # Time-series plotting (Optional)
 # 
-# First, I apply a log-odds transformation to the base models' predictions.  Since the top-level model is a logistic regression, it takes a linear combination of its inputs and then applies a logistic transformation (the inverse of log-odds) to the result.  If the inputs are themselves expressed as probabilities, then it's kind of like doing the logistic transformation twice (and if one of the base models were a logistic regression, it would be exactly like doing the logistic transformation twice), which would be hard to justify.  To put the base model predictions in "units that a linear model understands," I express them as log odds ratios rather than probabilities.
-# 
-# Second, I fit the logistic regression without an intercept.  Although the intercept might be necessary without the log-odds transformation, the regression with log odds gives reasonable results without it, and it's not clear why it should be there.  In my view, since the gini coefficient depends on order, an added constant has no substantive meaning, and the opportunity to add one is simply an opportunity to overfit.  (If we cared about the actual probabilities, you could make a case for using a constant term as being sort of like adding another base model that always predicts the same number, but here that justification doesn't apply.)
-# 
-# My model (as you should be able to see by comparing this notebook to his log) produces a very slightly higher CV score ("Stacker score") than Vladimir's.  I haven't submitted the output, but I expect it would get the same public leaderboard score.  But this is one of those cases where you have to make a judgment based on what you think is a better modeling practice rather than what results it gets in limited tests.
+# In all of the sections thus far our visualizations have focused on and used numeric variables: either categorical variables, which fall into a set of buckets, or interval variables, which fall into an interval of values. In this notebook we will explore another type of variable: a time-series variable.
 
-# In[ ]:
+# In[1]:
 
 
 import pandas as pd
+pd.set_option('max_columns', None)
 import numpy as np
 
-from sklearn.model_selection import StratifiedKFold
-from sklearn.model_selection import cross_val_score
 
-from xgboost import XGBClassifier
-from lightgbm import LGBMClassifier
-from catboost import CatBoostClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier, ExtraTreesClassifier, AdaBoostClassifier
-from sklearn.metrics import roc_auc_score
+# ## Types of time series variables
+# 
+# Time-series variables are populated by values which are specific to a point in time. Time is linear and infinitely fine-grained, so really time-series values are a kind of special case of interval variables.
+# 
+# Dates can show up in your dataset in a few different ways. We'll examine the two most common ways in this notebook.
+# 
+# In the "strong case" dates act as an explicit index on your dataset. A good example is the following dataset on stock prices:
 
-# Regularized Greedy Forest
-from rgf.sklearn import RGFClassifier     # https://github.com/fukatani/rgf_python
+# In[2]:
 
 
-# In[ ]:
+stocks = pd.read_csv("../input/nyse/prices.csv", parse_dates=['date'])
+stocks = stocks[stocks['symbol'] == "GOOG"].set_index('date')
+stocks.head()
 
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
+# This dataset which is indexed by the date: the data being collected is being collected in the "period" of a day. The values in the record provide information about that stock within that period.
+# 
+# For daily data like this using a date like this is convenient. But a period can technically be for any length of time. `pandas` provides a whole dedicated type, the `pandas.Period` `dtype` (documented [here](https://pandas.pydata.org/pandas-docs/stable/generated/pandas.Period.html)), for this concept.
+# 
+# In the "weak case", dates act as timestamps: they tell us something about when an observation occurred. For example, in the following dataset of animal shelter outcomes, there are two columns, `datetime` and `date_of_birth`, which describe facts about the animal in the observation.
 
+# In[3]:
 
-# In[ ]:
 
+shelter_outcomes = pd.read_csv(
+    "../input/austin-animal-center-shelter-outcomes-and/aac_shelter_outcomes.csv", 
+    parse_dates=['date_of_birth', 'datetime']
+)
+shelter_outcomes = shelter_outcomes[
+    ['outcome_type', 'age_upon_outcome', 'datetime', 'animal_type', 'breed', 
+     'color', 'sex_upon_outcome', 'date_of_birth']
+]
+shelter_outcomes.head()
 
-# Preprocessing 
-id_test = test['id'].values
-target_train = train['target'].values
 
-train = train.drop(['target','id'], axis = 1)
-test = test.drop(['id'], axis = 1)
+# To put this another way, the stock data is aggregated over a certain period of time, so changing the time significantly changes the data. In the animal outcomes case, information is "record-level"; the dates are descriptive facts and it doesn't make sense to change them.
 
+# ## Visualizing by grouping
+# 
+# I said earlier that time is a "special case" of an interval variable. Does that mean that we can use the tools and techniques familiar to us from earlier sections with time series data as well? Of course!
+# 
+# For example, here's a line plot visualizing which birth dates are the most common in the dataset.
 
-col_to_drop = train.columns[train.columns.str.startswith('ps_calc_')]
-train = train.drop(col_to_drop, axis=1)  
-test = test.drop(col_to_drop, axis=1)  
+# In[4]:
 
 
-train = train.replace(-1, np.nan)
-test = test.replace(-1, np.nan)
+shelter_outcomes['date_of_birth'].value_counts().sort_values().plot.line()
 
 
-cat_features = [a for a in train.columns if a.endswith('cat')]
+# It looks like birth dates for the animals in the dataset peak at around 2015, but it's hard to tell for sure because the data is rather noisy.
+# 
+# Currently the data is by day, but what if we globbed all the dates together into years? This is known as **resampling**. We can do this to tweak the dataset, generating a result that's aggregated by year. The method for doing this in `pandas`, `resample`, is pretty simple. There are lots of potential resampling options: we'll use `Y`, which is short for "year".
 
-# Make sure both train & test have a full set of dummies
-train['intrain'] = True  
-test['intrain'] = False
-both = pd.concat([train,test],axis=0)
-for column in cat_features:
-	temp = pd.get_dummies(pd.Series(both[column]))
-	both = pd.concat([both,temp],axis=1)
-	both = both.drop([column],axis=1)
-train = both[both.intrain==True].drop(['intrain'],axis=1)
-test = both[both.intrain==False].drop(['intrain'],axis=1)
+# In[5]:
 
-print(train.values.shape, test.values.shape)
 
+shelter_outcomes['date_of_birth'].value_counts().resample('Y').sum().plot.line()
 
-# In[ ]:
 
+# Much clearer! It looks like, actually, 2014 and 2015 have an almost equal presence in the dataset.
+# 
+# This demonstrates the data visualization benefit of resampling: by choosing certain periods you can more clearly visualize certain aspects of the dataset.
+# 
+# Notice that `pandas` is automatically adapting the labels on the x-axis to match our output type. This is because `pandas` is "datetime-aware"; it knows that when we have data points spaced out one year apart from one another, we only want to see the years in the labels, and nothing else!
+# 
+# Usually the value of time-series data is exposed through this sort of grouping. For example, here's a similar simple bar chart which looks at the trade volume of the `GOOG` stock:
 
-class Ensemble(object):
-    def __init__(self, n_splits, stacker, base_models):
-        self.n_splits = n_splits
-        self.stacker = stacker
-        self.base_models = base_models
+# In[6]:
 
-    def fit_predict(self, X, y, T):
-        X = np.array(X)
-        y = np.array(y)
-        T = np.array(T)
 
-        folds = list(StratifiedKFold(n_splits=self.n_splits, shuffle=True, random_state=2016).split(X, y))
+stocks['volume'].resample('Y').mean().plot.bar()
 
-        S_train = np.zeros((X.shape[0], len(self.base_models)))
-        S_test = np.zeros((T.shape[0], len(self.base_models)))
-        for i, clf in enumerate(self.base_models):
 
-            S_test_i = np.zeros((T.shape[0], self.n_splits))
+# Most of the "new stuff" to using dates in your visualization comes down to a handful of new data processing techniques. Because timestampls are "just" interval variables, understanding date-time data don't require any newfangled visualization techniques!
 
-            for j, (train_idx, test_idx) in enumerate(folds):
-                X_train = X[train_idx]
-                y_train = y[train_idx]
-                X_holdout = X[test_idx]
-#                y_holdout = y[test_idx]
+# ## Some new plot types
+# 
+# ### Lag plot
+# 
+# One of these plot types is the lag plot. A lag plot compares data points from each observation in the dataset against data points from a previous observation. So for example, data from December 21st will be compared with data from December 20th, which will in turn be compared with data from December 19th, and so on. For example, here is what we see when we apply a lag plot to the volume (number of trades conducted) in the stock data:
 
-                print ("Fit %s fold %d" % (str(clf).split('(')[0], j+1))
-                clf.fit(X_train, y_train)
-#                cross_score = cross_val_score(clf, X_train, y_train, cv=self.n_splits, scoring='roc_auc')
-#                print("    cross_score: %.5f" % (cross_score.mean()))
-                y_pred = clf.predict_proba(X_holdout)[:,1]                
+# In[7]:
 
-                S_train[test_idx, i] = y_pred
-                S_test_i[:, j] = clf.predict_proba(T)[:,1]
-            S_test[:, i] = S_test_i.mean(axis=1)
 
-            print("     Model score: %.5f\n" % roc_auc_score(y, S_train[:,i]))
+from pandas.plotting import lag_plot
 
-        self.base_preds = S_test
-        
-        # Log odds transformation
-        almost_zero = 1e-12
-        almost_one = 1 - almost_zero  # To avoid division by zero
-        S_train[S_train>almost_one] = almost_one
-        S_train[S_train<almost_zero] = almost_zero
-        S_train = np.log(S_train/(1-S_train))
-        S_test[S_test>almost_one] = almost_one
-        S_test[S_test<almost_zero] = almost_zero
-        S_test = np.log(S_test/(1-S_test))
-        
-        results = cross_val_score(self.stacker, S_train, y, cv=self.n_splits, scoring='roc_auc')
-        print("Stacker score: %.5f" % (results.mean()))
-
-        self.stacker.fit(S_train, y)
-        print( 'Coefficients:', self.stacker.coef_ )
-
-        res = self.stacker.predict_proba(S_test)[:,1]
-        return res
-
-
-# In[ ]:
+lag_plot(stocks['volume'].sample(250))
 
 
-# LightGBM params
-lgb_params = {}
-lgb_params['learning_rate'] = 0.02
-lgb_params['n_estimators'] = 650
-lgb_params['max_bin'] = 10
-lgb_params['subsample'] = 0.8
-lgb_params['subsample_freq'] = 10
-lgb_params['colsample_bytree'] = 0.8   
-lgb_params['min_child_samples'] = 500
-lgb_params['random_state'] = 99
+# It looks like days when volume is high are only very loosely correlated with one another. In other words, a day of frantic trading does not necessarily signal that the next day will also involve frantic trading. In fact, there seem to be quite a few days of *extremely* high trading activity which stand out all alone!
+# 
+# Time-series data tends to exhibit a behavior called **periodicity**: rises and peaks in the data that are correlated with time. For example, a gym would likely see an increase in attendance at the end of every workday, hence exhibiting a periodicity of a day. A bar would likely see a bump in sales on Friday, exhibiting periodicity over the course of a week. And so on.
+# 
+# Lag plots are extremely useful because they are a simple way of checking datasets for this kind of periodicity.
+# 
+# Note that they only work on "strong case" timeseries data.
+# 
+# ### Autocorrelation plot
+# 
+# A plot type that takes this concept and goes even further with it is the autocorrelation plot. The autocorrelation plot is a multivariate summarization-type plot that lets you check *every* periodicity at the same time. It does this by computing a summary statistic&mdash;the correlation score&mdash;across every possible lag in the dataset. This is known as autocorrelation.
+# 
+# In an autocorrelation plot the lag is on the x-axis and the autocorrelation score is on the y-axis. The farther away the autocorrelation is from 0, the greater the influence that records that far away from each other exert on one another.
+# 
+# Here is what an autocorrelation plot looks like when applied to the stock volume data:
 
+# In[8]:
 
-lgb_params2 = {}
-lgb_params2['n_estimators'] = 1090
-lgb_params2['learning_rate'] = 0.02
-lgb_params2['colsample_bytree'] = 0.3   
-lgb_params2['subsample'] = 0.7
-lgb_params2['subsample_freq'] = 2
-lgb_params2['num_leaves'] = 16
-lgb_params2['random_state'] = 99
 
+from pandas.plotting import autocorrelation_plot
 
-lgb_params3 = {}
-lgb_params3['n_estimators'] = 1100
-lgb_params3['max_depth'] = 4
-lgb_params3['learning_rate'] = 0.02
-lgb_params3['random_state'] = 99
+autocorrelation_plot(stocks['volume'])
 
 
-# RandomForest params
-#rf_params = {}
-#rf_params['n_estimators'] = 650
-#rf_params['max_depth'] = 14
-#rf_params['min_samples_split'] = 40
-#rf_params['min_samples_leaf'] = 35
+# It seems like the volume of trading activity is weakly descendingly correlated with trading volume from the year prior. There aren't any significant non-random peaks in the dataset, so this is good evidence that there isn't much of a time-series pattern to the volume of trade activity over time.
+# 
+# Of course, in this short optional section we're only scratching the surface of what you can do with do with time-series data. There's an entire literature around how to work with time-series variables that we are not discussing here. But these are the basics, and hopefully enough to get you started analyzing your own time-dependent data!
 
+# ## Exercises
+# 
 
-# ExtraTrees params
-#et_params = {}
-#et_params['n_estimators'] = 300
-#et_params['max_features'] = .2
-#et_params['max_depth'] = 10
-#et_params['min_samples_split'] = 7
-#et_params['min_samples_leaf'] = 40
+# In[21]:
 
 
-# XGBoost params
-#xgb_params = {}
-#xgb_params['objective'] = 'binary:logistic'
-#xgb_params['learning_rate'] = 0.04
-#xgb_params['n_estimators'] = 490
-#xgb_params['max_depth'] = 4
-#xgb_params['subsample'] = 0.9
-#xgb_params['colsample_bytree'] = 0.9  
-#xgb_params['min_child_weight'] = 10
+import pandas as pd
 
+crypto = pd.read_csv("../input/all-crypto-currencies/crypto-markets.csv")
+crypto = crypto[crypto['name'] == 'Bitcoin']
+crypto['date'] = pd.to_datetime(crypto['date'])
+crypto.head()
 
-# CatBoost params
-#cat_params = {}
-#cat_params['iterations'] = 900
-#cat_params['depth'] = 8
-#cat_params['rsm'] = 0.95
-#cat_params['learning_rate'] = 0.03
-#cat_params['l2_leaf_reg'] = 3.5  
-#cat_params['border_count'] = 8
-#cat_params['gradient_iterations'] = 4
 
+# Try answering the following questions. Click the "Output" button on the cell below to see the answers.
+# 
+# * Time-series variables are really a special case of what other type of variable?
+# * Why is resampling useful in a data visualization context?
+# * What is lag? What is autocorrelation?
 
-# Regularized Greedy Forest params
-#rgf_params = {}
-#rgf_params['max_leaf'] = 2000
-#rgf_params['learning_rate'] = 0.5
-#rgf_params['algorithm'] = "RGF_Sib"
-#rgf_params['test_interval'] = 100
-#rgf_params['min_samples_leaf'] = 3 
-#rgf_params['reg_depth'] = 1.0
-#rgf_params['l2'] = 0.5  
-#rgf_params['sl2'] = 0.005
+# In[19]:
 
 
-# In[ ]:
+from IPython.display import HTML
 
+HTML("""
+<ol>
+<li>Time-series data is really a special case of interval data.</li>
+<br/>
+<li>Resampling is often useful in data visualization because it can help clean up and denoise our plots by aggregating on a different level.</li>
+<br/>
+<li>Lag is the time-difference for each observation in the dataset. Autocorrelation is correlation applied to lag.</li>
+</ol>
+""")
 
-lgb_model = LGBMClassifier(**lgb_params)
 
-lgb_model2 = LGBMClassifier(**lgb_params2)
+# For the exercises that follow, try forking this notebook and replicating the plots that follow. To see the answers, hit the "Input" button below to un-hide the code.
 
-lgb_model3 = LGBMClassifier(**lgb_params3)
+# A line chart depicting the `datetime` column in `shelter_outcomes` aggregated by year.
 
-#rf_model = RandomForestClassifier(**rf_params)
+# In[31]:
 
-#et_model = ExtraTreesClassifier(**et_params)
-        
-#xgb_model = XGBClassifier(**xgb_params)
 
-#cat_model = CatBoostClassifier(**cat_params)
+shelter_outcomes['datetime'].value_counts().resample('Y').count().plot.line()
 
-#rgf_model = RGFClassifier(**rgf_params) 
 
-#gb_model = GradientBoostingClassifier(max_depth=5)
+# A lag plot of cryptocurrency (`crypto`) trading `volume`.
 
-#ada_model = AdaBoostClassifier()
+# In[32]:
 
-log_model = LogisticRegression(fit_intercept=False)
 
+lag_plot(crypto['volume'].sample(250))
 
-# In[ ]:
 
+# An autocorrelation plot of cryptocurrency (`crypto`) trading `volume`.
 
-stack = Ensemble(n_splits=3,
-        stacker = log_model,
-        base_models = (lgb_model, lgb_model2, lgb_model3))        
-        
-y_pred = stack.fit_predict(train, target_train, test)        
+# In[34]:
 
 
-# In[ ]:
-
-
-sub = pd.DataFrame()
-sub['id'] = id_test
-sub['target'] = y_pred
-sub.to_csv('stacked_1.csv', index=False)
+autocorrelation_plot(crypto['volume'])
 

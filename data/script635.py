@@ -1,6 +1,8 @@
 
 # coding: utf-8
 
+# Let us do some univariate analysis in this notebook and build simple regression models.
+
 # In[ ]:
 
 
@@ -10,450 +12,337 @@
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# In[ ]:
-
-
-df = pd.read_csv('../input/nyc-taxi-trip-duration/train.csv')
-df.pickup_datetime=pd.to_datetime(df.pickup_datetime)
-df.dropoff_datetime=pd.to_datetime(df.dropoff_datetime)
-df['pu_hour'] = df.pickup_datetime.dt.hour
-df['yday'] = df.pickup_datetime.dt.dayofyear
-df['wday'] = df.pickup_datetime.dt.dayofweek
-
-
-# In[ ]:
-
-
-df.head()
-
-
-# In[ ]:
-
-
-wdf = pd.read_csv('../input/weather-data-in-new-york-city-2016/weather_data_nyc_centralpark_2016.csv')
-
-
-# In[ ]:
-
-
-wdf['date']=pd.to_datetime(wdf.date,format='%d-%m-%Y')
-wdf['yday'] = wdf.date.dt.dayofyear
-
-
-# In[ ]:
-
-
-wdf.head()
-
-
-# In[ ]:
-
-
-falls = [ 0.01 if c=='T' else float(c) for c in wdf['snow fall']]
-rain = [ 0.01 if c=='T' else float(c) for c in wdf['precipitation']]
-wdf['snow fall']= falls
-wdf['precipitation'] = rain
-
-
-# In[ ]:
-
-
-df = pd.merge(df,wdf,on='yday')
-df.head()
-
-
-# In[ ]:
-
-
-df = df.drop(['date','maximum temerature','minimum temperature'],axis=1)
-df.head()
-
-
-# In[ ]:
-
-
-import seaborn as sns
 import matplotlib.pyplot as plt
-plt.subplots(1,1,figsize=(17,15))
-rain = wdf['precipitation']
-sns.barplot(wdf['yday'], rain)
-
-
-# In[ ]:
-
-
-intensity = wdf['precipitation'].apply(lambda x:'L' if x < 0.098 
-                           else 'M' if x>=0.098 and x<0.30 
-                           else 'H' if x>=0.30 and x<2.0
-                           else 'V')
-wdf['precipitation'] = intensity
-rain_count = wdf['precipitation'].value_counts().sort_values()
-plt.subplots(1,1,figsize=(17,10))
-sns.barplot(rain_count.index,rain_count.values)
-
-
-# In[ ]:
-
-
-rain_dummies = pd.get_dummies(wdf['precipitation'])
-df = pd.concat([df, rain_dummies], axis=1)
-df = df.drop(['precipitation'],axis=1)
-
-
-# In[ ]:
-
-
-df.head()
-
-
-# ## Locations
-
-# In[ ]:
-
-
-day =1
-df_day=df[((df.pickup_datetime<'2016-02-'+str(day+1))&
-           (df.pickup_datetime>='2016-02-'+str(day)))]
-
-
-# In[ ]:
-
-
-import matplotlib.pyplot as plt
-fig, ax = plt.subplots(ncols=1, nrows=1,figsize=(12,10))
-plt.ylim(40.6, 40.9)
-plt.xlim(-74.1,-73.7)
-ax.scatter(df['pickup_longitude'],df['pickup_latitude'], s=0.0002, alpha=1)
-
-
-# ## Distances
-
-# As described in this great kernel https://www.kaggle.com/skhemka/exploratory-data-analysis there are outliers in the trip distances so we remove them.
-
-# In[ ]:
-
-
-#plt.figure(figsize=(8,6))
-f,axarr = plt.subplots(ncols=2,nrows=1,figsize=(12,6))
-axarr[0].scatter(range(df.shape[0]), np.sort(df.trip_duration.values))
-q = df.trip_duration.quantile(0.99)
-df = df[df.trip_duration < q]
-axarr[1].scatter(range(df.shape[0]), np.sort(df.trip_duration.values))
-
-plt.show()
-
-
-# and compute the distance
-
-# In[ ]:
-
-
-def haversine_np(lon1, lat1, lon2, lat2):
-    """
-    Calculate the great circle distance between two points
-    on the earth (specified in decimal degrees)
-
-    All args must be of equal length.    
-
-    """
-    lon1, lat1, lon2, lat2 = map(np.radians, [lon1, lat1, lon2, lat2])
-
-    dlon = lon2 - lon1
-    dlat = lat2 - lat1
-
-    a = np.sin(dlat/2.0)**2 + np.cos(lat1) * np.cos(lat2) * np.sin(dlon/2.0)**2
-
-    c = 2 * np.arcsin(np.sqrt(a))
-    km = 6367 * c
-    return km
-
-
-# In[ ]:
-
-
-df['distance'] = haversine_np(df.pickup_longitude, df.pickup_latitude,
-                                           df.dropoff_longitude, df.dropoff_latitude)
-
-
-# In[ ]:
-
-
 import seaborn as sns
-#sns.set(style="ticks")
-sel = df[['distance','passenger_count']]
-sns.barplot(x='passenger_count',y='distance',data=sel)
-#sns.despine(offset=10, trim=True)
+from sklearn import linear_model as lm
+import kagglegym
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
+# Read the train file from Kaggle gym.
+
+# In[ ]:
+
+
+# Create environment
+env = kagglegym.make()
+
+# Get first observation
+observation = env.reset()
+
+# Get the train dataframe
+train = observation.train
 
 
 # In[ ]:
 
 
-import seaborn as sns
-#sns.set(style="ticks")
-sel = df[['distance','wday']]
-sns.barplot(x='wday',y='distance',data=sel)
-#sns.despine(offset=10, trim=True)
-
-
-# ## Attempting Regression
-
-# I am going to start with a linear regression model and I will make several attempts with base and engineered features.
-
-# In[ ]:
-
-
-features = df[['wday','yday','pu_hour','passenger_count','pickup_latitude','pickup_longitude','vendor_id']]
-target = df[['trip_duration']]
+train.shape
 
 
 # In[ ]:
 
 
-from sklearn import linear_model
-from sklearn.model_selection import ShuffleSplit
-from sklearn.model_selection import cross_val_score
-
-reg = linear_model.LinearRegression()
-cv = ShuffleSplit(n_splits=4, test_size=0.3, random_state=0)
-cross_val_score(reg, features, target, cv=cv)
-#reg.fit (features, target)
+mean_values = train.mean(axis=0)
+train.fillna(mean_values, inplace=True)
+train.head()
 
 
-# In[ ]:
-
-
-reg = linear_model.Ridge (alpha = .5)
-cv = ShuffleSplit(n_splits=4, test_size=0.3, random_state=0)
-cross_val_score(reg, features, target, cv=cv)
-
+# **Correlation coefficient plot:**
+# 
+# Let us look at the correlation of each of the variables with the target variables to get some important variables to be used for our next steps.
 
 # In[ ]:
 
 
-reg.fit(features,target)
+# Now let us look at the correlation coefficient of each of these variables #
+x_cols = [col for col in train.columns if col not in ['id','timestamp','y']]
 
-
-# In[ ]:
-
-
-tdf = pd.read_csv('../input/nyc-taxi-trip-duration/test.csv')
-tdf.pickup_datetime=pd.to_datetime(tdf.pickup_datetime)
-#tdf.dropoff_datetime=pd.to_datetime(tdf.dropoff_datetime)
-tdf['pu_hour'] = tdf.pickup_datetime.dt.hour
-tdf['yday'] = tdf.pickup_datetime.dt.dayofyear
-tdf['wday'] = tdf.pickup_datetime.dt.dayofweek
-
-
-# In[ ]:
-
-
-tfeatures = tdf[['wday','yday','pu_hour','passenger_count','pickup_latitude','pickup_longitude','vendor_id']]
-
-
-# In[ ]:
-
-
-pred = reg.predict(tfeatures)
-
-
-# In[ ]:
-
-
-tdf['trip_duration']=pred.astype(int)
-out = tdf[['id','trip_duration']]
-
-
-# In[ ]:
-
-
-out['trip_duration'].isnull().values.any()
-
-
-# In[ ]:
-
-
-out.to_csv('pred_linear_1.csv',index=False)
-
-
-# This model performed very bad :( scoring only 0.808. Let's try something more sophisticated. We can identify clusters of pick up locations and use them to train the model.
-
-# ##Creating Clusters
-
-# In[ ]:
-
-
-from sklearn.cluster import KMeans
-import numpy as np
-import pickle
-
-try:
-    kmeans = pickle.load(open("source_kmeans.pickle", "rb"))
-except:
-    kmeans = KMeans(n_clusters=20, random_state=0).fit(df[['pickup_longitude','pickup_latitude']])
-    pickle.dump(kmeans, open('source_kmeans.pickle', 'wb'))
-
-try:
-    destkmeans = pickle.load(open("dest_kmeans.pickle", "rb"))
-except:
-    destkmeans = KMeans(n_clusters=20, random_state=0).fit(df[['dropoff_longitude','dropoff_latitude']])
-    pickle.dump(destkmeans, open('dest_kmeans.pickle', 'wb'))
-
-
-# In[ ]:
-
-
-cx = [c[0] for c in kmeans.cluster_centers_]
-cy = [c[1] for c in kmeans.cluster_centers_]
-
-
-# In[ ]:
-
-
-fig, ax = plt.subplots(ncols=1, nrows=1,figsize=(12,10))
-plt.ylim(40.6, 40.9)
-plt.xlim(-74.1,-73.7)
-
-df['cluster'] = kmeans.predict(df[['pickup_longitude','pickup_latitude']])
-df['dest_cluster'] = destkmeans.predict(df[['dropoff_longitude','dropoff_latitude']])
-cm = plt.get_cmap('gist_rainbow')
-
-colors = [cm(2.*i/15) for i in range(20)]
-colored = [colors[k] for k in df['cluster']]
-
-#plt.figure(figsize = (10,10))
-ax.scatter(df.pickup_longitude,df.pickup_latitude,color=colored,s=0.0002,alpha=1)
-ax.scatter(cx,cy,color='Black',s=50,alpha=1)
-plt.title('Taxi Pickup Clusters')
-plt.show()
-#plt.ylim(40.6, 40.9)
-
-#ax.scatter(sdf['pickup_longitude'],sdf['pickup_latitude'], s=0.1, alpha=1)
-#ax.scatter(cx,cy,s=70,color='Red')
-
-
-# In[ ]:
-
-
-fig, ax = plt.subplots(ncols=1, nrows=1,figsize=(12,10))
-plt.ylim(40.6, 40.9)
-plt.xlim(-74.1,-73.7)
-
-cx = [c[0] for c in destkmeans.cluster_centers_]
-cy = [c[1] for c in destkmeans.cluster_centers_]
-
-colors = [cm(2.*i/15) for i in range(20)]
-colored = [colors[k] for k in df['dest_cluster']]
-
-ax.scatter(df.dropoff_longitude,df.dropoff_latitude,color=colored,s=0.0002,alpha=1)
-ax.scatter(cx,cy,color='Black',s=50,alpha=1)
-plt.title('Taxi Dropoff Clusters')
+labels = []
+values = []
+for col in x_cols:
+    labels.append(col)
+    values.append(np.corrcoef(train[col].values, train.y.values)[0,1])
+    
+ind = np.arange(len(labels))
+width = 0.9
+fig, ax = plt.subplots(figsize=(12,40))
+rects = ax.barh(ind, np.array(values), color='y')
+ax.set_yticks(ind+((width)/2.))
+ax.set_yticklabels(labels, rotation='horizontal')
+ax.set_xlabel("Correlation coefficient")
+ax.set_title("Correlation coefficient")
+#autolabel(rects)
 plt.show()
 
 
-# In[ ]:
-
-
-df.head()
-features = df[['wday','yday','pu_hour','passenger_count','cluster','vendor_id','dest_cluster']]
-target = df[['trip_duration']]
-
-
-# In[ ]:
-
-
-from sklearn import linear_model
-import xgboost
-reg = xgboost.XGBRegressor(n_estimators=100, learning_rate=0.08, gamma=0, subsample=0.75,
-                           colsample_bytree=1, max_depth=7)
-
-reg.fit(features,target)
-
+# As expected, the correlation coefficient values are very low and the maximum value is around 0.016 (in both positive and negative) as seen from the plot above.
+# 
+# Let us take the top 4 variables from the plot above and do some more analysis on them alone.
+# 
+#  - technical_30
+#  - technical_20
+#  - fundamental_11
+#  - technical_19
+# 
+# As a first step, let us get the correlation coefficient in between these variables. 
 
 # In[ ]:
 
 
-tdf = pd.read_csv('../input/nyc-taxi-trip-duration/test.csv')
-tdf['cluster'] = kmeans.predict(tdf[['pickup_longitude','pickup_latitude']])
-tdf['dest_cluster'] = destkmeans.predict(tdf[['dropoff_longitude','dropoff_latitude']])
-tdf.pickup_datetime=pd.to_datetime(tdf.pickup_datetime)
-#tdf.dropoff_datetime=pd.to_datetime(tdf.dropoff_datetime)
-tdf['pu_hour'] = tdf.pickup_datetime.dt.hour
-tdf['yday'] = tdf.pickup_datetime.dt.dayofyear
-tdf['wday'] = tdf.pickup_datetime.dt.dayofweek
-tfeatures = tdf[['wday','yday','pu_hour','passenger_count','cluster','vendor_id','dest_cluster']]
-pred = reg.predict(tfeatures)
+cols_to_use = ['technical_30', 'technical_20', 'fundamental_11', 'technical_19']
+
+temp_df = train[cols_to_use]
+corrmat = temp_df.corr(method='spearman')
+f, ax = plt.subplots(figsize=(8, 8))
+
+# Draw the heatmap using seaborn
+sns.heatmap(corrmat, vmax=.8, square=True)
+plt.show()
 
 
-# In[ ]:
-
-
-tdf['trip_duration']=pred.astype(int)
-out = tdf[['id','trip_duration']]
-out['trip_duration'].isnull().values.any()
-out.to_csv('pred_linear_2_clusters.csv',index=False)
-
-
-# I have added both the pickup and dropoff clusters which is very unfair with respect to the first model since the dropoff information is obviously correlated with the duration.
-# This model scored 0.621. 
-# Now I am going to us weather conditions
-
-# ##Weather Doesn't Matter
+# There is some negative correlation between 'technical_30' and 'technical_20'. 
+# 
+# As the next step, let us build simple linear regression models using these variables alone and see how they perform.
+# 
+# Let us first build our models.
 
 # In[ ]:
 
 
-features = df[['wday','yday','pu_hour','passenger_count','cluster','vendor_id','dest_cluster','H','L','M','V','snow fall']]
-target = df[['trip_duration']]
+models_dict = {}
+for col in cols_to_use:
+    model = lm.LinearRegression()
+    model.fit(np.array(train[col].values).reshape(-1,1), train.y.values)
+    models_dict[col] = model
 
 
-# In[ ]:
-
-
-reg = xgboost.XGBRegressor(n_estimators=200, min_child_weight=150, gamma=0, subsample=0.75,
-                           colsample_bytree=0.4, max_depth=10)
-
-reg.fit(features,target)
-
-
-# In[ ]:
-
-
-tdf = pd.merge(tdf,wdf,on='yday')
-tdf.head()
-
+# So we have built 4 univariate models using the train data.
+# 
+# **Technical_30:**
+# 
+# So we will start predicting with the model using 'technical_30' variable.
 
 # In[ ]:
 
 
-rain_dummies = pd.get_dummies(tdf['precipitation'])
-tdf = pd.concat([tdf, rain_dummies], axis=1)
-tdf = tdf.drop(['precipitation'],axis=1)
-tfeatures = tdf[['wday','yday','pu_hour','passenger_count','cluster','vendor_id','dest_cluster','H','L','M','V','snow fall']]
+col = 'technical_30'
+model = models_dict[col]
+while True:
+    observation.features.fillna(mean_values, inplace=True)
+    test_x = np.array(observation.features[col].values).reshape(-1,1)
+    observation.target.y = model.predict(test_x)
+    #observation.target.fillna(0, inplace=True)
+    target = observation.target
+    timestamp = observation.features["timestamp"][0]
+    if timestamp % 100 == 0:
+        print("Timestamp #{}".format(timestamp))
+        
+    observation, reward, done, info = env.step(target)
+    if done:
+        break
+info
 
-pred = reg.predict(tfeatures)
 
+# We are getting a public score of 0.011 using this variable.
+# 
+# **Technical_20:**
+# 
+# Now let us predict the test using our second univariate model which we have built.
 
 # In[ ]:
 
 
-pred = reg.predict(tfeatures)
+# Get first observation
+env = kagglegym.make()
+observation = env.reset()
 
+col = 'technical_20'
+model = models_dict[col]
+while True:
+    observation.features.fillna(mean_values, inplace=True)
+    test_x = np.array(observation.features[col].values).reshape(-1,1)
+    observation.target.y = model.predict(test_x)
+    #observation.target.fillna(0, inplace=True)
+    target = observation.target
+    timestamp = observation.features["timestamp"][0]
+    if timestamp % 100 == 0:
+        print("Timestamp #{}".format(timestamp))
+        
+    observation, reward, done, info = env.step(target)
+    if done:
+        break
+info
+
+
+# Using 'technical_20' as input variable, we are getting a public score of 0.0169 which is slightly better than the previous one.
+# 
+# Submitting this model to the LB gave me a score of 0.006. I have exported the above script into a kernel and it can be accessed [here][1].  
+# 
+# Let us do the same for our last two variables as well.
+# 
+# **Fundamental_11:**
+# 
+# 
+#   [1]: https://www.kaggle.com/sudalairajkumar/two-sigma-financial-modeling/univariate-model
 
 # In[ ]:
 
 
-tdf['trip_duration']=pred.astype(int)
-out = tdf[['id','trip_duration']]
-out['trip_duration'].isnull().values.any()
-out.to_csv('pred_3_clusters_weather.csv',index=False)
+# Get first observation
+env = kagglegym.make()
+observation = env.reset()
 
+col = 'fundamental_11'
+model = models_dict[col]
+while True:
+    observation.features.fillna(mean_values, inplace=True)
+    test_x = np.array(observation.features[col].values).reshape(-1,1)
+    observation.target.y = model.predict(test_x)
+    #observation.target.fillna(0, inplace=True)
+    target = observation.target
+    timestamp = observation.features["timestamp"][0]
+    if timestamp % 100 == 0:
+        print("Timestamp #{}".format(timestamp))
+        
+    observation, reward, done, info = env.step(target)
+    if done:
+        break
+info
+
+
+# **Technical_19:**
+
+# In[ ]:
+
+
+# Get first observation
+env = kagglegym.make()
+observation = env.reset()
+
+col = 'technical_19'
+model = models_dict[col]
+while True:
+    observation.features.fillna(mean_values, inplace=True)
+    test_x = np.array(observation.features[col].values).reshape(-1,1)
+    observation.target.y = model.predict(test_x)
+    #observation.target.fillna(0, inplace=True)
+    target = observation.target
+    timestamp = observation.features["timestamp"][0]
+    if timestamp % 100 == 0:
+        print("Timestamp #{}".format(timestamp))
+        
+    observation, reward, done, info = env.step(target)
+    if done:
+        break
+info
+
+
+# **Regression using all 4 variables:**
+# 
+# Now let us build multiple regression model using all these 4 variables.
+
+# In[ ]:
+
+
+cols_to_use = ['technical_30', 'technical_20', 'fundamental_11', 'technical_19']
+
+# Get first observation
+env = kagglegym.make()
+observation = env.reset()
+train = observation.train
+train.fillna(mean_values, inplace=True)
+
+model = lm.LinearRegression()
+model.fit(np.array(train[cols_to_use]), train.y.values)
+
+while True:
+    observation.features.fillna(mean_values, inplace=True)
+    test_x = np.array(observation.features[cols_to_use])
+    observation.target.y = model.predict(test_x)
+    target = observation.target
+    timestamp = observation.features["timestamp"][0]
+    if timestamp % 100 == 0:
+        print("Timestamp #{}".format(timestamp))
+        
+    observation, reward, done, info = env.step(target)
+    if done:
+        break
+info
+
+
+# This multiple regression gave a score of 0.019 which is better than all univariate models. So probably submitting this model might give a better LB score.
+# 
+# **Model with Clipping:**
+# 
+# As we can see from this [script][1] which gives the best public LB score of 0.00911, clipping the 'y' values help. 
+# 
+# So let us dig a little deeper to see why the public LB score increased from 0.006 to 0.009 when we clip the 'y' values.
+# 
+#   [1]: https://www.kaggle.com/bguberfain/two-sigma-financial-modeling/univariate-model-with-clip/run/482189/code
+
+# In[ ]:
+
+
+print("Max y value in train : ",train.y.max())
+print("Min y value in train : ",train.y.min())
+
+
+# Let us now do the clipping and see the number of rows that will be discarded from the training. 
+
+# In[ ]:
+
+
+low_y_cut = -0.086093
+high_y_cut = 0.093497
+
+y_is_above_cut = (train.y > high_y_cut)
+y_is_below_cut = (train.y < low_y_cut)
+y_is_within_cut = (~y_is_above_cut & ~y_is_below_cut)
+y_is_within_cut.value_counts()
+
+
+# So there are 9418 rows in the training set that lie between (-0.086093 and -0.0860941) and (0.093497 and 0.0934978) in the training set. So many values in such a small range.
+# 
+# As we can see from [anokas script][1], the distribution of 'y' values have two small spikes at both the ends. Probably values which are higher than these values are clipped in the training data and so not using these rows in our model building might be a good idea.
+# 
+# 
+# 
+# Now let us re-train our model (using technical_20) by excluding these rows from the training.
+# 
+# 
+#   [1]: https://www.kaggle.com/anokas/two-sigma-financial-modeling/two-sigma-time-travel-eda
+
+# In[ ]:
+
+
+# Get first observation
+env = kagglegym.make()
+observation = env.reset()
+
+col = 'technical_20'
+model = lm.LinearRegression()
+model.fit(np.array(train.loc[y_is_within_cut, col].values).reshape(-1,1), train.loc[y_is_within_cut, 'y'])
+
+while True:
+    observation.features.fillna(mean_values, inplace=True)
+    test_x = np.array(observation.features[col].values).reshape(-1,1)
+    observation.target.y = model.predict(test_x).clip(low_y_cut, high_y_cut)
+    #observation.target.fillna(0, inplace=True)
+    target = observation.target
+    timestamp = observation.features["timestamp"][0]
+    if timestamp % 100 == 0:
+        print("Timestamp #{}".format(timestamp))
+        
+    observation, reward, done, info = env.step(target)
+    if done:
+        break
+info
+
+
+# So we got almost same public score of 0.0169 with clip.
+# 
+# But on the leaderboard, we are getting some improvement in the score from 0.006 to 0.009. 
+# 
+# Hope this gives a good starting point for building models. Happy Kaggling under new environment.!

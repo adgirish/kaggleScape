@@ -1,332 +1,265 @@
 
 # coding: utf-8
 
-# # How to get to TOP 25% with Simple Model using sklearn only
-
-# ## by Sergei Neviadomski
-
-# ### Importing libraries and data
-
-# That's my simple ensemble model that helped me to get to top 40%. I'll try to briefly show you all steps that I made during my analysis and model building.
-
-# In[24]:
-
-
-# Adding needed libraries and reading data
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn import ensemble, tree, linear_model
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.metrics import r2_score, mean_squared_error
-from sklearn.utils import shuffle
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-import warnings
-warnings.filterwarnings('ignore')
-
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-
-
-# In[25]:
-
-
-train.head()
-
-
-# ### Checking for NAs
-
-# In[26]:
-
-
-#Checking for missing data
-NAs = pd.concat([train.isnull().sum(), test.isnull().sum()], axis=1, keys=['Train', 'Test'])
-NAs[NAs.sum(axis=1) > 0]
-
-
-# ### Importing my functions
-
-# In[27]:
-
-
-# Prints R2 and RMSE scores
-def get_score(prediction, lables):    
-    print('R2: {}'.format(r2_score(prediction, lables)))
-    print('RMSE: {}'.format(np.sqrt(mean_squared_error(prediction, lables))))
-
-# Shows scores for train and validation sets    
-def train_test(estimator, x_trn, x_tst, y_trn, y_tst):
-    prediction_train = estimator.predict(x_trn)
-    # Printing estimator
-    print(estimator)
-    # Printing train scores
-    get_score(prediction_train, y_trn)
-    prediction_test = estimator.predict(x_tst)
-    # Printing test scores
-    print("Test")
-    get_score(prediction_test, y_tst)
-
-
-# ### Splitting to features and labels and deleting variables I don't need
-
-# In[28]:
-
-
-# Spliting to features and lables and deleting variable I don't need
-train_labels = train.pop('SalePrice')
-
-features = pd.concat([train, test], keys=['train', 'test'])
-
-# I decided to get rid of features that have more than half of missing information or do not correlate to SalePrice
-features.drop(['Utilities', 'RoofMatl', 'MasVnrArea', 'BsmtFinSF1', 'BsmtFinSF2', 'BsmtUnfSF', 'Heating', 'LowQualFinSF',
-               'BsmtFullBath', 'BsmtHalfBath', 'Functional', 'GarageYrBlt', 'GarageArea', 'GarageCond', 'WoodDeckSF',
-               'OpenPorchSF', 'EnclosedPorch', '3SsnPorch', 'ScreenPorch', 'PoolArea', 'PoolQC', 'Fence', 'MiscFeature', 'MiscVal'],
-              axis=1, inplace=True)
-
-
-# ### Filling NAs and converting features
-
-# In[29]:
-
-
-# MSSubClass as str
-features['MSSubClass'] = features['MSSubClass'].astype(str)
-
-# MSZoning NA in pred. filling with most popular values
-features['MSZoning'] = features['MSZoning'].fillna(features['MSZoning'].mode()[0])
-
-# LotFrontage  NA in all. I suppose NA means 0
-features['LotFrontage'] = features['LotFrontage'].fillna(features['LotFrontage'].mean())
-
-# Alley  NA in all. NA means no access
-features['Alley'] = features['Alley'].fillna('NOACCESS')
-
-# Converting OverallCond to str
-features.OverallCond = features.OverallCond.astype(str)
-
-# MasVnrType NA in all. filling with most popular values
-features['MasVnrType'] = features['MasVnrType'].fillna(features['MasVnrType'].mode()[0])
-
-# BsmtQual, BsmtCond, BsmtExposure, BsmtFinType1, BsmtFinType2
-# NA in all. NA means No basement
-for col in ('BsmtQual', 'BsmtCond', 'BsmtExposure', 'BsmtFinType1', 'BsmtFinType2'):
-    features[col] = features[col].fillna('NoBSMT')
-
-# TotalBsmtSF  NA in pred. I suppose NA means 0
-features['TotalBsmtSF'] = features['TotalBsmtSF'].fillna(0)
-
-# Electrical NA in pred. filling with most popular values
-features['Electrical'] = features['Electrical'].fillna(features['Electrical'].mode()[0])
-
-# KitchenAbvGr to categorical
-features['KitchenAbvGr'] = features['KitchenAbvGr'].astype(str)
-
-# KitchenQual NA in pred. filling with most popular values
-features['KitchenQual'] = features['KitchenQual'].fillna(features['KitchenQual'].mode()[0])
-
-# FireplaceQu  NA in all. NA means No Fireplace
-features['FireplaceQu'] = features['FireplaceQu'].fillna('NoFP')
-
-# GarageType, GarageFinish, GarageQual  NA in all. NA means No Garage
-for col in ('GarageType', 'GarageFinish', 'GarageQual'):
-    features[col] = features[col].fillna('NoGRG')
-
-# GarageCars  NA in pred. I suppose NA means 0
-features['GarageCars'] = features['GarageCars'].fillna(0.0)
-
-# SaleType NA in pred. filling with most popular values
-features['SaleType'] = features['SaleType'].fillna(features['SaleType'].mode()[0])
-
-# Year and Month to categorical
-features['YrSold'] = features['YrSold'].astype(str)
-features['MoSold'] = features['MoSold'].astype(str)
-
-# Adding total sqfootage feature and removing Basement, 1st and 2nd floor features
-features['TotalSF'] = features['TotalBsmtSF'] + features['1stFlrSF'] + features['2ndFlrSF']
-features.drop(['TotalBsmtSF', '1stFlrSF', '2ndFlrSF'], axis=1, inplace=True)
-
-
-# ### Log transformation
-
-# In[30]:
-
-
-# Our SalesPrice is skewed right (check plot below). I'm logtransforming it. 
-ax = sns.distplot(train_labels)
-
-
-# In[31]:
-
-
-## Log transformation of labels
-train_labels = np.log(train_labels)
-
-
-# In[32]:
-
-
-## Now it looks much better
-ax = sns.distplot(train_labels)
-
-
-# ### Standardizing numeric data
-
-# In[33]:
-
-
-## Standardizing numeric features
-numeric_features = features.loc[:,['LotFrontage', 'LotArea', 'GrLivArea', 'TotalSF']]
-numeric_features_standardized = (numeric_features - numeric_features.mean())/numeric_features.std()
-
-
-# In[34]:
-
-
-ax = sns.pairplot(numeric_features_standardized)
-
-
-# ### Converting categorical data to dummies
-
-# In[35]:
-
-
-# Getting Dummies from Condition1 and Condition2
-conditions = set([x for x in features['Condition1']] + [x for x in features['Condition2']])
-dummies = pd.DataFrame(data=np.zeros((len(features.index), len(conditions))),
-                       index=features.index, columns=conditions)
-for i, cond in enumerate(zip(features['Condition1'], features['Condition2'])):
-    dummies.ix[i, cond] = 1
-features = pd.concat([features, dummies.add_prefix('Condition_')], axis=1)
-features.drop(['Condition1', 'Condition2'], axis=1, inplace=True)
-
-# Getting Dummies from Exterior1st and Exterior2nd
-exteriors = set([x for x in features['Exterior1st']] + [x for x in features['Exterior2nd']])
-dummies = pd.DataFrame(data=np.zeros((len(features.index), len(exteriors))),
-                       index=features.index, columns=exteriors)
-for i, ext in enumerate(zip(features['Exterior1st'], features['Exterior2nd'])):
-    dummies.ix[i, ext] = 1
-features = pd.concat([features, dummies.add_prefix('Exterior_')], axis=1)
-features.drop(['Exterior1st', 'Exterior2nd', 'Exterior_nan'], axis=1, inplace=True)
-
-# Getting Dummies from all other categorical vars
-for col in features.dtypes[features.dtypes == 'object'].index:
-    for_dummy = features.pop(col)
-    features = pd.concat([features, pd.get_dummies(for_dummy, prefix=col)], axis=1)
-
-
-# ### Obtaining standardized dataset
-
-# In[36]:
-
-
-### Copying features
-features_standardized = features.copy()
-
-### Replacing numeric features by standardized values
-features_standardized.update(numeric_features_standardized)
-
-
-# ### Splitting train and test features
-
-# In[37]:
-
-
-### Splitting features
-train_features = features.loc['train'].drop('Id', axis=1).select_dtypes(include=[np.number]).values
-test_features = features.loc['test'].drop('Id', axis=1).select_dtypes(include=[np.number]).values
-
-### Splitting standardized features
-train_features_st = features_standardized.loc['train'].drop('Id', axis=1).select_dtypes(include=[np.number]).values
-test_features_st = features_standardized.loc['test'].drop('Id', axis=1).select_dtypes(include=[np.number]).values
-
-
-# ### Splitting to train and validation sets
-
-# In[38]:
-
-
-### Shuffling train sets
-train_features_st, train_features, train_labels = shuffle(train_features_st, train_features, train_labels, random_state = 5)
-
-
-# In[39]:
-
-
-### Splitting
-x_train, x_test, y_train, y_test = train_test_split(train_features, train_labels, test_size=0.1, random_state=200)
-x_train_st, x_test_st, y_train_st, y_test_st = train_test_split(train_features_st, train_labels, test_size=0.1, random_state=200)
-
-
-# ## First level models
-
-# My analysis revealed that Gradient Boosting and Elastic Net (using Standardized Features) show best results.
-
-# ### Elastic Net
-
-# I'm using ElasticNetCV estimator to choose best alpha and l1_ratio for my Elastic Net model.
-
-# In[40]:
-
-
-ENSTest = linear_model.ElasticNetCV(alphas=[0.0001, 0.0005, 0.001, 0.01, 0.1, 1, 10], l1_ratio=[.01, .1, .5, .9, .99], max_iter=5000).fit(x_train_st, y_train_st)
-train_test(ENSTest, x_train_st, x_test_st, y_train_st, y_test_st)
-
-
-# In[41]:
-
-
-# Average R2 score and standart deviation of 5-fold cross-validation
-scores = cross_val_score(ENSTest, train_features_st, train_labels, cv=5)
-print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-
-
-# ### Gradient Boosting
-
-# We use a lot of features and have many outliers. So I'm using max_features='sqrt' to reduce overfitting of my model. I also use loss='huber' because it more tolerant to outliers. All other hyper-parameters was chosen using GridSearchCV.
-
-# In[42]:
-
-
-GBest = ensemble.GradientBoostingRegressor(n_estimators=3000, learning_rate=0.05, max_depth=3, max_features='sqrt',
-                                               min_samples_leaf=15, min_samples_split=10, loss='huber').fit(x_train, y_train)
-train_test(GBest, x_train, x_test, y_train, y_test)
-
-
-# In[43]:
-
-
-# Average R2 score and standart deviation of 5-fold cross-validation
-scores = cross_val_score(GBest, train_features_st, train_labels, cv=5)
-print("Accuracy: %0.2f (+/- %0.2f)" % (scores.mean(), scores.std() * 2))
-
-
-# ## Ensembling final model
-
-# My final ensemble model is an average of Gradient Boosting and Elastic Net predictions. But before that I retrained my models on all train data.
-
-# In[44]:
-
-
-# Retraining models
-GB_model = GBest.fit(train_features, train_labels)
-ENST_model = ENSTest.fit(train_features_st, train_labels)
-
-
-# In[45]:
-
-
-## Getting our SalePrice estimation
-Final_labels = (np.exp(GB_model.predict(test_features)) + np.exp(ENST_model.predict(test_features_st))) / 2
-
-
-# In[46]:
-
-
-## Saving to CSV
-pd.DataFrame({'Id': test.Id, 'SalePrice': Final_labels}).to_csv('2017-02-28.csv', index =False)    
-
-
-# ### I'll be glad to hear suggestions on improving my models.
+# ## Introduction
 # 
+# The following analysis is inspired by a notebook by omolluska ([When/ why are stocks bought and sold][1]). Check it out :). Here we build on that and try to gain additional insights about the id's (financial instruments) in the data and perform some clustering. The main idea is to look at the cumulative returns of each id and see how it correlates to other id's. That will allow us to cluster these in an easy way and see of th. 
+# 
+#  The last plot gives the main result (scroll to the end).
+# 
+# ##Caution! Important!
+# 
+# *The analysis changed somewhat to see if the result is not a statistical fluke. Let's assume we have lots of randomly generated curves (e.g. cumulative return) and we look at their correlations. Then we might find a subset of curves that are highly correlated and go up and about the same number of curves that are highly correlated and go down. The end result might look like what we got here. To see if the findings are for real the clustering is now performed up to the timestamp 900, ignoring everything that happens after that. The result is presented for all timestamps up to 1812. The new interpretation: **There are probably no clusters with respect to the cumulative returns** (at least not with the methodology used here) as the upward and downward trend of the clusters suddenly levels of after the timestamp 900 (in the old analysis these trends continued).*
+# 
+#   [1]: https://www.kaggle.com/sankhamukherjee/two-sigma-financial-modeling/when-why-are-stocks-bought-and-sold
+
+# In[ ]:
+
+
+import numpy as np
+import pandas as pd
+import seaborn as sns
+from sklearn.cluster import KMeans
+from matplotlib import pyplot as plt
+
+
+# In[ ]:
+
+
+data = pd.read_hdf("../input/train.h5")
+
+
+# We will calculate correlations between all the id's but to ensure that we have enough overlap we only look at those id's that have more than 450 timestamps (i.e. at least 50% of data available).
+# Additionally, we will later only keep id's that are generally highly correlated with other id's. That's what the parameter N_corr_cut is good for.
+
+# In[ ]:
+
+
+## Params
+
+N_timestamps = 450 # how many timestamps that are non-nan for each id
+N_corr_cut = 0.4 # min mean correlation coefficient when dropping id's
+
+
+# In[ ]:
+
+
+## data is used for clustering --> see comment at the beginning
+data_full = data.copy()
+data = data.iloc[0:800000,:]
+
+
+# In[ ]:
+
+
+## Check max timestamp
+np.max(data.timestamp)
+
+
+# In[ ]:
+
+
+## Select only id's where sufficient data is available, 
+## i.e. all timestamps available
+
+select_ids = data[["id","y"]].groupby("id").count()
+
+selected_ids = select_ids[select_ids.y > N_timestamps]#== N_timestamps]
+
+selected_ids = np.array(selected_ids.index)
+
+index_ids = [i in selected_ids for i in data.id]
+
+data_corr = data[index_ids][["id","timestamp","y"]].copy()
+
+
+# In[ ]:
+
+
+index_ids = [i in selected_ids for i in data_full.id]
+data_corr_full = data_full[index_ids][["id","timestamp","y"]].copy()
+
+
+# ## Finding Clusters
+
+# In[ ]:
+
+
+## Create a dataframe where each id is a column
+
+df_id = data_corr[['id', 'timestamp', 'y']].pivot_table(values='y',
+                                     index='timestamp',columns='id')
+
+df_id_full = data_corr_full[['id', 'timestamp', 'y']].pivot_table(values='y',
+                                     index='timestamp',columns='id')
+
+
+# In[ ]:
+
+
+## Calculate the cumulative sum of the return y 
+## and substract the mean of the cumulative sum at each timestamp
+
+df_id_cumsum = df_id.cumsum()
+
+diff = df_id_cumsum.mean(axis=1)
+df_id_cumsum = df_id_cumsum.subtract(diff.values,axis="rows")
+
+## Full Data
+
+df_id_cumsum_full = df_id_full.cumsum()
+
+diff = df_id_cumsum_full.mean(axis=1)
+df_id_cumsum_full = df_id_cumsum_full.subtract(diff.values,axis="rows")
+
+print(df_id_cumsum.shape)
+df_id_cumsum.head()
+
+
+# In[ ]:
+
+
+## Check max timestamp
+np.max(df_id_cumsum.index.values)
+
+
+# We are left with 895 id's. Now let's look at the correlations between them and how these are distributed.
+
+# In[ ]:
+
+
+## Calculate the correlations between the id's
+
+corr_cumsum = df_id_cumsum.corr()
+
+dist = corr_cumsum.as_matrix()
+
+
+# In[ ]:
+
+
+plt.hist(dist.flatten(),bins=100)
+plt.title("Distribution of Correlations Between Id's");
+
+
+# The bimodal distribution vanished after changing the analysis (see comment at beginning of notebook).
+
+# In[ ]:
+
+
+## Look at id's that are generally strongly correlated to others
+
+dist_id_mean = np.mean(np.abs(dist),axis = 1)
+index_mean = dist_id_mean > N_corr_cut
+
+tmp_cut = dist[index_mean,:]
+tmp_cut = tmp_cut[:,index_mean]
+
+print("Number of id's %i" % (tmp_cut.shape[0]))
+
+plt.hist(tmp_cut.flatten(),bins=100)
+plt.title("Distribution of Correlations Between Id's");
+
+
+# Now, we would like to see if the id's form any clusters.
+
+# In[ ]:
+
+
+g = sns.clustermap(tmp_cut,metric="euclidean",method="average")
+
+
+# Indeed, there are two clusters. Within each cluster the correlations are high and positive. In between clusters these correlations are inverted. Next, we extract these clusters and analyze them.
+
+# In[ ]:
+
+
+## Perform Kmeans to easily get the two clusters
+
+clf = KMeans(n_clusters = 2)
+clf.fit(tmp_cut)
+labels = clf.labels_
+
+print("%i id's in cluster 1 and %i id's in cluster 2" % (np.sum(labels == 0),np.sum(labels == 1)))
+
+
+# In[ ]:
+
+
+## See if Kmeans got the clusters right
+
+g = sns.clustermap(tmp_cut[labels == 0,:],metric="euclidean",method="average",square=True)
+
+
+# Looks good. Finally, we will look at the mean cumulative returns for each cluster and compare them. Note that we have already subtracted the general upward trend of the cumulative returns. For comparison, we include the result without that adjustment.
+
+# ## Mean Cumulative Returns for Each Cluster
+
+# In[ ]:
+
+
+## Define one dataframe for each cluster
+
+ids = corr_cumsum.columns[index_mean]
+
+ids_1 = ids[labels == 0]
+ids_2 = ids[labels == 1]
+
+data_sub_c1 = df_id_cumsum_full[ids_1]
+data_sub_c2 = df_id_cumsum_full[ids_2]
+
+## Cumulative Sums Without Adjustments
+
+df_id_cumsum_no_adjust = df_id_full.cumsum()
+
+data_sub_c1_no_adjust = df_id_cumsum_no_adjust[ids_1]
+data_sub_c2_no_adjust = df_id_cumsum_no_adjust[ids_2]
+
+
+# In[ ]:
+
+
+## Determine Mean of Cumulative Returns
+
+## Without Adjustment
+
+returns_1 = data_sub_c1_no_adjust.mean(axis=1)
+returns_2 = data_sub_c2_no_adjust.mean(axis=1)
+
+std_1 = data_sub_c1_no_adjust.std(axis=1)
+std_2 = data_sub_c2_no_adjust.std(axis=1)
+
+plt.plot(returns_1,alpha=1)
+plt.plot(returns_2,alpha=1)
+plt.title("Mean Cumulative Returns for Each Cluster, without adjustment")
+plt.xlabel("Timestamp")
+plt.ylabel("Mean Cumulative Return");
+
+plt.fill_between(returns_1.index, returns_1 - std_1, returns_1 + std_1, color='b', alpha=0.05)
+plt.fill_between(returns_2.index, returns_2 - std_2, returns_2 + std_2, color='g', alpha=0.05)
+
+plt.show()
+
+## With Adjustment
+
+returns_1 = data_sub_c1.mean(axis=1)
+returns_2 = data_sub_c2.mean(axis=1)
+
+std_1 = data_sub_c1.std(axis=1)
+std_2 = data_sub_c2.std(axis=1)
+
+plt.plot(returns_1,alpha=1)
+plt.plot(returns_2,alpha=1)
+plt.title("Mean Cumulative Returns for Each Cluster, with adjustment")
+plt.xlabel("Timestamp")
+plt.ylabel("Mean Cumulative Return");
+
+plt.fill_between(returns_1.index, returns_1 - std_1, returns_1 + std_1, color='b', alpha=0.05)
+plt.fill_between(returns_2.index, returns_2 - std_2, returns_2 + std_2, color='g', alpha=0.05);
+
+
+# ## Caution
+# 
+# *As mentioned in the beginning the clustering is now only performed up to the timestamp 900. This changed the end result quite a bit. Now we can see that the mean cumulative return levels of after 900 and the standard deviation starts to increase. This should be expected for curves that behave in a random way. The fact that they mirror each other closely is probably due to adjusting for the general upward trend in the cumulative mean.*
+# 
+# The two curves show the mean cumulative return within each cluster over time. The shaded regions show the standard deviation of the cumulative return within each cluster.

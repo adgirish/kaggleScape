@@ -1,283 +1,315 @@
 
 # coding: utf-8
 
-# In this exploration notebook, we shall try to uncover the basic information about the dataset which will help us build our models / features.
-# 
-# Let us start with importing the necessary modules.
+# # Introduction
+# #### *This notebook describes and implements a basic approach to solving the Titanic Survival Prediction problem. The prediction is made using a Random Forest Classifier.*
 
-# In[ ]:
+# ## 1. Exploring training and test sets
+
+# First, load required packages.
+
+# In[1]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import re
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn import model_selection, preprocessing
-import xgboost as xgb
-color = sns.color_palette()
+import warnings
+from sklearn.ensemble import RandomForestClassifier
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-pd.options.mode.chained_assignment = None  # default='warn'
-pd.set_option('display.max_columns', 500)
+warnings.filterwarnings("ignore")
+plt.style.use('ggplot')
 
 
-# First let us import the train file and get some idea about the data.
+# Read training and test sets. Both datasets will be used in exploring and predicting.
 
-# In[ ]:
-
-
-train_df = pd.read_csv("../input/train.csv")
-train_df.shape
+# In[2]:
 
 
-# In[ ]:
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
 
 
-train_df.head()
+# In[3]:
 
 
-# There are quite a few variables in this dataset. 
+train.sample(frac=1).head(3)
+
+
+# In[4]:
+
+
+test.sample(frac=1).head(3)
+
+
+# ## 2. Exploring missing data
+
+# Looks like there are missing (NaN) values among both datasets.
+
+# In[5]:
+
+
+train.info()
+
+
+# In[6]:
+
+
+test.info()
+
+
+# ### Non-numeric data
+
+# *Cabin* column stores quite a lot of different qualitative values and has a relatively large amount of missing data.
+
+# In[7]:
+
+
+missing_val_df = pd.DataFrame(index=["Total", "Unique Cabin", "Missing Cabin"])
+for name, df in zip(("Training data", "Test data"), (train, test)):
+    total = df.shape[0]
+    unique_cabin = len(df["Cabin"].unique())
+    missing_cabin = df["Cabin"].isnull().sum()
+    missing_val_df[name] = [total, unique_cabin, missing_cabin]
+missing_val_df
+
+
+# We shall remove _Cabin_ columns from our dataframes.
 # 
-# Let us start with target variable exploration - 'price_doc'. First let us do a scatter plot to see if there are any outliers in the data.
+# Also, we can exclude _PassengerId_ from the training set, since IDs are unnecessary for classification.
 
-# In[ ]:
-
-
-plt.figure(figsize=(8,6))
-plt.scatter(range(train_df.shape[0]), np.sort(train_df.price_doc.values))
-plt.xlabel('index', fontsize=12)
-plt.ylabel('price', fontsize=12)
-plt.show()
+# In[8]:
 
 
-# Looks okay to me. Also since the metric is RMSLE, I think it is okay to have it as such. However if needed, one can truncate the high values. 
+train.drop("PassengerId", axis=1, inplace=True)
+for df in train, test:
+    df.drop("Cabin", axis=1, inplace=True)
+
+
+# Fill in missing rows in _Embarked_ column with __S__ (Southampton Port), since it's the most frequent.
+
+# In[9]:
+
+
+non_empty_embarked = train["Embarked"].dropna()
+unique_values, value_counts = non_empty_embarked.unique(), non_empty_embarked.value_counts()
+X = np.arange(len(unique_values))
+colors = ["brown", "grey", "purple"]
+
+plt.bar(left=X,
+        height=value_counts,
+        color=colors,
+        tick_label=unique_values)
+plt.xlabel("Port of Embarkation")
+plt.ylabel("Amount of embarked")
+plt.title("Bar plot of embarked in Southampton, Queenstown, Cherbourg")
+
+
+# ### Quantitative data
+
+# Consider the distributions of passenger ages and fares (excluding NaN values).
+
+# In[10]:
+
+
+survived = train[train["Survived"] == 1]["Age"].dropna()
+perished = train[train["Survived"] == 0]["Age"].dropna()
+
+fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1)
+fig.set_size_inches(12, 6)
+fig.subplots_adjust(hspace=0.5)
+ax1.hist(survived, facecolor='green', alpha=0.75)
+ax1.set(title="Survived", xlabel="Age", ylabel="Amount")
+ax2.hist(perished, facecolor='brown', alpha=0.75)
+ax2.set(title="Dead", xlabel="Age", ylabel="Amount")
+
+
+# In[11]:
+
+
+survived = train[train["Survived"] == 1]["Fare"].dropna()
+perished = train[train["Survived"] == 0]["Fare"].dropna()
+
+fig, (ax1, ax2) = plt.subplots(nrows=2, ncols=1)
+fig.set_size_inches(12, 8)
+fig.subplots_adjust(hspace=0.5)
+ax1.hist(survived, facecolor='darkgreen', alpha=0.75)
+ax1.set(title="Survived", xlabel="Age", ylabel="Amount")
+ax2.hist(perished, facecolor='darkred', alpha=0.75)
+ax2.set(title="Dead", xlabel="Age", ylabel="Amount")
+
+
+# We can clean up *Age* and *Fare* columns filling in all of the missing values with **median **of all values in the training set.
+
+# In[12]:
+
+
+for df in train, test:
+    df["Embarked"].fillna("S", inplace=True)
+    for feature in "Age", "Fare":
+        df[feature].fillna(train[feature].mean(), inplace=True)
+
+
+# _Ticket_ column has a lot of various values. It will have no significant impact on our ensemble model.
+
+# In[13]:
+
+
+for df in train, test:
+    df.drop("Ticket", axis=1, inplace=True)
+
+
+# ## 3. Feature engineering
+
+# ### Converting non-numeric columns
+
+# All of the non-numeric features except _Embarked_ aren't particularly informative.
 # 
-# We can now bin the 'price_doc' and plot it.
+# We shall convert _Embarked_ and _Sex_ columns to numeric because we can't feed non-numeric columns into a Machine Learning algorithm.
 
-# In[ ]:
+# In[14]:
 
 
-plt.figure(figsize=(12,8))
-sns.distplot(train_df.price_doc.values, bins=50, kde=True)
-plt.xlabel('price', fontsize=12)
-plt.show()
+for df in train, test:
+    df["Embarked"] = df["Embarked"].map(dict(zip(("S", "C", "Q"), (0, 1, 2))))
+    df["Sex"] = df["Sex"].map(dict(zip(("female", "male"), (0, 1))))
 
 
-# Certainly a very long right tail. Since our metric is Root Mean Square **Logarithmic** error, let us plot the log of price_doc variable.
+# ### Generating new features
 
-# In[ ]:
+# $SibSp$ + $Parch$ + $1$ gives the total number of people in a family.
 
+# In[15]:
 
-plt.figure(figsize=(12,8))
-sns.distplot(np.log(train_df.price_doc.values), bins=50, kde=True)
-plt.xlabel('price', fontsize=12)
-plt.show()
 
+for df in train, test:
+    df["FamilySize"] = df["SibSp"] + df["Parch"] + 1
 
-# This looks much better than the previous one. 
-# 
-# Now let us see how the median housing price change with time. 
 
-# In[ ]:
+# Extract the passengers' titles (Mr., Mrs., Rev., etc.) from their names.
 
+# In[16]:
 
-train_df['yearmonth'] = train_df['timestamp'].apply(lambda x: x[:4]+x[5:7])
-grouped_df = train_df.groupby('yearmonth')['price_doc'].aggregate(np.median).reset_index()
 
+for df in train, test:
+    titles = list()
+    for row in df["Name"]:
+        surname, title, name = re.split(r"[,.]", row, maxsplit=2)
+        titles.append(title.strip())
+    df["Title"] = titles
+    df.drop("Name", axis=1, inplace=True)
 
-# In[ ]:
 
+# In[17]:
 
-plt.figure(figsize=(12,8))
-sns.barplot(grouped_df.yearmonth.values, grouped_df.price_doc.values, alpha=0.8, color=color[2])
-plt.ylabel('Median Price', fontsize=12)
-plt.xlabel('Year Month', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
 
+title = train["Title"]
+unique_values, value_counts = title.unique(), title.value_counts()
+X = np.arange(len(unique_values))
 
-# There are some variations in the median price with respect to time. Towards the end, there seems to be some linear increase in the price values.
-# 
-# Now let us dive into other variables and see. Let us first start with getting the count of different data types. 
+fig, ax = plt.subplots()
+fig.set_size_inches(18, 10)
+ax.bar(left=X, height=value_counts, width=0.5, tick_label=unique_values)
+ax.set_xlabel("Title")
+ax.set_ylabel("Count")
+ax.set_title("Passenger titles")
+ax.grid(color='g', linestyle='--', linewidth=0.5)
 
-# In[ ]:
 
+# Looks like some titles are very rare. Let's map them into related titles.
 
-train_df = pd.read_csv("../input/train.csv", parse_dates=['timestamp'])
-dtype_df = train_df.dtypes.reset_index()
-dtype_df.columns = ["Count", "Column Type"]
-dtype_df.groupby("Column Type").aggregate('count').reset_index()
+# In[18]:
 
 
-# So majority of them are numerical variables with 15 factor variables and 1 date variable.
-# 
-# Let us explore the number of missing values in each column.
+for df in train, test:
+    for key, value in zip(("Mr", "Mrs", "Miss", "Master", "Dr", "Rev"),
+                          np.arange(6)):
+        df.loc[df["Title"] == key, "Title"] = value
+    df.loc[df["Title"] == "Ms", "Title"] = 1
+    for title in "Major", "Col", "Capt":
+        df.loc[df["Title"] == title, "Title"] = 6
+    for title in "Mlle", "Mme":
+        df.loc[df["Title"] == title, "Title"] = 7
+    for title in "Don", "Sir":
+        df.loc[df["Title"] == title, "Title"] = 8
+    for title in "Lady", "the Countess", "Jonkheer":
+        df.loc[df["Title"] == title, "Title"] = 9
+test["Title"][414] = 0
 
-# In[ ]:
 
+# Nominal features of our model.
 
-missing_df = train_df.isnull().sum(axis=0).reset_index()
-missing_df.columns = ['column_name', 'missing_count']
-missing_df = missing_df.ix[missing_df['missing_count']>0]
-ind = np.arange(missing_df.shape[0])
-width = 0.9
-fig, ax = plt.subplots(figsize=(12,18))
-rects = ax.barh(ind, missing_df.missing_count.values, color='y')
-ax.set_yticks(ind)
-ax.set_yticklabels(missing_df.column_name.values, rotation='horizontal')
-ax.set_xlabel("Count of missing values")
-ax.set_title("Number of missing values in each column")
-plt.show()
+# In[19]:
 
 
-# Seems variables are found to missing as groups.
-# 
-# Since there are 292 variables, let us build a basic xgboost model and then explore only the important variables.
+nominal_features = ["Pclass", "Sex", "Embarked", "FamilySize", "Title"]
+for df in train, test:
+    for nominal in nominal_features:
+        df[nominal] = df[nominal].astype(dtype="category")
 
-# In[ ]:
 
+# Finally, we get
 
-for f in train_df.columns:
-    if train_df[f].dtype=='object':
-        lbl = preprocessing.LabelEncoder()
-        lbl.fit(list(train_df[f].values)) 
-        train_df[f] = lbl.transform(list(train_df[f].values))
-        
-train_y = train_df.price_doc.values
-train_X = train_df.drop(["id", "timestamp", "price_doc"], axis=1)
+# In[20]:
 
-xgb_params = {
-    'eta': 0.05,
-    'max_depth': 8,
-    'subsample': 0.7,
-    'colsample_bytree': 0.7,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'silent': 1
-}
-dtrain = xgb.DMatrix(train_X, train_y, feature_names=train_X.columns.values)
-model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=100)
 
-# plot the important features #
-fig, ax = plt.subplots(figsize=(12,18))
-xgb.plot_importance(model, max_num_features=50, height=0.8, ax=ax)
-plt.show()
+train.sample(frac=1).head(10)
 
 
-# So the top 5 variables and their description from the data dictionary are:
-# 
-#  1. full_sq - total area in square meters, including loggias, balconies and other non-residential areas
-#  2. life_sq - living area in square meters, excluding loggias, balconies and other non-residential areas
-#  3. floor - for apartments, floor of the building
-#  4. max_floor - number of floors in the building
-#  5. build_year - year built
-# 
-# Now let us see how these important variables are distributed with respect to target variable.
-# 
-# **Total area in square meters:**
+# ## 4. Prediction
 
-# In[ ]:
+# Choose the most informative predictors and randomly split the training data.
 
+# In[21]:
 
-ulimit = np.percentile(train_df.price_doc.values, 99.5)
-llimit = np.percentile(train_df.price_doc.values, 0.5)
-train_df['price_doc'].ix[train_df['price_doc']>ulimit] = ulimit
-train_df['price_doc'].ix[train_df['price_doc']<llimit] = llimit
 
-col = "full_sq"
-ulimit = np.percentile(train_df[col].values, 99.5)
-llimit = np.percentile(train_df[col].values, 0.5)
-train_df[col].ix[train_df[col]>ulimit] = ulimit
-train_df[col].ix[train_df[col]<llimit] = llimit
+from sklearn.model_selection import train_test_split
 
-plt.figure(figsize=(12,12))
-sns.jointplot(x=np.log1p(train_df.full_sq.values), y=np.log1p(train_df.price_doc.values), size=10)
-plt.ylabel('Log of Price', fontsize=12)
-plt.xlabel('Log of Total area in square metre', fontsize=12)
-plt.show()
+predictors = ["Pclass", "Sex", "Age", "SibSp", "Parch",
+              "Fare", "Embarked", "FamilySize", "Title"]
+X_train, X_test, y_train, y_test = train_test_split(train[predictors], train["Survived"])
 
 
-# **Living area in square meters:**
+# Build a Random Forest model from the training set and evaluate the mean accuracy on the given test set.
 
-# In[ ]:
+# In[22]:
 
 
-col = "life_sq"
-train_df[col].fillna(0, inplace=True)
-ulimit = np.percentile(train_df[col].values, 95)
-llimit = np.percentile(train_df[col].values, 5)
-train_df[col].ix[train_df[col]>ulimit] = ulimit
-train_df[col].ix[train_df[col]<llimit] = llimit
+forest = RandomForestClassifier(n_estimators=100,
+                                criterion='gini',
+                                max_depth=5,
+                                min_samples_split=10,
+                                min_samples_leaf=5,
+                                random_state=0)
+forest.fit(X_train, y_train)
+print("Random Forest score: {0:.2}".format(forest.score(X_test, y_test)))
 
-plt.figure(figsize=(12,12))
-sns.jointplot(x=np.log1p(train_df.life_sq.values), y=np.log1p(train_df.price_doc.values), 
-              kind='kde', size=10)
-plt.ylabel('Log of Price', fontsize=12)
-plt.xlabel('Log of living area in square metre', fontsize=12)
-plt.show()
 
+# Examine the feature importances.
 
-# **Floor:**
-# 
-# We will see the count plot of floor variable.
+# In[23]:
 
-# In[ ]:
 
+plt.bar(np.arange(len(predictors)), forest.feature_importances_)
+plt.xticks(np.arange(len(predictors)), predictors, rotation='vertical')
 
-plt.figure(figsize=(12,8))
-sns.countplot(x="floor", data=train_df)
-plt.ylabel('Count', fontsize=12)
-plt.xlabel('floor number', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
 
+# Pick the best features and make a submission.
 
-# The distribution is right skewed. There are some good drops in between (5 to 6, 9 to 10, 12 to 13, 17 to 18). Now let us see how the price changes with respect to floors.
+# In[24]:
 
-# In[ ]:
 
+predictors = ["Title", "Sex", "Fare", "Pclass", "Age", "FamilySize"]
+clf = RandomForestClassifier(n_estimators=100,
+                             criterion='gini',
+                             max_depth=5,
+                             min_samples_split=10,
+                             min_samples_leaf=5,
+                             random_state=0)
+clf.fit(train[predictors], train["Survived"])
+prediction = clf.predict(test[predictors])
 
-grouped_df = train_df.groupby('floor')['price_doc'].aggregate(np.median).reset_index()
-plt.figure(figsize=(12,8))
-sns.pointplot(grouped_df.floor.values, grouped_df.price_doc.values, alpha=0.8, color=color[2])
-plt.ylabel('Median Price', fontsize=12)
-plt.xlabel('Floor number', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
+submission = pd.DataFrame({"PassengerId": test["PassengerId"], "Survived": prediction})
+submission.to_csv("submission.csv", index=False)
 
-
-# This shows an overall increasing trend (individual houses seems to be costlier as well - check price of 0 floor houses). 
-# A sudden increase in the house price is also observed at floor 18.
-# 
-# **Max floor:**
-# 
-# Total number of floors in the building is one another important variable. So let us plot that one and see.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-sns.countplot(x="max_floor", data=train_df)
-plt.ylabel('Count', fontsize=12)
-plt.xlabel('Max floor number', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# We could see that there are few tall bars in between (at 5,9,12,17 - similar to drop in floors in the previous graph). May be there are some norms / restrictions on the number of maximum floors present(?). 
-# 
-# Now let us see how the median prices vary with the max floors. 
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-sns.boxplot(x="max_floor", y="price_doc", data=train_df)
-plt.ylabel('Median Price', fontsize=12)
-plt.xlabel('Max Floor number', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# More to come. Stay tuned.!

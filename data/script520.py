@@ -1,579 +1,225 @@
 
 # coding: utf-8
 
-# Hi Everyone!
+# # Contents
+# 1. Introduction
+#     * Loading the Data
+#     * Cleaning the Data
+#     * Determining Usable Years
+#     * Creating the Data Set to Analyze
+# 2. Analyzing the Data Set
+# 3. Conclusion
 # 
-# This is one of my first kernels on Kaggle, so any input is appreciated. Like many people starting out with machine learning, visualizing classification boundaries in high dimensions is often difficult to comprehend. I intended this kernel to teach me how different classifiers place boundaries in feature space. Ofcourse since we are limited to how many dimensions we can visualize, I used different types to kernel PCA's to see their effect on different types of classifiers. Lets go ahead and load the data/libraries
+# # 1.0 Introduction
+# The question I am wanting to explore in this kernel is if the popularity of video game genre has changed over the years.  To do this I will use a simple linear regression to see if the median sales number has increased or decreased over time. 
+# 
+# ## 1.1 Loading the Data
 
 # In[ ]:
 
+
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
+from sklearn import linear_model
 
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import KernelPCA
-
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix
-
-from matplotlib.colors import ListedColormap
-
-data = pd.read_csv('../input/data.csv')
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+data = pd.read_csv('../input/Video_Game_Sales_as_of_Jan_2017.csv')
+data.head()
 
 
-
-# Checking for missing values... Looks like one of the columns is missing data for all the rows. We can go ahead and eliminate it.
+# ## 1.2 Cleaning the Data
+# As the data set stands, it needs a little bit of cleaning before it can be analyzed.  First, video games with unknown release years should be omitted.  Furthermore, the video games released in 2017 will also be omitted since the data was gathered in January and the sales of those video games have not yet reached full potential.  Finally, pandas is reading the years as floating points, to create nice plots the years should be changed to integers.
 
 # In[ ]:
 
 
-data.isnull().sum()
-data.drop('Unnamed: 32', axis = 1, inplace = True )
+# Remove NaN data from Year of Release
+data = data[data.Year_of_Release.notnull()]
+
+# Omitting video games released in 2017.
+data = data.loc[data.Year_of_Release < 2017]
+
+# Converting year of release to integers
+data.Year_of_Release = data['Year_of_Release'].astype(int)
 
 
-# We can count how many people have malignant and benign tumors . Now lets also split the data into our features and labels, then map our labels to integers.
-
-# In[ ]:
-
-
-
-sns.countplot(x = 'diagnosis', data = data)
-
-
-x = data.iloc[:, 3:]
-
-y = data.diagnosis
-y = y.map({'M':1,'B':0})
-
-
-# The features looks like they are broken into three main categories, value means, standard deivations, and 'worst'. We can check to see if there are any correlations between these subsets of features
+# ## 1.3 Determining Usable Years
+# Considering the video game sales before a certain point in time would not only be irrelevant for predicting sales in the close future but could skew the predictions.  To determine the starting year two things should be considered: the yearly global sales and at what point in time were all genres being continuously released.  Fortunately, a starting year can be chosen by looking at the total yearly global sales, the cumulative proportion of yearly global sales and the heat map of global sales of games release each year by genre.  Using these three plots below it can be seen that all genres are not fully represented until 1991 and more than 95% of the global sales occur after 1991.  Hence we will start by only considering the video game sales from 1991 to 2016.
 
 # In[ ]:
 
 
-x.columns
-features_mean = x.columns[1:9]
-features_se = x.columns[9:19]
-features_worst = x.columns[19:]
+# Creating a table of the total global sales for each genre and year
+Sales_by_Gen_and_Yr = pd.pivot_table(data,index=['Year_of_Release'],
+                     columns=['Genre'],values=['Global_Sales'],aggfunc=np.sum)
+Sales_by_Gen_and_Yr.columns = Sales_by_Gen_and_Yr.columns.get_level_values(1)
 
-#Correlation between sets of features
-corr = x[features_mean].corr()
-g = sns.heatmap(corr, cbar = True, annot=True, annot_kws={'size': 15}, fmt= '.2f', square = True, cmap = 'coolwarm' )
-g.set_xticklabels(rotation=90, labels = features_mean, size = 15)
-g.set_yticklabels(rotation=0, labels = features_mean, size = 15)
-g.set_xticks(np.arange(.5,9.5,1))
-plt.rcParams["figure.figsize"] = (15,15)
+# Finding the yearly totals and cumulative proportion of yearly global sales
+Yearly_Tots = Sales_by_Gen_and_Yr.sum(axis=1)
+Yearly_Tots = Yearly_Tots.sort_index()
+YT1_cumsum = Yearly_Tots.cumsum()/Yearly_Tots.sum()
+
+# Plotting the yearly totals and cumulative proportions
+fig = plt.figure(figsize=(12,5))
+ax1=fig.add_subplot(121)
+ax2=fig.add_subplot(122)
+sns.barplot(y = Yearly_Tots.values, x = Yearly_Tots.index,ax=ax1)
+ax1.set_title('Total Yearly Global Sales')
+plt.setp(ax1.get_xticklabels(),rotation=90)
+ax1.set_xlabel('Years')
+ax1.set_ylabel('Number of games sold (in millions)')
+
+sns.barplot(y = YT1_cumsum.values, x = YT1_cumsum.index, ax=ax2)
+ax2.set_title('Cumulative Proportion of Yearly Global Sales')
+plt.setp(ax2.get_xticklabels(),rotation=90)
+ax2.set_xlabel('Years')
+ax2.set_ylabel('Cummulative Proportion')
+ax2.yaxis.set_ticks(np.arange(0,1,0.05))
+fig.tight_layout()
+
+# Plotting the heat map of global sales for games released each year by genre
+plt.figure(figsize=(10,10))
+sns.heatmap(Sales_by_Gen_and_Yr,annot = True, fmt = '.2f', cmap = 'Blues')
+plt.tight_layout()
+plt.ylabel('Year of Release')
+plt.xlabel('Genre')
+plt.title('Global Sales (in millions) of Games Released Each Year by Genre')
+plt.show()
 
 
+# ## 1.4 Creating the Data Set to Analyze
+# With the selection of years now comes the choice of how to represent the yearly global sales for each genre.  Since the total number of games released each year varies, the total global sales for each genre would not be a consistent measure over time.  Furthermore, by plotting a histogram of the global sales it is easy to see the data is highly skewed to the right, meaning the yearly average of the global sales for each genre will not be an acceptable measure.  For highly skewed data, the median is an acceptable measure, so we will consider the median number of games sold per genre each year.
 
+# In[ ]:
+
+
+# Histogram of global sales
+plt.figure(figsize=(9,5))
+data.Global_Sales.hist(bins=50)
+plt.show()
 
 
 # In[ ]:
 
 
-corr = x[features_se].corr()
-g = sns.heatmap(corr, cbar = True, annot=True, annot_kws={'size': 15}, fmt= '.2f', square = True, cmap = 'coolwarm' )
-g.set_xticklabels(rotation=90, labels = features_se, size = 15)
-g.set_yticklabels(rotation=0, labels = features_se, size = 15)
-g.set_xticks(np.arange(.5,10.5,1))
-plt.rcParams["figure.figsize"] = (15,15)
+# Pulling only the data from 1991 to 2016
+data = data.loc[data.Year_of_Release >= 1991]
+
+# Finding the median sales value by genre and year
+Med_Sales_by_Gen_and_Yr = pd.pivot_table(data,index=['Year_of_Release'],
+                     columns=['Genre'],values=['Global_Sales'],aggfunc=np.median)
+Med_Sales_by_Gen_and_Yr.columns = Med_Sales_by_Gen_and_Yr.columns.get_level_values(1)
+
+Med_Sales_by_Gen_and_Yr.head()
 
 
-# In[ ]:
-
-
-corr = x[features_worst].corr()
-g = sns.heatmap(corr, cbar = True, annot=True, annot_kws={'size': 15}, fmt= '.2f', square = True, cmap = 'coolwarm' )
-g.set_xticklabels(      rotation=90, labels = features_worst, size = 15)
-g.set_yticklabels(rotation=0, labels = features_worst, size = 15)
-g.set_xticks(np.arange(.5,10.5,1))
-plt.rcParams["figure.figsize"] = (15,15)
-
-
-# Lets go ahead and move on to preprocessing our data in order to apply our ML classifiers. In addition, we need to break out or data into a training and test set
+# # 2.0 Analyzing the Data Set
+# Simple linear regression can be used to explore basic increasing/decreasing trends.  
 
 # In[ ]:
 
 
-scaler = StandardScaler()
-x = scaler.fit_transform(x)
+def Linear_Regression_Plot(Data):
+    Regr_Coeff = []
+    Regr_MSE = []
+    fig, axes = plt.subplots(nrows=4, ncols=3, figsize=(10,12))
 
+    x_data = np.transpose(np.matrix(Data.index))
 
-#Split data to get hold out test set
-x_train, x_test, y_train, y_test = train_test_split(x, y, test_size = .1)
-
-
-# The next chunk of code will help us automate the next few steps. This function accepts three inputs:
-# 1) The kernel used for PCA
-# 2) Which classifier we will be using
-# 3) The name of the classifier (used for plot title)
-# 
-# On the advice of some comments I decided to create a large subplot which will show the summary of boundary lines for each classifier and kernel PCA. This is a consice way of looking at the boundary lines, however I have kept the original breakdown of the test and training boundary lines below if you would like further detail. As you can see some of the arguments for this function are not needed for this summary plot, however all the arguments are needed for the graphs below.
-
-# In[ ]:
-
-
-def BoundaryLine(kernel, algo, algo_name):
-    reduction = KernelPCA(n_components=2, kernel = kernel)
-    x_train_reduced = reduction.fit_transform(x_train)
-    x_test_reduced = reduction.transform(x_test)
+    count = 0
     
-    classifier = algo
-    classifier.fit(x_train_reduced, y_train)
+    for genre in Data.columns:
+        axs = axes[count//3,count%3]
+        y_data = Data[genre].to_frame()
     
-    y_pred = classifier.predict(x_test_reduced)
+        # Linear regression
+        regr = linear_model.LinearRegression()
+        regr.fit(x_data,y_data)
+        
+        # Mean Squared Error
+        MSE = np.mean((regr.predict(x_data)-y_data)**2)
+        
+        Regr_Coeff.append(regr.coef_[0][0])
+        Regr_MSE.append(MSE[0])
+
+        Data[genre].plot(ax=axs)
+        axs.plot(x_data,regr.predict(x_data), color='black')
+
+        y_lims = axs.get_ylim()
+        
+        
+        txt = 'Coeff: %.3f \nMSE: %.3f' % (regr.coef_,MSE)
+        y_loc = 0.85*(y_lims[1]-y_lims[0])+y_lims[0]
+        axs.text(2007,y_loc,txt)
+
+        axs.set_title(genre)
+        axs.set_xlabel('Year')
+        axs.set_ylabel('Median')
+        count+=1
+    fig.tight_layout()
     
-
-    #Boundary Line
-    X_set, y_set = np.concatenate([x_train_reduced, x_test_reduced], axis = 0), np.concatenate([y_train, y_test], axis = 0)
-    X1, X2 = np.meshgrid(np.arange(start = X_set[:, 0].min() - 1, stop = X_set[:, 0].max() + 1, step = 0.01),
-                         np.arange(start = X_set[:, 1].min() - 1, stop = X_set[:, 1].max() + 1, step = 0.01))
-    plt.contourf(X1, X2, classifier.predict(np.array([X1.ravel(), X2.ravel()]).T).reshape(X1.shape),
-                 alpha = 0.5, cmap = ListedColormap(('red', 'green')))
-    plt.xlim(X1.min(), X1.max())
-    plt.ylim(X2.min(), X2.max())
-    for i, j in enumerate(np.unique(y_set)):
-        plt.scatter(X_set[y_set == j, 0], X_set[y_set == j, 1],
-                    c = ListedColormap(('red', 'green'))(i), label = j)
-    #plt.title('{} Boundary Line with {} PCA' .format(algo_name, kernel))
-    #plt.xlabel('Component 1')
-    #plt.ylabel('Component 2')
-    #plt.legend()
-    plt.xticks(fontsize = 3)
-    plt.yticks(fontsize = 3)
-
+    return [Regr_Coeff,Regr_MSE]
     
+[Regr_Coeff,Regr_MSE] = Linear_Regression_Plot(Med_Sales_by_Gen_and_Yr)
 
 
-
-
-
-
+# Notice all but Shooter games have a negative trend; however, for many of the genres there is a large spike (an outlier) before 1995.  This initial spike in the data is affecting the slope of the trends and is not as relevant to recent sales. As a precaution, the same analysis can be performed starting after 1995 and will still include over 90% of the total global sales.
 
 # In[ ]:
 
 
-fig = plt.figure()
+Med_Sales_by_Gen_and_Yr = Med_Sales_by_Gen_and_Yr.loc[Med_Sales_by_Gen_and_Yr.index >= 1995]
 
-fig.suptitle('Classifiers and Kernel PCA')
-#Logistic Regression   
-from sklearn.linear_model import LogisticRegression
-ax = plt.subplot(7,5,1)
-ax.set_title('Linear PCA')
-ax.set_ylabel('Logistic \n Regression', rotation = 0, labelpad=30, fontsize = 10)
-BoundaryLine('linear', LogisticRegression(), "Logistic Regression")
-
-ax = plt.subplot(7,5,2)
-ax.set_title('RBF PCA')
-BoundaryLine('rbf', LogisticRegression(), "Logistic Regression")
-
-ax = plt.subplot(7,5,3)
-ax.set_title('Poly PCA')
-BoundaryLine('poly', LogisticRegression(), "Logistic Regression")
-
-ax = plt.subplot(7,5,4)
-ax.set_title('Sigmoid PCA')
-BoundaryLine('sigmoid', LogisticRegression(), "Logistic Regression")
-
-ax = plt.subplot(7,5,5)
-ax.set_title('Cosine PCA')
-BoundaryLine('cosine', LogisticRegression(), "Logistic Regression")
+[Regr_Coeff_After_95,Regr_MSE_After_95] = Linear_Regression_Plot(Med_Sales_by_Gen_and_Yr)
 
 
-#Naive Bayes
-from sklearn.naive_bayes import GaussianNB
-ax = plt.subplot(7,5,6)
-ax.set_ylabel('Naive \n Bayes', rotation = 0, labelpad=30, fontsize = 10)
-BoundaryLine('linear', GaussianNB(), "Naive Bayes")
-ax = plt.subplot(7,5,7)
-BoundaryLine('rbf', GaussianNB(), "Naive Bayes")
-ax = plt.subplot(7,5,8)
-BoundaryLine('poly', GaussianNB(), "Naive Bayes")
-ax = plt.subplot(7,5,9)
-BoundaryLine('sigmoid', GaussianNB(), "Naive Bayes")
-ax = plt.subplot(7,5,10)
-BoundaryLine('cosine', GaussianNB(), "Naive Bayes")
-
-#K-Nearest Neighbors
-from sklearn.neighbors import KNeighborsClassifier
-ax = plt.subplot(7,5,11)
-ax.set_ylabel('KNN', rotation = 0, labelpad=30, fontsize = 10)
-BoundaryLine('linear', KNeighborsClassifier(), "KNN")
-ax = plt.subplot(7,5,12)
-BoundaryLine('rbf', KNeighborsClassifier(), "KNN")
-ax = plt.subplot(7,5,13)
-BoundaryLine('poly', KNeighborsClassifier(), "KNN")
-ax = plt.subplot(7,5,14)
-BoundaryLine('sigmoid', KNeighborsClassifier(), "KNN")
-ax = plt.subplot(7,5,15)
-BoundaryLine('cosine', KNeighborsClassifier(), "KNN")
-
-#Random Forest
-from sklearn.ensemble import RandomForestClassifier
-ax = plt.subplot(7,5,16)
-ax.set_ylabel('Random \n Forest', rotation = 0, labelpad=30, fontsize = 10)
-BoundaryLine('linear', RandomForestClassifier(), "Random Forest")
-ax = plt.subplot(7,5,17)
-BoundaryLine('rbf', RandomForestClassifier(), "Random Forest")
-ax = plt.subplot(7,5,18)
-BoundaryLine('poly', RandomForestClassifier(), "Random Forest")
-ax = plt.subplot(7,5,19)
-BoundaryLine('sigmoid', RandomForestClassifier(), "Random Forest")
-ax = plt.subplot(7,5,20)
-BoundaryLine('cosine', RandomForestClassifier(), "Random Forest")
-
-#Support Vector - linear
-from sklearn.svm import SVC
-ax = plt.subplot(7,5,21)
-ax.set_ylabel('SVM \n Linear', rotation = 0, labelpad=30, fontsize = 10)
-BoundaryLine('linear', SVC(kernel = 'linear'), "SVM - Linear")
-ax = plt.subplot(7,5,22)
-BoundaryLine('rbf', SVC(kernel = 'linear'), "SVM - Linear")
-ax = plt.subplot(7,5,23)
-BoundaryLine('poly', SVC(kernel = 'linear'), "SVM - Linear")
-ax = plt.subplot(7,5,24)
-BoundaryLine('sigmoid', SVC(kernel = 'linear'), "SVM - Linear")
-ax = plt.subplot(7,5,25)
-BoundaryLine('cosine', SVC(kernel = 'linear'), "SVM - Linear")
-
-#Support Vector - RBF
-ax = plt.subplot(7,5,26)
-ax.set_ylabel('SVM \n rbf', rotation = 0, labelpad=30, fontsize = 10)
-BoundaryLine('linear', SVC(kernel = 'rbf'), "SVM - rbf")
-ax = plt.subplot(7,5,27)
-BoundaryLine('rbf', SVC(kernel = 'rbf'), "SVM - rbf")
-ax = plt.subplot(7,5,28)
-BoundaryLine('poly', SVC(kernel = 'rbf'), "SVM - rbf")
-ax = plt.subplot(7,5,29)
-BoundaryLine('sigmoid', SVC(kernel = 'rbf'), "SVM - rbf")
-ax = plt.subplot(7,5,30)
-BoundaryLine('cosine', SVC(kernel = 'rbf'), "SVM - rbf")
-
-
-#Support Vector - Poly
-ax = plt.subplot(7,5,31)
-ax.set_ylabel('SVM \n poly', rotation = 0, labelpad=30, fontsize = 10)
-BoundaryLine('linear', SVC(kernel = 'poly'), "SVM - poly")
-ax = plt.subplot(7,5,32)
-BoundaryLine('rbf', SVC(kernel = 'poly'), "SVM - poly")
-ax = plt.subplot(7,5,33)
-BoundaryLine('poly', SVC(kernel = 'poly'), "SVM - poly")
-ax = plt.subplot(7,5,34)
-BoundaryLine('sigmoid', SVC(kernel = 'poly'), "SVM - poly")
-ax = plt.subplot(7,5,35)
-BoundaryLine('cosine', SVC(kernel = 'poly'), "SVM - poly")
-
-fig.show()
-
+# Even after excluding the years before 1995 all but Shooter games have shown a decline in sales. However, after excluding the years before 1995 the severity of the decline in all but the sports genre lessened.  Of the declining genres Simulation, Role-Playing, Racing, and Action games have incurred the steepest decline in sales.
 
 # In[ ]:
 
 
-def BoundaryLine(kernel, algo, algo_name):
-    reduction = KernelPCA(n_components=2, kernel = kernel)
-    x_train_reduced = reduction.fit_transform(x_train)
-    x_test_reduced = reduction.transform(x_test)
-    
-    classifier = algo
-    classifier.fit(x_train_reduced, y_train)
-    
-    y_pred = classifier.predict(x_test_reduced)
-    
-    print(confusion_matrix(y_test, y_pred))
-    print(classification_report(y_test, y_pred))
-    
-    plt.subplot(2,1,1)
-    #Train set boundary
-    X_set, y_set = x_train_reduced, y_train
-    X1, X2 = np.meshgrid(np.arange(start = X_set[:, 0].min() - 1, stop = X_set[:, 0].max() + 1, step = 0.01),
-                         np.arange(start = X_set[:, 1].min() - 1, stop = X_set[:, 1].max() + 1, step = 0.01))
-    plt.contourf(X1, X2, classifier.predict(np.array([X1.ravel(), X2.ravel()]).T).reshape(X1.shape),
-                 alpha = 0.6, cmap = ListedColormap(('red', 'green')))
-    plt.xlim(X1.min(), X1.max())
-    plt.ylim(X2.min(), X2.max())
-    for i, j in enumerate(np.unique(y_set)):
-        plt.scatter(X_set[y_set == j, 0], X_set[y_set == j, 1],
-                    c = ListedColormap(('red', 'green'))(i), label = j)
-    plt.title('{} Boundary Line with {} PCA (Train Set)' .format(algo_name, kernel))
-    plt.xlabel('Component 1')
-    plt.ylabel('Component 2')
-    plt.legend()
-    
-    
-    plt.subplot(2,1,2)
-    #Test set boundary
-    X_set, y_set = x_test_reduced, y_test
-    X1, X2 = np.meshgrid(np.arange(start = X_set[:, 0].min() - 1, stop = X_set[:, 0].max() + 1, step = 0.01),
-                         np.arange(start = X_set[:, 1].min() - 1, stop = X_set[:, 1].max() + 1, step = 0.01))
-    plt.contourf(X1, X2, classifier.predict(np.array([X1.ravel(), X2.ravel()]).T).reshape(X1.shape),
-                 alpha = 0.6, cmap = ListedColormap(('red', 'green')))
-    plt.xlim(X1.min(), X1.max())
-    plt.ylim(X2.min(), X2.max())
-    for i, j in enumerate(np.unique(y_set)):
-        plt.scatter(X_set[y_set == j, 0], X_set[y_set == j, 1],
-                    c = ListedColormap(('red', 'green'))(i), label = j)
-    plt.title('{} Boundary Line with {} PCA (Test Set)' .format(algo_name, kernel))
-    plt.xlabel('Component 1')
-    plt.ylabel('Component 2')
-    plt.legend()
-    plt.tight_layout()
+Linear_Regression_Results = pd.DataFrame({'Regression Coeff After 1991':Regr_Coeff,
+                                         'MSE After 1991':Regr_MSE,
+                                         'Regression Coeff After 1995':Regr_Coeff_After_95,
+                                         'MSE After 1995':Regr_MSE_After_95},
+                                        index = list(Med_Sales_by_Gen_and_Yr.columns))
+Column_Order = ['Regression Coeff After 1991','MSE After 1991','Regression Coeff After 1995',
+                'MSE After 1995']
+
+# Printing the linear regression results
+Linear_Regression_Results[Column_Order].head(n=len(list(Med_Sales_by_Gen_and_Yr.columns)))
 
 
-# 
-# 
-# This function is a modified from the one created above. In addition to the boundary lines, it will output the confusion matrix, classification report, and graph of the decision boundary on both the training and test set.
-# 
-# The next parts will have very little commentary but hopefully you will get the gist of it. There will be multiple classifiers used under different PCA conditions. Lets see what happens!
+# With the decline in sales for all but one genre of video games, it would be normal to want to see if the same decline can be seen in the global sales for all genres.  By plotting the yearly median of all global sales, it is apparent there is an overall a decline in global sales.
 
 # In[ ]:
 
 
-#Logistic Regression
-from sklearn.linear_model import LogisticRegression
+Med_Sales_by_Yr = pd.pivot_table(data,index=['Year_of_Release'],
+                     values=['Global_Sales'],aggfunc=np.median)
 
 
-# In[ ]:
+fig = plt.figure(figsize=(13,5))
+Med_Sales_by_Yr.plot()
 
+x_data = np.transpose(np.matrix(Med_Sales_by_Yr.index))
+y_data = Med_Sales_by_Yr
+regr = linear_model.LinearRegression()
+regr.fit(x_data,y_data)
 
-BoundaryLine('linear', LogisticRegression(), "Logistic Regression")
+plt.plot(x_data,regr.predict(x_data), color='black')
 
+txt = 'Coeff: %.3f \nMSE: %.3f' % (regr.coef_,np.mean((regr.predict(x_data)-y_data)**2))
 
-# In[ ]:
+plt.text(2011,0.8*Med_Sales_by_Yr.max(),txt)
 
+plt.title('Median Global Sales')
+plt.xlabel('Year')
+plt.ylabel('Median Sales (in millions)')
 
-BoundaryLine('rbf', LogisticRegression(), "Logistic Regression")
 
-
-# In[ ]:
-
-
-BoundaryLine('poly', LogisticRegression(), "Logistic Regression")
-
-
-# In[ ]:
-
-
-BoundaryLine('sigmoid', LogisticRegression(), "Logistic Regression")
-
-
-# In[ ]:
-
-
-BoundaryLine('cosine', LogisticRegression(), "Logistic Regression")
-
-
-# In[ ]:
-
-
-#Naive Bayes
-from sklearn.naive_bayes import GaussianNB
-
-
-# In[ ]:
-
-
-BoundaryLine('linear', GaussianNB(), "Naive Bayes")
-
-
-# In[ ]:
-
-
-BoundaryLine('rbf', GaussianNB(), "Naive Bayes")
-
-
-# In[ ]:
-
-
-BoundaryLine('poly', GaussianNB(), "Naive Bayes")
-
-
-# In[ ]:
-
-
-BoundaryLine('sigmoid', GaussianNB(), "Naive Bayes")
-
-
-# In[ ]:
-
-
-BoundaryLine('cosine', GaussianNB(), "Naive Bayes")
-
-
-# In[ ]:
-
-
-#K-Nearest Neighbors
-from sklearn.neighbors import KNeighborsClassifier
-
-
-# In[ ]:
-
-
-BoundaryLine('linear', KNeighborsClassifier(), "KNN")
-
-
-# In[ ]:
-
-
-BoundaryLine('rbf', KNeighborsClassifier(), "KNN")
-
-
-# In[ ]:
-
-
-BoundaryLine('poly', KNeighborsClassifier(), "KNN")
-
-
-# In[ ]:
-
-
-BoundaryLine('sigmoid', KNeighborsClassifier(), "KNN")
-
-
-# In[ ]:
-
-
-BoundaryLine('cosine', KNeighborsClassifier(), "KNN")
-
-
-# In[ ]:
-
-
-#Random Forest
-from sklearn.ensemble import RandomForestClassifier
-
-
-# In[ ]:
-
-
-BoundaryLine('linear', RandomForestClassifier(), "Random Forest")
-
-
-# In[ ]:
-
-
-BoundaryLine('rbf', RandomForestClassifier(), "Random Forest")
-
-
-# In[ ]:
-
-
-BoundaryLine('poly', RandomForestClassifier(), "Random Forest")
-
-
-# In[ ]:
-
-
-BoundaryLine('sigmoid', RandomForestClassifier(), "Random Forest")
-
-
-# In[ ]:
-
-
-BoundaryLine('cosine', RandomForestClassifier(), "Random Forest")
-
-
-# In[ ]:
-
-
-#Support Vector - linear
-from sklearn.svm import SVC
-
-
-# In[ ]:
-
-
-BoundaryLine('linear', SVC(kernel = 'linear'), "SVM - Linear")
-
-
-# In[ ]:
-
-
-BoundaryLine('rbf', SVC(kernel = 'linear'), "SVM - Linear")
-
-
-# In[ ]:
-
-
-BoundaryLine('poly', SVC(kernel = 'linear'), "SVM - Linear")
-
-
-# In[ ]:
-
-
-BoundaryLine('sigmoid', SVC(kernel = 'linear'), "SVM - Linear")
-
-
-# In[ ]:
-
-
-BoundaryLine('cosine', SVC(kernel = 'linear'), "SVM - Linear")
-
-
-# In[ ]:
-
-
-#Support Vector - RBF
-BoundaryLine('linear', SVC(kernel = 'rbf'), "SVM - rbf")
-
-
-# In[ ]:
-
-
-BoundaryLine('rbf', SVC(kernel = 'rbf'), "SVM - rbf")
-
-
-# In[ ]:
-
-
-BoundaryLine('poly', SVC(kernel = 'rbf'), "SVM - rbf")
-
-
-# In[ ]:
-
-
-BoundaryLine('sigmoid', SVC(kernel = 'rbf'), "SVM - rbf")
-
-
-# In[ ]:
-
-
-BoundaryLine('cosine', SVC(kernel = 'rbf'), "SVM - rbf")
-
-
-# In[ ]:
-
-
-#Support Vector - Poly
-BoundaryLine('linear', SVC(kernel = 'poly'), "SVM - poly")
-
-
-# In[ ]:
-
-
-BoundaryLine('rbf', SVC(kernel = 'poly'), "SVM - poly")
-
-
-# In[ ]:
-
-
-BoundaryLine('poly', SVC(kernel = 'poly'), "SVM - poly")
-
-
-# In[ ]:
-
-
-BoundaryLine('sigmoid', SVC(kernel = 'poly'), "SVM - poly")
-
-
-# In[ ]:
-
-
-BoundaryLine('cosine', SVC(kernel = 'poly'), "SVM - poly")
-
+# # 3.0 Conclusion
+# With the exception of Shooter games the global sales of all other video game genres have been declining.  This could be due to the increase in games being played on tablets and smart phones.  First person shooter games are not easily played with touchscreen controls causing them to be unaffected by the increase in popularity of using tablets and smart phones as a gaming platform.  It would be interesting to find a data set that had the global downloads of games for tablets and smart phones and compare it with this data set.  If anyone has any interesting theories, please let me know.  Also I am still new to programming in Python and am open to any suggestions about creating a cleaner program.

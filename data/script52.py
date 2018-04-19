@@ -1,104 +1,63 @@
 
 # coding: utf-8
 
-# *This tutorial is part of the series [Learn Machine Learning](https://www.kaggle.com/learn/machine-learning). At the end of this step, you will understand the concepts of underfitting and overfitting, and you will be able to apply these ideas to optimize your model accuracy.*
+# # Where to Start
+# **This best starting point for most users is [Kaggle Learn](https://www.kaggle.com/learn)**.  This list was created before Kaggle Learn was launched, but **[this](https://www.kaggle.com/learn)** is the best and most up-to-date resource about learning data science on Kaggle.
 # 
-# # Experimenting With Different Models
+# # Python Based
 # 
-# Now that you have a trustworthy way to measure model accuracy, you can experiment with alternative models and see which gives the best predictions.  But what alternatives do you have for models?
+# ### Learn Machine Learning: Intro
+# | Name  | Description
+# |:----- |:-----|
+# | [How Models Work](https://www.kaggle.com/dansbecker/how-models-work)  |  The first step if you are new to machine learning
+# | [Starting Your ML Project](https://www.kaggle.com/dansbecker/starting-your-ml-project) | Loading data, and setting up your computing environment for your hands-on project
+# | [Selecting and Filtering Data in Pandas](https://www.kaggle.com/dansbecker/selecting-and-filtering-in-pandas) | Getting your data ready for modeling
+# | [Running Your First Model](https://www.kaggle.com/dansbecker/your-first-scikit-learn-model) | Building your first model. Hurray!
+# | [Model Validation](https://www.kaggle.com/dansbecker/model-validation) | Measuring the performance of your model. This opens up the possibilities for trying and comparing alternative models
+# | [Underfitting, Overfitting and Model Optimization](https://www.kaggle.com/dansbecker/underfitting-overfitting-and-model-optimization) | Fine-tune your model for better performance.
+# | [Random Forests](https://www.kaggle.com/dansbecker/random-forests) | Using a more sophisticated machine learning algorithm.
+# | [Submitting To A Competition](https://www.kaggle.com/dansbecker/submitting-from-a-kernel) | Take pride in what you've built, and start tracking your ongoing progress through a Kaggle Competition.
 # 
-# You can see in scikit-learn's [documentation](http://scikit-learn.org/stable/modules/generated/sklearn.tree.DecisionTreeRegressor.html) that the decision tree model has many options (more than you'll want or need for a long time). The most important options determine the tree's depth.  Recall from [page 2](https://www.kaggle.com/dansbecker/first-data-science-scenario-page-2/) that a tree's depth is a measure of how many splits it makes before coming to a prediction.  This is a relatively shallow tree
 # 
-# ![Depth 2 Tree](http://i.imgur.com/R3ywQsR.png)
+# ### Learn Machine Learning: Intermediate
+# | Name  | Description
+# |:----- |:-----|
+# | [Handling Missing Values](https://www.kaggle.com/dansbecker/handling-missing-values)  |  Learn multiple approaches for dealing with missing data fields
+# | [Using Categorical Data](https://www.kaggle.com/dansbecker/using-categorical-data-with-one-hot-encoding) | Handle this important but challenging data type
+# | [Gradient Boosting with XGBoost](https://www.kaggle.com/dansbecker/learning-to-use-xgboost/) | The most important technique for building high-performance models on conventional data (the type that fits in tables or data frames.
+# | [Partial Dependence Plots](https://www.kaggle.com/dansbecker/partial-dependence-plots/) | Extract insights from your models. Insights many didn't even realize were possible.
+# | [Scikit-Learn Pipelines](https://www.kaggle.com/dansbecker/pipelines/) | Make your machine learning code cleaner and more professional
+# | [Cross-Validation](https://www.kaggle.com/dansbecker/cross-validation) |Improve how you compare and choose models and data preprocessing
+# | [Data Leakage](https://www.kaggle.com/dansbecker/data-leakage/) | Identify and avoid one of the most common and costly mistakes in machine learning.
 # 
-# In practice, it's not uncommon for a tree to have 10 splits between the top level (all houses and a leaf).  As the tree gets deeper, the dataset gets sliced up into leaves with fewer houses.  If a tree only had 1 split, it divides the data into 2 groups. If each group is split again, we would get 4 groups of houses.  Splitting each of those again would create 8 groups.  If we keep doubling the number of groups by adding more splits at each level, we'll have \\(2^{10}\\) groups of houses by the time we get to the 10th level. That's 1024 leaves.  
-# 
-# When we divide the houses amongst many leaves, we also have fewer houses in each leaf.  Leaves with very few houses will make predictions that are quite close to those homes' actual values, but they may make very unreliable predictions for new data (because each prediction is based on only a few houses).
-# 
-# This is a phenomenon called **overfitting**, where a model matches the training data almost perfectly, but does poorly in validation and other new data.  On the flip side, if we make our tree very shallow, it doesn't divide up the houses into very distinct groups.  
-# 
-# At an extreme, if a tree divides houses into only 2 or 4, each group still has a wide variety of houses. Resulting predictions may be far off for most houses, even in the training data (and it will be bad in validation too for the same reason). When a model fails to capture important distinctions and patterns in the data, so it performs poorly even in training data, that is called **underfitting**.  
-# 
-# Since we care about accuracy on new data, which we estimate from our validation data, we want to find the sweet spot between underfitting and overfitting.  Visually, we want the low point of the (red) validation curve in
-# 
-# ![underfitting_overfitting](http://i.imgur.com/2q85n9s.png)
-# 
-# # Example
-# There are a few alternatives for controlling the tree depth, and many allow for some routes through the tree to have greater depth than other routes.  But the *max_leaf_nodes* argument provides a very sensible way to control overfitting vs underfitting.  The more leaves we allow the model to make, the more we move from the underfitting area in the above graph to the overfitting area.
-# 
-# We can use a utility function to help compare MAE scores from different values for *max_leaf_nodes*:
-# 
-
-# In[ ]:
-
-
-from sklearn.metrics import mean_absolute_error
-from sklearn.tree import DecisionTreeRegressor
-
-def get_mae(max_leaf_nodes, predictors_train, predictors_val, targ_train, targ_val):
-    model = DecisionTreeRegressor(max_leaf_nodes=max_leaf_nodes, random_state=0)
-    model.fit(predictors_train, targ_train)
-    preds_val = model.predict(predictors_val)
-    mae = mean_absolute_error(targ_val, preds_val)
-    return(mae)
-
-
-# The data is loaded into **train_X**, **val_X**, **train_y** and **val_y** using the code you've already seen (and which you've already written).
-
-# In[ ]:
-
-
-# Data Loading Code Runs At This Point
-import pandas as pd
-    
-# Load data
-melbourne_file_path = '../input/melbourne-housing-snapshot/melb_data.csv'
-melbourne_data = pd.read_csv(melbourne_file_path) 
-# Filter rows with missing values
-filtered_melbourne_data = melbourne_data.dropna(axis=0)
-# Choose target and predictors
-y = filtered_melbourne_data.Price
-melbourne_predictors = ['Rooms', 'Bathroom', 'Landsize', 'BuildingArea', 
-                        'YearBuilt', 'Lattitude', 'Longtitude']
-X = filtered_melbourne_data[melbourne_predictors]
-
-from sklearn.model_selection import train_test_split
-
-# split data into training and validation data, for both predictors and target
-train_X, val_X, train_y, val_y = train_test_split(X, y,random_state = 0)
-
-
-# We can use a for-loop to compare the accuracy of models built with different values for *max_leaf_nodes.*
-
-# In[ ]:
-
-
-# compare MAE with differing values of max_leaf_nodes
-for max_leaf_nodes in [5, 50, 500, 5000]:
-    my_mae = get_mae(max_leaf_nodes, train_X, val_X, train_y, val_y)
-    print("Max leaf nodes: %d  \t\t Mean Absolute Error:  %d" %(max_leaf_nodes, my_mae))
-
-
-# Of the options listed, 500 is the optimal number of leaves.  Apply the function to your Iowa data to find the best decision tree.
-# ---
-# 
-# # Conclusion
-# 
-# Here's the takeaway: Models can suffer from either:
-# - **Overfitting:** capturing spurious patterns that won't recur in the future, leading to less accurate predictions, or 
-# - **Underfitting:** failing to capture relevant patterns, again leading to less accurate predictions. 
-# 
-# We use **validation** data, which isn't used in model training, to measure a candidate model's accuracy. This lets us try many candidate models and keep the best one. 
-# 
-# But we're still using Decision Tree models, which are not very sophisticated by modern machine learning standards. 
-# 
-# ---
-# # Your Turn
-# In the near future, you'll be efficient writing functions like `get_mae` yourself.  For now, just copy it over to your work area.  Then use a for loop that tries different values of *max_leaf_nodes* and calls the *get_mae* function on each to find the ideal number of leaves for your Iowa data.
-# 
-# You should see that the ideal number of leaves for Iowa data is less than the ideal number of leaves for the Melbourne data. Remember, that a lower MAE is better.
+# ### Other
+# | Name  | Approx Length (Minutes) | Pre-Reqs | Description
+# |:----- |:-----:|:----- |:----- |:-----|
+# | [A Whirlwind Tour of Python](https://www.kaggle.com/sohier/whirlwind-tour-of-python-index) | Flexible | | An introduction to the Python language. From excellent book by Jake VanderPlas |
+# | [Learn Machine Learning](https://www.kaggle.com/dansbecker/learn-machine-learning) | | **The best starting point for learning machine learning**
+# | [Merging Multiple Datasets](https://www.kaggle.com/crawford/python-merge-tutorial) |  30 | Basic knowledge of Pandas | A critical skill for real-world data science 
+# | [Pandas Groupby Command](https://www.kaggle.com/crawford/python-groupby-tutorial) |  30 | See statistics for different subgroups in data. Also key to combining different types of data.
+# | [Regular Expressions](https://www.kaggle.com/sohier/introduction-to-regular-expressions) | 30 | | A powerful tool for working with text data
+# | [Basic Network Analysis](https://www.kaggle.com/crailtap/basic-network-analysis-tutorial) | 60 | Linear Algebra |  Unique branch of data science with applications to social networks, transportation and more.
+# | [Starting Kit for PyTorch Deep Learning](https://www.kaggle.com/mratsim/starting-kit-for-pytorch-deep-learning) | 45 | Intro to Data Science | Computer vision (convolutional networks) with PyTorch
+# | [Getting Started with TensorFlow](https://www.kaggle.com/fuzzyfroghunter/getting-started-with-tensorflow) | 45 | Intro to Data Science | Computer vision (convolutional networks) with TensorFlow
 # 
 # ---
 # 
-# # Continue
-# **[Click here](https://www.kaggle.com/dansbecker/random-forests)** to learn your first sophisticated Machine Learning model, the Random Forest. It is a clever extrapolation of the decision tree model that consistently leads to more accurate predictions.
+# # R Based
+# | Name  | Approx Length (Minutes) | Pre-Reqs | Description
+# |:----- |:-----:|:----- |:----- |:-----|
+# | [Getting staRted in R: First Steps](https://www.kaggle.com/rtatman/getting-started-in-r-first-steps/) | 120 | Minimal programming experience |  Intro to the language, loading data, basic manipulation and graphing
+# | [Reading JSON data](https://www.kaggle.com/rtatman/reading-json-data-into-r) | 15 | Getting StaRted in R |  The first step when your data comes in .json files
+# | [Joyplots](https://www.kaggle.com/rtatman/joyplots-tutorial-with-insect-data) | 20 | Getting StaRted in R |  Make some very cool looking graphs
+# | [Tidy TitaRnic](https://www.kaggle.com/headsortails/tidy-titarnic/notebook) | 30 | Getting StaRted in R | Introduction to the important Tidyverse set of R libraries
+# | [Word Tokenization](https://www.kaggle.com/rtatman/tokenization-tutorial) | 20 | Getting StaRted in R |  A first step towards working with text
+# | [Getting N-Grams](https://www.kaggle.com/rtatman/tutorial-getting-n-grams) | 30 | Word Tokenization |  Use word groupings for better natural language processing
+# | [Sentiment Analysis](https://www.kaggle.com/rtatman/tutorial-sentiment-analysis-in-r/) | 60 | Word Tokenization | Analyze the positive or negative sentiments in text. A key application in natural language processing.
+# 
+# 
+# *Notes*
+# - *Many lessons include hands-on coding exercises. Lengths include time to complete exercises at average pace*.
+# - *Prior knowledge can replace listed pre-reqs*
+# 
+# **Want a different approach to learning that jumps in with guided exercises?  Work through the [5-day Challenge](https://www.kaggle.com/rtatman/the-5-day-data-challenge/)**

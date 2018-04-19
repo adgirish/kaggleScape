@@ -1,479 +1,795 @@
 
 # coding: utf-8
 
-# In[ ]:
+# # Human Resources Analytics : Exploration Data Analysis and modeling
+# ### **Yassine Ghouzam, PhD**
+# #### 17/08/2017
+# 
+# 
+# I really enjoyed writing this notebook. If you like it or it helps you , you can upvote and/or leave a comment :).
+# 
+# 
+# * **1 Introduction**
+# * **2 Load and check data**
+#     * 2.1 load data
+#     * 2.2 check for missing values
+# * **3 Global data exploration**
+# * **4 Detailed data exploration**    
+#     * 4.1 Normalisation and dimensionalty reduction
+#     * 4.2 Global Radar Chart
+#     * 4.3 Left and other features
+#     * 4.4 Clustering analysis
+# * **5 Modeling**
+#     * 5.1 Decision Tree
+#     * 5.2 Random Forest
+
+# ## 1. Introduction
+# 
+# The Human Resources Analytics is a dataset providing informations on the situation and work of several ten of thousands employees.
+# 
+# **In this kernel ill focus on one very important question : Why employees are leaving the company ?**
+# 
+# To tackle this question , this notebook combines data exploration analysis and modeling.
+# 
+# This dataset is perfect for this kind of detailed data exploration because it contains a few number of features a large number of individual, so we can perform robust statistics. Firstlty, ill globally explore the dataset, then ill focus on a detailed exploration analysis of the stayed/left employees and ill end by the data modeling.
+# 
+# This script follows three main parts:
+# 
+# * **Global data exploration**
+# * **Detailed data exploration**
+# * **Data modeling**
+
+# In[3]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import datetime
-import os
-#print(os.listdir("../input"))
-
-import time
-
+import pandas as pd
+import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib as matplot
 import seaborn as sns
 get_ipython().run_line_magic('matplotlib', 'inline')
 
+from sklearn.model_selection import GridSearchCV, cross_val_score, learning_curve
+from sklearn.cross_validation import StratifiedKFold
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.preprocessing import StandardScaler, Normalizer, RobustScaler
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE, Isomap
+from sklearn.cluster import KMeans
+from sklearn import tree
+from sklearn.tree import DecisionTreeClassifier
+#import pydot
+#import pydotplus as pydot
+from IPython.display import Image
+from sklearn.externals.six import StringIO
+
+from bokeh.io import output_notebook
+from bokeh.plotting import figure, show, ColumnDataSource
+from bokeh.models import HoverTool
+output_notebook()
+
+import warnings
+
+warnings.filterwarnings('ignore')
+
+sns.set(style='white', context='notebook', palette='deep')
+
+np.random.seed(seed=2)
+
+
+# ## 2. Load and Check data
+# ### 2.1 Load the data
 
 # In[ ]:
 
 
-#make wider graphs
-sns.set(rc={'figure.figsize':(12,5)});
-plt.figure(figsize=(12,5));
+# Load the data
+dataset = pd.read_csv("../input/HR_comma_sep.csv")
 
 
-# This notebook is built using some of ideas in the book by *anokas* at  https://www.kaggle.com/anokas/talkingdata-adtracking-eda  .  I suggest reviewing that book first.
+# In[ ]:
+
+
+dataset.shape
+
+
+# In[ ]:
+
+
+# Look at the train set
+dataset.head()
+
+
+# - This dataset contains 14999 rows described by 10 features.
 # 
-# For this part I use  the first 10 million rows from train ( as the complete sets are too big for this kernel) and the full test data.
 # 
-# Note:  in the notebook I sometimes refer to downloads as conversions.  i.e. is_attributed == 1  means the click converted.
-
-# In[ ]:
-
-
-#import first 10,000,000 rows of train and all test data
-train = pd.read_csv('../input/train.csv', nrows=10000000)
-test = pd.read_csv('../input/test.csv')
-
-
-# In[ ]:
-
-
-train.head()
-
-
-# In[ ]:
-
-
-test.head()
-
-
-# ip, app, device, os and channel are actually categorical variables encoded as integers.   Set them as categories for analysis.
-
-# In[ ]:
-
-
-variables = ['ip', 'app', 'device', 'os', 'channel']
-for v in variables:
-    train[v] = train[v].astype('category')
-    test[v]=test[v].astype('category')
-
-
-# Convert date stamps to date/time type.
-
-# In[ ]:
-
-
-#set click_time and attributed_time as timeseries
-train['click_time'] = pd.to_datetime(train['click_time'])
-train['attributed_time'] = pd.to_datetime(train['attributed_time'])
-test['click_time'] = pd.to_datetime(test['click_time'])
-
-#set as_attributed in train as a categorical
-train['is_attributed']=train['is_attributed'].astype('category')
-
-
-# Now lets do a quick inspection of train and test data main statistics
-
-# In[ ]:
-
-
-train.describe()
-
-
-# *this graph is adapted from https://www.kaggle.com/anokas/talkingdata-adtracking-eda*:
-
-# In[ ]:
-
-
-plt.figure(figsize=(10, 6))
-cols = ['ip', 'app', 'device', 'os', 'channel']
-uniques = [len(train[col].unique()) for col in cols]
-sns.set(font_scale=1.2)
-ax = sns.barplot(cols, uniques, log=True)
-ax.set(xlabel='Feature', ylabel='log(unique count)', title='Number of unique values per feature (from 10,000,000 samples)')
-for p, uniq in zip(ax.patches, uniques):
-    height = p.get_height()
-    ax.text(p.get_x()+p.get_width()/2.,
-            height + 10,
-            uniq,
-            ha="center") 
-# for col, uniq in zip(cols, uniques):
-#     ax.text(col, uniq, uniq, color='black', ha="center")
-
-
-# Quick check to make sure that Nan values in 'attribute_time' are only for samples that did not convert.  Check that counts of 'attributed_time' values is same as count of converted clicks.
-
-# In[ ]:
-
-
-#double check that 'attributed_time' is not Null for all values that resulted in download (i.e. is_attributed == 1)
-train[['attributed_time', 'is_attributed']][train['is_attributed']==1].describe()
-
-
-# In[ ]:
-
-
-#set click_id to categorical, for cleaner statistics view
-test['click_id']=test['click_id'].astype('category')
-test.describe()
-
-
-# **Quick Notes/Observations** :
-# - There are only 18717 attributed_time values.  This means only 18,717 out of 10,000,000 clicks resulted in a download.  That's less than 0.2% !
-# - There are ip adresses that trigger  a click over 50 thousand times.  Seems strange that one ip address would click that often in a span of just 4 days.  Does that mean that ip address encoded is not device id, but network id?  (explore this below)
-# - First click in train set is on 2017-11-06 14:32:21.  Test clicks start on  2017-11-10.  Based on data specifications, train coveres a 4 day period.  This means that the train and test data do not overlap, but test data is taken the day after train data ends.
-# -Train data is ordered by timestamp.  (therefore batches pulled in order cover limited time span)
-# - 2017-11-06 was a Monday.   2017-11-10 was a Friday.  i.e. Train is Mon-Thur, Test is Friday
-# -There is no missing data in Test.  Missing values in train appear to be only for attributed_time, where there isn't any value due to no app download.
-
-# Only a small proportion of clicks were followed by a download:
-
-# In[ ]:
-
-
-plt.figure(figsize=(6,6))
-#sns.set(font_scale=1.2)
-mean = (train.is_attributed.values == 1).mean()
-ax = sns.barplot(['App Downloaded (1)', 'Not Downloaded (0)'], [mean, 1-mean])
-ax.set(ylabel='Proportion', title='App Downloaded vs Not Downloaded')
-for p, uniq in zip(ax.patches, [mean, 1-mean]):
-    height = p.get_height()
-    ax.text(p.get_x()+p.get_width()/2.,
-            height+0.01,
-            '{}%'.format(round(uniq * 100, 2)),
-            ha="center")
-
-
-# ### Explore ip counts.  Check if multiple ips have any downloads.
+# - There are 8 numerical features and 2 categorical features.
+#     - Sales is non nominal
+#     - Salary is ordinal
+#     
+#     
+#     
+# - The feature of our interests is the 'left' feature, it encoded in {0,1} 0 for stayed employees and 1 if not.
 # 
-# At this point I was trying to figure out what 'ip' were actually encoding.  My original understanding that ips were user specific did not hold up to scrutiny.
-# If ip repeated too many times, was it a bot?  This does not appear to be true, as repeated ips do convert.  See below:
+# ### 2.2 check for missing values
 
 # In[ ]:
 
 
-#temporary table to see ips with their associated count frequencies
-temp = train['ip'].value_counts().reset_index(name='counts')
-temp.columns = ['ip', 'counts']
-temp[:10]
+# Check for missing values
+dataset.isnull().any()
+
+
+# The dataset is already clean, there is no missing values at all , great  !!!
+# 
+# ## 3. Global data exploration
+# 
+# Here, i display histograms of the 10 features for a global analysis.
+
+# In[ ]:
+
+
+fig, axs = plt.subplots(ncols=2,figsize=(12,6))
+g = sns.countplot(dataset["sales"], ax=axs[0])
+plt.setp(g.get_xticklabels(), rotation=45)
+g = sns.countplot(dataset["salary"], ax=axs[1])
+plt.tight_layout()
+plt.show()
+plt.gcf().clear()
 
 
 # In[ ]:
 
 
-#add temporary counts of ip feature ('counts') to the train table, to see if IPs with high counts have conversions
-train= train.merge(temp, on='ip', how='left')
+fig, axs = plt.subplots(ncols=3,figsize=(12,6))
+sns.countplot(dataset["Work_accident"], ax=axs[0])
+sns.countplot(dataset["promotion_last_5years"], ax=axs[1])
+sns.countplot(dataset["left"], ax=axs[2])
+plt.tight_layout()
+plt.show()
+plt.gcf().clear()
+
+
+# - Our target variable (left) is unbalanced, since we have not more than 10x it is still reasonable.
+
+# In[ ]:
+
+
+fig, axs = plt.subplots(ncols=3,figsize=(12,6))
+sns.distplot(dataset["satisfaction_level"], ax=axs[0])
+sns.distplot(dataset["last_evaluation"], ax=axs[1])
+sns.distplot(dataset["average_montly_hours"], ax=axs[2])
+plt.tight_layout()
+plt.show()
+plt.gcf().clear()
+
+
+# These distplots show something very interesting. It seems that there is two distributions mixed in satisfaction_level, last_evaluation and average_montly_hours data distributions. 
+# 
+# **Is that corresponding to employees who stay and left ?**
+
+# In[ ]:
+
+
+fig, axs = plt.subplots(ncols=2,figsize=(12,6))
+axs[0].hist(dataset["number_project"],bins=6)
+axs[0].set_xlabel("number_project")
+axs[0].set_ylabel("Count")
+axs[1].hist(dataset["time_spend_company"],bins=6,color="r")
+axs[1].set_xlabel("time_spend_company")
+axs[1].set_ylabel("Count")
+plt.tight_layout()
+plt.show()
+plt.gcf().clear()
+
+
+# The number of projects and the time spend in company seem to follow an extrem value distribution (Gumbel distribution).
+# 
+# Time_spend_company is very positively skewed (right skewed).
+
+# In[ ]:
+
+
+g = sns.heatmap(dataset.corr(),annot=True,cmap="RdYlGn")
+
+
+# It seems that employees working hard and with many projects have a better evaluation. (corr(number_project,last_evaluation) : 0.35, corr(average_montly_hours,last_evaluation) : 0.34 ).
+# 
+# The most important thing in this correlation matrix is the negative correlation between 'left' and 'satifaction_level' (-0.39) : **employees leave because they are not happy at work ?**
+# 
+# **Is that the only main reason ?**
+# **Is there employee patterns that can explained that ?** 
+# 
+# To adress these questions, i performed a detailed analysis.
+# 
+# ## 4. Detailed data exploration
+# 
+# Firslty, i will perform a dimensionality reduction in order to identify groups.
+
+# In[ ]:
+
+
+dataset = dataset.drop(labels=["sales"],axis = 1)
 
 
 # In[ ]:
 
 
-#check top 10 values
-train[train['is_attributed']==1].sort_values('counts', ascending=False)[:10]
+dataset["salary"] = dataset["salary"].astype("category",ordered=True, categories = ['low','medium','high']).cat.codes
+
+
+# ### 4.1 Normalisation and dimensionalty reduction
+
+# In[ ]:
+
+
+# pca/isomap analysis
+
+N = StandardScaler()
+
+N.fit(dataset)
+
+dataset_norm = N.transform(dataset)
+
+
+# Don't forget to normalize the data before the demensionality reduction.
+
+# In[ ]:
+
+
+index = np.random.randint(0,dataset_norm.shape[0],size=10000)
+
+
+# Because of the size of the dataset the isomap algorithm is very memory greedy. So i randomly choosed a 10 000 points in the dataset. 
+# 
+# The isomap and pca maps are very similar to the ones obtained from the full dataset and are much faster to compute.
+
+# In[ ]:
+
+
+pca = PCA(n_components=2)
+pca_representation = pca.fit_transform(dataset_norm[index])
 
 
 # In[ ]:
 
 
-train[train['is_attributed']==1].ip.describe()
+iso = Isomap(n_components=2, n_neighbors=40)
+iso_representation = iso.fit_transform(dataset_norm[index])
 
-
-# So high frequency ip counts do get conversions.   Up to 56 downloads for one ip.  Each IP must be for some network with many devices.
 
 # In[ ]:
 
 
-#convert 'is_attributed' back to numeric for proportion calculations
-train['is_attributed']=train['is_attributed'].astype(int)
+left_colors = dataset["left"].map(lambda s : "g" if s==0 else "r")
+
+fig, axes = plt.subplots(1,2,figsize=(15,6))
+
+axes[0].scatter(pca_representation[:,0],pca_representation[:,1],
+            c = left_colors[index],alpha=0.5,s=20)
+axes[0].set_title("Dimensionality reduction with PCA")
+axes[0].legend(["Left employee"])
+
+axes[1].scatter(iso_representation[:,0],iso_representation[:,1],
+            c = left_colors[index],alpha=0.5,s=20)
+axes[1].set_title("Dimensionality reduction with Isomap")
+axes[1].legend(["Left employee"])
 
 
-# ### Conversion rates over Counts of 300 most popular IPs
+# The red points correspond to employees who left. Here the PCA doesn't show a great separation between the left and stayed employees. PCA performs a linear demensionality reduction , the components produced by pca is a linear combinaison of the existing features. So it is very good when we have a linear relation between the points.
+# 
+# Here it seems that we need a non linear reduction like isomap does. We can see a great separation between the red and green points. An interesting fact is that we have two groups of employees who stayed (green points).
+# 
+# **Let's represent this with an interactive plot**
 
 # In[ ]:
 
 
-proportion = train[['ip', 'is_attributed']].groupby('ip', as_index=False).mean().sort_values('is_attributed', ascending=False)
-counts = train[['ip', 'is_attributed']].groupby('ip', as_index=False).count().sort_values('is_attributed', ascending=False)
-merge = counts.merge(proportion, on='ip', how='left')
-merge.columns = ['ip', 'click_count', 'prop_downloaded']
+source_dataset = ColumnDataSource(
+        data = dict(
+            x = iso_representation[:2000,0],
+            y = iso_representation[:2000,1],
+            desc = dataset.loc[index,"left"],
+            colors = ["#%02x%02x%02x" % (int(c*255), int((1-c)*255), 0) 
+            for c in dataset.loc[index,"left"]],
+            satisfaction_level = dataset.loc[index,'satisfaction_level'],
+            last_evaluation = dataset.loc[index,'last_evaluation'],
+            number_project = dataset.loc[index,'number_project'],
+            time_spend_company = dataset.loc[index,'time_spend_company'],
+            average_montly_hours = dataset.loc[index,'average_montly_hours']))
+        
+hover = HoverTool(tooltips=[("Left", "@desc"), 
+                       ("Satisf. level", "@satisfaction_level"),
+                       ("#projects", "@number_project"), 
+                       ("Last eval.", "@last_evaluation"),
+                       ("Time in Company", "@time_spend_company"),
+                       ("Montly hrs", "@average_montly_hours")])
 
-ax = merge[:300].plot(secondary_y='prop_downloaded')
-plt.title('Conversion Rates over Counts of 300 Most Popular IPs')
-ax.set(ylabel='Count of clicks')
-plt.ylabel('Proportion Downloaded')
+tools_isomap = [hover, "box_zoom",'pan', 'wheel_zoom', 'reset']
+
+plot_isomap = figure(plot_width= 800, plot_height=600, tools=tools_isomap, 
+                     title='Isomap projection of employee data')
+plot_isomap.scatter('x', 'y', size=7, fill_color = "colors", line_color = None,
+                    fill_alpha = 0.6, radius=0.1, alpha=0.5, line_width=0,
+                    source=source_dataset)
+show(plot_isomap)
+
+
+# You can hover the data to see the major features. 
+# 
+# ### 4.2 Global Radar Chart
+
+# In[ ]:
+
+
+data_stay = dataset[dataset["left"]==0]
+data_left = dataset[dataset["left"]==1]
+
+
+# For practical reasons, i separate the left and stay data.
+
+# In[ ]:
+
+
+def _scale_data(data, ranges):
+    (x1, x2) = ranges[0]
+    d = data[0]
+    return [(d - y1) / (y2 - y1) * (x2 - x1) + x1 for d, (y1, y2) in zip(data, ranges)]
+
+
+class RadarChart():
+    def __init__(self, fig, variables, ranges, n_ordinate_levels = 6):
+        angles = np.arange(0, 360, 360./len(variables))
+
+        axes = [fig.add_axes([0.1,0.1,0.8,0.8],polar = True, 
+        label = "axes{}".format(i)) for i in range(len(variables))]
+        _, text = axes[0].set_thetagrids(angles, labels = variables)
+        
+        for txt, angle in zip(text, angles):
+            txt.set_rotation(angle - 90)
+        
+        for ax in axes[1:]:
+            ax.patch.set_visible(False)
+            ax.xaxis.set_visible(False)
+            ax.grid("off")
+        
+        for i, ax in enumerate(axes):
+            grid = np.linspace(*ranges[i],num = n_ordinate_levels)
+            grid_label = [""]+["{:.1f}".format(x) for x in grid[1:]]
+            ax.set_rgrids(grid, labels = grid_label, angle = angles[i])
+            ax.set_ylim(*ranges[i])
+        
+        self.angle = np.deg2rad(np.r_[angles, angles[0]])
+        self.ranges = ranges
+        self.ax = axes[0]
+
+    def plot(self, data, *args, **kw):
+        sdata = _scale_data(data, self.ranges)
+        self.ax.plot(self.angle, np.r_[sdata, sdata[0]], *args, **kw)
+
+    def fill(self, data, *args, **kw):
+        sdata = _scale_data(data, self.ranges)
+        self.ax.fill(self.angle, np.r_[sdata, sdata[0]], *args, **kw)
+
+    def legend(self, *args, **kw):
+        self.ax.legend(*args, **kw)
+
+
+attributes = ['satisfaction_level','last_evaluation','number_project',
+              'average_montly_hours','time_spend_company']
+
+
+
+data_stay_mean = data_stay[attributes].mean().values.reshape(1,-1)
+data_left_mean = data_left[attributes].mean().values.reshape(1,-1)
+
+datas = np.concatenate((data_stay_mean,data_left_mean),axis = 0)
+
+ranges = [[1e-2, dataset[attr].max()] for attr in attributes]
+colors = ["green","red"]
+left_types = ["Stayed","Left"]
+
+
+fig = plt.figure(figsize=(8, 8))
+radar = RadarChart(fig, attributes, ranges)
+
+for data, color, left_type in zip(datas, colors, left_types):
+    radar.plot(data, color = color, label = left_type, linewidth=2.0)
+    radar.fill(data, alpha = 0.2, color = color)
+    radar.legend(loc = 1, fontsize = 'medium')
+
+plt.title('Stats of employees who stayed and left')
 plt.show()
 
-print('Counversion Rates over Counts of Most Popular IPs')
-print(merge[:20])
 
-
-# Conversions are noisy and do not appear to correlate with how popular an IP is.
-
-# ### Conversions by App
+# This radar chart doesn't show so many diffrences between left and stayed employees. At first glance the main difference seems to be the satisfaction level. 
 # 
-# Check 100 most popular apps by click count:
+# As we demonstrate above, employees who left are less happy than the others.
+# 
+# However this radar chart is build on the mean of each feature, so it could hide some sub-distributions in the data. 
+# 
+# Let's investigate this in further analysis.
+
+# ### 4.3 Left and other features
 
 # In[ ]:
 
 
-proportion = train[['app', 'is_attributed']].groupby('app', as_index=False).mean().sort_values('is_attributed', ascending=False)
-counts = train[['app', 'is_attributed']].groupby('app', as_index=False).count().sort_values('is_attributed', ascending=False)
-merge = counts.merge(proportion, on='app', how='left')
-merge.columns = ['app', 'click_count', 'prop_downloaded']
+fig, axs = plt.subplots(nrows=1,ncols=2,figsize=(10,6))
+sns.factorplot(y="satisfaction_level",x="left",data=dataset,kind="box", ax=axs[0])
+axs[1].hist(data_stay["satisfaction_level"],bins=6,label="Stay",alpha=0.7)
+axs[1].hist(data_left["satisfaction_level"],bins=6,label="Left",alpha=0.7)
+axs[1].set_xlabel("Satifaction level")
+axs[1].set_ylabel("Count")
+axs[1].legend()
+plt.tight_layout()
+plt.gcf().clear()
 
-ax = merge[:100].plot(secondary_y='prop_downloaded')
-plt.title('Conversion Rates over Counts of 100 Most Popular Apps')
-ax.set(ylabel='Count of clicks')
-plt.ylabel('Proportion Downloaded')
+
+# The satisfaction level is the most correlated feature with 'left'. Here we can see that employees who left have a lower satisfaction level that those who stayed.
+# 
+# We can also noticed the three sub-distributions of satisfaction levels with employees who left. Is that corresponding to 3 groups ?
+# - One with a low satisfaction level
+# - One with a medium satisfaction level
+# - One with a high satisfaction level
+
+# In[ ]:
+
+
+salary_counts = (dataset.groupby(['left'])['salary']
+                     .value_counts(normalize=True)
+                     .rename('percentage')
+                     .mul(100)
+                     .reset_index())
+p = sns.barplot(x="salary", y="percentage", hue="left", data=salary_counts)
+p.set_ylabel("Percentage")
+p = p.set_xticklabels(["Low","Medium","High"])
+
+
+# Let's invistigate for the salary of employees who left/stayed.
+# 
+# Here i show the percentage of the employees with a low/medium/high salary in the two categories.
+# 
+# - Employees who left have a lower salary than other.
+# 
+# **Is that the reason why employees left ?**
+
+# In[ ]:
+
+
+fig, axs = plt.subplots(nrows=1,ncols=3,figsize=(17,6))
+
+sns.factorplot(y="number_project",x="left",data=dataset,kind="bar", ax=axs[0])
+
+axs[1].hist(data_stay["number_project"],bins=6,label="Stay",alpha=0.7)
+axs[1].hist(data_left["number_project"],bins=6,label="Left",alpha=0.7)
+axs[1].set_xlabel("Number of projects")
+axs[1].set_ylabel("Count")
+axs[1].legend()
+
+ax = sns.kdeplot(data=data_stay["satisfaction_level"],color='b',shade=True,ax=axs[2])
+ax = sns.kdeplot(data=data_left["satisfaction_level"],color='g',shade=True, ax=axs[2])
+ax.legend(["Stay","Left"])
+ax.set_xlabel('Satifsfaction level')
+ax.set_ylabel('Density')
+
+plt.tight_layout()
+plt.gcf().clear()
+
+
+# Let's see now if they have more work than the others. 
+# 
+# Left and stayed employees have a similar number of projects.
+# 
+# However, when we look in detail, there is two sub population in the employees who left. Those who have few projects and those who have a lot of projects.
+# 
+
+# In[ ]:
+
+
+fig, axs = plt.subplots(nrows=1,ncols=3,figsize=(17,6))
+
+sns.factorplot(y="last_evaluation",x="left",data=dataset,kind="bar", ax=axs[0])
+
+axs[1].hist(data_stay["last_evaluation"],bins=6,label="Stay",alpha=0.7)
+axs[1].hist(data_left["last_evaluation"],bins=6,label="Left",alpha=0.7)
+axs[1].set_xlabel("Last evaluation")
+axs[1].set_ylabel("Count")
+axs[1].legend()
+
+ax = sns.kdeplot(data=data_stay["last_evaluation"],color='b',shade=True, ax=axs[2])
+ax = sns.kdeplot(data=data_left["last_evaluation"],color='g',shade=True, ax=axs[2])
+ax.legend(["Stay","Left"])
+ax.set_xlabel('last_evaluation')
+ax.set_ylabel('Density')
+
+plt.tight_layout()
+plt.gcf().clear()
+
+
+# When we look at the last evaluation we still have two sub populations of left employees.
+# 
+# Those with a medium score and those with an high score, that's very interesting !
+
+# In[ ]:
+
+
+fig, axs = plt.subplots(nrows=1,ncols=2,figsize=(10,6))
+sns.factorplot(y="average_montly_hours",x="left",data=dataset,kind="box", ax=axs[0])
+axs[1].hist(data_stay["average_montly_hours"],bins=6,label="Stay",alpha=0.7)
+axs[1].hist(data_left["average_montly_hours"],bins=6,label="Left",alpha=0.7)
+axs[1].set_xlabel("Average Montly Hours")
+axs[1].set_ylabel("Count")
+axs[1].legend()
+plt.tight_layout()
+plt.gcf().clear()
+
+
+# Similarly to the evaluation score and the number of projects. There is two sub populations of employees who left. Those who work less and those who work a lot.
+# 
+# Since the evaluation score, the number of projects and the average montly hours are correlated each other, we can make the hypothesis that there is two groups of employee who leaves. Those who work less because they have gets lower scores 
+
+# In[ ]:
+
+
+g = sns.pairplot(dataset.drop(labels=['promotion_last_5years','Work_accident','salary'],axis=1),hue="left",plot_kws=dict(alpha=0.1))
+handles = g._legend_data.values()
+labels = g._legend_data.keys()
+g.fig.legend(handles=handles, labels=labels, loc='upper center', ncol=1)
+g.fig.legend(handles=handles, labels=labels, loc='lower center', ncol=3)
+
+
+# The pairplot shows very interesting patterns when we plot the average montly hours against the satisfaction level or the satifaction level against the evaluation score.
+# 
+# It's like we still have 2/3 kind of employees who left.
+# 
+# Let's analyse these groups in detail.
+
+# In[ ]:
+
+
+# Deeper in the analysis
+g = sns.FacetGrid(dataset, col="left", hue="left",size=5,aspect=1.2)
+g.map(plt.scatter, "satisfaction_level", "last_evaluation",alpha=0.15)
+g.add_legend()
+
+g = sns.FacetGrid(dataset, col="left",size=5,aspect=1.2)
+g.map(sns.kdeplot, "satisfaction_level", "last_evaluation",shade=True,shade_lowest=False)
+g.add_legend()
+
+
+# We have three groups of employees who left.
+#     - Successfull but unhappy employees (top left)
+#     - Successfull and happy employees (top right)
+#     - Unsuccessfull and unhappy employees (bottom center)
+#     
+# Now we want to label the data with this tree groups.
+# 
+# ### 4.4 Clustering analysis
+
+# In[ ]:
+
+
+# Lets compare inside the 3 identified groups
+
+kmeans = KMeans(n_clusters=3,random_state=2)
+kmeans.fit(data_left[["satisfaction_level","last_evaluation"]])
+
+
+# I performed a kmean clustering to isolate these three groups.
+
+# In[ ]:
+
+
+kmeans_colors = ['red' if c == 0 else 'orange' if c == 2 else 'blue' for c in kmeans.labels_]
+
+fig = plt.figure(figsize=(10, 7))
+plt.scatter(x="satisfaction_level",y="last_evaluation", data=data_left,
+            alpha=0.25,color = kmeans_colors)
+plt.xlabel("Satisfaction level")
+plt.ylabel("Last evaluation")
+plt.scatter(x=kmeans.cluster_centers_[:,0],y=kmeans.cluster_centers_[:,1],color="black",marker="X",s=100)
+plt.title("Clustering of the employed who left by Kmeans")
+
 plt.show()
 
-print('Counversion Rates over Counts of Most Popular Apps')
-print(merge[:20])
 
-
-# There is a again a huge difference in clicks per app, with minimum of one click on an app and max at almost 13 million.  The proportion flucuates more as the counts go down, since each additional click has larger impact on the proportion value.  In general, for apps with counts in the thousands the ratio stays within 0.0001 - 0.0015 boundary.  For less popular apps it fluxuates more widely.  
-
-# ### Conversions by OS
-# Look at top 100 operating systems by click count
+# The cluster center are the three black crosses.
+# 
+# We have three groups which are defined as : 
+#     - SuccessUnhappy (yellow) == Successfull but unhappy employees (top left)
+#     - SuccessHappy (red) == Successfull and happy employees (top right)
+#     - UnsuccessUnhappy (blue) == Unsuccessfull and unhappy employees (bottom center)
 
 # In[ ]:
 
 
-proportion = train[['os', 'is_attributed']].groupby('os', as_index=False).mean().sort_values('is_attributed', ascending=False)
-counts = train[['os', 'is_attributed']].groupby('os', as_index=False).count().sort_values('is_attributed', ascending=False)
-merge = counts.merge(proportion, on='os', how='left')
-merge.columns = ['os', 'click_count', 'prop_downloaded']
+data_left_SuccessHappy = data_left[kmeans.labels_ == 0]
+data_left_UnsuccessUnhappy = data_left[kmeans.labels_ == 1]
+data_left_SuccessUnhappy = data_left[kmeans.labels_ == 2]
 
-ax = merge[:100].plot(secondary_y='prop_downloaded')
-plt.title('Conversion Rates over Counts of 100 Most Popular Operating Systems')
-ax.set(ylabel='Count of clicks')
-plt.ylabel('Proportion Downloaded')
+
+# In[ ]:
+
+
+data_left_SuccessUnhappy.shape
+
+
+# In[ ]:
+
+
+data_left_SuccessHappy.shape
+
+
+# In[ ]:
+
+
+data_left_UnsuccessUnhappy.shape
+
+
+# The three groups have sufficient data to consider significant differences.
+# 
+# To demonstrate a significant diffrence we should perform statistical analysis . Such as comparison of means (Student test,  Z-test or wilcoxon test if you don't want to make any assumption on the data distribution) 
+
+# In[ ]:
+
+
+data_left_SuccessUnhappy_mean = data_left_SuccessUnhappy[attributes].mean().values.reshape(1,-1)
+data_left_SuccessHappy_mean = data_left_SuccessHappy[attributes].mean().values.reshape(1,-1)
+data_left_UnsuccessUnhappy_mean = data_left_UnsuccessUnhappy[attributes].mean().values.reshape(1,-1)
+
+datas = np.concatenate((data_stay_mean,data_left_SuccessUnhappy_mean, 
+                        data_left_SuccessHappy_mean,data_left_UnsuccessUnhappy_mean),axis = 0)
+
+
+# In[ ]:
+
+
+colors = ["green","red","blue","orange"]
+left_types = ["Stayed","Left Success-Unhappy", "Left Success-Happy", "Left Unsucess-Unhappy"]
+
+fig = plt.figure(figsize=(10, 10))
+radar = RadarChart(fig, attributes, ranges)
+for data, color, left_type in zip(datas, colors, left_types):
+    radar.plot(data, color = color, label = left_type,linewidth=2.0)
+    radar.fill(data, alpha = 0.1, color = color)
+    radar.legend(loc = 1, fontsize = 'small')
+plt.title('Stats of employees who stayed and left')
+plt.show() 
+
+
+# When we compare the 3 groups and the group of employees who stayed we better understand the groups.
+# 
+# It appears that the SuccessUnhappy group of employees are those who work the most with 6 projects and more than 300 h/month.
+# These employees left because they have too much work !
+# 
+# The UnsuccessUnhappy group left because they are not really involved in their company. They have few projects and work less than the other.
+# 
+# The last group (SuccessHappy group) is closest to the stay group except that they spent a long time in the company.
+# 
+
+# ## 5. Modeling
+# 
+# I wanted to build a model that predicts the target variable with a good accuracy and explore the features weights and importance.
+
+# In[ ]:
+
+
+## Prediction of the target variable (stay/left) 
+
+X_train = dataset.drop(labels = "left",axis = 1)
+
+Y_train = dataset["left"]
+
+train_features = X_train.columns
+
+
+# In[ ]:
+
+
+kfold = StratifiedKFold(Y_train,n_folds=10,random_state=2)
+
+
+# ### 5.1 Decision Tree
+# I will consider the Decision tree algorithm which is perfect for studying the importance of features in data modeling.
+
+# In[ ]:
+
+
+DTC = DecisionTreeClassifier(max_depth=3)
+
+cv_results = cross_val_score(DTC,X_train, Y_train, cv=kfold, scoring="accuracy")
+
+cv_results.mean()
+
+
+# I have restricted the depth tree to 3, to build a simple tree for analysis.
+# 
+# Despite the simplicity of this tree, it gives us 95% of accuracy which is very good and enough.
+
+# In[ ]:
+
+
+DTC.fit(X_train,Y_train)
+
+
+# I plot the tree structure to look at the most important features.
+
+# In[ ]:
+
+
+### NOT WORKING ON KAGGLE SERVERS (no module pydot nor pydotplus)####
+#dot_data = StringIO()
+
+#tree.export_graphviz(DTC, out_file=dot_data,feature_names=train_features)
+
+#graph = pydot.graph_from_dot_data(dot_data.getvalue())[0]
+#graph.set_lwidth(400)
+#graph.set_lheight(300)
+
+#Image(graph.create_png())
+
+# I have uploaded an image instead.
+
+
+# ![](http://img1.imagilive.com/0817/graph_DTC.png)
+
+# In the Decision tree structure, the most important variable (for the prediction) is at the top.
+# 
+# So the satisfaction level is the most important feature. 
+# 
+# What is very interesting is that we can found the 4 groups (SuccessHappy, UnsuccessUnhappy, SuccessUnhappy, stay) and their caracteristics .
+# 
+# - **The left leaf (satisf.level <=0.465 [True] -> number_project <= 2.5 [True] -> last_evaluation <= 0.57 [True]) corresponds to the UnsuccessUnhappy group.**
+# 
+# 
+# - **The path satisf.level <=0.465 [True] -> number_project <= 2.5 [False] -> last_evaluation <= 0.115 [True] corresponds to the SuccessUnhappy group.**
+# 
+# 
+# - **The right leaf (satisf.level <=0.465 [False] -> time_spend_company <= 4.5 [False] -> last_evaluation <= 0.805 [False])corresponds to the SuccessHappy group.**
+# 
+# 
+# - **The path (satisf.level <=0.465 [False] -> time_spend_company <= 4.5 [True] -> average_monty_hours <= 290.5 [True]) contains to the most important part of the stay group (8706/11428 = 76%).**
+# 
+# With this decision tree we can clearly explain why the employee left.
+# 
+# ### 5.2 Random Forest
+# I made a Random Forest classifier for those who like the performances :) (99% of accuracy)
+
+# In[ ]:
+
+
+# For those who like performance, 99% accuracy
+
+RFC = RandomForestClassifier()
+
+cv_results = cross_val_score(RFC,X_train, Y_train, cv=kfold, scoring="accuracy")
+
+cv_results.mean()
+
+
+# In[ ]:
+
+
+RFC.fit(X_train,Y_train)
+
+
+# In[ ]:
+
+
+indices = np.argsort(RFC.feature_importances_)[::-1][:40]
+
+fig = plt.figure(figsize=(7, 10))
+g = sns.barplot(y=train_features[indices][:40],x = RFC.feature_importances_[indices][:40] , orient='h')
+g.set_xlabel("Relative importance",fontsize=12)
+g.set_ylabel("Features",fontsize=12)
+g.tick_params(labelsize=9)
+g.set_title("Random Forest classifier feature importance")
+
 plt.show()
-
-print('Counversion Rates over Counts of Most Popular Operating Systems')
-print(merge[:20])
+plt.gcf().clear()
 
 
-# Same story. For values in the thousands the boundary on the ratio is very low, roughly between 0.0006 and 0.003, but as counts on OS become lower, the ratio starts fluxuating more wildely.
-
-# ### Conversions by Device
+# It is now clear that satisfaction_level average_montly_hours, number_project, time_spend_company and last_evaluation are the 5 most important features that explain why employees are leaving or staying in the company. Not the salary not the promotions.
 # 
-# Devices are extremely disproportionately distributed, with number one device used almost 94% of time.  For that device proportion download was 0.001326. (0.13%)
-
-# In[ ]:
-
-
-proportion = train[['device', 'is_attributed']].groupby('device', as_index=False).mean().sort_values('is_attributed', ascending=False)
-counts = train[['device', 'is_attributed']].groupby('device', as_index=False).count().sort_values('is_attributed', ascending=False)
-merge = counts.merge(proportion, on='device', how='left')
-merge.columns = ['device', 'click_count', 'prop_downloaded']
-
-print('Count of clicks and proportion of downloads by device:')
-print(merge)
-
-
-# ### Conversions by Channel
-# 
-
-# In[ ]:
-
-
-proportion = train[['channel', 'is_attributed']].groupby('channel', as_index=False).mean().sort_values('is_attributed', ascending=False)
-counts = train[['channel', 'is_attributed']].groupby('channel', as_index=False).count().sort_values('is_attributed', ascending=False)
-merge = counts.merge(proportion, on='channel', how='left')
-merge.columns = ['channel', 'click_count', 'prop_downloaded']
-
-ax = merge[:100].plot(secondary_y='prop_downloaded')
-plt.title('Conversion Rates over Counts of 100 Most Popular Apps')
-ax.set(ylabel='Count of clicks')
-plt.ylabel('Proportion Downloaded')
-plt.show()
-
-print('Counversion Rates over Counts of Most Popular Channels')
-print(merge[:20])
-
-
-# There appear to be a few peaks for channels at reasonable click quantity, but overall the pattern holds same as for categories above.  
-
-# # Checking for time patterns
-# 
-# Round the click time down to an hour of the day to see if there are any hourly patterns.
-# 
-# For this part cannot use the first n rows from train data, as it's organized by time.  To get a genral idea for the pattern, will use train data from the randomly sampled 100000 train set provided by organizers.
-
-# In[ ]:
-
-
-train_smp = pd.read_csv('../input/train_sample.csv')
-
-
-# In[ ]:
-
-
-train_smp.head(7)
-
-
-# In[ ]:
-
-
-#convert click_time and attributed_time to time series
-train_smp['click_time'] = pd.to_datetime(train_smp['click_time'])
-train_smp['attributed_time'] = pd.to_datetime(train_smp['attributed_time'])
-
-
-# In[ ]:
-
-
-#round the time to nearest hour
-train_smp['click_rnd']=train_smp['click_time'].dt.round('H')  
-
-#check for hourly patterns
-train_smp[['click_rnd','is_attributed']].groupby(['click_rnd'], as_index=True).count().plot()
-plt.title('HOURLY CLICK FREQUENCY');
-plt.ylabel('Number of Clicks');
-
-train_smp[['click_rnd','is_attributed']].groupby(['click_rnd'], as_index=True).mean().plot()
-plt.title('HOURLY CONVERSION RATIO');
-plt.ylabel('Converted Ratio');
-
-
-# There is no clear hourly time pattern in ratios, however there is a definete pattern in frequency of clicks based on time of day.
-# 
-# Lets extract the hour of day from each day as a separate feature, and see combined trend (merge the 4 days together by hour).
-
-# In[ ]:
-
-
-#extract hour as a feature
-train_smp['click_hour']=train_smp['click_time'].dt.hour
-
-
-# In[ ]:
-
-
-train_smp.head(7)
-
-
-# Let's check number of clicks by hour:
-
-# In[ ]:
-
-
-train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=True).count().plot(kind='bar', color='#a675a1')
-plt.title('HOURLY CLICK FREQUENCY Barplot');
-plt.ylabel('Number of Clicks');
-
-train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=True).count().plot(color='#a675a1')
-plt.title('HOURLY CLICK FREQUENCY Lineplot');
-plt.ylabel('Number of Clicks');
-
-
-# And number of conversions by hours:
-
-# In[ ]:
-
-
-train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=True).mean().plot(kind='bar', color='#75a1a6')
-plt.title('HOURLY CONVERSION RATIO Barplot');
-plt.ylabel('Converted Ratio');
-
-train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=True).mean().plot( color='#75a1a6')
-plt.title('HOURLY CONVERSION RATIO Lineplot');
-plt.ylabel('Converted Ratio');
-
-
-# let's overlay the two graphs to see if patterns correlate in any way
-
-# In[ ]:
-
-
-#adapted from https://stackoverflow.com/questions/9103166/multiple-axis-in-matplotlib-with-different-scales
-#smonek's answer
-
-
-group = train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=False).mean()
-x = group['click_hour']
-ymean = group['is_attributed']
-group = train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=False).count()
-ycount = group['is_attributed']
-
-
-fig = plt.figure()
-host = fig.add_subplot(111)
-
-par1 = host.twinx()
-
-host.set_xlabel("Time")
-host.set_ylabel("Proportion Converted")
-par1.set_ylabel("Click Count")
-
-#color1 = plt.cm.viridis(0)
-#color2 = plt.cm.viridis(0.5)
-color1 = '#75a1a6'
-color2 = '#a675a1'
-
-p1, = host.plot(x, ymean, color=color1,label="Proportion Converted")
-p2, = par1.plot(x, ycount, color=color2, label="Click Count")
-
-lns = [p1, p2]
-host.legend(handles=lns, loc='best')
-
-host.yaxis.label.set_color(p1.get_color())
-par1.yaxis.label.set_color(p2.get_color())
-
-plt.savefig("pyplot_multiple_y-axis.png", bbox_inches='tight')
-
-
-# The proportions may be more reliable if estimated on full data.  With the random sample it's  hard too tell because the variability is too high, especially for the hours with low click counts.   i.e. the fewer clicks/conversions, the wider margin of the estimated conversion ratio.  (see below)
-
-# In[ ]:
-
-
-sns.barplot('click_hour', 'is_attributed', data=train_smp)
-plt.title('HOURLY CONVERSION RATIO');
-plt.ylabel('Converted Ratio');
-
-
-# ### Look into attributed_time
-# It could be useful to learn more about conversions that did take place.
-# Let's see how much time passed from clicking on the ad to downloading it.
-
-# In[ ]:
-
-
-train_smp['timePass']= train_smp['attributed_time']-train_smp['click_time']
-#check:
-train_smp[train_smp['is_attributed']==1][:15]
-
-
-# In[ ]:
-
-
-train_smp['timePass'].describe()
-
-
-# It takes as long as (almost) 20 hours to go from click to purchase and as little as 4 seconds.  
-# 
-# The 4 seconds seems to low to make a decision.  This person would have either seen the ad before, or already been aware of the product some other way.
-# 
-# Does that mean the ad was clicked on multiple times, but only one click was counted as conversion?   Or did the person click on the ad specifically with the intent to download?  (eg, if channel is something like google search, the ad could be clicked during search results view and app downloaded immediately because that's what the person intended to do right away)
-# 
-# Raises questions to explore:
-#    - How accurately are conversions tracked? How are clicks and downloads linked?  What happens if download after multiple clicks?  Is there a way to identify likely same users (same IP, Device, etc...)
-
-# ### Check actual train data (the first 10,000,000)
-# double check the same feature on the first 10 million rows of train data:
-
-# In[ ]:
-
-
-#check first 10,000,000 of actual train data
-train['timePass']= train['attributed_time']-train['click_time']
-train['timePass'].describe()
-
-
-# Here minimum time from click to download is virtually instanteneous.  How is this possible?  It is clearly not a result of a human decision made from clicking on an ad seen for the first time.
+# ## **I really enjoyed writing this kernel, and explain it. So if it is helpful for you (i hope) or you liked it (i hope too), some upvotes would be very much appreciated - That will keep me motivated :)**

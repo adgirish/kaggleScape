@@ -1,184 +1,104 @@
 
 # coding: utf-8
 
-# Someone asked how to generate outputs to use with  [LibFFM](https://github.com/guestwalk/libffm)
-# 
-# So all I do is to use pandas cuts for the numerics to turn them into categories.  Feel free to try using them as straight numerics if you wish.  I have tried to make it as generic as possible so you can use it on other competitons going forward!
-# 
-# 
+# A noise pattern intrinsic to a camera will be visible if we juxtapose spectral amplitudes of images taken by the camera after applying laplacian filters to separate noise and content of an image.  Here is an implementation of this idea.
 
-# In[ ]:
+# In[1]:
 
 
-import math
-import numpy as np
-import pandas as pd
+import numpy as np, pandas as pd, matplotlib.pyplot as plt
+import glob, functools, tqdm, PIL
+from multiprocess import Pool
+
+def imread(fn):
+    return np.array(PIL.Image.open(fn))
+
+def imsize(fn):
+    im = PIL.Image.open(fn)
+    sz = im.size
+    im.close()
+    return sz
+
+def is_landscape(fn):
+    s = imsize(fn)
+    return s[0] > s[1]
 
 
-# In[ ]:
+# In[2]:
 
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-test.insert(1,'target',0)
-print(train.shape)
-print(test.shape)
+train = pd.DataFrame({'path':glob.glob('../input/train/*/*')})
+train['modelname'] = train.path.map(lambda p:p.split('/')[-2])
 
 
-# In[ ]:
+# In[3]:
 
 
-x = pd.concat([train,test])
-x = x.reset_index(drop=True)
-unwanted = x.columns[x.columns.str.startswith('ps_calc_')]
-x.drop(unwanted,inplace=True,axis=1)
+import cv2
+
+def random_crop_fft(img, W):
+    nr, nc = img.shape[:2]
+    r1, c1 = np.random.randint(nr-W), np.random.randint(nc-W) 
+    imgc = img[r1:r1+W, c1:c1+W, :]
+
+    img1 = imgc - cv2.GaussianBlur(imgc, (3,3), 0)
+    imgs1 = np.sum(img1, axis=2)
+    
+    sf = np.stack([
+         np.fft.fftshift(np.fft.fft2( imgs1 )),
+         np.fft.fftshift(np.fft.fft2( img1[:,:,0] - img1[:,:,1] )),
+         np.fft.fftshift(np.fft.fft2( img1[:,:,1] - img1[:,:,2] )),
+         np.fft.fftshift(np.fft.fft2( img1[:,:,2] - img1[:,:,0] )) ], axis=-1)
+    return np.abs(sf)
+    
+def imread_residual_fft(fn, W, navg):
+    #print(fn, rss())
+    img = imread(fn).astype(np.float32) / 255.0
+    return sum(map(lambda x:random_crop_fft(img, W), range(navg))) / navg
+
+def noise_pattern(modelname, W, navg=256):
+    files = train.path[train.modelname == modelname].values
+    orientations = np.vectorize(is_landscape)(files)
+    if np.sum(orientations) < len(orientations)//2:
+        orientations = ~orientations
+    files = files[orientations]
+
+    from multiprocess import Pool
+    with Pool() as pool:
+        s = sum(tqdm.tqdm(pool.imap(lambda fn:imread_residual_fft(fn, W, navg), files), total=len(files), desc=modelname)) / len(files)
+    
+    return s
 
 
-# In[ ]:
+# In[4]:
 
 
-features = x.columns[2:]
-categories = []
-for c in features:
-    trainno = len(x.loc[:train.shape[0],c].unique())
-    testno = len(x.loc[train.shape[0]:,c].unique())
-    print(c,trainno,testno)
+def plot_model_features(modelname, W):
+    s = noise_pattern(modelname, W)
+    nchans = s.shape[2]
+    nrows = (nchans + 3) // 4
+    _, ax = plt.subplots(nrows, 4, figsize=(16, 4 * nrows))
+    ax = ax.flatten()
 
-
-# OK so let us turn the big boys into categories
-
-# In[ ]:
-
-
-x.loc[:,'ps_reg_03'] = pd.cut(x['ps_reg_03'], 50,labels=False)
-x.loc[:,'ps_car_12'] = pd.cut(x['ps_car_12'], 50,labels=False)
-x.loc[:,'ps_car_13'] = pd.cut(x['ps_car_13'], 50,labels=False)
-x.loc[:,'ps_car_14'] =  pd.cut(x['ps_car_14'], 50,labels=False)
-x.loc[:,'ps_car_15'] =  pd.cut(x['ps_car_15'], 50,labels=False)
-
-
-# In[ ]:
-
-
-test = x.loc[train.shape[0]:].copy()
-train = x.loc[:train.shape[0]].copy()
-
-
-# In[ ]:
-
-
-#Always good to shuffle for SGD type optimizers
-train = train.sample(frac=1).reset_index(drop=True)
-
-
-# In[ ]:
-
-
-train.drop('id',inplace=True,axis=1)
-test.drop('id',inplace=True,axis=1)
-
-
-# In[ ]:
-
-
-train.head()
-
-
-# In[ ]:
-
-
-test.head()
-
-
-# All out parameters are categories - if you want to try numerics please scale them first!
-
-# In[ ]:
-
-
-categories = train.columns[1:]
-numerics = []
-
-
-# In[ ]:
-
-
-currentcode = len(numerics)
-catdict = {}
-catcodes = {}
-for x in numerics:
-    catdict[x] = 0
-for x in categories:
-    catdict[x] = 1
-
-noofrows = train.shape[0]
-noofcolumns = len(features)
-with open("alltrainffm.txt", "w") as text_file:
-    for n, r in enumerate(range(noofrows)):
-        if((n%100000)==0):
-            print('Row',n)
-        datastring = ""
-        datarow = train.iloc[r].to_dict()
-        datastring += str(int(datarow['target']))
-
-
-        for i, x in enumerate(catdict.keys()):
-            if(catdict[x]==0):
-                datastring = datastring + " "+str(i)+":"+ str(i)+":"+ str(datarow[x])
-            else:
-                if(x not in catcodes):
-                    catcodes[x] = {}
-                    currentcode +=1
-                    catcodes[x][datarow[x]] = currentcode
-                elif(datarow[x] not in catcodes[x]):
-                    currentcode +=1
-                    catcodes[x][datarow[x]] = currentcode
-
-                code = catcodes[x][datarow[x]]
-                datastring = datastring + " "+str(i)+":"+ str(int(code))+":1"
-        datastring += '\n'
-        text_file.write(datastring)
+    for c in range(nchans):
+        eps = np.max(s[:,:,c]) * 1e-2
+        s1 = np.log(s[:,:,c] + eps) - np.log(eps) 
+        img = (s1 * 255 / np.max(s1)).astype(np.uint8)
+        ax[c].imshow(cv2.equalizeHist(img))
         
-noofrows = test.shape[0]
-noofcolumns = len(features)
-with open("alltestffm.txt", "w") as text_file:
-    for n, r in enumerate(range(noofrows)):
-        if((n%100000)==0):
-            print('Row',n)
-        datastring = ""
-        datarow = test.iloc[r].to_dict()
-        datastring += str(int(datarow['target']))
+    for ax1 in ax[nchans:]:
+        ax1.axis('off')
+
+    plt.show()
+    
+def plot_all_model_features(W):
+    print("Feature Size={}".format(W))
+    for modelname in train.modelname.unique():
+        plot_model_features(modelname, W)
 
 
-        for i, x in enumerate(catdict.keys()):
-            if(catdict[x]==0):
-                datastring = datastring + " "+str(i)+":"+ str(i)+":"+ str(datarow[x])
-            else:
-                if(x not in catcodes):
-                    catcodes[x] = {}
-                    currentcode +=1
-                    catcodes[x][datarow[x]] = currentcode
-                elif(datarow[x] not in catcodes[x]):
-                    currentcode +=1
-                    catcodes[x][datarow[x]] = currentcode
-
-                code = catcodes[x][datarow[x]]
-                datastring = datastring + " "+str(i)+":"+ str(int(code))+":1"
-        datastring += '\n'
-        text_file.write(datastring)
+# In[5]:
 
 
-# Once you have built the libffm just use
-# * ./ffm-train alltrainffm.txt
-# * ./ffm-predict alltestffm.txt alltrainffm.txt.model output.txt
-
-# We haven't shuffled test to we can just create the submission as follows
-
-# In[ ]:
-
-
-# sub = pd.read_csv('../input/sample_submission.csv')
-# outputs = pd.read_csv('output.txt',header=None)
-# outputs.columns = ['target']
-# sub.target = outputs.target.ravel()
-# sub.to_csv('libffmsubmission.csv',index=False)
+plot_all_model_features(W=128)
 

@@ -1,120 +1,200 @@
 
 # coding: utf-8
 
-# <h1>This notebook shows how I reduce the size of the properties dataset by selecting smaller datatypes. </h1> <p> I noticed the size of the properties dataset is pretty big for a lower/mid-range laptop so I made a script to make the dataset smaller without losing information. </p>
-# <h3>This notebook uses the following approach: </h3>
-# <ol>
-# <li>Iterate over every column </li>
-# <li>Determine if the column is numeric </li>
-# <li>Determine if the column can be represented by an integer </li>
-# <li>Find the min and the max value </li>
-# <li>Determine and apply the smallest datatype that can fit the range of values </li>
-# </ol>
+# This notebook shows how to use LightGBM in a Regularized RandomForest fashion
+# Advantages of LightGBM are :
+# - a lot faster than the well-known scikit learn RandomForestClassifier
+# - it allows L1 and L2 regularization to achieve better performance
 # 
-# <h3> This reduces the dataset from approx. 1.3 GB to 466 MB </h3>
-
-# <h2> 1 | load packages </h2>
+# This notebook is not about finding the best parameters but focuses on using powerfull algos to find important features. 
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from sklearn.model_selection import StratifiedKFold
+import numpy as np
+import pandas as pd
+import lightgbm as lgb
+import time
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+# do not display LGBM categorical override warning 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 
-# <h2> 2 | Function for reducing memory usage of a pandas dataframe </h2>
-
-# In[ ]:
-
-
-def reduce_mem_usage(props):
-    start_mem_usg = props.memory_usage().sum() / 1024**2 
-    print("Memory usage of properties dataframe is :",start_mem_usg," MB")
-    NAlist = [] # Keeps track of columns that have missing values filled in. 
-    for col in props.columns:
-        if props[col].dtype != object:  # Exclude strings
-            
-            # Print current column type
-            print("******************************")
-            print("Column: ",col)
-            print("dtype before: ",props[col].dtype)
-            
-            # make variables for Int, max and min
-            IsInt = False
-            mx = props[col].max()
-            mn = props[col].min()
-            
-            # Integer does not support NA, therefore, NA needs to be filled
-            if not np.isfinite(props[col]).all(): 
-                NAlist.append(col)
-                props[col].fillna(mn-1,inplace=True)  
-                   
-            # test if column can be converted to an integer
-            asint = props[col].fillna(0).astype(np.int64)
-            result = (props[col] - asint)
-            result = result.sum()
-            if result > -0.01 and result < 0.01:
-                IsInt = True
-
-            
-            # Make Integer/unsigned Integer datatypes
-            if IsInt:
-                if mn >= 0:
-                    if mx < 255:
-                        props[col] = props[col].astype(np.uint8)
-                    elif mx < 65535:
-                        props[col] = props[col].astype(np.uint16)
-                    elif mx < 4294967295:
-                        props[col] = props[col].astype(np.uint32)
-                    else:
-                        props[col] = props[col].astype(np.uint64)
-                else:
-                    if mn > np.iinfo(np.int8).min and mx < np.iinfo(np.int8).max:
-                        props[col] = props[col].astype(np.int8)
-                    elif mn > np.iinfo(np.int16).min and mx < np.iinfo(np.int16).max:
-                        props[col] = props[col].astype(np.int16)
-                    elif mn > np.iinfo(np.int32).min and mx < np.iinfo(np.int32).max:
-                        props[col] = props[col].astype(np.int32)
-                    elif mn > np.iinfo(np.int64).min and mx < np.iinfo(np.int64).max:
-                        props[col] = props[col].astype(np.int64)    
-            
-            # Make float datatypes 32 bit
-            else:
-                props[col] = props[col].astype(np.float32)
-            
-            # Print new column type
-            print("dtype after: ",props[col].dtype)
-            print("******************************")
-    
-    # Print final result
-    print("___MEMORY USAGE AFTER COMPLETION:___")
-    mem_usg = props.memory_usage().sum() / 1024**2 
-    print("Memory usage is: ",mem_usg," MB")
-    print("This is ",100*mem_usg/start_mem_usg,"% of the initial size")
-    return props, NAlist
-
-
-# <h2> 3 | Load Data </h2>
+# ### Define Gini metrics 
+# Let's use the [Extremely Fast Gini Computation by @CPMP](http://www.kaggle.com/cpmpml/extremely-fast-gini-computation)
 
 # In[ ]:
 
 
-props = pd.read_csv(r"../input/properties_2016.csv")  #The properties dataset
+from numba import jit
 
-#train = pd.read_csv(r"../input/train_2016_v2.csv")   # The parcelid's with their outcomes
-#samp = pd.read_csv(r"../input/sample_submission.csv")  #The parcelid's for the testset
+@jit
+def eval_gini(y_true, y_prob):
+    y_true = np.asarray(y_true)
+    y_true = y_true[np.argsort(y_prob)]
+    ntrue = 0
+    gini = 0
+    delta = 0
+    n = len(y_true)
+    for i in range(n-1, -1, -1):
+        y_i = y_true[i]
+        ntrue += y_i
+        gini += y_i * delta
+        delta += 1 - y_i
+    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
+    return gini
 
 
-# <h2> 4 | Run function </h2>
+# ### Read data and target
 
 # In[ ]:
 
 
-props, NAlist = reduce_mem_usage(props)
-print("_________________")
-print("")
-print("Warning: the following columns have missing values filled with 'df['column_name'].min() -1': ")
-print("_________________")
-print("")
-print(NAlist)
+trn_df = pd.read_csv("../input/train.csv", index_col=0)
+
+target = trn_df.target
+del trn_df["target"]
+
+
+# ### Define LGBM Random Forest L1 regularizer
+
+# In[ ]:
+
+
+reg = lgb.LGBMClassifier(boosting_type="rf",
+                         num_leaves=165,
+                         colsample_bytree=.5,
+                         n_estimators=400,
+                         min_child_weight=5,
+                         min_child_samples=10,
+                         subsample=.632, # Standard RF bagging fraction
+                         subsample_freq=1,
+                         min_split_gain=0,
+                         reg_alpha=10, # Hard L1 regularization
+                         reg_lambda=0,
+                         n_jobs=3)
+
+
+# ### Run a 5 fold CV and display selected features
+
+# In[ ]:
+
+
+# do not display LGBM categorical override warning 
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning) 
+
+imp_l1 = pd.DataFrame()
+imp_l1["feature"] = trn_df.columns
+
+folds = StratifiedKFold(n_splits=5, shuffle=True, random_state=15)
+oof_1 = np.zeros(len(trn_df))
+start = time.time()
+for fold_, (trn_idx, val_idx) in enumerate(folds.split(trn_df.values, target.values)):
+    reg.fit(
+        trn_df.iloc[trn_idx].values, target.iloc[trn_idx].values,
+        feature_name=list(trn_df.columns),
+        categorical_feature=[f for f in trn_df.columns if '_cat' in f],
+    )
+    trn_gini = eval_gini(target.iloc[trn_idx].values,
+                               reg.predict_proba(trn_df.iloc[trn_idx].values)[:, 1])
+    oof_1[val_idx] = reg.predict_proba(trn_df.iloc[val_idx])[:, 1]
+    val_gini = eval_gini(target.iloc[val_idx], oof_1[val_idx])
+    imp_l1["imp" + str(fold_ + 1)] = reg.feature_importances_
+    print("Gini score for fold %2d : TRN %.6f / VAL %.6f in [%5.1f]" 
+          % (fold_, trn_gini, val_gini, (time.time() - start) / 60))
+
+print("OOF score : %.6f in [%5.1f]"
+      % (eval_gini(target, oof_1), (time.time() - start) / 60))
+
+# Compute average importances
+imps = [f for f in imp_l1 if "imp" in f]
+imp_l1["score"] = imp_l1[imps].mean(axis=1)
+imp_l1["score"] = 100 * imp_l1["score"] / imp_l1["score"].max()
+imp_l1.sort_values("score", ascending=False, inplace=True)
+
+# Initialize the matplotlib figure
+f, ax = plt.subplots(figsize=(10, 8))
+
+# Plot the total crashes
+sns.set_color_codes("pastel")
+
+sns.barplot(x="score", y="feature", 
+            data=imp_l1[imp_l1["score"] > 0],
+            palette=mpl.cm.ScalarMappable(cmap='viridis_r').to_rgba((imp_l1["score"])))
+plt.xlabel("LGBM Importance score over 5 folds")
+plt.ylabel("Feature")
+plt.title("LGBM L1 Regularized Random Forest importances")
+
+
+# ### Define LGBM Random Forest L2 regularizer
+
+# In[ ]:
+
+
+reg = lgb.LGBMClassifier(boosting_type="rf",
+                         num_leaves=165,
+                         colsample_bytree=.5,
+                         n_estimators=400,
+                         min_child_weight=5,
+                         min_child_samples=10,
+                         subsample=.632,
+                         subsample_freq=1,
+                         min_split_gain=0,
+                         reg_alpha=0,
+                         reg_lambda=5, # L2 regularization
+                         n_jobs=3)
+
+
+# ### Run a 5 fold CV and display L2 selected features
+
+# In[ ]:
+
+
+imp_l2 = pd.DataFrame()
+imp_l2["feature"] = trn_df.columns
+
+folds = StratifiedKFold(n_splits=5, shuffle=True, random_state=15)
+oof_1 = np.zeros(len(trn_df))
+start = time.time()
+for fold_, (trn_idx, val_idx) in enumerate(folds.split(trn_df.values, target.values)):
+    reg.fit(
+        trn_df.iloc[trn_idx].values, target.iloc[trn_idx].values,
+        feature_name=list(trn_df.columns),
+        categorical_feature=[f for f in trn_df.columns if '_cat' in f],
+    )
+    trn_gini = eval_gini(target.iloc[trn_idx].values,
+                               reg.predict_proba(trn_df.iloc[trn_idx].values)[:, 1])
+    oof_1[val_idx] = reg.predict_proba(trn_df.iloc[val_idx])[:, 1]
+    val_gini = eval_gini(target.iloc[val_idx], oof_1[val_idx])
+    imp_l2["imp" + str(fold_ + 1)] = reg.feature_importances_
+    print("Gini score for fold %2d : TRN %.6f / VAL %.6f in [%5.1f]" 
+          % (fold_, trn_gini, val_gini, (time.time() - start) / 60))
+
+print("OOF score : %.6f in [%5.1f]"
+      % (eval_gini(target, oof_1), (time.time() - start) / 60))
+
+imps = [f for f in imp_l2.columns if "imp" in f]
+imp_l2["score"] = imp_l2[imps].mean(axis=1)
+imp_l2["score"] = 100 * imp_l2["score"] / imp_l2["score"].max()
+imp_l2.sort_values("score", ascending=False, inplace=True)
+
+# Initialize the matplotlib figure
+f, ax = plt.subplots(figsize=(10, 8))
+
+# Plot the total crashes
+sns.set_color_codes("pastel")
+
+sns.barplot(x="score", y="feature", 
+            data=imp_l2[imp_l2["score"] > 0],
+            palette=mpl.cm.ScalarMappable(cmap='viridis_r').to_rgba((imp_l2["score"])))
+plt.xlabel("LGBM Importance score over 5 folds")
+plt.ylabel("Feature")
+plt.title("LGBM L2 Regularized Random Forest importances")
 

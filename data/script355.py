@@ -1,246 +1,330 @@
 
 # coding: utf-8
 
-# <h3>Note:  in the Discussion section they said that data from figshare has some overlap with the current test set (https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/discussion/46177). So it's possible that using features/scores based on this data may overfit to the current test set.  Once they change the test set, the LB scores may change.
-# So at this point, I think it's hard to tell whether using features based on these datasets will ultimately help your LB score. It may still help, but we won't know for sure until the new test set is released.<h3>
-
-# **The idea for this kernel is to use the public datasets at https://conversationai.github.io/ to train models and use those models to score the train and test sets for this challenge. You can then use the scores as features when training the real models. So the output of this kernel isn't meant to be submitted as is. The output is the original train/test datasets, with additional columns/features.**
-# 
-# Using these enhanced train/test sets improved my logistic-regression based models from 0.047 to 0.044 log-loss. I haven't done much if any tuning for these models below, so you should be able to tweak things and get even better results.
-# 
-# I understand that there are PerspectiveAPI models that may be similar. But rather than wait for an API key, and so I could play around with the models more myself, I trained the models in this kernel.
-
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import tensorflow as tf
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
 
 # In[ ]:
 
 
-toxic_cmt = pd.read_table('../input/conversationaidataset/toxicity_annotated_comments.tsv')
-toxic_annot = pd.read_table('../input/conversationaidataset/toxicity_annotations.tsv')
-aggr_cmt = pd.read_table('../input/conversationaidataset/aggression_annotated_comments.tsv')
-aggr_annot = pd.read_table('../input/conversationaidataset/aggression_annotations.tsv')
-attack_cmt = pd.read_table('../input/conversationaidataset/attack_annotated_comments.tsv')
-attack_annot = pd.read_table('../input/conversationaidataset/attack_annotations.tsv')
-
-
-# **Find the mean score for toxicity, aggression, attack, and join with the corresponding comment**
-# For each comment/rev_id, multiple workers have labeld/annotated. So then you have to decide what your overall label is for a given comment/rev_id. I simply took the mean value, and will train a regression model. You could try other aggregations/methods. You could, e.g., instead go with majority vote, and train binary classifiers, etc.
-
-# In[ ]:
-
-
-def JoinAndSanitize(cmt, annot):
-    df = cmt.set_index('rev_id').join(annot.groupby(['rev_id']).mean())
-    df = Sanitize(df)
-    return df
-
-
-# **Basic cleaning/standardizing -- can potentially do more (or less) here**
-
-# In[ ]:
-
-
-def Sanitize(df):
-    comment = 'comment' if 'comment' in df else 'comment_text'
-    df[comment] = df[comment].str.lower().str.replace('newline_token', ' ')
-    df[comment] = df[comment].fillna('erikov')
-    return df
+# load data
+train_data = pd.read_csv(r"../input/train.csv")
+test_data = pd.read_csv(r"../input/test.csv")
 
 
 # In[ ]:
 
 
-toxic = JoinAndSanitize(toxic_cmt, toxic_annot)
-attack = JoinAndSanitize(attack_cmt, attack_annot)
-aggression = JoinAndSanitize(aggr_cmt, aggr_annot)
-
-
-# **The attack and aggression labeled datasets are actually the same with only very slightly different annotations/labels**
-# So probably only the scores from one model will be needed, but I left both here for completeness.
-
-# In[ ]:
-
-
-len(attack), len(aggression)
+train_data
 
 
 # In[ ]:
 
 
-attack['comment'].equals(aggression['comment'])
-
-
-# Check how correlated the mean value for the annotations between the attack and aggression datasets are
-
-# In[ ]:
-
-
-attack['attack'].corr(aggression['aggression'])
-
-
-# **Check dataset**
-
-# In[ ]:
-
-
-toxic.head()
-#attack.head()
-#aggression.head()
+test_data
 
 
 # In[ ]:
 
 
-from sklearn.feature_extraction.text import TfidfVectorizer
+# Feature Engineering
+from sklearn.preprocessing import Imputer
 
-def Tfidfize(df):
-    # can tweak these as desired
-    max_vocab = 200000
-    split = 0.1
+def nan_padding(data, columns):
+    for column in columns:
+        imputer=Imputer()
+        data[column]=imputer.fit_transform(data[column].values.reshape(-1,1))
+    return data
 
-    comment = 'comment' if 'comment' in df else 'comment_text'
+
+nan_columns = ["Age", "SibSp", "Parch"]
+
+train_data = nan_padding(train_data, nan_columns)
+test_data = nan_padding(test_data, nan_columns)
+
+
+# In[ ]:
+
+
+train_data
+
+
+# In[ ]:
+
+
+#save PassengerId for evaluation
+test_passenger_id=test_data["PassengerId"]
+
+
+# In[ ]:
+
+
+def drop_not_concerned(data, columns):
+    return data.drop(columns, axis=1)
+
+not_concerned_columns = ["PassengerId","Name", "Ticket", "Fare", "Cabin", "Embarked"]
+train_data = drop_not_concerned(train_data, not_concerned_columns)
+test_data = drop_not_concerned(test_data, not_concerned_columns)
+
+
+# In[ ]:
+
+
+train_data.head()
+
+
+# In[ ]:
+
+
+test_data.head()
+
+
+# In[ ]:
+
+
+def dummy_data(data, columns):
+    for column in columns:
+        data = pd.concat([data, pd.get_dummies(data[column], prefix=column)], axis=1)
+        data = data.drop(column, axis=1)
+    return data
+
+
+dummy_columns = ["Pclass"]
+train_data=dummy_data(train_data, dummy_columns)
+test_data=dummy_data(test_data, dummy_columns)
+
+
+# In[ ]:
+
+
+test_data.head()
+
+
+# In[ ]:
+
+
+from sklearn.preprocessing import LabelEncoder
+def sex_to_int(data):
+    le = LabelEncoder()
+    le.fit(["male","female"])
+    data["Sex"]=le.transform(data["Sex"]) 
+    return data
+
+train_data = sex_to_int(train_data)
+test_data = sex_to_int(test_data)
+train_data.head()
+
+
+# In[ ]:
+
+
+from sklearn.preprocessing import MinMaxScaler
+
+def normalize_age(data):
+    scaler = MinMaxScaler()
+    data["Age"] = scaler.fit_transform(data["Age"].values.reshape(-1,1))
+    return data
+train_data = normalize_age(train_data)
+test_data = normalize_age(test_data)
+train_data.head()
+
+
+# In[ ]:
+
+
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.model_selection import train_test_split
+
+def split_valid_test_data(data, fraction=(1 - 0.8)):
+    data_y = data["Survived"]
+    lb = LabelBinarizer()
+    data_y = lb.fit_transform(data_y)
+
+    data_x = data.drop(["Survived"], axis=1)
+
+    train_x, valid_x, train_y, valid_y = train_test_split(data_x, data_y, test_size=fraction)
+
+    return train_x.values, train_y, valid_x, valid_y
+
+train_x, train_y, valid_x, valid_y = split_valid_test_data(train_data)
+print("train_x:{}".format(train_x.shape))
+print("train_y:{}".format(train_y.shape))
+print("train_y content:{}".format(train_y[:3]))
+
+print("valid_x:{}".format(valid_x.shape))
+print("valid_y:{}".format(valid_y.shape))
+
+
+# In[ ]:
+
+
+# Build Neural Network
+from collections import namedtuple
+
+def build_neural_network(hidden_units=10):
+    tf.reset_default_graph()
+    inputs = tf.placeholder(tf.float32, shape=[None, train_x.shape[1]])
+    labels = tf.placeholder(tf.float32, shape=[None, 1])
+    learning_rate = tf.placeholder(tf.float32)
+    is_training=tf.Variable(True,dtype=tf.bool)
     
-    tfidfer = TfidfVectorizer(ngram_range=(1,2), max_features=max_vocab,
-                   use_idf=1, stop_words='english',
-                   smooth_idf=1, sublinear_tf=1 )
-    tfidf = tfidfer.fit_transform(df[comment])
-
-    return tfidf, tfidfer
-
-
-# Get the tfidf values for the training sets, as well as the fit tfidf vectorizer to be used later to transform the train/test sets for the real challenge datasets.
-
-# In[ ]:
-
-
-X_toxic, tfidfer_toxic = Tfidfize(toxic)
-y_toxic = toxic['toxicity'].values
-X_attack, tfidfer_attack = Tfidfize(attack)
-y_attack = attack['attack'].values
-X_aggression, tfidfer_aggression = Tfidfize(aggression)
-y_aggression = aggression['aggression'].values
-
-
-# **Model Training Strategy**
-# 
-# Rather than converting the 'toxicity', 'attack', 'aggression' into a binary label (e.g., >= 0.5), let's train a regression model to use as much information as possible. The output score from these models could be used as features in training the further refined models in the current challenge ('severe_toxic', 'obscene', etc.).
-# 
-# The toxicity/attack/aggression may not have a 1-1 mapping with the desired targets for the challenge, but they may be features that can help.
-
-# In[ ]:
-
-
-from sklearn.linear_model import Ridge
-from sklearn.model_selection import cross_val_score
-
-ridge = Ridge()
-mse_toxic = -cross_val_score(ridge, X_toxic, y_toxic, scoring='neg_mean_squared_error')
-mse_attack = -cross_val_score(ridge, X_attack, y_attack, scoring='neg_mean_squared_error')
-mse_aggression = -cross_val_score(ridge, X_aggression, y_aggression, scoring='neg_mean_squared_error')
-
-
-# In[ ]:
-
-
-mse_toxic.mean(), mse_attack.mean(), mse_aggression.mean()
-
-
-# **If the cross-validation scores look okay, train on the full dataset**
-
-# In[ ]:
-
-
-model_toxic = ridge.fit(X_toxic, y_toxic)
-model_attack = ridge.fit(X_attack, y_attack)
-model_aggression = ridge.fit(X_aggression, y_aggression)
-
-
-# **Now score the original train and test sets, and save out as an additional feature for those datasets. (These can then be used when training/scoring with our real model**
-
-# In[ ]:
-
-
-train_orig = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
-test_orig = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
-
-
-# In[ ]:
-
-
-train_orig = Sanitize(train_orig)
-test_orig = Sanitize(test_orig)
-
-
-# In[ ]:
-
-
-def TfidfAndPredict(tfidfer, model):
-    tfidf_train = tfidfer.transform(train_orig['comment_text'])
-    tfidf_test = tfidfer.transform(test_orig['comment_text'])
-    train_scores = model.predict(tfidf_train)
-    test_scores = model.predict(tfidf_test)
+    initializer = tf.contrib.layers.xavier_initializer()
+    fc = tf.layers.dense(inputs, hidden_units, activation=None,kernel_initializer=initializer)
+    fc=tf.layers.batch_normalization(fc, training=is_training)
+    fc=tf.nn.relu(fc)
     
-    return train_scores, test_scores
+    logits = tf.layers.dense(fc, 1, activation=None)
+    cross_entropy = tf.nn.sigmoid_cross_entropy_with_logits(labels=labels, logits=logits)
+    cost = tf.reduce_mean(cross_entropy)
+    
+    with tf.control_dependencies(tf.get_collection(tf.GraphKeys.UPDATE_OPS)):
+        optimizer = tf.train.AdamOptimizer(learning_rate=learning_rate).minimize(cost)
+
+    predicted = tf.nn.sigmoid(logits)
+    correct_pred = tf.equal(tf.round(predicted), labels)
+    accuracy = tf.reduce_mean(tf.cast(correct_pred, tf.float32))
+
+    # Export the nodes 
+    export_nodes = ['inputs', 'labels', 'learning_rate','is_training', 'logits',
+                    'cost', 'optimizer', 'predicted', 'accuracy']
+    Graph = namedtuple('Graph', export_nodes)
+    local_dict = locals()
+    graph = Graph(*[local_dict[each] for each in export_nodes])
+
+    return graph
+
+model = build_neural_network()
 
 
 # In[ ]:
 
 
-toxic_tr_scores, toxic_t_scores = TfidfAndPredict(tfidfer_toxic, model_toxic)
+def get_batch(data_x,data_y,batch_size=32):
+    batch_n=len(data_x)//batch_size
+    for i in range(batch_n):
+        batch_x=data_x[i*batch_size:(i+1)*batch_size]
+        batch_y=data_y[i*batch_size:(i+1)*batch_size]
+        
+        yield batch_x,batch_y
 
 
 # In[ ]:
 
 
-toxic_tr_scores.shape, toxic_t_scores.shape
+epochs = 200
+train_collect = 50
+train_print=train_collect*2
+
+learning_rate_value = 0.001
+batch_size=16
+
+x_collect = []
+train_loss_collect = []
+train_acc_collect = []
+valid_loss_collect = []
+valid_acc_collect = []
+
+saver = tf.train.Saver()
+with tf.Session() as sess:
+    sess.run(tf.global_variables_initializer())
+    iteration=0
+    for e in range(epochs):
+        for batch_x,batch_y in get_batch(train_x,train_y,batch_size):
+            iteration+=1
+            feed = {model.inputs: train_x,
+                    model.labels: train_y,
+                    model.learning_rate: learning_rate_value,
+                    model.is_training:True
+                   }
+
+            train_loss, _, train_acc = sess.run([model.cost, model.optimizer, model.accuracy], feed_dict=feed)
+            
+            if iteration % train_collect == 0:
+                x_collect.append(e)
+                train_loss_collect.append(train_loss)
+                train_acc_collect.append(train_acc)
+
+                if iteration % train_print==0:
+                     print("Epoch: {}/{}".format(e + 1, epochs),
+                      "Train Loss: {:.4f}".format(train_loss),
+                      "Train Acc: {:.4f}".format(train_acc))
+                        
+                feed = {model.inputs: valid_x,
+                        model.labels: valid_y,
+                        model.is_training:False
+                       }
+                val_loss, val_acc = sess.run([model.cost, model.accuracy], feed_dict=feed)
+                valid_loss_collect.append(val_loss)
+                valid_acc_collect.append(val_acc)
+                
+                if iteration % train_print==0:
+                    print("Epoch: {}/{}".format(e + 1, epochs),
+                      "Validation Loss: {:.4f}".format(val_loss),
+                      "Validation Acc: {:.4f}".format(val_acc))
+                
+
+    saver.save(sess, "./titanic.ckpt")
 
 
 # In[ ]:
 
 
-attack_tr_scores, attack_t_scores = TfidfAndPredict(tfidfer_attack, model_attack)
+plt.plot(x_collect, train_loss_collect, "r--")
+plt.plot(x_collect, valid_loss_collect, "g^")
+plt.show()
 
 
 # In[ ]:
 
 
-attack_tr_scores.shape, attack_t_scores.shape
+plt.plot(x_collect, train_acc_collect, "r--")
+plt.plot(x_collect, valid_acc_collect, "g^")
+plt.show()
 
 
 # In[ ]:
 
 
-aggression_tr_scores, aggression_t_scores = TfidfAndPredict(tfidfer_aggression, model_aggression)
+model=build_neural_network()
+restorer=tf.train.Saver()
+with tf.Session() as sess:
+    restorer.restore(sess,"./titanic.ckpt")
+    feed={
+        model.inputs:test_data,
+        model.is_training:False
+    }
+    test_predict=sess.run(model.predicted,feed_dict=feed)
+    
+test_predict[:10]
 
 
 # In[ ]:
 
 
-aggression_tr_scores.shape, aggression_t_scores.shape
-
-
-# **Ok, now write out these scores alongside the original train and test datasets**
-
-# In[ ]:
-
-
-# toxic_level, to not be confused with original label 'toxic'
-train_orig['toxic_level'] = toxic_tr_scores
-train_orig['attack'] = attack_tr_scores
-train_orig['aggression'] = aggression_tr_scores
-test_orig['toxic_level'] = toxic_t_scores
-test_orig['attack'] = attack_t_scores
-test_orig['aggression'] = aggression_t_scores
+from sklearn.preprocessing import Binarizer
+binarizer=Binarizer(0.5)
+test_predict_result=binarizer.fit_transform(test_predict)
+test_predict_result=test_predict_result.astype(np.int32)
+test_predict_result[:10]
 
 
 # In[ ]:
 
 
-train_orig.to_csv('train_with_convai.csv', index=False)
-test_orig.to_csv('test_with_convai.csv', index=False)
+passenger_id=test_passenger_id.copy()
+evaluation=passenger_id.to_frame()
+evaluation["Survived"]=test_predict_result
+evaluation[:10]
+
+
+# In[ ]:
+
+
+evaluation.to_csv("evaluation_submission.csv",index=False)
 

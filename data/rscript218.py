@@ -1,214 +1,75 @@
-####The entire data manipulation was stolen from the script from Dune_dweller
-##https://www.kaggle.com/dvasyukova/talkingdata-mobile-user-demographics/a-linear-model-on-apps-and-labels
-
 import numpy as np
 import pandas as pd
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Activation
-from keras.wrappers.scikit_learn import KerasClassifier
-from keras.utils import np_utils
-from keras.optimizers import SGD
+import lightgbm as lgb
+import gc
 
-from sklearn.cross_validation import cross_val_score
-from sklearn.cross_validation import KFold
-from sklearn.preprocessing import LabelEncoder
-from sklearn.pipeline import Pipeline
-from sklearn.cross_validation import train_test_split
-from sklearn.metrics import log_loss
+print('Loading data ...')
 
-import os
-from scipy.sparse import csr_matrix, hstack
+train = pd.read_csv('../input/train_2016.csv')
+prop = pd.read_csv('../input/properties_2016.csv')
 
+for c, dtype in zip(prop.columns, prop.dtypes):	
+    if dtype == np.float64:		
+        prop[c] = prop[c].astype(np.float32)
 
-# fix random seed for reproducibility
-seed = 7
-np.random.seed(seed)
+df_train = train.merge(prop, how='left', on='parcelid')
 
-# load dataset
-#dataframe = pandas.read_csv("/home/username/projects/PracticeNN/iris.data", header=None)
+x_train = df_train.drop(['parcelid', 'logerror', 'transactiondate', 'propertyzoningdesc', 'propertycountylandusecode'], axis=1)
+y_train = df_train['logerror'].values
+print(x_train.shape, y_train.shape)
 
-datadir = '../input'
-#datadir = '/home/username/projects/talkingData/input'
-gatrain = pd.read_csv(os.path.join(datadir,'gender_age_train.csv'), index_col='device_id')
-gatest = pd.read_csv(os.path.join(datadir,'gender_age_test.csv'), index_col = 'device_id')
-phone = pd.read_csv(os.path.join(datadir,'phone_brand_device_model.csv'))
-# Get rid of duplicate device ids in phone
-phone = phone.drop_duplicates('device_id',keep='first').set_index('device_id')
-events = pd.read_csv(os.path.join(datadir,'events.csv'),  parse_dates=['timestamp'], index_col='event_id')
-appevents = pd.read_csv(os.path.join(datadir,'app_events.csv'), usecols=['event_id','app_id','is_active'], dtype={'is_active':bool})
-applabels = pd.read_csv(os.path.join(datadir,'app_labels.csv'))
+train_columns = x_train.columns
 
+for c in x_train.dtypes[x_train.dtypes == object].index.values:
+    x_train[c] = (x_train[c] == True)
 
-####Phone brand
-#As preparation I create two columns that show which train or test set row a particular device_id belongs to.
+del df_train; gc.collect()
 
-gatrain['trainrow'] = np.arange(gatrain.shape[0])
-gatest['testrow'] = np.arange(gatest.shape[0])
+split = 90000
+x_train, y_train, x_valid, y_valid = x_train[:split], y_train[:split], x_train[split:], y_train[split:]
+x_train = x_train.values.astype(np.float32, copy=False)
+x_valid = x_valid.values.astype(np.float32, copy=False)
 
-# A sparse matrix of features can be constructed in various ways. I use this constructor:
-# csr_matrix((data, (row_ind, col_ind)), [shape=(M, N)])
-# where ``data``, ``row_ind`` and ``col_ind`` satisfy the
-# relationship ``a[row_ind[k], col_ind[k]] = data[k]``
-#
-# It lets me specify which values to put into which places in a sparse matrix. For phone brand data the data array will be all ones, row_ind will be the row number of a device and col_ind will be the number of brand.
+d_train = lgb.Dataset(x_train, label=y_train)
+d_valid = lgb.Dataset(x_valid, label=y_valid)
 
-brandencoder = LabelEncoder().fit(phone.phone_brand)
-phone['brand'] = brandencoder.transform(phone['phone_brand'])
-gatrain['brand'] = phone['brand']
-gatest['brand'] = phone['brand']
-Xtr_brand = csr_matrix((np.ones(gatrain.shape[0]),
-                       (gatrain.trainrow, gatrain.brand)))
-Xte_brand = csr_matrix((np.ones(gatest.shape[0]),
-                       (gatest.testrow, gatest.brand)))
-print('Brand features: train shape {}, test shape {}'.format(Xtr_brand.shape, Xte_brand.shape))
+params = {}
+params['learning_rate'] = 0.002
+params['boosting_type'] = 'gbdt'
+params['objective'] = 'regression'
+params['metric'] = 'mae'
+params['sub_feature'] = 0.5
+params['num_leaves'] = 60
+params['min_data'] = 500
+params['min_hessian'] = 1
 
+watchlist = [d_valid]
+clf = lgb.train(params, d_train, 500, watchlist)
 
-# Device model
-# In [5]:
-m = phone.phone_brand.str.cat(phone.device_model)
+del d_train, d_valid; gc.collect()
+del x_train, x_valid; gc.collect()
 
-modelencoder = LabelEncoder().fit(m)
-phone['model'] = modelencoder.transform(m)
-gatrain['model'] = phone['model']
-gatest['model'] = phone['model']
-Xtr_model = csr_matrix((np.ones(gatrain.shape[0]),
-                       (gatrain.trainrow, gatrain.model)))
-Xte_model = csr_matrix((np.ones(gatest.shape[0]),
-                       (gatest.testrow, gatest.model)))
-print('Model features: train shape {}, test shape {}'.format(Xtr_model.shape, Xte_model.shape))
+print("Prepare for the prediction ...")
+sample = pd.read_csv('../input/sample_submission.csv')
+sample['parcelid'] = sample['ParcelId']
+df_test = sample.merge(prop, on='parcelid', how='left')
+del sample, prop; gc.collect()
+x_test = df_test[train_columns]
+del df_test; gc.collect()
+for c in x_test.dtypes[x_test.dtypes == object].index.values:
+    x_test[c] = (x_test[c] == True)
+x_test = x_test.values.astype(np.float32, copy=False)
 
-# Installed apps features
-# For each device I want to mark which apps it has installed. So I'll have as many feature columns as there are distinct apps.
-# Apps are linked to devices through events. So I do the following:
-# merge device_id column from events table to app_events
-# group the resulting dataframe by device_id and app and aggregate
-# merge in trainrow and testrow columns to know at which row to put each device in the features matrix
+print("Start prediction ...")
+# num_threads > 1 will predict very slow in kernal
+clf.reset_parameter({"num_threads":1})
+p_test = clf.predict(x_test)
 
-appencoder = LabelEncoder().fit(appevents.app_id)
-appevents['app'] = appencoder.transform(appevents.app_id)
-napps = len(appencoder.classes_)
-deviceapps = (appevents.merge(events[['device_id']], how='left',left_on='event_id',right_index=True)
-                       .groupby(['device_id','app'])['app'].agg(['size'])
-                       .merge(gatrain[['trainrow']], how='left', left_index=True, right_index=True)
-                       .merge(gatest[['testrow']], how='left', left_index=True, right_index=True)
-                       .reset_index())
-deviceapps.head()
+del x_test; gc.collect()
 
-d = deviceapps.dropna(subset=['trainrow'])
-Xtr_app = csr_matrix((np.ones(d.shape[0]), (d.trainrow, d.app)),
-                      shape=(gatrain.shape[0],napps))
-d = deviceapps.dropna(subset=['testrow'])
-Xte_app = csr_matrix((np.ones(d.shape[0]), (d.testrow, d.app)),
-                      shape=(gatest.shape[0],napps))
-print('Apps data: train shape {}, test shape {}'.format(Xtr_app.shape, Xte_app.shape))
+print("Start write result ...")
+sub = pd.read_csv('../input/sample_submission.csv')
+for c in sub.columns[sub.columns != 'ParcelId']:
+    sub[c] = p_test
 
-# App labels features
-# These are constructed in a way similar to apps features by merging app_labels with the deviceapps dataframe we created above.
-applabels = applabels.loc[applabels.app_id.isin(appevents.app_id.unique())]
-applabels['app'] = appencoder.transform(applabels.app_id)
-labelencoder = LabelEncoder().fit(applabels.label_id)
-applabels['label'] = labelencoder.transform(applabels.label_id)
-nlabels = len(labelencoder.classes_)
-
-devicelabels = (deviceapps[['device_id','app']]
-                .merge(applabels[['app','label']])
-                .groupby(['device_id','label'])['app'].agg(['size'])
-                .merge(gatrain[['trainrow']], how='left', left_index=True, right_index=True)
-                .merge(gatest[['testrow']], how='left', left_index=True, right_index=True)
-                .reset_index())
-devicelabels.head()
-
-d = devicelabels.dropna(subset=['trainrow'])
-Xtr_label = csr_matrix((np.ones(d.shape[0]), (d.trainrow, d.label)),
-                      shape=(gatrain.shape[0],nlabels))
-d = devicelabels.dropna(subset=['testrow'])
-Xte_label = csr_matrix((np.ones(d.shape[0]), (d.testrow, d.label)),
-                      shape=(gatest.shape[0],nlabels))
-print('Labels data: train shape {}, test shape {}'.format(Xtr_label.shape, Xte_label.shape))
-
-
-# Concatenate all features
-
-Xtrain = hstack((Xtr_brand, Xtr_model, Xtr_app, Xtr_label), format='csr')
-Xtest =  hstack((Xte_brand, Xte_model, Xte_app, Xte_label), format='csr')
-print('All features: train shape {}, test shape {}'.format(Xtrain.shape, Xtest.shape))
-
-#################
-# Start modeling
-#################
-
-targetencoder = LabelEncoder().fit(gatrain.group)
-y = targetencoder.transform(gatrain.group)
-nclasses = len(targetencoder.classes_)
-dummy_y = np_utils.to_categorical(y) ## Funcion de Keras!
-
-
-def batch_generator(X, y, batch_size, shuffle):
-    #chenglong code for fiting from generator (https://www.kaggle.com/c/talkingdata-mobile-user-demographics/forums/t/22567/neural-network-for-sparse-matrices)
-    number_of_batches = np.ceil(X.shape[0]/batch_size)
-    counter = 0
-    sample_index = np.arange(X.shape[0])
-    if shuffle:
-        np.random.shuffle(sample_index)
-    while True:
-        batch_index = sample_index[batch_size*counter:batch_size*(counter+1)]
-        X_batch = X[batch_index,:].toarray()
-        y_batch = y[batch_index]
-        counter += 1
-        yield X_batch, y_batch
-        if (counter == number_of_batches):
-            if shuffle:
-                np.random.shuffle(sample_index)
-            counter = 0
-
-def batch_generatorp(X, batch_size, shuffle):
-    number_of_batches = X.shape[0] / np.ceil(X.shape[0]/batch_size)
-    counter = 0
-    sample_index = np.arange(X.shape[0])
-    while True:
-        batch_index = sample_index[batch_size * counter:batch_size * (counter + 1)]
-        X_batch = X[batch_index, :].toarray()
-        counter += 1
-        yield X_batch
-        if (counter == number_of_batches):
-            counter = 0
-
-# define baseline model
-def baseline_model():
-    # create model
-    model = Sequential()
-    #model.add(Dense(10, input_dim=Xtrain.shape[1], init='normal', activation='relu'))
-    #model.add(Dropout(0.2))
-    model.add(Dense(50, input_dim=Xtrain.shape[1], init='normal', activation='tanh'))
-    model.add(Dropout(0.5))
-    model.add(Dense(12, init='normal', activation='sigmoid'))
-    # Compile model
-    model.compile(loss='categorical_crossentropy', optimizer='adadelta', metrics=['accuracy'])  #logloss
-    return model
-
-model=baseline_model()
-
-X_train, X_val, y_train, y_val = train_test_split(Xtrain, dummy_y, test_size=0.002, random_state=42)
-
-fit= model.fit_generator(generator=batch_generator(X_train, y_train, 32, True),
-                         nb_epoch=15,
-                         samples_per_epoch=70496,
-                         validation_data=(X_val.todense(), y_val), verbose=2
-                         )
-
-# evaluate the model
-scores_val = model.predict_generator(generator=batch_generatorp(X_val, 32, False), val_samples=X_val.shape[0])
-scores = model.predict_generator(generator=batch_generatorp(Xtest, 32, False), val_samples=Xtest.shape[0])
-
-print('logloss val {}'.format(log_loss(y_val, scores_val)))
-
-#Scaling to 1-0 probs
-#for i in xrange(Xtest.shape[0]):
-#    scores2[i,]=scores[i,]/sum(scores[i,])
-
-pred = pd.DataFrame(scores, index = gatest.index, columns=targetencoder.classes_)
-#pred.head()
-
-
-pred.to_csv('Keras on labels and brands -2.csv',index=True)
-
+sub.to_csv('lgb_starter.csv', index=False, float_format='%.4f')

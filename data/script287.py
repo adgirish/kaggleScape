@@ -1,26 +1,7 @@
 
 # coding: utf-8
 
-# ## Here I have defined text processing functions for generating normalised output for text of the following classes:
-# 
-# 1. Cardinal
-# 2. Digit
-# 3. Ordinal
-# 4. Letters
-# 5. Address
-# 6. Telephone
-# 7.  Electronic
-# 8. Fractions
-# 9. Money
-# 
-# The idea is to first create a dictionary of all the training input strings and their corresponding normalised text. For normalising the test data, we first look it up in the dictionary and return the corresponding 'after' value. If the string is not in the dictionary, we use these functions to generate normalised text.
-# 
-# 
-# **Any suggestions/feedback for improvement are welcome!**
-
-# ## Import modules and data sets
-
-# In[2]:
+# In[ ]:
 
 
 # This Python 3 environment comes with many helpful analytics libraries installed
@@ -29,333 +10,267 @@
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import inflect
-from num2words import num2words 
-import re
+
 # Input data files are available in the "../input/" directory.
 # For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
 from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
-p = inflect.engine()
-
 
 # Any results you write to the current directory are saved as output.
 
 
-# ## CARDINAL
+# ####TL;DR
+# **Runs on GPU** There is some compatiblity issue with CPUs
+# 1. Hyperparameters in Deep learning are many, tuning them will take weeks or months. Generally researchers do this tuning and publish paper when they find a nice set of architecture which performs better than other.
+# 
+# 2. Since the model is pre-trained, it converges very fast and you but still you need GPU to use this. Due to some library issues, it doesn't work on CPU.
+# 
+# 2. For our purpose, we can use those architectures, which are made available by those researchers to us.
+# 
+# 3. Using those pretrained nets, layers of which already 'knows' how to extract features, we can don't have to tune the hyperparameters. Since they are already trained of some dataset(say imagenet), their pre-trained weights provide a good initialization of weights and because of this, our Convnet converges very fast which otherwise can take days on these deep architectures. That's the idea behind **Transfer Learning**.  Examples of which are VGG16, InceptionNet, goolenet, Resnet etc.
+# 
+# 4. In this kernel we will use pretrained VGG-16 network which performs very well on small size images.
+# 
+# 5.** VGG architecture has proved to worked well on small sized images(CIFAR-10)  ** I expected it to work well for this dataset as well.
+# 
+# 6. The code also includes the data augmentation steps, thus considerably improving the performance.
+# 
+# - **GPU is needed**
+# 
+# Here is the link of the research paper if you are interested.
+# [https://arxiv.org/pdf/1409.1556.pdf](http://)
+# 
+# Also here is the doc for keras library:
+# [https://keras.io/applications/#vgg16](http://)
+# 
+# 
+# 
 
-# In[3]:
-
-
-def cardinal(x):
-    try:
-        if re.match('.*[A-Za-z]+.*', x):
-            return x
-        x = re.sub(',', '', x, count = 10)
-
-        if(re.match('.+\..*', x)):
-            x = p.number_to_words(float(x))
-        elif re.match('\..*', x): 
-            x = p.number_to_words(float(x))
-            x = x.replace('zero ', '', 1)
-        else:
-            x = p.number_to_words(int(x))
-        x = x.replace('zero', 'o')    
-        x = re.sub('-', ' ', x, count=10)
-        x = re.sub(' and','',x, count = 10)
-        return x
-    except:
-        return x
-
-
-# ## DIGIT
-
-# In[4]:
-
-
-def digit(x): 
-    try:
-        x = re.sub('[^0-9]', '',x)
-        result_string = ''
-        for i in x:
-            result_string = result_string + cardinal(i) + ' '
-        result_string = result_string.strip()
-        return result_string
-    except:
-        return(x) 
+# In[ ]:
 
 
-# ## LETTERS
-
-# In[5]:
-
-
-def letters(x):
-    try:
-        x = re.sub('[^a-zA-Z]', '', x)
-        x = x.lower()
-        result_string = ''
-        for i in range(len(x)):
-            result_string = result_string + x[i] + ' '
-        return(result_string.strip())  
-    except:
-        return x
+#Mandatory imports
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import log_loss
+from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
+from os.path import join as opj
+from matplotlib import pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D
+import pylab
+plt.rcParams['figure.figsize'] = 10, 10
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# ## ORDINAL
-
-# In[6]:
+# In[ ]:
 
 
-#Convert Roman to integers
-#https://codereview.stackexchange.com/questions/5091/converting-roman-numerals-to-integers-and-vice-versa
-def rom_to_int(string):
-
-    table=[['M',1000],['CM',900],['D',500],['CD',400],['C',100],['XC',90],['L',50],['XL',40],['X',10],['IX',9],['V',5],['IV',4],['I',1]]
-    returnint=0
-    for pair in table:
+train = pd.read_json("../input/train.json")
+target_train=train['is_iceberg']
+test = pd.read_json("../input/test.json")
 
 
-        continueyes=True
+# 
+# 
+# Keras provide the implementation of pretrained VGG, it in it's library so we don't have to build the net by ourselves.
+# Here we are removing the last layer of VGG and putting our sigmoid layer for binary predictions.
+# 
+# The following code will NOT WORK, since on kaggle notebook, the weights of model cannot be downloaded, however, you can copy paste the code in your own notebook to make it work.
 
-        while continueyes:
-            if len(string)>=len(pair[0]):
-
-                if string[0:len(pair[0])]==pair[0]:
-                    returnint+=pair[1]
-                    string=string[len(pair[0]):]
-
-                else: continueyes=False
-            else: continueyes=False
-
-    return returnint    
-def ordinal(x):
-    try:
-        result_string = ''
-        x = x.replace(',', '')
-        x = x.replace('[\.]$', '')
-        if re.match('^[0-9]+$',x):
-            x = num2words(int(x), ordinal=True)
-            return(x.replace('-', ' '))
-        if re.match('.*V|X|I|L|D',x):
-            if re.match('.*th|st|nd|rd',x):
-                x = x[0:len(x)-2]
-                x = rom_to_int(x)
-                result_string = re.sub('-', ' ',  num2words(x, ordinal=True))
-            else:
-                x = rom_to_int(x)
-                result_string = 'the '+ re.sub('-', ' ',  num2words(x, ordinal=True))
-        else:
-            x = x[0:len(x)-2]
-            result_string = re.sub('-', ' ',  num2words(float(x), ordinal=True))
-        return(result_string)  
-    except:
-        return x
+# In[ ]:
 
 
-# ## ADDRESS
 
-# In[7]:
+target_train=train['is_iceberg']
+test['inc_angle']=pd.to_numeric(test['inc_angle'], errors='coerce')
+train['inc_angle']=pd.to_numeric(train['inc_angle'], errors='coerce')#We have only 133 NAs.
+train['inc_angle']=train['inc_angle'].fillna(method='pad')
+X_angle=train['inc_angle']
+test['inc_angle']=pd.to_numeric(test['inc_angle'], errors='coerce')
+X_test_angle=test['inc_angle']
+
+#Generate the training data
+X_band_1=np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in train["band_1"]])
+X_band_2=np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in train["band_2"]])
+X_band_3=(X_band_1+X_band_2)/2
+#X_band_3=np.array([np.full((75, 75), angel).astype(np.float32) for angel in train["inc_angle"]])
+X_train = np.concatenate([X_band_1[:, :, :, np.newaxis]
+                          , X_band_2[:, :, :, np.newaxis]
+                         , X_band_3[:, :, :, np.newaxis]], axis=-1)
 
 
-def address(x):
-    try:
-        x = re.sub('[^0-9a-zA-Z]+', '', x)
-        result_string = ''
-        for i in range(0,len(x)):
-            if re.match('[A-Z]|[a-z]',x[i]):
-                result_string = result_string + plain(x[i]).lower() + ' '
-            else:
-                result_string = result_string + cardinal(x[i]) + ' '
-                
-        return(result_string.strip())        
-    except:    
-        return(x)    
+
+X_band_test_1=np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in test["band_1"]])
+X_band_test_2=np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in test["band_2"]])
+X_band_test_3=(X_band_test_1+X_band_test_2)/2
+#X_band_test_3=np.array([np.full((75, 75), angel).astype(np.float32) for angel in test["inc_angle"]])
+X_test = np.concatenate([X_band_test_1[:, :, :, np.newaxis]
+                          , X_band_test_2[:, :, :, np.newaxis]
+                         , X_band_test_3[:, :, :, np.newaxis]], axis=-1)
+
+#Import Keras.
+from matplotlib import pyplot
+from keras.optimizers import RMSprop
+from keras.preprocessing.image import ImageDataGenerator
+from keras.models import Sequential
+from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten, Activation
+from keras.layers import GlobalMaxPooling2D
+from keras.layers.normalization import BatchNormalization
+from keras.layers.merge import Concatenate
+from keras.models import Model
+from keras import initializers
+from keras.optimizers import Adam
+from keras.optimizers import rmsprop
+from keras.layers.advanced_activations import LeakyReLU, PReLU
+from keras.optimizers import SGD
+from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
+
+from keras.datasets import cifar10
+from keras.applications.inception_v3 import InceptionV3
+from keras.applications.vgg16 import VGG16
+from keras.applications.xception import Xception
+from keras.applications.mobilenet import MobileNet
+from keras.applications.vgg19 import VGG19
+from keras.layers import Concatenate, Dense, LSTM, Input, concatenate
+from keras.preprocessing import image
+from keras.applications.vgg16 import preprocess_input	
+
+#Data Aug for multi-input
+from keras.preprocessing.image import ImageDataGenerator
+batch_size=64
+# Define the image transformations here
+gen = ImageDataGenerator(horizontal_flip = True,
+                         vertical_flip = True,
+                         width_shift_range = 0.,
+                         height_shift_range = 0.,
+                         channel_shift_range=0,
+                         zoom_range = 0.2,
+                         rotation_range = 10)
+
+# Here is the function that merges our two generators
+# We use the exact same generator with the same random seed for both the y and angle arrays
+def gen_flow_for_two_inputs(X1, X2, y):
+    genX1 = gen.flow(X1,y,  batch_size=batch_size,seed=55)
+    genX2 = gen.flow(X1,X2, batch_size=batch_size,seed=55)
+    while True:
+            X1i = genX1.next()
+            X2i = genX2.next()
+            #Assert arrays are equal - this was for peace of mind, but slows down training
+            #np.testing.assert_array_equal(X1i[0],X2i[0])
+            yield [X1i[0], X2i[1]], X1i[1]
+
+# Finally create generator
+def get_callbacks(filepath, patience=2):
+   es = EarlyStopping('val_loss', patience=10, mode="min")
+   msave = ModelCheckpoint(filepath, save_best_only=True)
+   return [es, msave]
+
+
+def getVggAngleModel():
+    input_2 = Input(shape=[1], name="angle")
+    angle_layer = Dense(1, )(input_2)
+    base_model = VGG16(weights='imagenet', include_top=False, 
+                 input_shape=X_train.shape[1:], classes=1)
+    x = base_model.get_layer('block5_pool').output
     
 
-
-# ## TELEPHONE
-
-# In[8]:
-
-
-def telephone(x):
-    try:
-        result_string = ''
-        print(len(x))
-        for i in range(0,len(x)):
-            if re.match('[0-9]+', x[i]):
-                result_string = result_string + cardinal(x[i]) + ' '
-            else:
-                result_string = result_string + 'sil '
-        return result_string.strip()    
-    except:    
-        return(x)    
-
+    x = GlobalMaxPooling2D()(x)
+    merge_one = concatenate([x, angle_layer])
+    merge_one = Dense(512, activation='relu', name='fc2')(merge_one)
+    merge_one = Dropout(0.3)(merge_one)
+    merge_one = Dense(512, activation='relu', name='fc3')(merge_one)
+    merge_one = Dropout(0.3)(merge_one)
     
-   
-
-
-# ## ELECTRONIC
-
-# In[9]:
-
-
-def electronic(x):
-    try:
-        replacement = {'.' : 'dot', ':' : 'colon', '/':'slash', '-' : 'dash', '#' : 'hash tag', }
-        result_string = ''
-        if re.match('.*[A-Za-z].*', x):
-            for char in x:
-                if re.match('[A-Za-z]', char):
-                    result_string = result_string + letters(char) + ' '
-                elif char in replacement:
-                    result_string = result_string + replacement[char] + ' '
-                elif re.match('[0-9]', char):
-                    if char == 0:
-                        result_string = result_string + 'o '
-                    else:
-                        number = cardinal(char)
-                        for n in number:
-                            result_string = result_string + n + ' ' 
-            return result_string.strip()                
-        else:
-            return(x)
-    except:    
-        return(x)
-
-
-# ## FRACTIONS
-
-# In[10]:
-
-
-def fraction(x):
-    try:
-        y = x.split('/')
-        result_string = ''
-        y[0] = cardinal(y[0])
-        y[1] = ordinal(y[1])
-        if y[1] == 4:
-            result_string = y[0] + ' quarters'
-        else:    
-            result_string = y[0] + ' ' + y[1] + 's'
-        return(result_string)
-    except:    
-        return(x)
+    predictions = Dense(1, activation='sigmoid')(merge_one)
     
+    model = Model(input=[base_model.input, input_2], output=predictions)
+    
+    sgd = SGD(lr=1e-3, decay=1e-6, momentum=0.9, nesterov=True)
+    model.compile(loss='binary_crossentropy',
+                  optimizer=sgd,
+                  metrics=['accuracy'])
+    return model
 
 
-# ## MONEY
+#Using K-fold Cross Validation with Data Augmentation.
+def myAngleCV(X_train, X_angle, X_test):
+    K=3
+    folds = list(StratifiedKFold(n_splits=K, shuffle=True, random_state=16).split(X_train, target_train))
+    y_test_pred_log = 0
+    y_train_pred_log=0
+    y_valid_pred_log = 0.0*target_train
+    for j, (train_idx, test_idx) in enumerate(folds):
+        print('\n===================FOLD=',j)
+        X_train_cv = X_train[train_idx]
+        y_train_cv = target_train[train_idx]
+        X_holdout = X_train[test_idx]
+        Y_holdout= target_train[test_idx]
+        
+        #Angle
+        X_angle_cv=X_angle[train_idx]
+        X_angle_hold=X_angle[test_idx]
 
-# In[11]:
+        #define file path and get callbacks
+        file_path = "%s_aug_model_weights.hdf5"%j
+        callbacks = get_callbacks(filepath=file_path, patience=5)
+        gen_flow = gen_flow_for_two_inputs(X_train_cv, X_angle_cv, y_train_cv)
+        galaxyModel= getVggAngleModel()
+        galaxyModel.fit_generator(
+                gen_flow,
+                steps_per_epoch=24,
+                epochs=100,
+                shuffle=True,
+                verbose=1,
+                validation_data=([X_holdout,X_angle_hold], Y_holdout),
+                callbacks=callbacks)
+
+        #Getting the Best Model
+        galaxyModel.load_weights(filepath=file_path)
+        #Getting Training Score
+        score = galaxyModel.evaluate([X_train_cv,X_angle_cv], y_train_cv, verbose=0)
+        print('Train loss:', score[0])
+        print('Train accuracy:', score[1])
+        #Getting Test Score
+        score = galaxyModel.evaluate([X_holdout,X_angle_hold], Y_holdout, verbose=0)
+        print('Test loss:', score[0])
+        print('Test accuracy:', score[1])
+
+        #Getting validation Score.
+        pred_valid=galaxyModel.predict([X_holdout,X_angle_hold])
+        y_valid_pred_log[test_idx] = pred_valid.reshape(pred_valid.shape[0])
+
+        #Getting Test Scores
+        temp_test=galaxyModel.predict([X_test, X_test_angle])
+        y_test_pred_log+=temp_test.reshape(temp_test.shape[0])
+
+        #Getting Train Scores
+        temp_train=galaxyModel.predict([X_train, X_angle])
+        y_train_pred_log+=temp_train.reshape(temp_train.shape[0])
+
+    y_test_pred_log=y_test_pred_log/K
+    y_train_pred_log=y_train_pred_log/K
+
+    print('\n Train Log Loss Validation= ',log_loss(target_train, y_train_pred_log))
+    print(' Test Log Loss Validation= ',log_loss(target_train, y_valid_pred_log))
+    return y_test_pred_log
 
 
-def money(x):
-    try:
-        if re.match('^\$', x):
-            x = x.replace('$','')
-            if len(x.split(' ')) == 1:
-                if re.match('.*M|m$',x):
-                    x = x.replace('M', '')
-                    x = x.replace('m', '')
-                    text = cardinal(x)
-                    x = text + ' million dollars'
-                elif re.match('.*b|B$', x):
-                    x = x.replace('B', '')
-                    x = x.replace('b', '')
-                    text = cardinal(x)
-                    x = text + ' million dollars'
-                else:
-                    text = cardinal(x)
-                    x = text + ' dollars'
-                return x.lower()
-            elif len(x.split(' ')) == 2:
-                text = cardinal(x.split(' ')[0])
-                if x.split(' ')[1].lower() == 'million':
-                    x = text + ' million dollars'
-                elif x.split(' ')[1].lower() == 'billion':
-                    x = text + ' billion dollars'
-                return x.lower()
-                
-                
-                
-        if re.match('^US\$', x):
-            x = x.replace('US$','')
-            if len(x.split(' ')) == 1:
-                if re.match('.*M|m$', x):
-                    x = x.replace('M', '')
-                    x = x.replace('m', '')
-                    text = cardinal(x)
-                    x = text + ' million dollars'
-                elif re.match('.*b|B$', x):
-                    x = x.replace('b', '')
-                    x = x.replace('B', '')
-                    text = cardinal(x)
-                    x = text + ' million dollars'
-                else:
-                    text = cardinal(x)
-                    x = text + ' dollars'
-                return x.lower()
-            elif len(x.split(' ')) == 2:
-                text = cardinal(x.split(' ')[0])
-                if x.split(' ')[1].lower() == 'million':
-                    x = text + ' million dollars'
-                elif x.split(' ')[1].lower() == 'billion':
-                    x = text + ' billion dollars'
-                return x.lower()
 
-        elif re.match('^£', x):
-            x = x.replace('£','')
-            if len(x.split(' ')) == 1:
-                if re.match('.*M|m$', x):
-                    x = x.replace('M', '')
-                    x = x.replace('m', '')
-                    text = cardinal(x)
-                    x = text + ' million pounds'
-                elif re.match('.*b|B$', x):
-                    x = x.replace('b', '')
-                    x = x.replace('B', '')
-                    text = cardinal(x)
-                    x = text + ' million pounds'
-                else:
-                    text = cardinal(x)
-                    x = text + ' pounds'
-                return x.lower()
-            elif len(x.split(' ')) == 2:
-                text = cardinal(x.split(' ')[0])
-                if x.split(' ')[1].lower() == 'million':
-                    x = text + ' million pounds'
-                elif x.split(' ')[1].lower() == 'billion':
-                    x = text + ' billion pounds'
-                return x.lower()
-            
-        elif re.match('^€', x):
-            x = x.replace('€','')
-            if len(x.split(' ')) == 1:
-                if re.match('.*M|m$', x):
-                    x = x.replace('M', '')
-                    x = x.replace('m', '')
-                    text = cardinal(x)
-                    x = text + ' million euros'
-                elif re.match('.*b|B$', x):
-                    x = x.replace('B', '')
-                    x = x.replace('b', '')
-                    text = cardinal(x)
-                    x = text + ' million euros'
-                else:
-                    text = cardinal(x)
-                    x = text + ' euros'
-                return x.lower()
-            elif len(x.split(' ')) == 2:
-                text = cardinal(x.split(' ')[0])
-                if x.split(' ')[1].lower() == 'million':
-                    x = text + ' million euros'
-                elif x.split(' ')[1].lower() == 'billion':
-                    x = text + ' billion euros'
-                return x.lower()  
-    except:    
-        return(x)
 
+# In[ ]:
+
+
+preds=myAngleCV(X_train, X_angle, X_test)
+
+
+# In[ ]:
+
+
+#Submission for each day.
+submission = pd.DataFrame()
+submission['id']=test['id']
+submission['is_iceberg']=preds
+submission.to_csv('sub.csv', index=False)
 

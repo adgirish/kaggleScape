@@ -1,168 +1,208 @@
 
 # coding: utf-8
 
-# # How to load the data
-# ---
+# Hi, Kagglers!
+# <br>This is a quick Python-based version of Markov Chain Transitional Probabilities Calculation
+# <br>(based on <a href="https://www.kaggle.com/mmotoki/markov-chain-tutorial">This R Kernel by Matt Motoki</a>)
+# <br>See read it for the description / visualization and intuition behind this approach.
 # 
-# This kernel shows you how to resize these images and load them into an array ready to feed your models. The dataset contains 14 different disease classes, but this kernel separates the data based on which x-rays show Lung Infiltrations and which x-rays do not. This makes the data suitable for a binary classification and you can modify this kernel to classifiy any of the other disease classes. 
-# 
-# [Click here](https://www.kaggle.com/crawford/keras-cnn-using-kernel-output-as-a-data-source) to see the second kernel, where I use the output from this kernel to train a convolutional neural network.
+# <br>This domain, as well as R language, are new to me, thus, the code might contain some technical/translational errors :)
+# <br>This code doesn't implement multithreading, however, can be parallelized in a similar way to <a href="https://www.kaggle.com/mmueller/order-streaks-feature">This Script by Faron</a>
+# <br>**Comments/Suggestions/Error Handlings are highly appreciated!**
+
+# ## Library / Data Import
 
 # In[ ]:
 
 
-import cv2
-import os
-import random
-import matplotlib.pylab as plt
-from glob import glob
-import pandas as pd
+# libraries
 import numpy as np
-from sklearn.model_selection import train_test_split
+import pandas as pd
+import gc
 
-
-# # Prepare file directories and image paths and load labels
-# 
-# ---
-
-# In[ ]:
-
-
-# ../input/
-PATH = os.path.abspath(os.path.join('..', 'input'))
-
-# ../input/sample/images/
-SOURCE_IMAGES = os.path.join(PATH, "sample", "images")
-
-# ../input/sample/images/*.png
-images = glob(os.path.join(SOURCE_IMAGES, "*.png"))
-
-# Load labels
-labels = pd.read_csv('../input/sample_labels.csv')
+from pandas import isnull
 
 
 # In[ ]:
 
 
-# First five images paths
-images[0:5]
+# load data
+input_dir = '../input/'
+
+# prior orders
+priors = pd.read_csv(input_dir + 'order_products__prior.csv',
+                    dtype={
+                        'order_id': np.int32,
+                        'add_to_cart_order': np.uint8,
+                        'reordered': np.int8,
+                        'product_id': np.uint16
+                    })
+
+# order details
+orders = pd.read_csv(input_dir + 'orders.csv',
+                     dtype={
+                         'order_dow': np.uint8,
+                         'order_hour_of_day': np.uint8,
+                         'order_number': np.uint8,
+                         'order_id': np.uint32,
+                         'user_id': np.uint32,
+                         'days_since_prior_order': np.float16
+                     })
+
+# products, need just ids
+products = pd.read_csv(input_dir + 'products.csv', 
+                       dtype={
+                           'aisle_id': np.uint8,
+                           'department_id': np.uint8,
+                           'product_id': np.uint16
+                       }).drop(['product_name', 'aisle_id', 'department_id'], axis=1)
+
+# set index
+orders.set_index('order_id', drop=False, inplace=True)
+
+# Append previous order info
+orders['prev_order_id'] = orders.sort_values(['user_id', 'order_number']).groupby('user_id')['order_id'].shift().fillna(0).astype(np.uint32)
 
 
-# # Show three random images
-# 
-# ---
-
-# In[ ]:
-
-
-r = random.sample(images, 3)
-r
-
-# Matplotlib black magic
-plt.figure(figsize=(16,16))
-plt.subplot(131)
-plt.imshow(cv2.imread(r[0]))
-
-plt.subplot(132)
-plt.imshow(cv2.imread(r[1]))
-
-plt.subplot(133)
-plt.imshow(cv2.imread(r[2]));    
-
-
-# In[ ]:
-
-
-# Example of bad x-ray and good reason to use data augmentation
-e = cv2.imread(os.path.join(SOURCE_IMAGES,'00030209_008.png'))
-
-plt.imshow(e)
-
-labels[labels["Image Index"] == '00030209_008.png']
-
-
-# # Turn images into arrays and make a list of classes
-# ---
-# 
-# Images with Lung Infiltrations will be labeled "Infiltration" and everything else goes into "Not Infiltration". In this process I am creating two arrays, one for the images and one for the labels. I am also resizing the images from 1024x1024 to 128x128.
+# ## Get Product Lists for Current / Previous Order
 
 # In[ ]:
 
 
-def proc_images():
-    """
-    Returns two arrays: 
-        x is an array of resized images
-        y is an array of labels
-    """
-    
-    disease="Infiltration"
-
-    x = [] # images as arrays
-    y = [] # labels Infiltration or Not_infiltration
-    WIDTH = 128
-    HEIGHT = 128
-
-    for img in images:
-        base = os.path.basename(img)
-        finding = labels["Finding Labels"][labels["Image Index"] == base].values[0]
-
-        # Read and resize image
-        full_size_image = cv2.imread(img)
-        x.append(cv2.resize(full_size_image, (WIDTH,HEIGHT), interpolation=cv2.INTER_CUBIC))
-
-        # Labels
-        if disease in finding:
-            #finding = str(disease)
-            finding = 1
-            y.append(finding)
-
-        else:
-            #finding = "Not_" + str(disease)
-            finding = 0
-            y.append(finding)
-
-    return x,y
+# get product list for all orders, except test :)
+orders['prod_list'] = priors.groupby('order_id').aggregate(
+    {'product_id':lambda x: set(x)})
 
 
 # In[ ]:
 
 
-x,y = proc_images()
+# filter representative orders (those, whose previous order exists)
+ords = orders[(orders.order_number > 1) & (orders.eval_set == 'prior')]
+
+# to speed-up kernel execution - use only small subset of data
+# comment it to get full results !!!
+ords = orders[(orders.order_number > 1) & (orders.eval_set == 'prior')][:5000]
 
 
 # In[ ]:
 
 
-# Set it up as a dataframe if you like
-df = pd.DataFrame()
-df["labels"]=y
-df["images"]=x
+# get product list for all orders, except test :)
+ords['prod_list'] = ords.order_id.map(orders.prod_list)
 
 
 # In[ ]:
 
 
-print(len(df), df.images[0].shape)
-
-
-# # Saving arrays for use in another kernel
-# ----
-# 
-# Since this kernel takes up valuable time modifying the data to feed into a predictive model, it makes sense to save the arrays so that we don't have to process them again. We can use the output from this kernal as a data source for another kernel where we  can train a model. 
-
-# In[ ]:
-
-
-np.savez("x_images_arrays", x)
-np.savez("y_infiltration_labels", y)
+# get previous order's product list
+ords['prev_prod_list'] = ords.prev_order_id.map(orders.prod_list)
 
 
 # In[ ]:
 
 
-get_ipython().system('ls -1')
+# fill N/A values: na -> empty set
+ords.loc[:, ['prod_list', 
+               'prev_prod_list']] \
+= ords.loc[:, ['prod_list', 
+               'prev_prod_list']].applymap(lambda x: set() if isnull(x) else x)
 
 
-# ### Click here to see how I use the output from this kernel as input for a CNN with Keras:<br>
-# [https://www.kaggle.com/crawford/keras-cnn-using-kernel-output-as-a-data-source](https://www.kaggle.com/crawford/keras-cnn-using-kernel-output-as-a-data-source)
+# In[ ]:
+
+
+# T11, products, bought in previous order and reordered in current
+ords['T11'] = ords.apply(lambda r: r['prod_list'] & r['prev_prod_list'], axis=1)
+
+# T01, products, ordered in current order and not ordered in previous
+ords['T01'] = ords.apply(lambda r: r['prod_list'] - r['prev_prod_list'], axis=1)
+
+# T10, products, ordered in previous order and not ordered in current
+ords['T10'] = ords.apply(lambda r: r['prev_prod_list'] - r['prod_list'], axis=1)
+
+
+# ## Transitions out of State 1
+
+# In[ ]:
+
+
+# product count -> # of bins needed
+n_products = len(products)
+
+# denominator
+N = len(ords)
+
+# N1 ----------------------------
+# flatten list of sets
+f = [val for sublist in [list(i) for i in ords.prev_prod_list.values] for val in sublist]
+N1 = np.bincount(f, minlength=n_products+1)
+
+# N11 ----------------------------
+# flatten list of sets
+f = [val for sublist in [list(i) for i in ords.T11.values] for val in sublist]
+N11 = np.bincount(f, minlength=n_products+1)
+
+# N10 ----------------------------
+# flatten list of sets
+f = [val for sublist in [list(i) for i in ords.T10.values] for val in sublist]
+N10 = np.bincount(f, minlength=n_products+1)
+
+del f
+gc.collect()
+
+
+# ## Transitions out of State 0
+
+# In[ ]:
+
+
+# N0 ----------------------------
+N0 = N - N1
+
+# N01 ----------------------------
+# flatten list of sets
+f = [val for sublist in [list(i) for i in ords.T01.values] for val in sublist]
+N01 = np.bincount(f, minlength=n_products+1)
+
+# N00 ----------------------------
+N00 = N0 - N01
+
+del f
+gc.collect()
+
+
+# ## Make DataFrame
+
+# In[ ]:
+
+
+product_probs = pd.DataFrame(
+    data={
+        'product_id': np.array(range(0, n_products+1)),
+        'P0':   (N0+1) / (N+2),
+        'P00': (N00+1) / (N0+2),
+        'P01': (N01+1) / (N0+2),
+        
+        'P1':  (N1+1)  / (N+2), 
+        'P10': (N10+1) / (N1+2),
+        'P11': (N11+1) / (N1+2)
+    }
+)
+
+# delete 1st row (for product_id) if you don't use None as a product, leave as is otherwise
+product_probs = product_probs[1:]
+
+product_probs.head()
+
+
+# In[ ]:
+
+
+# save to csv
+product_probs.to_csv('transition-probabilities-by-product.csv', 
+                     index=False, 
+                     encoding='utf-8')
+
+pass
+

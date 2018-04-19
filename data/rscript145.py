@@ -1,116 +1,100 @@
 import numpy as np
 import pandas as pd
-import xgboost as xgb
-from sklearn import metrics
-import re
- 
-def change_datatype(df): #minimize used memory
-    for col in list(df.select_dtypes(include=['int']).columns):
-        if df[col].max() < 2**7 and df[col].min() >= -2**7:
-            df[col] = df[col].astype(np.int8)
-        elif df[col].max() < 2**8 and df[col].min() >= 0:
-            df[col] = df[col].astype(np.uint8)
-        elif df[col].max() < 2**15 and df[col].min() >= -2**15:
-            df[col] = df[col].astype(np.int16)
-        elif df[col].max() < 2**16 and df[col].min() >= 0:
-            df[col] = df[col].astype(np.uint16)
-        elif df[col].max() < 2**31 and df[col].min() >= -2**31:
-            df[col] = df[col].astype(np.int32)
-        elif df[col].max() < 2**32 and df[col].min() >= 0:
-            df[col] = df[col].astype(np.uint32)
-    for col in list(df.select_dtypes(include=['float']).columns):
-        df[col] = df[col].astype(np.float32)
 
-def short_names(df): #just by self, for simple work with columns
-    cols = {}
-    for c in df.columns:
-        if (not re.match(r'ps_.*',c)):
-            continue
-        t = ''
-        e = ''
-        if c.startswith('ps_calc'):
-            t = 'F'
-        elif c.startswith('ps_car'):
-            t = 'C'
-        elif c.startswith('ps_ind'):
-            t = 'I'
-        elif c.startswith('ps_reg'):
-            t = 'R'
-        
-        if c.endswith('bin'):
-            e = 'b'
-        elif c.endswith('cat'):
-            e = 'c'
-        else:
-            e = 'd'
-        i = re.search('\d+',c).group(0)
-        cols[c] = t+i+e
-    change_datatype(df)
-    return df.rename(columns=cols)
 
-# transform features: some columns to OHE, some change NaN to mean, median or both
-def transform(df, oh_columns, na_columns): 
-    df = pd.get_dummies(df, columns=oh_columns, dummy_na=True, drop_first=False)
-    for c in na_columns:
-        if na_columns[c] == 0 or c not in df.columns:
-            continue
-        df[c] = df[c].replace(-1, np.NaN)
-        if na_columns[c] == 1:
-            df[c] = df[c].fillna(df[c].mean())
-        elif na_columns[c] == 2:
-            df[c] = df[c].fillna(df[c].median())
-        else:
-            df[c+'m'] = df[c].fillna(df[c].median())
-            df[c] = df[c].fillna(df[c].mean())
-    change_datatype(df)
-    return df[df['_']], df[~df['_']]
-    
-def predictTarget(df, oh_columns, na_columns, kfold): #XGB kfold
-    train, test = transform(df, oh_columns, na_columns)
-    # I will explain later
-    params = {'eta' : 0.025,
-                'gamma' : 9,
-                'max_depth' : 6,
-                'reg_lambda' : 1.2,
-                'colsample_bytree' : 1.0,
-                'min_child_weight' : 10,
-                'reg_alpha' : 8,
-                'scale_pos_weight' : 1.6,
-                'subsample' : 0.7,
+def Outputs(data):
+    return np.round(1.-(1./(1.+np.exp(-data))))
 
-                'eval_metric' : 'auc',
-                'objective' : 'binary:logistic',
-                'seed' : 2017,
-                'silent' : False,
-                'tree_method' : 'hist'}
-    trains = np.array_split(train.sample(frac=1, random_state=200), kfold)
 
-    # for tunning i used some columns with postfix '_', about it i will write later
-    col = [c for c in train.columns if not c.endswith('_') and c not in ['id', 'target']]
-    test['target'] = 0.0
-    for i in range(kfold):
-        valid = trains[i] 
-        train = pd.concat(trains[:i]+trains[i+1:])
-        dtrain = xgb.DMatrix(train[col], train['target'])
-        dvalid = xgb.DMatrix(valid[col], valid['target'])
-        watchlist = [(dtrain, 'train'), (dvalid, 'valid')]
-        model = xgb.train(params, dtrain, 99999, watchlist, verbose_eval=False, 
-                          maximize=True, early_stopping_rounds=300)
-        test['target'] += model.predict(xgb.DMatrix(test[col]), ntree_limit=model.best_ntree_limit+35)/kfold
-    return test
-    
-df = short_names(pd.read_csv('../input/train.csv'))
-test = short_names(pd.read_csv('../input/test.csv'))
-test['target'] = -1
-df = pd.concat([df, test])
-del test
+def GeneticFunction(data):
+    return ((np.minimum( ((((0.058823499828577 + data["Sex"]) - np.cos((data["Pclass"] / 2.0))) * 2.0)),  ((0.885868))) * 2.0) +
+            np.maximum( ((data["SibSp"] - 2.409090042114258)),  ( -(np.minimum( (data["Sex"]),  (np.sin(data["Parch"]))) * data["Pclass"]))) +
+            (0.138462007045746 * ((np.minimum( (data["Sex"]),  (((data["Parch"] / 2.0) / 2.0))) * data["Age"]) - data["Cabin"])) +
+            np.minimum( ((np.sin((data["Parch"] * ((data["Fare"] - 0.720430016517639) * 2.0))) * 2.0)),  ((data["SibSp"] / 2.0))) +
+            np.maximum( (np.minimum( ( -np.cos(data["Embarked"])),  (0.138462007045746))),  (np.sin(((data["Cabin"] - data["Fare"]) * 2.0)))) +
+            -np.minimum( ((((data["Age"] * data["Parch"]) * data["Embarked"]) + data["Parch"])),  (np.sin(data["Pclass"]))) +
+            np.minimum( (data["Sex"]),  ((np.sin( -(data["Fare"] * np.cos((data["Fare"] * 1.630429983139038)))) / 2.0))) +
+            np.minimum( ((0.230145)),  (np.sin(np.minimum( (((67.0 / 2.0) * np.sin(data["Fare"]))),  (0.31830988618379069))))) +
+            np.sin((np.sin(data["Cabin"]) * (np.sin((12.6275)) * np.maximum( (data["Age"]),  (data["Fare"]))))) +
+            np.sin(((np.minimum( (data["Fare"]),  ((data["Cabin"] * data["Embarked"]))) / 2.0) *  -data["Fare"])) +
+            np.minimum( (((2.675679922103882 * data["SibSp"]) * np.sin(((96) * np.sin(data["Cabin"]))))),  (data["Parch"])) +
+            np.sin(np.sin((np.maximum( (np.minimum( (data["Age"]),  (data["Cabin"]))),  ((data["Fare"] * 0.31830988618379069))) * data["Cabin"]))) +
+            np.maximum( (np.sin(((12.4148) * (data["Age"] / 2.0)))),  (np.sin((-3.0 * data["Cabin"])))) +
+            (np.minimum( (np.sin((((np.sin(((data["Fare"] * 2.0) * 2.0)) * 2.0) * 2.0) * 2.0))),  (data["SibSp"])) / 2.0) +
+            ((data["Sex"] - data["SibSp"]) * (np.cos(((data["Embarked"] - 0.730768978595734) + data["Age"])) / 2.0)) +
+            ((np.sin(data["Cabin"]) / 2.0) - (np.cos(np.minimum( (data["Age"]),  (data["Embarked"]))) * np.sin(data["Embarked"]))) +
+            np.minimum( (0.31830988618379069),  ((data["Sex"] * (2.212120056152344 * (0.720430016517639 - np.sin((data["Age"] * 2.0))))))) +
+            (np.minimum( (np.cos(data["Fare"])),  (np.maximum( (np.sin(data["Age"])),  (data["Parch"])))) * np.cos((data["Fare"] / 2.0))) +
+            np.sin((data["Parch"] * np.minimum( ((data["Age"] - 1.5707963267948966)),  ((np.cos((data["Pclass"] * 2.0)) / 2.0))))) +
+            (data["Parch"] * (np.sin(((data["Fare"] * (0.623655974864960 * data["Age"])) * 2.0)) / 2.0)) +
+            (0.31830988618379069 * np.cos(np.maximum( ((0.602940976619720 * data["Fare"])),  ((np.sin(0.720430016517639) * data["Age"]))))) +
+            (np.minimum( ((data["SibSp"] / 2.0)),  (np.sin(((data["Pclass"] - data["Fare"]) * data["SibSp"])))) * data["SibSp"]) +
+            np.tanh((data["Sex"] * np.sin((5.199999809265137 * np.sin((data["Cabin"] * np.cos(data["Fare"]))))))) +
+            (np.minimum( (data["Parch"]),  (data["Sex"])) * np.cos(np.maximum( ((np.cos(data["Parch"]) + data["Age"])),  (3.1415926535897931)))) +
+            (np.minimum( (np.tanh(((data["Cabin"] / 2.0) + data["Parch"]))),  ((data["Sex"] + np.cos(data["Age"])))) / 2.0) +
+            (np.sin((np.sin(data["Sex"]) * (np.sin((data["Age"] * data["Pclass"])) * data["Pclass"]))) / 2.0) +
+            (data["Sex"] * (np.cos(((data["Sex"] + data["Fare"]) * ((8.48635) * (63)))) / 2.0)) +
+            np.minimum( (data["Sex"]),  ((np.cos((data["Age"] * np.tanh(np.sin(np.cos(data["Fare"]))))) / 2.0))) +
+            (np.tanh(np.tanh( -np.cos((np.maximum( (np.cos(data["Fare"])),  (0.094339601695538)) * data["Age"])))) / 2.0) +
+            (np.tanh(np.cos((np.cos(data["Age"]) + (data["Age"] + np.minimum( (data["Fare"]),  (data["Age"])))))) / 2.0) +
+            (np.tanh(np.cos((data["Age"] * ((-2.0 + np.sin(data["SibSp"])) + data["Fare"])))) / 2.0) +
+            (np.minimum( (((281) - data["Fare"])),  (np.sin((np.maximum( ((176)),  (data["Fare"])) * data["SibSp"])))) * 2.0) +
+            np.sin(((np.maximum( (data["Embarked"]),  (data["Age"])) * 2.0) * (((785) * 3.1415926535897931) * data["Age"]))) +
+            np.minimum( (data["Sex"]),  (np.sin( -(np.minimum( ((data["Cabin"] / 2.0)),  (data["SibSp"])) * (data["Fare"] / 2.0))))) +
+            np.sin(np.sin((data["Cabin"] * (data["Embarked"] + (np.tanh( -data["Age"]) + data["Fare"]))))) +
+            (np.cos(np.cos(data["Fare"])) * (np.sin((data["Embarked"] - ((734) * data["Fare"]))) / 2.0)) +
+            ((np.minimum( (data["SibSp"]),  (np.cos(data["Fare"]))) * np.cos(data["SibSp"])) * np.sin((data["Age"] / 2.0))) +
+            (np.sin((np.sin((data["SibSp"] * np.cos((data["Fare"] * 2.0)))) + (data["Cabin"] * 2.0))) / 2.0) +
+            (((data["Sex"] * data["SibSp"]) * np.sin(np.sin( -(data["Fare"] * data["Cabin"])))) * 2.0) +
+            (np.sin((data["SibSp"] * ((((5.428569793701172 + 67.0) * 2.0) / 2.0) * data["Age"]))) / 2.0) +
+            (data["Pclass"] * (np.sin(((data["Embarked"] * data["Cabin"]) * (data["Age"] - (1.07241)))) / 2.0)) +
+            (np.cos((((( -data["SibSp"] + data["Age"]) + data["Parch"]) * data["Embarked"]) / 2.0)) / 2.0) +
+            (0.31830988618379069 * np.sin(((data["Age"] * ((data["Embarked"] * np.sin(data["Fare"])) * 2.0)) * 2.0))) +
+            ((np.minimum( ((data["Age"] * 0.058823499828577)),  (data["Sex"])) - 0.63661977236758138) * np.tanh(np.sin(data["Pclass"]))) +
+            -np.minimum( ((np.cos(((727) * ((data["Fare"] + data["Parch"]) * 2.0))) / 2.0)),  (data["Fare"])) +
+            (np.minimum( (np.cos(data["Fare"])),  (data["SibSp"])) * np.minimum( (np.sin(data["Parch"])),  (np.cos((data["Embarked"] * 2.0))))) +
+            (np.minimum( (((data["Fare"] / 2.0) - 2.675679922103882)),  (0.138462007045746)) * np.sin((1.5707963267948966 * data["Age"]))) +
+            np.minimum( ((0.0821533)),  (((np.sin(data["Fare"]) + data["Embarked"]) - np.cos((data["Age"] * (9.89287)))))))
 
-# i want save maximum information for model, and drop only 'ps_calc*'
-df = df.drop([c for c in df.columns if c.startswith('F')], axis=1)
-df['_'] = df['target'] != -1
-na_columns = {'R03d':2, 'C11d':2, 'C12d':1, 'C14d':1, 'I04c':3} #columns for change NaN - 1:mean, 2:median, 3:both
-oh_columns = [c for c in df.columns if c.endswith('c') and not c in['C01c','I04c']] #columns for OHE(not all categorical should transform to OHE) 
 
-kfold = 8
-df = predictTarget(df, oh_columns, na_columns, kfold)
-df[['id', 'target']].to_csv('../input/sub.csv', index = False)
+def MungeData(data):
+    # Sex
+    data.drop(['Ticket', 'Name'], inplace=True, axis=1)
+    data.Sex.fillna('0', inplace=True)
+    data.loc[data.Sex != 'male', 'Sex'] = 0
+    data.loc[data.Sex == 'male', 'Sex'] = 1
+    # Cabin
+    data.Cabin.fillna('0', inplace=True)
+    data.loc[data.Cabin.str[0] == 'A', 'Cabin'] = 1
+    data.loc[data.Cabin.str[0] == 'B', 'Cabin'] = 2
+    data.loc[data.Cabin.str[0] == 'C', 'Cabin'] = 3
+    data.loc[data.Cabin.str[0] == 'D', 'Cabin'] = 4
+    data.loc[data.Cabin.str[0] == 'E', 'Cabin'] = 5
+    data.loc[data.Cabin.str[0] == 'F', 'Cabin'] = 6
+    data.loc[data.Cabin.str[0] == 'G', 'Cabin'] = 7
+    data.loc[data.Cabin.str[0] == 'T', 'Cabin'] = 8
+    # Embarked
+    data.loc[data.Embarked == 'C', 'Embarked'] = 1
+    data.loc[data.Embarked == 'Q', 'Embarked'] = 2
+    data.loc[data.Embarked == 'S', 'Embarked'] = 3
+    data.Embarked.fillna(0, inplace=True)
+    data.fillna(-1, inplace=True)
+    return data.astype(float)
+
+
+if __name__ == "__main__":
+    train = pd.read_csv('../input/train.csv')
+    test = pd.read_csv('../input/test.csv')
+    mungedtrain = MungeData(train)
+    trainPredictions = Outputs(GeneticFunction(mungedtrain))
+
+    pdtrain = pd.DataFrame({'PassengerId': mungedtrain.PassengerId.astype(int),
+                            'Predicted': trainPredictions.astype(int),
+                            'Survived': mungedtrain.Survived.astype(int)})
+    pdtrain.to_csv('gptrain.csv', index=False)
+    mungedtest = MungeData(test)
+    testPredictions = Outputs(GeneticFunction(mungedtest))
+
+    pdtest = pd.DataFrame({'PassengerId': mungedtest.PassengerId.astype(int),
+                            'Survived': testPredictions.astype(int)})
+    pdtest.to_csv('gptest.csv', index=False)

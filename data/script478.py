@@ -1,663 +1,390 @@
 
 # coding: utf-8
 
+# # Exploring "YouTube Faces with Facial Keypoints" Dataset
+# In this script we will demonstrate how to access the files of "YouTube Faces with Facial Keypoints" dataset.  
+# We also perform basic cluster analysis of the shapes in the dataset.  
+# 
+# I will not hide any code in this script so that we get familiarized with the files, how to load them and how to present them.
+# 
+# ![filmreel](http://kjmultimediasolutions.com/wp-content/uploads/2015/07/filmreel1.jpg)
+# 
+# This dataset is a processed version of the [YouTube Faces Dataset](https://www.cs.tau.ac.il/~wolf/ytfaces/), that basically contained short videos of celebrities that are publicly available and were downloaded from YouTube. There are multiple videos of each celebrity (up to 6 videos per celebrity).  
+# Additionally, for this kaggle version of the dataset I've extracted facial keypoints for each frame of each video using [this amazing 2D and 3D Face alignment library](https://github.com/1adrianb/face-alignment) that was recently published.  
+# 
+# For full description please read the description on the [dataset page](https://www.kaggle.com/selfishgene/youtube-faces-with-facial-keypoints).
+
 # In[ ]:
 
-
-#Import libraries
 
 import numpy as np
-from numpy.random import random_integers
 import pandas as pd
+from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.pyplot as plt
-import sklearn
-from sklearn.cross_validation import train_test_split
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier
-from scipy.stats import pointbiserialr, spearmanr
-get_ipython().run_line_magic('matplotlib', 'inline')
+import matplotlib
+import glob
+from sklearn import cluster
 
-print('Libraries Ready!')
 
+# ## Show the basic details of the videos in the dataset
+# In this particular case, show the "large" subset of the dataset that contains all videos of individuals with at least 3 different videos each.
 
 # In[ ]:
 
 
-#Load training data
-
-path = '../input/'
-df = pd.read_csv(path+'train.csv')
-df.head()
+videoDF = pd.read_csv('../input/youtube_faces_with_keypoints_large.csv')
+videoDF.head(15)
 
 
-# ####Process Data
+# Each video in the dataset is defined by the "video ID" field.  
+# For each videoID there exists an "videoID.npz" (e.g. "Kevin_Spacey_2.npz") that are divided among the archive files.  
 # 
-# People with stronger titles tend to have more help on board. Hence, we will categorize passengers based on titles.
+# * First, since there are multiple archive files with different names we will create a map between the videoID and the full filepath with which we can load the data.
+# * Then, we will then remove the rows in the videoDF dataframe that are yet to be uploaded to kaggle and keep only the rows of videos that have been uploaded already
 
 # In[ ]:
 
 
-Title_Dictionary = {
-                    "Capt":       "Officer",
-                    "Col":        "Officer",
-                    "Major":      "Officer",
-                    "Jonkheer":   "Royalty",
-                    "Don":        "Royalty",
-                    "Sir" :       "Royalty",
-                    "Dr":         "Officer",
-                    "Rev":        "Officer",
-                    "the Countess":"Royalty",
-                    "Dona":       "Royalty",
-                    "Mme":        "Mrs",
-                    "Mlle":       "Miss",
-                    "Ms":         "Mrs",
-                    "Mr" :        "Mr",
-                    "Mrs" :       "Mrs",
-                    "Miss" :      "Miss",
-                    "Master" :    "Master",
-                    "Lady" :      "Royalty"
-                    } 
+# create a dictionary that maps videoIDs to full file paths
+npzFilesFullPath = glob.glob('../input/youtube_faces_*/*.npz')
+videoIDs = [x.split('/')[-1].split('.')[0] for x in npzFilesFullPath]
+fullPaths = {}
+for videoID, fullPath in zip(videoIDs, npzFilesFullPath):
+    fullPaths[videoID] = fullPath
 
-df['Title'] = df['Name'].apply(lambda x: Title_Dictionary[x.split(',')[1].split('.')[0].strip()])
-
-df.head()
+# remove from the large csv file all videos that weren't uploaded yet
+videoDF = videoDF.loc[videoDF.loc[:,'videoID'].isin(fullPaths.keys()),:].reset_index(drop=True)
+print('Number of Videos is %d' %(videoDF.shape[0]))
+print('Number of Unique Individuals is %d' %(len(videoDF['personName'].unique())))
 
 
-# The ticket prefix may determine the status or cabin on board and hence will be included
+# ## Show Overview of Dataset Content
+# Again, right now it's the content of a subset of the dataset that was already uploaded.  
+# When the dataset size limitation will be lifted, I'll upload more videos. This will be automatically updated whenever I'll re-run the script.
 
 # In[ ]:
 
 
-def Ticket_Prefix(s):
-    s=s.split()[0]
-    if s.isdigit():
-        return 'NoClue'
-    else:
-        return s
+# overview of the contents of the dataset
+groupedByPerson = videoDF.groupby("personName")
+numVidsPerPerson = groupedByPerson.count()['videoID']
+groupedByPerson.count().sort_values('videoID', axis=0, ascending=False)
 
-df['TicketPrefix'] = df['Ticket'].apply(lambda x: Ticket_Prefix(x))
+plt.close('all')
+plt.figure(figsize=(25,20))
+plt.subplot(2,2,1)
+plt.hist(x=numVidsPerPerson,bins=0.5+np.arange(numVidsPerPerson.min()-1,numVidsPerPerson.max()+1))
+plt.title('Number of Videos per Person',fontsize=30); 
+plt.xlabel('Number of Videos',fontsize=25); plt.ylabel('Number of People',fontsize=25)
 
-df.head()
+plt.subplot(2,2,2)
+plt.hist(x=videoDF['videoDuration'],bins=28);
+plt.title('Distribution of Video Duration',fontsize=30); 
+plt.xlabel('duration [frames]',fontsize=25); plt.ylabel('Number of Videos',fontsize=25)
+plt.xlim(videoDF['videoDuration'].min()-2,videoDF['videoDuration'].max()+2)
+
+plt.subplot(2,2,3)
+plt.scatter(x=videoDF['imageWidth'], y=videoDF['imageHeight'])
+plt.title('Distribution of Image Sizes',fontsize=30)
+plt.xlabel('Image Width [pixels]',fontsize=25); plt.ylabel('Image Height [pixels]',fontsize=25)
+plt.xlim(0,videoDF['imageWidth'].max() +15)
+plt.ylim(0,videoDF['imageHeight'].max()+15)
+
+plt.subplot(2,2,4)
+averageFaceSize_withoutNaNs = np.array(videoDF['averageFaceSize'])
+averageFaceSize_withoutNaNs = averageFaceSize_withoutNaNs[np.logical_not(np.isnan(averageFaceSize_withoutNaNs))]
+plt.hist(averageFaceSize_withoutNaNs, bins=28)
+plt.title('Distribution of Average Face Sizes ',fontsize=30)
+plt.xlabel('Average Face Size [pixels]',fontsize=25); plt.ylabel('Number of Videos',fontsize=25);
 
 
-# Now let's check for data types and missing values
+# ## 2D and 3D Landmarks Data
+# The best way to introduce the landmarks data is just to look at the following video:
 
 # In[ ]:
 
 
-df.info()
+from IPython.display import YouTubeVideo
+YouTubeVideo('8FdSHl4oNIM',width=640, height=480)
 
 
-# We can see that Age and Embarked has missing data.
+# For further details on this really awsome work, please visit [this project page](https://www.adrianbulat.com/face-alignment/).  
+# The paper can be found [here](https://www.adrianbulat.com/downloads/FaceAlignment/FaceAlignment.pdf).  
+# The pytorch code can be found [here](https://github.com/1adrianb/face-alignment).  
 # 
-# Simply dropping the Age NaNs would mean throwing away too much data.
-# 
-# We add in the median age based on the Title, Pclass and Sex of each passenger.
+# **Note**: I'm in no way associated to any of these guys, just genuinely impressed.
+
+# ## Show Images from YouTube Faces with 2D Keypoints Overlaid
+# This shows how to read the dataset and display it's main content
 
 # In[ ]:
 
 
-mask_Age = df.Age.notnull()
-Age_Sex_Title_Pclass = df.loc[mask_Age, ["Age", "Title", "Sex", "Pclass"]]
-Filler_Ages = Age_Sex_Title_Pclass.groupby(by = ["Title", "Pclass", "Sex"]).median()
-Filler_Ages = Filler_Ages.Age.unstack(level = -1).unstack(level = -1)
+# show several frames from each video and overlay 2D keypoints
+np.random.seed(3)
+numVideos = 4
+framesToShowFromVideo = np.array([0.1,0.5,0.9])
+numFramesPerVideo = len(framesToShowFromVideo)
 
-mask_Age = df.Age.isnull()
-Age_Sex_Title_Pclass_missing = df.loc[mask_Age, ["Title", "Sex", "Pclass"]]
+# define which points need to be connected with a line
+jawPoints          = [ 0,17]
+rigthEyebrowPoints = [17,22]
+leftEyebrowPoints  = [22,27]
+noseRidgePoints    = [27,31]
+noseBasePoints     = [31,36]
+rightEyePoints     = [36,42]
+leftEyePoints      = [42,48]
+outerMouthPoints   = [48,60]
+innerMouthPoints   = [60,68]
 
-def Age_filler(row):
-    if row.Sex == "female":
-        age = Filler_Ages.female.loc[row["Title"], row["Pclass"]]
-        return age
+listOfAllConnectedPoints = [jawPoints,rigthEyebrowPoints,leftEyebrowPoints,
+                            noseRidgePoints,noseBasePoints,
+                            rightEyePoints,leftEyePoints,outerMouthPoints,innerMouthPoints]
+
+# select a random subset of 'numVideos' from the available videos
+randVideoIDs = videoDF.loc[np.random.choice(videoDF.index,size=numVideos,replace=False),'videoID']
+
+fig, axArray = plt.subplots(nrows=numVideos,ncols=numFramesPerVideo,figsize=(14,18))
+for i, videoID in enumerate(randVideoIDs):
+    # load video
+    videoFile = np.load(fullPaths[videoID])
+    colorImages = videoFile['colorImages']
+    boundingBox = videoFile['boundingBox']
+    landmarks2D = videoFile['landmarks2D']
+    landmarks3D = videoFile['landmarks3D']
+
+    # select frames and show their content
+    selectedFrames = (framesToShowFromVideo*(colorImages.shape[3]-1)).astype(int)
+    for j, frameInd in enumerate(selectedFrames):
+        axArray[i][j].imshow(colorImages[:,:,:,frameInd])
+        axArray[i][j].scatter(x=landmarks2D[:,0,frameInd],y=landmarks2D[:,1,frameInd],s=9,c='r')
+        for conPts in listOfAllConnectedPoints:
+            xPts = landmarks2D[conPts[0]:conPts[-1],0,frameInd]
+            yPts = landmarks2D[conPts[0]:conPts[-1],1,frameInd]
+            axArray[i][j].plot(xPts,yPts,c='w',lw=1)
+        axArray[i][j].set_title('"%s" (t=%d)' %(videoID,frameInd), fontsize=12)
+        axArray[i][j].set_axis_off()
+
+
+# We can see a small amount of imprefections in the keypoints predictions outputed by the alignment library, but overall this is really amazing performace.
+
+# ## Show 3D Keypoints
+# Interestingly, this work can also extract 3D Keypoints, this shows how one can display the 3D landmarks
+
+# In[ ]:
+
+
+# show several 3D keypoints
+numVideos = 4
+framesToShowFromVideo = np.array([0.2,0.5,0.8])
+numFramesPerVideo = len(framesToShowFromVideo)
+
+# select a random subset of 'numVideos' from the available videos
+randVideoIDs = videoDF.loc[np.random.choice(videoDF.index,size=numVideos,replace=False),'videoID']
+
+fig = plt.figure(figsize=(14,14))
+for i, videoID in enumerate(randVideoIDs):
+    # load video
+    videoFile = np.load(fullPaths[videoID])
+    colorImages = videoFile['colorImages']
+    boundingBox = videoFile['boundingBox']
+    landmarks2D = videoFile['landmarks2D']
+    landmarks3D = videoFile['landmarks3D']
+
+    # select frames and show their content
+    selectedFrames = (framesToShowFromVideo*(colorImages.shape[3]-1)).astype(int)
+    for j, frameInd in enumerate(selectedFrames):
+        subplotInd = i*numFramesPerVideo + j+1
+        ax = fig.add_subplot(numVideos, numFramesPerVideo, subplotInd, projection='3d')
+        ax.scatter(landmarks3D[:,0,frameInd], landmarks3D[:,1,frameInd], landmarks3D[:,2,frameInd],c='r')
+        for conPts in listOfAllConnectedPoints:
+            xPts = landmarks3D[conPts[0]:conPts[-1],0,frameInd]
+            yPts = landmarks3D[conPts[0]:conPts[-1],1,frameInd]
+            zPts = landmarks3D[conPts[0]:conPts[-1],2,frameInd]
+            ax.plot3D(xPts,yPts,zPts,color='g')         
+        ax.set_xlim(ax.get_xlim()[::-1])
+        ax.view_init(elev=96, azim=90)
+        ax.set_title('"%s" (t=%d)' %(videoID,frameInd), fontsize=12)
+        
+plt.tight_layout()
+
+
+# ## Basic EDA
+# ## Normalize 2D and 3D shapes
+
+# In[ ]:
+
+
+# collect all 2D and 3D shapes from all frames from all videos to a single numpy array matrix
+totalNumberOfFrames = videoDF['videoDuration'].sum()
+landmarks2D_all = np.zeros((68,2,int(totalNumberOfFrames)))
+landmarks3D_all = np.zeros((68,3,int(totalNumberOfFrames)))
+
+shapeIndToVideoID = {} # dictionary for later useage
+endInd = 0
+for i, videoID in enumerate(videoDF['videoID']):
     
-    elif row.Sex == "male":
-        age = Filler_Ages.male.loc[row["Title"], row["Pclass"]]
-        return age
+    # load video
+    videoFile = np.load(fullPaths[videoID])
+    landmarks2D = videoFile['landmarks2D']
+    landmarks3D = videoFile['landmarks3D']
+
+    startInd = endInd
+    endInd   = startInd + landmarks2D.shape[2]
+
+    # store in one big array
+    landmarks2D_all[:,:,startInd:endInd] = landmarks2D
+    landmarks3D_all[:,:,startInd:endInd] = landmarks3D
     
-Age_Sex_Title_Pclass_missing["Age"]  = Age_Sex_Title_Pclass_missing.apply(Age_filler, axis = 1)   
+    # make sure we keep track of the mapping to the original video and frame
+    for videoFrameInd, shapeInd in enumerate(range(startInd,endInd)):
+        shapeIndToVideoID[shapeInd] = (videoID, videoFrameInd)
 
-df["Age"] = pd.concat([Age_Sex_Title_Pclass["Age"], Age_Sex_Title_Pclass_missing["Age"]])    
+# center the shapes around zero
+# i.e. such that for each frame the mean x,y,z coordinates will be zero
+# or in math terms: Xc = X - mean(X), Yc = Y - mean(Y), Zc = Z - mean(Z)
+landmarks2D_centered = np.zeros(landmarks2D_all.shape)
+landmarks2D_centered = landmarks2D_all - np.tile(landmarks2D_all.mean(axis=0),[68,1,1])
 
-df.head()
+landmarks3D_centered = np.zeros(landmarks3D_all.shape)
+landmarks3D_centered = landmarks3D_all - np.tile(landmarks3D_all.mean(axis=0),[68,1,1])
 
+# normalize the shapes such that they have the same scale
+# i.e. such that for each frame the mean euclidian distance from the shape center will be one
+# or in math terms: mean( sqrt(dX^2 + dY^2 + dZ^2) ) = 1 
+landmarks2D_normlized = np.zeros(landmarks2D_all.shape)
+landmarks2D_normlized = landmarks2D_centered / np.tile(np.sqrt((landmarks2D_centered**2).sum(axis=1)).mean(axis=0), [68,2,1])
 
-# Next we fill in the missing Fare.
-
-# In[ ]:
-
-
-df['Fare']=df['Fare'].fillna(value=df.Fare.mean())
-df.head()
-
-
-# We do not need Cabin and Ticket and hence can be dropped from our DataFrame.
-# 
-# We also can combine SibSp and Parch to FamilySize.
-
-# In[ ]:
-
-
-df['FamilySize'] = df['SibSp'] + df['Parch']
-df = df.drop(['Ticket', 'Cabin'], axis=1)
-df.head()
+landmarks3D_normlized = np.zeros(landmarks3D_all.shape)
+landmarks3D_normlized = landmarks3D_centered / np.tile(np.sqrt((landmarks3D_centered**2).sum(axis=1)).mean(axis=0), [68,3,1])
 
 
-# Now we deal with categorical data using dummy variables.
+# ## Show 2D Shape Normalization stages
 
 # In[ ]:
 
 
-dummies_Sex=pd.get_dummies(df['Sex'],prefix='Sex')
-dummies_Embarked = pd.get_dummies(df['Embarked'], prefix= 'Embarked') 
-dummies_Pclass = pd.get_dummies(df['Pclass'], prefix= 'Pclass')
-dummies_Title = pd.get_dummies(df['Title'], prefix= 'Title')
-dummies_TicketPrefix = pd.get_dummies(df['TicketPrefix'], prefix='TicketPrefix')
-df = pd.concat([df, dummies_Sex, dummies_Embarked, dummies_Pclass, dummies_Title, dummies_TicketPrefix], axis=1)
-df = df.drop(['Sex','Embarked','Pclass','Title','Name','TicketPrefix'], axis=1)
+#%% check the 2D normalization and verify that everything is as expected
+# select random several frames to be used as test cases
+np.random.seed(2)
 
-df.head()
+listOfShapeColors = ['r','g','b','m','y','c','k']
+numShapesToPresent = len(listOfShapeColors)
+listOfShapeInds = np.random.choice(range(int(totalNumberOfFrames)),size=numShapesToPresent,replace=False)
 
+plt.close('all')
+plt.figure(figsize=(14,10))
+plt.suptitle('Shape Normalization Stages',fontsize=35)
+plt.subplot(1,3,1)
+for k,shapeInd in enumerate(listOfShapeInds):
+    plt.scatter(landmarks2D_all[:,0,shapeInd], -landmarks2D_all[:,1,shapeInd], s=15, c=listOfShapeColors[k])
+    for conPts in listOfAllConnectedPoints:
+        xPts =  landmarks2D_all[conPts[0]:conPts[-1],0,shapeInd]
+        yPts = -landmarks2D_all[conPts[0]:conPts[-1],1,shapeInd]
+        plt.plot(xPts,yPts,c=listOfShapeColors[k],lw=1)
+plt.axis('off'); plt.title('Original Shapes', fontsize=20)
 
-# Finally, we set our PassengerId as our index.
+plt.subplot(1,3,2)
+for k,shapeInd in enumerate(listOfShapeInds):
+    plt.scatter(landmarks2D_centered[:,0,shapeInd], -landmarks2D_centered[:,1,shapeInd], s=15, c=listOfShapeColors[k])
+    for conPts in listOfAllConnectedPoints:
+        xPts =  landmarks2D_centered[conPts[0]:conPts[-1],0,shapeInd]
+        yPts = -landmarks2D_centered[conPts[0]:conPts[-1],1,shapeInd]
+        plt.plot(xPts,yPts,c=listOfShapeColors[k],lw=1)
+plt.axis('off'); plt.title('Centered Shapes', fontsize=20)
 
-# In[ ]:
-
-
-df = df.set_index(['PassengerId'])
-df.head()
-
-
-# ####Feature Selection
-# 
-# For feature selection, we will look at the correlation of each feature against Survived.
-# Based on our data types, we will use the following aglorithms:
-# 
-# - Spearman-Rank correlation for nominal vs nominal data
-# - Point-Biserial correlation for nominal vs continuous data
-
-# In[ ]:
-
-
-columns = df.columns.values
-
-param=[]
-correlation=[]
-abs_corr=[]
-
-for c in columns:
-    #Check if binary or continuous
-    if len(df[c].unique())<=2:
-        corr = spearmanr(df['Survived'],df[c])[0]
-    else:
-        corr = pointbiserialr(df['Survived'],df[c])[0]
-    param.append(c)
-    correlation.append(corr)
-    abs_corr.append(abs(corr))
-
-#Create dataframe for visualization
-param_df=pd.DataFrame({'correlation':correlation,'parameter':param, 'abs_corr':abs_corr})
-
-#Sort by absolute correlation
-param_df=param_df.sort_values(by=['abs_corr'], ascending=False)
-
-#Set parameter name as index
-param_df=param_df.set_index('parameter')
-
-param_df.head()
+plt.subplot(1,3,3)
+for k,shapeInd in enumerate(listOfShapeInds):
+    plt.scatter(landmarks2D_normlized[:,0,shapeInd], -landmarks2D_normlized[:,1,shapeInd], s=15, c=listOfShapeColors[k])
+    for conPts in listOfAllConnectedPoints:
+        xPts =  landmarks2D_normlized[conPts[0]:conPts[-1],0,shapeInd]
+        yPts = -landmarks2D_normlized[conPts[0]:conPts[-1],1,shapeInd]
+        plt.plot(xPts,yPts,c=listOfShapeColors[k],lw=1)
+plt.axis('off'); plt.title('Normlized Shapes', fontsize=20)
 
 
-# Now that we have our correlation, we can use the Decision Tree classifier to see the score agaisnt feature space.
+# On the left we see that the original faces can appear anywhere in the frame, and have several different sizes.  
+# The centered images are at the same location, but with different sizes. The normlized faces on the right are approximatley same location and and same size. 
+
+# ## Cluster all 2D shapes using Kmeans and show the resulting clusters
 
 # In[ ]:
 
 
-scoresCV = []
-scores = []
+#%% cluster normalized shapes and show the cluster centers
+numClusters = 16
+normalizedShapesTable = np.reshape(landmarks2D_normlized, [68*2, landmarks2D_normlized.shape[2]]).T
 
-for i in range(1,len(param_df)):
-    new_df=df[param_df.index[0:i+1].values]
-    X = new_df.ix[:,1::]
-    y = new_df.ix[:,0]
-    clf = DecisionTreeClassifier()
-    scoreCV = sklearn.cross_validation.cross_val_score(clf, X, y, cv= 10)
-    scores.append(np.mean(scoreCV))
+shapesModel = cluster.KMeans(n_clusters=numClusters, n_init=5, random_state=1).fit(normalizedShapesTable[::2,:])
+clusterAssignment = shapesModel.predict(normalizedShapesTable)
+
+plt.figure(figsize=(14,14))
+numRowsAndCols = int(np.ceil(np.sqrt(numClusters)))
+for i in range(numClusters):
+    plt.subplot(numRowsAndCols,numRowsAndCols,i+1);
+    currClusterShape = np.reshape(shapesModel.cluster_centers_[i,:], [68,2])
+    plt.scatter(x=currClusterShape[:,0],y=-currClusterShape[:,1],s=20,c='r')
+    for conPts in listOfAllConnectedPoints:
+        xPts =  currClusterShape[conPts[0]:conPts[-1],0]
+        yPts = -currClusterShape[conPts[0]:conPts[-1],1]
+        plt.plot(xPts,yPts,c='g',lw=1)
+    plt.title('cluster %d' %(i),fontsize=15)
+    plt.axis('off')
+
+
+# Most clusters are various poses with a neutral expression. It could perhaps be interesting to have a look at the clusters if we increase the number of clusters. you are welcome to fork and have a look.
+
+# # Show original images assigned to the same shape cluster
+# ## Look to the Left (Cluster 15)
+# (their left, it's our right)
+
+# In[ ]:
+
+
+#%% show several original images that are assigned to a particular cluster
+selectedCluster = 15
+numRows = 4; numCols = 4;
+
+shapeIndsAssignedToCluster = np.nonzero(clusterAssignment == selectedCluster)[0]
+listOfShapeInds = np.random.choice(shapeIndsAssignedToCluster ,size=numRows*numCols,replace=False)
+
+plt.figure(figsize=(14,14))
+for i, shapeInd in enumerate(listOfShapeInds):
+    # load video and pickout the relevent frame
+    videoID  = shapeIndToVideoID[shapeInd][0]
+    frameInd = shapeIndToVideoID[shapeInd][1]    
+    videoFile = np.load(fullPaths[videoID])
+    image = videoFile['colorImages'][:,:,:,frameInd]
     
-plt.figure(figsize=(15,5))
-plt.plot(range(1,len(scores)+1),scores, '.-')
-plt.axis("tight")
-plt.title('Feature Selection', fontsize=14)
-plt.xlabel('# Features', fontsize=12)
-plt.ylabel('Score', fontsize=12)
-plt.grid();
+    # show the image
+    plt.subplot(numRows,numCols,i+1);
+    plt.imshow(image); plt.axis('off')
 
 
-# Based on the plot, a feature space of 10 dimensions provides the most reliable result while avoiding overfit.
+# We can see that all of those images have similar face poses, which was exactly the goal.
 
-# In[ ]:
-
-
-best_features=param_df.index[1:10+1].values
-print('Best features:\t',best_features)
-
-
-# Looking at out best features.
+# ## Now look to the Right (Cluster 2)
+# (their right, it's our left)
 
 # In[ ]:
 
 
-df[best_features].hist(figsize=(20,15));
+#%% show several original images that are assigned to a particular cluster
+selectedCluster = 2
+numRows = 4; numCols = 4;
 
+shapeIndsAssignedToCluster = np.nonzero(clusterAssignment == selectedCluster)[0]
+listOfShapeInds = np.random.choice(shapeIndsAssignedToCluster ,size=numRows*numCols,replace=False)
 
-# Creating the train and test datasets.
+plt.figure(figsize=(14,14))
+for i, shapeInd in enumerate(listOfShapeInds):
+    # load video and pickout the relevent frame
+    videoID  = shapeIndToVideoID[shapeInd][0]
+    frameInd = shapeIndToVideoID[shapeInd][1]    
+    videoFile = np.load(fullPaths[videoID])
+    image = videoFile['colorImages'][:,:,:,frameInd]
+    
+    # show the image
+    plt.subplot(numRows,numCols,i+1);
+    plt.imshow(image); plt.axis('off')
 
-# In[ ]:
-
-
-X = df[best_features]
-y = df['Survived']
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=44)
-
-
-# ####Decision Tree
-# 
-# Analyzing the different parameters of Decision Trees.
-
-# In[ ]:
-
-
-plt.figure(figsize=(15,7))
-
-#Max Features
-plt.subplot(2,3,1)
-feature_param = ['auto','sqrt','log2',None]
-scores=[]
-for feature in feature_param:
-    clf = DecisionTreeClassifier(max_features=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = sklearn.cross_validation.cross_val_score(clf, X, y, cv= 10)
-    scores.append(np.mean(scoreCV))
-plt.plot(scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Max Features')
-plt.xticks(range(len(feature_param)), feature_param)
-plt.grid();
-
-#Max Depth
-plt.subplot(2,3,2)
-feature_param = range(1,51)
-scores=[]
-for feature in feature_param:
-    clf = DecisionTreeClassifier(max_depth=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = sklearn.cross_validation.cross_val_score(clf, X, y, cv= 10)
-    scores.append(np.mean(scoreCV))
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Max Depth')
-plt.grid();
-
-#Min Samples Split
-plt.subplot(2,3,3)
-feature_param = range(1,51)
-scores=[]
-for feature in feature_param:
-    clf = DecisionTreeClassifier(min_samples_split =feature)
-    clf.fit(X_train,y_train)
-    scoreCV = sklearn.cross_validation.cross_val_score(clf, X, y, cv= 10)
-    scores.append(np.mean(scoreCV))
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Min Samples Split')
-plt.grid();
-
-#Min Samples Leaf
-plt.subplot(2,3,4)
-feature_param = range(1,51)
-scores=[]
-for feature in feature_param:
-    clf = DecisionTreeClassifier(min_samples_leaf =feature)
-    clf.fit(X_train,y_train)
-    scoreCV = sklearn.cross_validation.cross_val_score(clf, X, y, cv= 10)
-    scores.append(np.mean(scoreCV))
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Min Samples Leaf')
-plt.grid();
-
-#Min Weight Fraction Leaf
-plt.subplot(2,3,5)
-feature_param = np.linspace(0,0.5,10)
-scores=[]
-for feature in feature_param:
-    clf = DecisionTreeClassifier(min_weight_fraction_leaf =feature)
-    clf.fit(X_train,y_train)
-    scoreCV = sklearn.cross_validation.cross_val_score(clf, X, y, cv= 10)
-    scores.append(np.mean(scoreCV))
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Min Weight Fraction Leaf')
-plt.grid();
-
-#Max Leaf Nodes
-plt.subplot(2,3,6)
-feature_param = range(2,21)
-scores=[]
-for feature in feature_param:
-    clf = DecisionTreeClassifier(max_leaf_nodes=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = sklearn.cross_validation.cross_val_score(clf, X, y, cv= 10)
-    scores.append(np.mean(scoreCV))
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Max Leaf Nodes')
-plt.grid();
-
-
-# - Max Depth show high score variance with change in parameter.
-# - All otehr parameters show low score variance.
-
-# ####Random Forest Classifier
-
-# In[ ]:
-
-
-plt.figure(figsize=(15,10))
-
-#N Estimators
-plt.subplot(3,3,1)
-feature_param = range(1,21)
-scores=[]
-for feature in feature_param:
-    clf = RandomForestClassifier(n_estimators=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('N Estimators')
-plt.grid();
-
-#Criterion
-plt.subplot(3,3,2)
-feature_param = ['gini','entropy']
-scores=[]
-for feature in feature_param:
-    clf = RandomForestClassifier(criterion=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(scores, '.-')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Criterion')
-plt.xticks(range(len(feature_param)), feature_param)
-plt.grid();
-
-#Max Features
-plt.subplot(3,3,3)
-feature_param = ['auto','sqrt','log2',None]
-scores=[]
-for feature in feature_param:
-    clf = RandomForestClassifier(max_features=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Max Features')
-plt.xticks(range(len(feature_param)), feature_param)
-plt.grid();
-
-#Max Depth
-plt.subplot(3,3,4)
-feature_param = range(1,21)
-scores=[]
-for feature in feature_param:
-    clf = RandomForestClassifier(max_depth=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Max Depth')
-plt.grid();
-
-#Min Samples Split
-plt.subplot(3,3,5)
-feature_param = range(1,21)
-scores=[]
-for feature in feature_param:
-    clf = RandomForestClassifier(min_samples_split =feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Min Samples Split')
-plt.grid();
-
-#Min Weight Fraction Leaf
-plt.subplot(3,3,6)
-feature_param = np.linspace(0,0.5,10)
-scores=[]
-for feature in feature_param:
-    clf = RandomForestClassifier(min_weight_fraction_leaf =feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Min Weight Fraction Leaf')
-plt.grid();
-
-#Max Leaf Nodes
-plt.subplot(3,3,7)
-feature_param = range(2,21)
-scores=[]
-for feature in feature_param:
-    clf = RandomForestClassifier(max_leaf_nodes=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Max Leaf Nodes')
-plt.grid();
-
-
-# - Random Forest seems to show high variance in scores with most parameter changes.
-# - Max Features, Criterion and Max Leaf Nodes show low variance in scores.
-# - The general high varience in N Estimator plot shows the risk of overfitting.
-
-# ####Gradient Boosting
-
-# In[ ]:
-
-
-plt.figure(figsize=(15,10))
-
-#N Estimators
-plt.subplot(3,3,1)
-feature_param = range(1,21)
-scores=[]
-for feature in feature_param:
-    clf = GradientBoostingClassifier(n_estimators=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('N Estimators')
-plt.grid();
-
-#Learning Rate
-plt.subplot(3,3,2)
-feature_param = np.linspace(0.1,1,10)
-scores=[]
-for feature in feature_param:
-    clf = GradientBoostingClassifier(learning_rate=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(scores, '.-')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Learning Rate')
-plt.grid();
-
-#Max Features
-plt.subplot(3,3,3)
-feature_param = ['auto','sqrt','log2',None]
-scores=[]
-for feature in feature_param:
-    clf = GradientBoostingClassifier(max_features=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Max Features')
-plt.grid();
-
-#Max Depth
-plt.subplot(3,3,4)
-feature_param = range(1,21)
-scores=[]
-for feature in feature_param:
-    clf = GradientBoostingClassifier(max_depth=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Max Depth')
-plt.grid();
-
-#Min Samples Split
-plt.subplot(3,3,5)
-feature_param = range(1,21)
-scores=[]
-for feature in feature_param:
-    clf = GradientBoostingClassifier(min_samples_split =feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Min Samples Split')
-plt.grid();
-
-#Min Weight Fraction Leaf
-plt.subplot(3,3,6)
-feature_param = np.linspace(0,0.5,10)
-scores=[]
-for feature in feature_param:
-    clf = GradientBoostingClassifier(min_weight_fraction_leaf =feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Min Weight Fraction Leaf')
-plt.grid();
-
-#Max Leaf Nodes
-plt.subplot(3,3,7)
-feature_param = range(2,21)
-scores=[]
-for feature in feature_param:
-    clf = GradientBoostingClassifier(max_leaf_nodes=feature)
-    clf.fit(X_train,y_train)
-    scoreCV = clf.score(X_test,y_test)
-    scores.append(scoreCV)
-plt.plot(feature_param, scores, '.-')
-plt.axis('tight')
-# plt.xlabel('parameter')
-# plt.ylabel('score')
-plt.title('Max Leaf Nodes')
-plt.grid();
-
-
-# - The N Estimator plot seems very stable and hence resistant to overfitting.
-# - Min Weight Fraction Leaf drops significantly after a certain point.
-# - All other plots show very little variance.
-
-# ####Decision Surface
-
-# In[ ]:
-
-
-#Plotting dicision boundries with columns Age and Fare. 
-from itertools import product
-
-#Picking Age and Fare as they are continuous and highly correlated with Survived
-X = df[['Age', 'Fare']].values
-y = df['Survived'].values
-
-# Training classifiers
-clf1 = DecisionTreeClassifier()
-clf2 = RandomForestClassifier()
-clf3 = GradientBoostingClassifier()
-
-#Fit models
-clf1.fit(X, y)
-clf2.fit(X, y)
-clf3.fit(X, y)
-
-# Plotting decision regions
-x_min, x_max = X[:, 0].min() - 1, X[:, 0].max() + 1
-y_min, y_max = X[:, 1].min() - 1, X[:, 1].max() + 1
-xx, yy = np.meshgrid(np.arange(x_min, x_max, 0.1),
-                     np.arange(y_min, y_max, 0.1))
-
-f, axarr = plt.subplots(1, 3, sharex='col', sharey='row', figsize=(15,4))
-
-for idx, clf, tt in zip(range(3),
-                        [clf1, clf2, clf3],
-                        ['Decision Tree', 'Random Forest',
-                         'Gradient Boost']):
-
-    Z = clf.predict(np.c_[xx.ravel(), yy.ravel()])
-    Z = Z.reshape(xx.shape)
-
-    axarr[idx].contourf(xx, yy, Z, alpha=0.4)
-    axarr[idx].scatter(X[:, 0], X[:, 1], c=y, alpha=0.8)
-    axarr[idx].set_title(tt, fontsize=14)
-    axarr[idx].axis('off')
-
-
-# All 3 plots are similar on the right side in terms of classification by initially splitting at Age. The second split occurs at the bottom for Fare. Discrepensies in classification occur as we move further than 2 splits. As more branches are forming, Decision Tree and Random Forest risk overfitting as they try to form more pure leaves. Relatively, Gradient Boost seem to be forming less branches and hence resistant to overfitting.

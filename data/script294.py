@@ -1,267 +1,178 @@
 
 # coding: utf-8
 
-# **Loading Libraries and Data**
-
-# In[ ]:
-
-
-import numpy as np
-import pandas as pd
-from sklearn import *
-import nltk, datetime
-
-train = pd.read_csv('../input/sales_train.csv')
-test = pd.read_csv('../input/test.csv')
-submission = pd.read_csv('../input/sample_submission.csv')
-items = pd.read_csv('../input/items.csv')
-item_cats = pd.read_csv('../input/item_categories.csv')
-shops = pd.read_csv('../input/shops.csv')
-print('train:', train.shape, 'test:', test.shape)
-
-
-# **Difference betwee train and test**
-
-# In[ ]:
-
-
-[c for c in train.columns if c not in test.columns]
-
-
-# In[ ]:
-
-
-train.head()
-
-
-# In[ ]:
-
-
-test.head()
-
-
-# **Adding Features**
+# Looking at the [leaderboard][1], I was wondering what is the maximum possible score one would be able to achieve since the top score currently is **0.0303** (on 13th Nov, 2016).
 # 
-# * Text Features
-# * Date Features (Not necessarily needed for monthly summary but may help if using daily preds)
-
-# In[ ]:
-
-
-#Text Features
-feature_cnt = 25
-tfidf = feature_extraction.text.TfidfVectorizer(max_features=feature_cnt)
-items['item_name_len'] = items['item_name'].map(len) #Lenth of Item Description
-items['item_name_wc'] = items['item_name'].map(lambda x: len(str(x).split(' '))) #Item Description Word Count
-txtFeatures = pd.DataFrame(tfidf.fit_transform(items['item_name']).toarray())
-cols = txtFeatures.columns
-for i in range(feature_cnt):
-    items['item_name_tfidf_' + str(i)] = txtFeatures[cols[i]]
-items.head()
-
-
-# In[ ]:
-
-
-#Text Features
-feature_cnt = 25
-tfidf = feature_extraction.text.TfidfVectorizer(max_features=feature_cnt)
-item_cats['item_category_name_len'] = item_cats['item_category_name'].map(len)  #Lenth of Item Category Description
-item_cats['item_category_name_wc'] = item_cats['item_category_name'].map(lambda x: len(str(x).split(' '))) #Item Category Description Word Count
-txtFeatures = pd.DataFrame(tfidf.fit_transform(item_cats['item_category_name']).toarray())
-cols = txtFeatures.columns
-for i in range(feature_cnt):
-    item_cats['item_category_name_tfidf_' + str(i)] = txtFeatures[cols[i]]
-item_cats.head()
-
-
-# In[ ]:
-
-
-#Text Features
-feature_cnt = 25
-tfidf = feature_extraction.text.TfidfVectorizer(max_features=feature_cnt)
-shops['shop_name_len'] = shops['shop_name'].map(len)  #Lenth of Shop Name
-shops['shop_name_wc'] = shops['shop_name'].map(lambda x: len(str(x).split(' '))) #Shop Name Word Count
-txtFeatures = pd.DataFrame(tfidf.fit_transform(shops['shop_name']).toarray())
-cols = txtFeatures.columns
-for i in range(feature_cnt):
-    shops['shop_name_tfidf_' + str(i)] = txtFeatures[cols[i]]
-shops.head()
-
-
-# In[ ]:
-
-
-#Make Monthly
-train['date'] = pd.to_datetime(train['date'], format='%d.%m.%Y')
-train['month'] = train['date'].dt.month
-train['year'] = train['date'].dt.year
-train = train.drop(['date','item_price'], axis=1)
-train = train.groupby([c for c in train.columns if c not in ['item_cnt_day']], as_index=False)[['item_cnt_day']].sum()
-train = train.rename(columns={'item_cnt_day':'item_cnt_month'})
-#Monthly Mean
-shop_item_monthly_mean = train[['shop_id','item_id','item_cnt_month']].groupby(['shop_id','item_id'], as_index=False)[['item_cnt_month']].mean()
-shop_item_monthly_mean = shop_item_monthly_mean.rename(columns={'item_cnt_month':'item_cnt_month_mean'})
-#Add Mean Feature
-train = pd.merge(train, shop_item_monthly_mean, how='left', on=['shop_id','item_id'])
-#Last Month (Oct 2015)
-shop_item_prev_month = train[train['date_block_num']==33][['shop_id','item_id','item_cnt_month']]
-shop_item_prev_month = shop_item_prev_month.rename(columns={'item_cnt_month':'item_cnt_prev_month'})
-shop_item_prev_month.head()
-#Add Previous Month Feature
-train = pd.merge(train, shop_item_prev_month, how='left', on=['shop_id','item_id']).fillna(0.)
-#Items features
-train = pd.merge(train, items, how='left', on='item_id')
-#Item Category features
-train = pd.merge(train, item_cats, how='left', on='item_category_id')
-#Shops features
-train = pd.merge(train, shops, how='left', on='shop_id')
-train.head()
-
-
-# In[ ]:
-
-
-test['month'] = 11
-test['year'] = 2015
-test['date_block_num'] = 34
-#Add Mean Feature
-test = pd.merge(test, shop_item_monthly_mean, how='left', on=['shop_id','item_id']).fillna(0.)
-#Add Previous Month Feature
-test = pd.merge(test, shop_item_prev_month, how='left', on=['shop_id','item_id']).fillna(0.)
-#Items features
-test = pd.merge(test, items, how='left', on='item_id')
-#Item Category features
-test = pd.merge(test, item_cats, how='left', on='item_category_id')
-#Shops features
-test = pd.merge(test, shops, how='left', on='shop_id')
-test['item_cnt_month'] = 0.
-test.head()
-
-
-# **Visualize**
-
-# In[ ]:
-
-
-from PIL import Image, ImageDraw, ImageFilter
-import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-df_all = pd.concat((train, test), axis=0, ignore_index=True)
-stores_hm = df_all.pivot_table(index='shop_id', columns='item_category_id', values='item_cnt_month', aggfunc='count', fill_value=0)
-fig, ax = plt.subplots(figsize=(10,10))
-_ = sns.heatmap(stores_hm, ax=ax, cbar=False)
-
-
-# In[ ]:
-
-
-stores_hm = test.pivot_table(index='shop_id', columns='item_category_id', values='item_cnt_month', aggfunc='count', fill_value=0)
-fig, ax = plt.subplots(figsize=(10,10))
-_ = sns.heatmap(stores_hm, ax=ax, cbar=False)
-
-
-# **Label Encoding**
+# I thought if we could get a ball park value for the maximum possible score, it will be nice to know. So in this notebook, let us do some computation for the same. 
 # 
-# * Try different approaches - weight based sequence, etc.
-
-# In[ ]:
-
-
-for c in ['shop_name','item_name','item_category_name']:
-    lbl = preprocessing.LabelEncoder()
-    lbl.fit(list(train[c].unique())+list(test[c].unique()))
-    train[c] = lbl.fit_transform(train[c].astype(str))
-    test[c] = lbl.fit_transform(test[c].astype(str))
-    print(c)
-
-
-# **Train & Predict Models**
-
-# In[ ]:
-
-
-col = [c for c in train.columns if c not in ['item_cnt_month']]
-#Validation Hold Out Month
-x1 = train[train['date_block_num']<33]
-y1 = np.log1p(x1['item_cnt_month'].clip(0.,20.))
-x1 = x1[col]
-x2 = train[train['date_block_num']==33]
-y2 = np.log1p(x2['item_cnt_month'].clip(0.,20.))
-x2 = x2[col]
-
-reg = ensemble.ExtraTreesRegressor(n_estimators=25, n_jobs=-1, max_depth=15, random_state=18)
-reg.fit(x1,y1)
-print('RMSE:', np.sqrt(metrics.mean_squared_error(y2.clip(0.,20.),reg.predict(x2).clip(0.,20.))))
-#full train
-reg.fit(train[col],train['item_cnt_month'].clip(0.,20.))
-test['item_cnt_month'] = reg.predict(test[col]).clip(0.,20.)
-test[['ID','item_cnt_month']].to_csv('submission.csv', index=False)
-
-
-# **Happy Kaggling :)**
+# **Objective:**
 # 
-# * Try XGBoost, LightGBM, CatBoost next
-# * Try some more Scikit-Learn Linear Regressors and more
-# * Also try TensorFlow, Keras, PyTorch or other NN models for extra fun
-# * Add more text features
-# * Make some ensembles
-# * Tune your models further
-# * Add some awesome visualizations
-# * Comment on Kernels for feedback, fork some, share your own versions
+# We have train data from 2015-01-28 to 2016-05-28 and the test data is from 2016-06-28.
 # 
-# Have some fun!
-
-# **Getting Started with More Models**
+# The objective is to predict what **additional** products a customer will get in the last month, 2016-06-28, in addition to what they already have at 2016-05-28. 
 # 
-# * Off to model tuning land you go now...
+# **Evaluation:**
+# 
+# Evaluation metric is Mean Average Precision @ 7 (MAP@7) as seen from this [evaluation page][2].
+# 
+# If the number of added products for the given user at that time point is 0 (which is from May 2016 to June 2016), then the precision is defined to be 0.
+# 
+# **Maximum possible score:**
+# 
+# All those customers who did not buy a product in the given one month will have a map@7 score of 0 though they will be counted in the mean calculation.  So the maximum possible score for the competition is not 1 and a value lesser than 1. We do not know the additional products bought in June 2016 to compute the maximum possible score for June.
+# 
+# So let us compute the maximum possible score for May 2016 by taking in to account what the customers already have in April 2016. This will get us a fairly good idea on the maximum possible score one would be able to achieve in this competition.
+# 
+# 
+#   [1]: https://www.kaggle.com/c/santander-product-recommendation/leaderboard
+#   [2]: https://www.kaggle.com/c/santander-product-recommendation/details/evaluation
 
 # In[ ]:
 
 
-import xgboost as xgb
-import lightgbm as lgb
-from catboost import CatBoostRegressor
-from multiprocessing import *
-
-#XGBoost
-def xgb_rmse(preds, y):
-    y = y.get_label()
-    score = np.sqrt(metrics.mean_squared_error(y.clip(0.,20.), preds.clip(0.,20.)))
-    return 'RMSE', score
-
-params = {'eta': 0.2, 'max_depth': 4, 'objective': 'reg:linear', 'eval_metric': 'rmse', 'seed': 18, 'silent': True}
-#watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]
-#xgb_model = xgb.train(params, xgb.DMatrix(x1, y1), 100,  watchlist, verbose_eval=10, feval=xgb_rmse, maximize=False, early_stopping_rounds=20)
-#test['item_cnt_month'] = xgb_model.predict(xgb.DMatrix(test[col]), ntree_limit=xgb_model.best_ntree_limit)
-#test[['ID','item_cnt_month']].to_csv('xgb_submission.csv', index=False)
-
-#LightGBM
-def lgb_rmse(preds, y):
-    y = np.array(list(y.get_label()))
-    score = np.sqrt(metrics.mean_squared_error(y.clip(0.,20.), preds.clip(0.,20.)))
-    return 'RMSE', score, False
-
-params = {'learning_rate': 0.2, 'max_depth': 7, 'boosting': 'gbdt', 'objective': 'regression', 'metric': 'mse', 'is_training_metric': False, 'seed': 18}
-#lgb_model = lgb.train(params, lgb.Dataset(x1, label=y1), 100, lgb.Dataset(x2, label=y2), feval=lgb_rmse, verbose_eval=10, early_stopping_rounds=20)
-#test['item_cnt_month'] = lgb_model.predict(test[col], num_iteration=lgb_model.best_iteration)
-#test[['ID','item_cnt_month']].to_csv('lgb_submission.csv', index=False)
-
-#CatBoost
-cb_model = CatBoostRegressor(iterations=100, learning_rate=0.2, depth=7, loss_function='RMSE', eval_metric='RMSE', random_seed=18, od_type='Iter', od_wait=20) 
-cb_model.fit(x1, y1, eval_set=(x2, y2), use_best_model=True, verbose=False)
-print('RMSE:', np.sqrt(metrics.mean_squared_error(y2.clip(0.,20.), cb_model.predict(x2).clip(0.,20.))))
-test['item_cnt_month'] += cb_model.predict(test[col])
-test['item_cnt_month'] /= 2
-test[['ID','item_cnt_month']].to_csv('cb_blend_submission.csv', index=False)
+# importing the modules needed #
+import csv
+from operator import sub 
 
 
 # In[ ]:
 
 
-#test['item_cnt_month'] = np.expm1(test['item_cnt_month'])
-#test[['ID','item_cnt_month']].to_csv('cb_submission_exp.csv', index=False)
+# name of the target columns #
+target_cols = ['ind_ahor_fin_ult1','ind_aval_fin_ult1',
+               'ind_cco_fin_ult1','ind_cder_fin_ult1',
+               'ind_cno_fin_ult1','ind_ctju_fin_ult1',
+               'ind_ctma_fin_ult1','ind_ctop_fin_ult1',
+               'ind_ctpp_fin_ult1','ind_deco_fin_ult1',
+               'ind_deme_fin_ult1','ind_dela_fin_ult1',
+               'ind_ecue_fin_ult1','ind_fond_fin_ult1',
+               'ind_hip_fin_ult1','ind_plan_fin_ult1',
+               'ind_pres_fin_ult1','ind_reca_fin_ult1',
+               'ind_tjcr_fin_ult1','ind_valo_fin_ult1',
+               'ind_viv_fin_ult1','ind_nomina_ult1',
+               'ind_nom_pens_ult1','ind_recibo_ult1']
 
+def getTarget(row):
+    """
+    Function to fetch the target columns as a list
+    """
+    tlist = []
+    for col in target_cols:
+        if row[col].strip() in ['', 'NA']:
+            target = 0
+        else:
+            target = int(float(row[col]))
+        tlist.append(target)
+    return tlist
+
+data_path = "../input/"
+train_file = open(data_path+"train_ver2.csv")
+
+cust_dict = {}
+cust_count = 0
+map_count = 0
+for row in csv.DictReader(train_file):
+    cust_id = int(row['ncodpers'])
+    date = row['fecha_dato']
+    
+    if date != '2016-05-28':
+        cust_dict[cust_id] = getTarget(row)  
+    elif date == '2016-05-28':
+        new_products = getTarget(row)
+        existing_products = cust_dict.get(cust_id, [0]*24)
+        num_new_products = sum([max(x1 - x2,0) for (x1, x2) in zip(new_products, existing_products)])
+        if num_new_products >= 1:
+            map_count += 1
+        cust_count += 1
+print("Number of customers in May 2016 : ",cust_count)
+print("Number of customers with new products in May 2016 : ",map_count)
+
+train_file.close()
+
+
+# Though there were **931453 customers in May 2016, only 29712 of them got new products in that month**.
+# 
+# Considering we are predicting all these new products correctly, we will get a MAP@7 score of
+
+# In[ ]:
+
+
+print("Max possible MAP@7 score for May 2016: ",29712./931453.)
+
+
+# Wow.! It is **0.0319 for May 2016** and I think that it will be around the same number for June 2016 as well. 
+# 
+# I did the same for other months as well and the maximum possible scores for other months are as follows:
+# 
+# 1. Apr 2016 - 0.0309
+# 2. Mar 2016 - 0.0330
+# 3. Feb 2016 - 0.0422
+# 4. Jan 2016 - 0.0330
+# 5. Dec 2015 - 0.0406
+# 6. Nov 2015 - 0.0404
+# 7. Oct 2015 - 0.0543
+# 
+# **Leaderboard Probing Methodology:** 
+# 
+# As discussed in this [forum post][1], the idea is to make submission with 1 product on all rows to determine the maximum score.
+# 
+# Panos was kind enough to share his results (sparing us 21 submissions.!) of such an exercise. Thanks to him and the scores are:
+# 
+# 1. ind_cco_fin_ult1 - 0.0096681
+# 
+# 2. ind_recibo_ult1  - 0.0086845
+# 
+# 3. ind_tjcr_fin_ult1  - 0.0041178
+# 
+# 4. ind_reca_fin_ult1  - 0.0032092
+# 
+# 5. ind_nom_pens_ult1  - 0.0021801
+# 
+# 6. ind_nomina_ult1  - 0.0021478
+# 
+# 7. ind_ecue_fin_ult1  - 0.0019961
+# 
+# 8. cno  - 0.0017839
+# 
+# 9. ctma  - 0.0004488
+# 
+# 10. valo  - 0.000278
+# 
+# 11. ctop  - 0.0001949
+# 
+# 12. ctpp  - 0.0001142
+# 
+# 13. fond  - 0.000104
+# 
+# 14. ctju  - 0.0000502
+# 
+# 15. hip  - 0.0000161
+# 
+# 16. plan  - 0.0000126
+# 
+# 17. pres  - 0.0000054
+# 
+# 18. cder  - 0.000009
+# 
+# 19. viv  - 0
+# 
+# 20. deco  - 0
+# 
+# 21. deme  - 0
+# 
+# The last 3 will most probably be 0 as well. 
+# 
+# So summing them all, we get a score of **0.0350207** for the month of June 2016.
+# 
+# **Inference:**
+# 
+# From the script, we see that the maximum possible score varies between 0.0309 to 0.0543 for the previous months.
+# 
+# From the Public LB probing, the maximum possible score is  ~0.0350207
+# 
+# **So if the distribution of private LB is same as that of public LB, then we expect the maximum possible score to be around 0.035**
+# 
+# Happy Kaggling.!
+# 
+# 
+#   [1]: https://www.kaggle.com/c/santander-product-recommendation/forums/t/25727/question-about-map-7

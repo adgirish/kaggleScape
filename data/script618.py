@@ -1,468 +1,479 @@
 
 # coding: utf-8
 
-# #Intro
-# This piece of work is inspired by a [youtube video lecture](https://www.youtube.com/watch?v=vaL1I2BD_xY) by Martin Gorner, a Google developer 
-# who put forth this idea of combining YOLO grid with SqueezeNet (instead of DarkNet - original stack for [YOLO](https://arxiv.org/pdf/1506.02640.pdf)).
-
-# In[1]:
+# In[ ]:
 
 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import datetime
 import os
-import sys
-import numpy as np
-import tensorflow as tf
-import random
-import math
-import warnings
-import pandas as pd
-import cv2
+#print(os.listdir("../input"))
+
+import time
+
 import matplotlib.pyplot as plt
-import matplotlib.cm as cm
-import matplotlib.ticker as ticker
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-from tqdm import tqdm
-from itertools import chain
-from skimage.io import imread, imshow, imread_collection, concatenate_images
-from skimage.transform import resize
-from skimage.morphology import label
 
-warnings.filterwarnings('ignore', category=UserWarning, module='skimage')
-seed = 19
-random.seed = seed
-np.random.seed = seed
+# In[ ]:
 
 
-# In[2]:
+#make wider graphs
+sns.set(rc={'figure.figsize':(12,5)});
+plt.figure(figsize=(12,5));
 
 
-IMG_WIDTH = 384
-IMG_HEIGHT = 384
-IMG_CHANNELS = 3
+# This notebook is built using some of ideas in the book by *anokas* at  https://www.kaggle.com/anokas/talkingdata-adtracking-eda  .  I suggest reviewing that book first.
+# 
+# For this part I use  the first 10 million rows from train ( as the complete sets are too big for this kernel) and the full test data.
+# 
+# Note:  in the notebook I sometimes refer to downloads as conversions.  i.e. is_attributed == 1  means the click converted.
 
-TRAIN_PATH = '../input/data-science-bowl-2018-2/stage1_train'
-TEST_PATH = '../input/data-science-bowl-2018-2/stage1_test'
+# In[ ]:
 
 
-# In[3]:
+#import first 10,000,000 rows of train and all test data
+train = pd.read_csv('../input/train.csv', nrows=10000000)
+test = pd.read_csv('../input/test.csv')
 
 
-train_ids = next(os.walk(TRAIN_PATH))[1]
-test_ids = next(os.walk(TEST_PATH))[1]
+# In[ ]:
 
-train_images = np.zeros((len(train_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
-test_images = np.zeros((len(test_ids), IMG_HEIGHT, IMG_WIDTH, IMG_CHANNELS), dtype=np.uint8)
 
+train.head()
 
-# In[4]:
 
+# In[ ]:
 
-# Resize train images.
-print('resize train images... ')
-sys.stdout.flush()
 
-for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
-    path = TRAIN_PATH + "/" + id_
-    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
-    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
-    
-    train_images[n] = img
-    
-# Get and resize test images
-sizes_test = []
-print('resize test images ... ')
-sys.stdout.flush()
+test.head()
 
-for n, id_ in tqdm(enumerate(test_ids), total=len(test_ids)):
-    path = TEST_PATH + "/" + id_
-    img = imread(path + '/images/' + id_ + '.png')[:,:,:IMG_CHANNELS]
-    sizes_test.append([img.shape[0], img.shape[1]])
-    img = resize(img, (IMG_HEIGHT, IMG_WIDTH), mode='constant', preserve_range=True)
-    test_images[n] = img
 
-print('Done!')
+# ip, app, device, os and channel are actually categorical variables encoded as integers.   Set them as categories for analysis.
 
+# In[ ]:
 
-# In[5]:
 
+variables = ['ip', 'app', 'device', 'os', 'channel']
+for v in variables:
+    train[v] = train[v].astype('category')
+    test[v]=test[v].astype('category')
 
-def store_bounding_boxes(img, train_id, mask_id, rotby_90):
-    ret, thresh = cv2.threshold(img, 127, 255, 0)
-    contours = cv2.findContours(thresh.astype(np.uint8), 1, 2)
-    cnt = contours[0]
-        
-    x, y, w, h = cv2.boundingRect(cnt)    
-    
-    x = x * (IMG_WIDTH/img.shape[1])
-    w = w * (IMG_WIDTH/img.shape[1])
-    y = y * (IMG_WIDTH/img.shape[0])
-    h = h * (IMG_WIDTH/img.shape[0])
-    
-    if(x > IMG_WIDTH-1):
-        x = IMG_WIDTH-1
-    if(y > IMG_HEIGHT-1):
-        y = IMG_HEIGHT-1
-    if(x+w > IMG_WIDTH-1):
-        w = IMG_WIDTH-1 - x
-    if(y+h > IMG_HEIGHT-1):
-        h = IMG_HEIGHT-1 - y
-        
-    bbdict = { "train_id": train_id, "mask_id": mask_id, "rotby_90": rotby_90, "x": x, "y": y, "w": w, "h": h}
-    return bbdict
 
+# Convert date stamps to date/time type.
 
-# In[6]:
+# In[ ]:
 
 
-path_bboxes_csv = "../input/data-science-bowl-2018-1/bboxes.csv"
-if not os.path.isfile(path_bboxes_csv):
-    bboxes = pd.DataFrame(columns=["train_id", "mask_id", "rotby_90", "x", "y", "w", "h"])
-    row_count = 1
-    for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
-        path = TRAIN_PATH + "/" + id_
-        for mask_id, mask_file in enumerate(next(os.walk(path + '/masks/'))[2]):
-            mask_ = imread(path + '/masks/' + mask_file)
-            for r in range(4):
-                bboxes.loc[row_count] = store_bounding_boxes(np.rot90(mask_, r), id_, mask_id, r)
-                row_count += 1
-    bboxes.to_csv(path_bboxes_csv, index=False)
-else:
-    bboxes = pd.read_csv(path_bboxes_csv)
+#set click_time and attributed_time as timeseries
+train['click_time'] = pd.to_datetime(train['click_time'])
+train['attributed_time'] = pd.to_datetime(train['attributed_time'])
+test['click_time'] = pd.to_datetime(test['click_time'])
 
+#set as_attributed in train as a categorical
+train['is_attributed']=train['is_attributed'].astype('category')
 
-# In[7]:
 
+# Now lets do a quick inspection of train and test data main statistics
 
-GRID_DIM = 12
-GRID_PIX = IMG_WIDTH//GRID_DIM
-BATCH_SIZE = 14
+# In[ ]:
 
 
-# In[8]:
+train.describe()
 
 
-train_ids_df = pd.DataFrame(columns=["idx", "id_"])
-cnt = 0
-for n, id_ in tqdm(enumerate(train_ids), total=len(train_ids)):
-    train_ids_df.loc[cnt] = { "idx": n, "id_": id_}
-    cnt += 1
+# *this graph is adapted from https://www.kaggle.com/anokas/talkingdata-adtracking-eda*:
 
-train_ids_df = train_ids_df.set_index(['idx'])
+# In[ ]:
 
 
-# In[9]:
+plt.figure(figsize=(10, 6))
+cols = ['ip', 'app', 'device', 'os', 'channel']
+uniques = [len(train[col].unique()) for col in cols]
+sns.set(font_scale=1.2)
+ax = sns.barplot(cols, uniques, log=True)
+ax.set(xlabel='Feature', ylabel='log(unique count)', title='Number of unique values per feature (from 10,000,000 samples)')
+for p, uniq in zip(ax.patches, uniques):
+    height = p.get_height()
+    ax.text(p.get_x()+p.get_width()/2.,
+            height + 10,
+            uniq,
+            ha="center") 
+# for col, uniq in zip(cols, uniques):
+#     ax.text(col, uniq, uniq, color='black', ha="center")
 
 
-bboxes['grid_row'] = bboxes['y']//GRID_PIX
-bboxes['grid_column'] = bboxes['x']//GRID_PIX
+# Quick check to make sure that Nan values in 'attribute_time' are only for samples that did not convert.  Check that counts of 'attributed_time' values is same as count of converted clicks.
 
-bboxes['grid_center_x'] = bboxes['grid_column'] * GRID_PIX + GRID_PIX/2
-bboxes['grid_center_y'] = bboxes['grid_row'] * GRID_PIX + GRID_PIX/2
+# In[ ]:
 
-bboxes['box_center_x'] = bboxes.x + bboxes['w']/2
-bboxes['box_center_y'] = bboxes.y + bboxes['h']/2
 
-bboxes['new_x'] = (bboxes.box_center_x - bboxes.grid_center_x)/(IMG_WIDTH)
-bboxes['new_y'] = (bboxes.box_center_y - bboxes.grid_center_y)/(IMG_HEIGHT)
+#double check that 'attributed_time' is not Null for all values that resulted in download (i.e. is_attributed == 1)
+train[['attributed_time', 'is_attributed']][train['is_attributed']==1].describe()
 
-bboxes['new_w'] = np.sqrt(bboxes.w/(IMG_WIDTH))
-bboxes['new_h'] = np.sqrt(bboxes.h/(IMG_WIDTH))
 
-bboxes['confidence'] = 1
+# In[ ]:
 
-bboxes['box_area'] = bboxes.new_w*bboxes.new_h
 
+#set click_id to categorical, for cleaner statistics view
+test['click_id']=test['click_id'].astype('category')
+test.describe()
 
-# In[10]:
 
+# **Quick Notes/Observations** :
+# - There are only 18717 attributed_time values.  This means only 18,717 out of 10,000,000 clicks resulted in a download.  That's less than 0.2% !
+# - There are ip adresses that trigger  a click over 50 thousand times.  Seems strange that one ip address would click that often in a span of just 4 days.  Does that mean that ip address encoded is not device id, but network id?  (explore this below)
+# - First click in train set is on 2017-11-06 14:32:21.  Test clicks start on  2017-11-10.  Based on data specifications, train coveres a 4 day period.  This means that the train and test data do not overlap, but test data is taken the day after train data ends.
+# -Train data is ordered by timestamp.  (therefore batches pulled in order cover limited time span)
+# - 2017-11-06 was a Monday.   2017-11-10 was a Friday.  i.e. Train is Mon-Thur, Test is Friday
+# -There is no missing data in Test.  Missing values in train appear to be only for attributed_time, where there isn't any value due to no app download.
 
-mask_count = 1
-#Set maximum bounding boxes allowed per grid cell
-MAX_BB_CNT = 2
+# Only a small proportion of clicks were followed by a download:
 
+# In[ ]:
 
-# In[11]:
 
+plt.figure(figsize=(6,6))
+#sns.set(font_scale=1.2)
+mean = (train.is_attributed.values == 1).mean()
+ax = sns.barplot(['App Downloaded (1)', 'Not Downloaded (0)'], [mean, 1-mean])
+ax.set(ylabel='Proportion', title='App Downloaded vs Not Downloaded')
+for p, uniq in zip(ax.patches, [mean, 1-mean]):
+    height = p.get_height()
+    ax.text(p.get_x()+p.get_width()/2.,
+            height+0.01,
+            '{}%'.format(round(uniq * 100, 2)),
+            ha="center")
 
-def get_grid_info(tr_id, rotby_90):
-    df = bboxes.loc[(bboxes.train_id == tr_id) & (bboxes.rotby_90 == rotby_90), 'grid_row':'box_area']
-    df.drop(['grid_center_x', 'grid_center_y','box_center_x', 'box_center_y',], axis = 1, inplace=True)
-    df = df.sort_values(['grid_column', 'grid_row', 'box_area'], ascending=False)
-    #print(len(df))
-    global mask_count
-    mask_count += len(df)
-    label_info = np.zeros(shape=(GRID_DIM, GRID_DIM, MAX_BB_CNT, 5),  dtype=np.float32) + 0.000001
-    
-    for ind, row in df.iterrows():
-        i = int(row[0])
-        j = int(row[1])
-        for b in range(MAX_BB_CNT):
-            if(label_info[i, j, b][4] != 1.0):
-                label_info[i, j, b] = np.array(row[2:7])
-                break
-    return label_info
 
+# ### Explore ip counts.  Check if multiple ips have any downloads.
+# 
+# At this point I was trying to figure out what 'ip' were actually encoding.  My original understanding that ips were user specific did not hold up to scrutiny.
+# If ip repeated too many times, was it a bot?  This does not appear to be true, as repeated ips do convert.  See below:
 
-# In[12]:
+# In[ ]:
 
 
-def get_labels(counts, rotations):
-    grid_info = np.zeros(shape=(BATCH_SIZE, GRID_DIM, GRID_DIM, MAX_BB_CNT, 5), dtype=np.float32)
-    for i, c in enumerate(counts):
-        tr_id = train_ids_df.loc[c, 'id_']
-        grid_info[i] = get_grid_info(tr_id, rotations[i])
-    grid_info = np.reshape(grid_info, newshape=[BATCH_SIZE, GRID_DIM, GRID_DIM, MAX_BB_CNT, 5])
-    return grid_info
+#temporary table to see ips with their associated count frequencies
+temp = train['ip'].value_counts().reset_index(name='counts')
+temp.columns = ['ip', 'counts']
+temp[:10]
 
 
-# In[13]:
+# In[ ]:
 
 
-def get_images(counts, rotations):
-    images = np.zeros(shape=(BATCH_SIZE, IMG_WIDTH, IMG_HEIGHT, IMG_CHANNELS), dtype=np.uint8)
-    for i, c in enumerate(counts):
-        images[i] = np.rot90(train_images[c], rotations[i])
-    return images
+#add temporary counts of ip feature ('counts') to the train table, to see if IPs with high counts have conversions
+train= train.merge(temp, on='ip', how='left')
 
 
-# In[14]:
+# In[ ]:
 
 
-def next_batch():
-    rotations = []
-    rand_counts = []
-    for i in range(BATCH_SIZE):
-        rotations.append(random.randint(0, 3))
-        rand_counts.append(random.randint(0, 669))
-    return get_images(rand_counts, rotations), get_labels(rand_counts, rotations)
+#check top 10 values
+train[train['is_attributed']==1].sort_values('counts', ascending=False)[:10]
 
 
-# In[15]:
+# In[ ]:
 
 
-tf.reset_default_graph()
-X = tf.placeholder(tf.float32, [None, IMG_WIDTH, IMG_HEIGHT, 3])
-Y_ = tf.placeholder(tf.float32, [None, GRID_DIM, GRID_DIM, MAX_BB_CNT, 5])
-lr = tf.placeholder(tf.float32)
+train[train['is_attributed']==1].ip.describe()
 
 
-# In[16]:
+# So high frequency ip counts do get conversions.   Up to 56 downloads for one ip.  Each IP must be for some network with many devices.
 
+# In[ ]:
 
-def process_logits(logits, name=None):
-    net = tf.reshape(logits, [-1, GRID_DIM*1, GRID_DIM*1, MAX_BB_CNT*5*16, 1])
-    net = tf.layers.average_pooling3d(net, [1, 1, 16], [1, 1, 16], padding="valid")
 
-    net = tf.reshape(net, [-1, GRID_DIM*GRID_DIM*MAX_BB_CNT, 5]) #GRID_DIM = 12
-    net = tf.transpose(net, [1, 2, 0])        
+#convert 'is_attributed' back to numeric for proportion calculations
+train['is_attributed']=train['is_attributed'].astype(int)
 
-    logits_tensor = tf.map_fn(lambda x:
-                            tf.stack([
-                                tf.tanh(x[0]),
-                                tf.tanh(x[1]),
-                                tf.sqrt(tf.sigmoid(x[2])),
-                                tf.sqrt(tf.sigmoid(x[3])),
-                                tf.sigmoid(x[4])
-                            ]), net)
 
-    logits_tensor = tf.transpose(logits_tensor, [2, 0, 1])
-    logits_tensor = tf.reshape(logits_tensor, [-1, GRID_DIM, GRID_DIM, MAX_BB_CNT, 5])
+# ### Conversion rates over Counts of 300 most popular IPs
 
-    return logits_tensor
+# In[ ]:
 
 
-# In[17]:
+proportion = train[['ip', 'is_attributed']].groupby('ip', as_index=False).mean().sort_values('is_attributed', ascending=False)
+counts = train[['ip', 'is_attributed']].groupby('ip', as_index=False).count().sort_values('is_attributed', ascending=False)
+merge = counts.merge(proportion, on='ip', how='left')
+merge.columns = ['ip', 'click_count', 'prop_downloaded']
 
+ax = merge[:300].plot(secondary_y='prop_downloaded')
+plt.title('Conversion Rates over Counts of 300 Most Popular IPs')
+ax.set(ylabel='Count of clicks')
+plt.ylabel('Proportion Downloaded')
+plt.show()
 
-def normalize_yolo_loss(processed_logits, lambda_coords, lambda_noobj):
-    yolo_loss = tf.reduce_sum(tf.squared_difference(labels, processed_logits), axis=0)
-    yolo_loss = tf.reduce_sum(yolo_loss, axis=0)
-    yolo_loss = tf.reduce_sum(yolo_loss, axis=0)
-    yolo_loss = tf.reduce_sum(yolo_loss, axis=0)
+print('Counversion Rates over Counts of Most Popular IPs')
+print(merge[:20])
 
-    yolo_loss = tf.stack([tf.multiply(lambda_coords, yolo_loss[0]), 
-                          tf.multiply(lambda_coords, yolo_loss[1]),
-                          yolo_loss[2],
-                          yolo_loss[3],
-                          tf.multiply(lambda_noobj,yolo_loss[4])])
-    yolo_loss = tf.reduce_sum(yolo_loss)
 
-    return  yolo_loss
+# Conversions are noisy and do not appear to correlate with how popular an IP is.
 
+# ### Conversions by App
+# 
+# Check 100 most popular apps by click count:
 
-# In[18]:
+# In[ ]:
 
 
-def l_relu(features):
-    return tf.nn.leaky_relu(features, 0.1)
+proportion = train[['app', 'is_attributed']].groupby('app', as_index=False).mean().sort_values('is_attributed', ascending=False)
+counts = train[['app', 'is_attributed']].groupby('app', as_index=False).count().sort_values('is_attributed', ascending=False)
+merge = counts.merge(proportion, on='app', how='left')
+merge.columns = ['app', 'click_count', 'prop_downloaded']
 
+ax = merge[:100].plot(secondary_y='prop_downloaded')
+plt.title('Conversion Rates over Counts of 100 Most Popular Apps')
+ax.set(ylabel='Count of clicks')
+plt.ylabel('Proportion Downloaded')
+plt.show()
 
-# In[19]:
+print('Counversion Rates over Counts of Most Popular Apps')
+print(merge[:20])
 
 
-def squeeze_module(x, dim, idx):
-    name = 'conv_' + idx + '_sq'
-    return tf.layers.conv2d(x, filters=dim, kernel_size=1, strides=1, padding="same", 
-                           activation=l_relu, name=name)
+# There is a again a huge difference in clicks per app, with minimum of one click on an app and max at almost 13 million.  The proportion flucuates more as the counts go down, since each additional click has larger impact on the proportion value.  In general, for apps with counts in the thousands the ratio stays within 0.0001 - 0.0015 boundary.  For less popular apps it fluxuates more widely.  
 
-def expand_module(x, dim, idx):
-    name = 'conv_' + idx + '_ex_' + '0'
-    net1 = tf.layers.conv2d(x, filters=dim, kernel_size=1, strides=1, padding="same", 
-                           activation=l_relu, name=name)
-    name = 'conv_' + idx + '_ex_' + '1'
-    net2 = tf.layers.conv2d(x, filters=dim, kernel_size=3, strides=1, padding="same", 
-                           activation=l_relu, name=name) 
-    return tf.concat([net1, net2], 3)
+# ### Conversions by OS
+# Look at top 100 operating systems by click count
 
+# In[ ]:
 
-# In[20]:
 
+proportion = train[['os', 'is_attributed']].groupby('os', as_index=False).mean().sort_values('is_attributed', ascending=False)
+counts = train[['os', 'is_attributed']].groupby('os', as_index=False).count().sort_values('is_attributed', ascending=False)
+merge = counts.merge(proportion, on='os', how='left')
+merge.columns = ['os', 'click_count', 'prop_downloaded']
 
-def fire_module(input_tensor, squeeze_dim, expand_dim, idx):
-    net = squeeze_module(input_tensor, squeeze_dim, idx)
-    net = expand_module(net, expand_dim, idx)
-    return net
+ax = merge[:100].plot(secondary_y='prop_downloaded')
+plt.title('Conversion Rates over Counts of 100 Most Popular Operating Systems')
+ax.set(ylabel='Count of clicks')
+plt.ylabel('Proportion Downloaded')
+plt.show()
 
+print('Counversion Rates over Counts of Most Popular Operating Systems')
+print(merge[:20])
 
-# In[21]:
 
+# Same story. For values in the thousands the boundary on the ratio is very low, roughly between 0.0006 and 0.003, but as counts on OS become lower, the ratio starts fluxuating more wildely.
 
-net = tf.layers.conv2d(X, filters=32, kernel_size=1, strides=1, padding="same", 
-                       activation=l_relu, name='conv0') #384 
+# ### Conversions by Device
+# 
+# Devices are extremely disproportionately distributed, with number one device used almost 94% of time.  For that device proportion download was 0.001326. (0.13%)
 
-net = tf.layers.max_pooling2d(net, pool_size=2, strides=2, padding="same") #192
+# In[ ]:
 
-net = fire_module(net, 32, 64, '0')
-net = fire_module(net, 32, 64, '1')
-net = fire_module(net, 32, 64, '2')
 
-net = tf.layers.max_pooling2d(net, pool_size=2, strides=2, padding="same") #96
+proportion = train[['device', 'is_attributed']].groupby('device', as_index=False).mean().sort_values('is_attributed', ascending=False)
+counts = train[['device', 'is_attributed']].groupby('device', as_index=False).count().sort_values('is_attributed', ascending=False)
+merge = counts.merge(proportion, on='device', how='left')
+merge.columns = ['device', 'click_count', 'prop_downloaded']
 
+print('Count of clicks and proportion of downloads by device:')
+print(merge)
 
-net = fire_module(net, 64, 96, '3')
-net = fire_module(net, 64, 96, '4')
-net = fire_module(net, 64, 96, '5')
 
+# ### Conversions by Channel
+# 
 
-net = tf.layers.max_pooling2d(net, pool_size=2, strides=2, padding="same") #48
+# In[ ]:
 
-net = fire_module(net, 128, 160, '6')
-net = fire_module(net, 128, 160, '7') 
-net = fire_module(net, 128, 128, '8')
 
+proportion = train[['channel', 'is_attributed']].groupby('channel', as_index=False).mean().sort_values('is_attributed', ascending=False)
+counts = train[['channel', 'is_attributed']].groupby('channel', as_index=False).count().sort_values('is_attributed', ascending=False)
+merge = counts.merge(proportion, on='channel', how='left')
+merge.columns = ['channel', 'click_count', 'prop_downloaded']
 
-net = tf.layers.max_pooling2d(net, pool_size=2, strides=2, padding="same") #24
+ax = merge[:100].plot(secondary_y='prop_downloaded')
+plt.title('Conversion Rates over Counts of 100 Most Popular Apps')
+ax.set(ylabel='Count of clicks')
+plt.ylabel('Proportion Downloaded')
+plt.show()
 
-net = fire_module(net, 256, 512, '9')
-net = fire_module(net, 256, 512, '10')
-net = fire_module(net, 256, 512, '11')
+print('Counversion Rates over Counts of Most Popular Channels')
+print(merge[:20])
 
-net = tf.layers.max_pooling2d(net, pool_size=2, strides=2, padding="same") #12
 
-net = fire_module(net, 512, 1024, '12')
-net = fire_module(net, 512, 1024, '13')
-net = fire_module(net, 512, 1024, '14')
+# There appear to be a few peaks for channels at reasonable click quantity, but overall the pattern holds same as for categories above.  
 
-logits = tf.layers.conv2d(net, filters=MAX_BB_CNT*5*16, kernel_size=1, strides=1, padding="same",
-                       activation=None, name='conv40') #12
+# # Checking for time patterns
+# 
+# Round the click time down to an hour of the day to see if there are any hourly patterns.
+# 
+# For this part cannot use the first n rows from train data, as it's organized by time.  To get a genral idea for the pattern, will use train data from the randomly sampled 100000 train set provided by organizers.
 
-processed_logits = process_logits(logits)
+# In[ ]:
 
-labels = Y_
 
-lambda_coords = tf.constant(5.0)
-lambda_noobj = tf.constant(0.5)
+train_smp = pd.read_csv('../input/train_sample.csv')
 
-yolo_loss = normalize_yolo_loss(processed_logits, lambda_coords, lambda_noobj)
 
-train_op = tf.train.AdamOptimizer(lr).minimize(yolo_loss)
+# In[ ]:
 
 
-# In[98]:
+train_smp.head(7)
 
 
-start_training = False #using pretrained model as Kaggle server doesn't allow training time more than 6 hrs.
-if not start_training:
-    test_image_id = 1
-    saver = tf.train.Saver()
-    with tf.Session() as sess:
-        saver.restore(sess, "../input/pre-trained-model/model.ckpt")
-        result = sess.run([processed_logits], {X: np.reshape(test_images[test_image_id], [1, 384, 384, 3])})
+# In[ ]:
 
 
-# In[99]:
+#convert click_time and attributed_time to time series
+train_smp['click_time'] = pd.to_datetime(train_smp['click_time'])
+train_smp['attributed_time'] = pd.to_datetime(train_smp['attributed_time'])
 
 
-if(start_training):
-    # initialize
-    init = tf.global_variables_initializer()
-    sess = tf.Session()
-    sess.run(init)
+# In[ ]:
 
-    batch_count = 0
-    display_count = 1
-    global mask_count
 
-    for i in range(33000):
-        batch_X, batch_Y = next_batch()
-        batch_count += 1
-        train_loss, _ = sess.run([yolo_loss, train_op], {X: batch_X, Y_: batch_Y, lr: 0.0001})
+#round the time to nearest hour
+train_smp['click_rnd']=train_smp['click_time'].dt.round('H')  
 
-        if(i % 100 == 0):
-            print(str(display_count) + " training loss(" + str(mask_count) + "): " + str(train_loss))
-            display_count +=1
-        mask_count = 0
-    print("Done!")
+#check for hourly patterns
+train_smp[['click_rnd','is_attributed']].groupby(['click_rnd'], as_index=True).count().plot()
+plt.title('HOURLY CLICK FREQUENCY');
+plt.ylabel('Number of Clicks');
 
+train_smp[['click_rnd','is_attributed']].groupby(['click_rnd'], as_index=True).mean().plot()
+plt.title('HOURLY CONVERSION RATIO');
+plt.ylabel('Converted Ratio');
 
-# In[100]:
 
+# There is no clear hourly time pattern in ratios, however there is a definete pattern in frequency of clicks based on time of day.
+# 
+# Lets extract the hour of day from each day as a separate feature, and see combined trend (merge the 4 days together by hour).
 
-if(start_training):
-    test_image_id = 13
-    result = sess.run([processed_logits], {X: np.reshape(test_images[test_image_id], [1, 384, 384, 3])})
+# In[ ]:
 
 
-# In[101]:
+#extract hour as a feature
+train_smp['click_hour']=train_smp['click_time'].dt.hour
 
 
-boxes = result[0]
-print(boxes.shape)
-boxes = np.reshape(boxes, newshape=[GRID_DIM, GRID_DIM, MAX_BB_CNT, 5])
-bbs = []
+# In[ ]:
 
-for i in range(GRID_DIM):
-    for j in range(GRID_DIM):
-        for b in range(MAX_BB_CNT):
-            if(boxes[i][j][b][4]> 0.1):
-                grid_center_x = ((j+0)*GRID_PIX + GRID_PIX/2)
-                grid_center_y = ((i+0)*GRID_PIX + GRID_PIX/2)
-                
-                new_box_center_x = boxes[i][j][b][0] * IMG_WIDTH + grid_center_x
-                new_box_center_y = boxes[i][j][b][1] * IMG_HEIGHT + grid_center_y
 
-                new_w = np.square(boxes[i][j][b][2]) * IMG_WIDTH
-                new_h = np.square(boxes[i][j][b][3]) * IMG_HEIGHT
-                
-                x1 = new_box_center_x - new_w/2
-                y1 = new_box_center_y - new_h/2
+train_smp.head(7)
 
-                x2 = new_box_center_x + new_w/2
-                y2 = new_box_center_y + new_h/2
 
-                bbs.append((math.floor(x1), math.floor(y1), math.ceil(x2), math.ceil(y2)))
+# Let's check number of clicks by hour:
 
+# In[ ]:
 
-# In[102]:
 
+train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=True).count().plot(kind='bar', color='#a675a1')
+plt.title('HOURLY CLICK FREQUENCY Barplot');
+plt.ylabel('Number of Clicks');
 
-img = test_images[test_image_id]
-f, axs = plt.subplots(1,2)
-axs[0].imshow(img)
+train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=True).count().plot(color='#a675a1')
+plt.title('HOURLY CLICK FREQUENCY Lineplot');
+plt.ylabel('Number of Clicks');
 
-imshow(img)
-for i, b in enumerate(bbs):
-    cv2.rectangle(img,(b[0], b[1]),(b[2], b[3]),(0,255,0),2)
 
-axs[1].imshow(img)
+# And number of conversions by hours:
 
+# In[ ]:
+
+
+train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=True).mean().plot(kind='bar', color='#75a1a6')
+plt.title('HOURLY CONVERSION RATIO Barplot');
+plt.ylabel('Converted Ratio');
+
+train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=True).mean().plot( color='#75a1a6')
+plt.title('HOURLY CONVERSION RATIO Lineplot');
+plt.ylabel('Converted Ratio');
+
+
+# let's overlay the two graphs to see if patterns correlate in any way
+
+# In[ ]:
+
+
+#adapted from https://stackoverflow.com/questions/9103166/multiple-axis-in-matplotlib-with-different-scales
+#smonek's answer
+
+
+group = train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=False).mean()
+x = group['click_hour']
+ymean = group['is_attributed']
+group = train_smp[['click_hour','is_attributed']].groupby(['click_hour'], as_index=False).count()
+ycount = group['is_attributed']
+
+
+fig = plt.figure()
+host = fig.add_subplot(111)
+
+par1 = host.twinx()
+
+host.set_xlabel("Time")
+host.set_ylabel("Proportion Converted")
+par1.set_ylabel("Click Count")
+
+#color1 = plt.cm.viridis(0)
+#color2 = plt.cm.viridis(0.5)
+color1 = '#75a1a6'
+color2 = '#a675a1'
+
+p1, = host.plot(x, ymean, color=color1,label="Proportion Converted")
+p2, = par1.plot(x, ycount, color=color2, label="Click Count")
+
+lns = [p1, p2]
+host.legend(handles=lns, loc='best')
+
+host.yaxis.label.set_color(p1.get_color())
+par1.yaxis.label.set_color(p2.get_color())
+
+plt.savefig("pyplot_multiple_y-axis.png", bbox_inches='tight')
+
+
+# The proportions may be more reliable if estimated on full data.  With the random sample it's  hard too tell because the variability is too high, especially for the hours with low click counts.   i.e. the fewer clicks/conversions, the wider margin of the estimated conversion ratio.  (see below)
+
+# In[ ]:
+
+
+sns.barplot('click_hour', 'is_attributed', data=train_smp)
+plt.title('HOURLY CONVERSION RATIO');
+plt.ylabel('Converted Ratio');
+
+
+# ### Look into attributed_time
+# It could be useful to learn more about conversions that did take place.
+# Let's see how much time passed from clicking on the ad to downloading it.
+
+# In[ ]:
+
+
+train_smp['timePass']= train_smp['attributed_time']-train_smp['click_time']
+#check:
+train_smp[train_smp['is_attributed']==1][:15]
+
+
+# In[ ]:
+
+
+train_smp['timePass'].describe()
+
+
+# It takes as long as (almost) 20 hours to go from click to purchase and as little as 4 seconds.  
+# 
+# The 4 seconds seems to low to make a decision.  This person would have either seen the ad before, or already been aware of the product some other way.
+# 
+# Does that mean the ad was clicked on multiple times, but only one click was counted as conversion?   Or did the person click on the ad specifically with the intent to download?  (eg, if channel is something like google search, the ad could be clicked during search results view and app downloaded immediately because that's what the person intended to do right away)
+# 
+# Raises questions to explore:
+#    - How accurately are conversions tracked? How are clicks and downloads linked?  What happens if download after multiple clicks?  Is there a way to identify likely same users (same IP, Device, etc...)
+
+# ### Check actual train data (the first 10,000,000)
+# double check the same feature on the first 10 million rows of train data:
+
+# In[ ]:
+
+
+#check first 10,000,000 of actual train data
+train['timePass']= train['attributed_time']-train['click_time']
+train['timePass'].describe()
+
+
+# Here minimum time from click to download is virtually instanteneous.  How is this possible?  It is clearly not a result of a human decision made from clicking on an ad seen for the first time.

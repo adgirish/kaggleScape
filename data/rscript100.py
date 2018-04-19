@@ -1,173 +1,164 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+# -*- coding: utf-8 -*-
+"""
+@author: Faron
+"""
+import numpy as np
+import pandas as pd
+import matplotlib.pylab as plt
+from datetime import datetime
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import lightgbm as lgb
-import gc
-import datetime as dt
-from sklearn.model_selection import KFold
+'''
+This kernel implements the O(n²) F1-Score expectation maximization algorithm presented in
+"Ye, N., Chai, K., Lee, W., and Chieu, H.  Optimizing F-measures: A Tale of Two Approaches. In ICML, 2012."
 
-
-## Version 8 - LB 0.0643367
-# Let's use model averaging on 4 folds of data and voilà!
-
-## Version 5 - LB 0.0643922
-# I didn't replace all leaked information with NaNs in previous version, so the score was probably
-# better due to overfitting. Now everything should be fine. 
-# This kernel is optimized for 2016 predictions, so you have to change a few lines
-# of code to have it optimized for final submission.
-
-## Version 4 - LB 0.0643788
-# I've updated the kernel with 2017 data. To avoid data leakage I replaced
-# tax information from 2017 with NaN values, like it's been suggested by the organizers.
-
-## Version 3 - LB 0.0644042
-# Train month averages for test predictions seem work better than their linear fit,
-# so I changed it (overfitting test data as hell... but who doesn't here? ;))
-
-## Version 2 - LB 0.0644120
-# LGBM performs much better, so I left him alone
-
-## Version 1 - LB 0.0644711
-# Both models have the same weight, which is based on cross-validation results, but
-# XGB model seems to be worse on public LB, 'cause alone gets score 0.0646474,
-# which is much worse than score of the combination. I reached the limit of submissions,
-# so I will check how LGBM alone performs tomorrow. Check it out for your own ;)
+It solves argmax_(0 <= k <= n,[[None]]) E[F1(P,k,[[None]])]
+with [[None]] being the indicator for predicting label "None"
+given posteriors P = [p_1, p_2, ... , p_n], where p_1 > p_2 > ... > p_n
+under label independence assumption by means of dynamic programming in O(n²).
+'''
 
 
-print('Loading data...')
-properties2016 = pd.read_csv('../input/properties_2016.csv', low_memory = False)
-properties2017 = pd.read_csv('../input/properties_2017.csv', low_memory = False)
-train2016 = pd.read_csv('../input/train_2016_v2.csv')
-train2017 = pd.read_csv('../input/train_2017.csv')
+class F1Optimizer():
+    def __init__(self):
+        pass
 
-sample_submission = pd.read_csv('../input/sample_submission.csv', low_memory = False)
-train2016 = pd.merge(train2016, properties2016, how = 'left', on = 'parcelid')
-train2017 = pd.merge(train2017, properties2017, how = 'left', on = 'parcelid')
-train2017[['structuretaxvaluedollarcnt', 'landtaxvaluedollarcnt', 'taxvaluedollarcnt', 'taxamount']] = np.nan
-train = pd.concat([train2016, train2017], axis = 0)
-test = pd.merge(sample_submission[['ParcelId']], properties2016.rename(columns = {'parcelid': 'ParcelId'}), 
-                how = 'left', on = 'ParcelId')
-del properties2016, properties2017, train2016, train2017
-gc.collect();
+    @staticmethod
+    def get_expectations(P, pNone=None):
+        expectations = []
+        P = np.sort(P)[::-1]
+
+        n = np.array(P).shape[0]
+        DP_C = np.zeros((n + 2, n + 1))
+        if pNone is None:
+            pNone = (1.0 - P).prod()
+
+        DP_C[0][0] = 1.0
+        for j in range(1, n):
+            DP_C[0][j] = (1.0 - P[j - 1]) * DP_C[0, j - 1]
+
+        for i in range(1, n + 1):
+            DP_C[i, i] = DP_C[i - 1, i - 1] * P[i - 1]
+            for j in range(i + 1, n + 1):
+                DP_C[i, j] = P[j - 1] * DP_C[i - 1, j - 1] + (1.0 - P[j - 1]) * DP_C[i, j - 1]
+
+        DP_S = np.zeros((2 * n + 1,))
+        DP_SNone = np.zeros((2 * n + 1,))
+        for i in range(1, 2 * n + 1):
+            DP_S[i] = 1. / (1. * i)
+            DP_SNone[i] = 1. / (1. * i + 1)
+        for k in range(n + 1)[::-1]:
+            f1 = 0
+            f1None = 0
+            for k1 in range(n + 1):
+                f1 += 2 * k1 * DP_C[k1][k] * DP_S[k + k1]
+                f1None += 2 * k1 * DP_C[k1][k] * DP_SNone[k + k1]
+            for i in range(1, 2 * k - 1):
+                DP_S[i] = (1 - P[k - 1]) * DP_S[i] + P[k - 1] * DP_S[i + 1]
+                DP_SNone[i] = (1 - P[k - 1]) * DP_SNone[i] + P[k - 1] * DP_SNone[i + 1]
+            expectations.append([f1None + 2 * pNone / (2 + k), f1])
+
+        return np.array(expectations[::-1]).T
+
+    @staticmethod
+    def maximize_expectation(P, pNone=None):
+        expectations = F1Optimizer.get_expectations(P, pNone)
+
+        ix_max = np.unravel_index(expectations.argmax(), expectations.shape)
+        max_f1 = expectations[ix_max]
+
+        predNone = True if ix_max[0] == 0 else False
+        best_k = ix_max[1]
+
+        return best_k, predNone, max_f1
+
+    @staticmethod
+    def _F1(tp, fp, fn):
+        return 2 * tp / (2 * tp + fp + fn)
+
+    @staticmethod
+    def _Fbeta(tp, fp, fn, beta=1.0):
+        beta_squared = beta ** 2
+        return (1.0 + beta_squared) * tp / ((1.0 + beta_squared) * tp + fp + beta_squared * fn)
 
 
-print('Memory usage reduction...')
-train[['latitude', 'longitude']] /= 1e6
-test[['latitude', 'longitude']] /= 1e6
+def print_best_prediction(P, pNone=None):
+    print("Maximize F1-Expectation")
+    print("=" * 23)
+    P = np.sort(P)[::-1]
+    n = P.shape[0]
+    L = ['L{}'.format(i + 1) for i in range(n)]
 
-train['censustractandblock'] /= 1e12
-test['censustractandblock'] /= 1e12
+    if pNone is None:
+        print("Estimate p(None|x) as (1-p_1)*(1-p_2)*...*(1-p_n)")
+        pNone = (1.0 - P).prod()
 
-for column in test.columns:
-    if test[column].dtype == int:
-        test[column] = test[column].astype(np.int32)
-    if test[column].dtype == float:
-        test[column] = test[column].astype(np.float32)
-      
-        
-print('Feature engineering...')
-train['month'] = (pd.to_datetime(train['transactiondate']).dt.year - 2016)*12 + pd.to_datetime(train['transactiondate']).dt.month
-train = train.drop('transactiondate', axis = 1)
-from sklearn.preprocessing import LabelEncoder
-non_number_columns = train.dtypes[train.dtypes == object].index.values
+    PL = ['p({}|x)={}'.format(l, p) for l, p in zip(L, P)]
+    print("Posteriors: {} (n={})".format(PL, n))
+    print("p(None|x)={}".format(pNone))
 
-for column in non_number_columns:
-    train_test = pd.concat([train[column], test[column]], axis = 0)
-    encoder = LabelEncoder().fit(train_test.astype(str))
-    train[column] = encoder.transform(train[column].astype(str)).astype(np.int32)
-    test[column] = encoder.transform(test[column].astype(str)).astype(np.int32)
-    
-feature_names = [feature for feature in train.columns[2:] if feature != 'month']
+    opt = F1Optimizer.maximize_expectation(P, pNone)
+    best_prediction = ['None'] if opt[1] else []
+    best_prediction += (L[:opt[0]])
+    f1_max = opt[2]
 
-month_avgs = train.groupby('month').agg('mean')['logerror'].values - train['logerror'].mean()
-                             
-print('Preparing arrays and throwing out outliers...')
-X_train = train[feature_names].values
-y_train = train['logerror'].values
-X_test = test[feature_names].values
+    print("Prediction {} yields best E[F1] of {}\n".format(best_prediction, f1_max))
 
-del test
-gc.collect();
 
-month_values = train['month'].values
-month_avg_values = np.array([month_avgs[month - 1] for month in month_values]).reshape(-1, 1)
-X_train = np.hstack([X_train, month_avg_values])
+def save_plot(P, filename='expected_f1.png'):
+    E_F1 = pd.DataFrame(F1Optimizer.get_expectations(P).T, columns=["/w None", "/wo None"])
+    best_k, _, max_f1 = F1Optimizer.maximize_expectation(P)
 
-X_train = X_train[np.abs(y_train) < 0.4, :]
-y_train = y_train[np.abs(y_train) < 0.4]
+    plt.style.use('ggplot')
+    plt.figure()
+    E_F1.plot()
+    plt.title('Expected F1-Score for \n {}'.format("P = [{}]".format(",".join(map(str, P)))), fontsize=12)
+    plt.xlabel('k')
+    plt.xticks(np.arange(0, len(P) + 1, 1.0))
+    plt.ylabel('E[F1(P,k)]')
+    plt.plot([best_k], [max_f1], 'o', color='#000000', markersize=4)
+    plt.annotate('max E[F1(P,k)] = E[F1(P,{})] = {:.5f}'.format(best_k, max_f1), xy=(best_k, max_f1),
+                 xytext=(best_k, max_f1 * 0.8), arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=7),
+                 horizontalalignment='center', verticalalignment='top')
+    plt.gcf().savefig(filename)
 
-kfolds = 4
 
-models = []
-kfold = KFold(n_splits = kfolds, shuffle = True)
-for i, (train_index, test_index) in enumerate(kfold.split(X_train, y_train)):
-    
-    print('Training LGBM model with fold {}...'.format(i + 1))
-    X_train_, y_train_ = X_train[train_index], y_train[train_index]
-    X_valid_, y_valid_ = X_train[test_index], y_train[test_index]
-    
-    ltrain = lgb.Dataset(X_train_, label = y_train_, free_raw_data = False)
-    lvalid = lgb.Dataset(X_valid_, label = y_valid_, free_raw_data = False)
-    
-    params = {}
-    params['metric'] = 'mae'
-    params['max_depth'] = 100
-    params['num_leaves'] = 32
-    params['feature_fraction'] = .85
-    params['bagging_fraction'] = .95
-    params['bagging_freq'] = 8
-    params['learning_rate'] = 0.01
-    params['verbosity'] = 0
-    
-    models.append(lgb.train(params, ltrain, valid_sets = [ltrain, lvalid], 
-            verbose_eval=200, num_boost_round=1000))
-                  
-                  
-print('Making predictions and praying for good results...')
-X_test = np.hstack([X_test, np.zeros((X_test.shape[0], 1))])
-folds = 10
-n = int(X_test.shape[0] / folds)
 
-for j in range(folds):
-    results = pd.DataFrame()
-    
-    if j < folds - 1:
-            X_test_ = X_test[j*n: (j+1)*n, :]
-            results['ParcelId'] = sample_submission['ParcelId'].iloc[j*n: (j+1)*n]
-    else:
-            X_test_ = X_test[j*n: , :]
-            results['ParcelId'] = sample_submission['ParcelId'].iloc[j*n: ]
-            
-    for month in [10, 11, 12]:
-        X_test_[:, -1] = month_avgs[month - 1]
-        assert X_test_.shape[1] == X_test.shape[1]
-        y_pred = np.zeros(X_test_.shape[0])
-        for model in models:
-            y_pred += model.predict(X_test_) / kfolds
-        results['2016'+ str(month)] = y_pred
-        
-        
-    X_test_[:, -1] = month_avgs[20]
-    assert X_test_.shape[1] == X_test.shape[1]
-    y_pred = np.zeros(X_test_.shape[0])
-    for model in models:
-        y_pred += model.predict(X_test_) / kfolds
-    results['201710'] = y_pred
-    results['201711'] = y_pred
-    results['201712'] = y_pred
-    
-    if j == 0:
-        results_ = results.copy()
-    else:
-        results_ = pd.concat([results_, results], axis = 0)
-    print('{}% completed'.format(round(100*(j+1)/folds)))
-    
-    
-print('Saving predictions...')
-results = results_[sample_submission.columns]
-assert results.shape == sample_submission.shape
-results.to_csv('submission.csv', index = False, float_format = '%.5f')
-print('Done!')
+def timeit(P):
+    s = datetime.now()
+    F1Optimizer.maximize_expectation(P)
+    e = datetime.now()
+    return (e-s).microseconds / 1E6
+
+
+def benchmark(n=100, filename='runtimes.png'):
+    results = pd.DataFrame(index=np.arange(1,n+1))
+    results['runtimes'] = 0
+
+    for i in range(1,n+1):
+        runtimes = []
+        for j in range(5):
+            runtimes.append(timeit(np.sort(np.random.rand(i))[::-1]))
+        results.iloc[i-1] = np.mean(runtimes)
+
+    x = results.index
+    y = results.runtimes
+    results['quadratic fit'] = np.poly1d(np.polyfit(x, y, deg=2))(x)
+
+    plt.style.use('ggplot')
+    plt.figure()
+    results.plot()
+    plt.title('Expectation Maximization Runtimes', fontsize=12)
+    plt.xlabel('n = |P|')
+    plt.ylabel('time in seconds')
+    plt.gcf().savefig(filename)
+
+
+if __name__ == '__main__':
+    print_best_prediction([0.3, 0.2])
+    print_best_prediction([0.3, 0.2], 0.57)
+    print_best_prediction([0.9, 0.6])
+    print_best_prediction([0.5, 0.4, 0.3, 0.35, 0.33, 0.31, 0.29, 0.27, 0.25, 0.20, 0.15, 0.10])
+    print_best_prediction([0.5, 0.4, 0.3, 0.35, 0.33, 0.31, 0.29, 0.27, 0.25, 0.20, 0.15, 0.10], 0.2)
+
+    save_plot([0.45, 0.35, 0.31, 0.29, 0.27, 0.25, 0.22, 0.20, 0.17, 0.15, 0.10, 0.05, 0.02])
+    benchmark()

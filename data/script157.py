@@ -1,260 +1,80 @@
 
 # coding: utf-8
 
-# This script shows the full training and prediction pipeline for a pixel-based classifier: we create a mask, train logistic regression on one-pixel patches, make prediction for all pixels, create and smooth polygons from pixels.
+# In[ ]:
+
+
+get_ipython().run_cell_magic('time', '', 'import numpy as np\nimport pandas as pd\nfrom sklearn import *\nimport lightgbm as lgb\nimport random\n\ntrain = pd.read_json("../input/statoil-iceberg-classifier-challenge/train.json").fillna(-1.0).replace(\'na\', -1.0)\ntest = pd.read_json("../input/statoil-iceberg-classifier-challenge/test.json").fillna(-1.0).replace(\'na\', -1.0)\ntrain[\'angle_l\'] = train[\'inc_angle\'].apply(lambda x: len(str(x))) <= 7\ntest[\'angle_l\'] = test[\'inc_angle\'].apply(lambda x: len(str(x))) <= 7\ntrain[\'null_angle\'] = (train[\'inc_angle\']==-1).values\ntest[\'null_angle\'] = (test[\'inc_angle\']==-1).values\nx1 = train[train[\'inc_angle\']!= -1.0]\nx2 = train[train[\'inc_angle\']== -1.0]\ndel train;\nprint(x1.values.shape, x2.values.shape)')
+
 
 # In[ ]:
 
 
-from collections import defaultdict
-import csv
-import sys
+get_ipython().run_cell_magic('time', '', 'pca_b1 = decomposition.PCA(n_components=50, whiten=False, random_state=12)\npca_b2 = decomposition.PCA(n_components=50, whiten=False, random_state=13)\netc = ensemble.ExtraTreesRegressor(n_estimators=200, max_depth=7, n_jobs=-1, random_state=14)\n\nband1 = [np.array(band).astype(np.float32).flatten() for band in x1["band_1"]]\nband2 = [np.array(band).astype(np.float32).flatten() for band in x1["band_2"]]\nband1 = pd.DataFrame(pca_b1.fit_transform(band1))\nband1.columns = [str(c)+\'_1\' for c in band1.columns]\nband2 = pd.DataFrame(pca_b2.fit_transform(band2))\nband2.columns = [str(c)+\'_2\' for c in band2.columns]\nfeatures = pd.concat((band1, band2), axis=1, ignore_index=True)\netc.fit(features, x1.inc_angle)\n\nband1 = [np.array(band).astype(np.float32).flatten() for band in x2["band_1"]]\nband2 = [np.array(band).astype(np.float32).flatten() for band in x2["band_2"]]\nband1 = pd.DataFrame(pca_b1.transform(band1))\nband1.columns = [str(c)+\'_1\' for c in band1.columns]\nband2 = pd.DataFrame(pca_b2.fit_transform(band2))\nband2.columns = [str(c)+\'_2\' for c in band2.columns]\nfeatures = pd.concat((band1, band2), axis=1, ignore_index=True)\nx2[\'inc_angle\'] = etc.predict(features)\n\ntrain = pd.concat((x1, x2), axis=0, ignore_index=True).reset_index(drop=True)\ndel x1; del x2;\nprint(train.values.shape)\ntrain.head()')
 
-import cv2
-from shapely.geometry import MultiPolygon, Polygon
-import shapely.wkt
-import shapely.affinity
-import numpy as np
-import tifffile as tiff
-
-csv.field_size_limit(sys.maxsize);
-
-
-# We'll work on buildings (class 1) from image 6120_2_2. Fist load grid sizes and polygons.
 
 # In[ ]:
 
 
-IM_ID = '6120_2_2'
-POLY_TYPE = '1'  # buildings
+get_ipython().run_cell_magic('time', '', 'pca_b1 = decomposition.PCA(n_components=50, whiten=True, random_state=15)\npca_b2 = decomposition.PCA(n_components=50, whiten=True, random_state=16)\npca_b3 = decomposition.PCA(n_components=50, whiten=True, random_state=17)\npca_b4 = decomposition.PCA(n_components=50, whiten=True, random_state=18)\n\nband1 = [np.array(band).astype(np.float32).flatten() for band in train["band_1"]]\nband2 = [np.array(band).astype(np.float32).flatten() for band in train["band_2"]]\npd_band1 = pd.DataFrame(band1)\npd_band2 = pd.DataFrame(band2)\npd_band3 = pd.DataFrame(np.dot(np.diag(train[\'inc_angle\'].values), ((pd_band1 + pd_band2) / 2)))\npd_band4 = pd.DataFrame(np.dot(np.diag(train[\'inc_angle\'].values), ((pd_band1 - pd_band2) / 2)))\nband1 = pd.DataFrame(pca_b1.fit_transform(pd_band1))\nband1.columns = [str(c)+\'_1\' for c in band1.columns]\nband2 = pd.DataFrame(pca_b2.fit_transform(pd_band2))\nband2.columns = [str(c)+\'_2\' for c in band2.columns]\nband3 = pd.DataFrame(pca_b3.fit_transform(pd_band3.values))\nband3.columns = [str(c)+\'_3\' for c in band3.columns]\nband4 = pd.DataFrame(pca_b4.fit_transform(pd_band4.values))\nband4.columns = [str(c)+\'_4\' for c in band4.columns]\nfeatures = pd.concat((band1, band2, band3, band4), axis=1, ignore_index=True).reset_index(drop=True)\nfeatures[\'inc_angle\'] = train[\'inc_angle\']\nfeatures[\'angle_l\'] = train[\'angle_l\']\nfeatures[\'null_angle\'] = train[\'null_angle\']\nfeatures[\'band1_min\'] = pd_band1.min(axis=1, numeric_only=True)\nfeatures[\'band2_min\'] = pd_band2.min(axis=1, numeric_only=True)\nfeatures[\'band3_min\'] = pd_band3.min(axis=1, numeric_only=True)\nfeatures[\'band4_min\'] = pd_band4.min(axis=1, numeric_only=True)\nfeatures[\'band1_max\'] = pd_band1.max(axis=1, numeric_only=True)\nfeatures[\'band2_max\'] = pd_band2.max(axis=1, numeric_only=True)\nfeatures[\'band3_max\'] = pd_band3.max(axis=1, numeric_only=True)\nfeatures[\'band4_max\'] = pd_band4.max(axis=1, numeric_only=True)\nfeatures[\'band1_med\'] = pd_band1.median(axis=1, numeric_only=True)\nfeatures[\'band2_med\'] = pd_band2.median(axis=1, numeric_only=True)\nfeatures[\'band3_med\'] = pd_band3.median(axis=1, numeric_only=True)\nfeatures[\'band4_med\'] = pd_band4.median(axis=1, numeric_only=True)\nfeatures[\'band1_mea\'] = pd_band1.mean(axis=1, numeric_only=True)\nfeatures[\'band2_mea\'] = pd_band2.mean(axis=1, numeric_only=True)\nfeatures[\'band3_mea\'] = pd_band3.mean(axis=1, numeric_only=True)\nfeatures[\'band4_mea\'] = pd_band4.mean(axis=1, numeric_only=True)\ndel pd_band1; del pd_band2; del pd_band3; del pd_band4\nfeatures1 = features.copy()\nfeatures.tail()')
 
-# Load grid size
-x_max = y_min = None
-for _im_id, _x, _y in csv.reader(open('../input/grid_sizes.csv')):
-    if _im_id == IM_ID:
-        x_max, y_min = float(_x), float(_y)
-        break
-
-# Load train poly with shapely
-train_polygons = None
-for _im_id, _poly_type, _poly in csv.reader(open('../input/train_wkt_v4.csv')):
-    if _im_id == IM_ID and _poly_type == POLY_TYPE:
-        train_polygons = shapely.wkt.loads(_poly)
-        break
-
-# Read image with tiff
-im_rgb = tiff.imread('../input/three_band/{}.tif'.format(IM_ID)).transpose([1, 2, 0])
-im_size = im_rgb.shape[:2]
-
-
-# Scale polygons to match image:
 
 # In[ ]:
 
 
-def get_scalers():
-    h, w = im_size  # they are flipped so that mask_for_polygons works correctly
-    w_ = w * (w / (w + 1))
-    h_ = h * (h / (h + 1))
-    return w_ / x_max, h_ / y_min
+get_ipython().run_cell_magic('time', '', 'band1 = [np.array(band).astype(np.float32).flatten() for band in test["band_1"]]\nband2 = [np.array(band).astype(np.float32).flatten() for band in test["band_2"]]\npd_band1 = pd.DataFrame(band1)\npd_band2 = pd.DataFrame(band2)\npd_band3 = pd.DataFrame(np.dot(np.diag(test[\'inc_angle\'].values), ((pd_band1 + pd_band2) / 2)))\npd_band4 = pd.DataFrame(np.dot(np.diag(test[\'inc_angle\'].values), ((pd_band1 - pd_band2) / 2)))\nband1 = pd.DataFrame(pca_b1.transform(pd_band1))\nband1.columns = [str(c)+\'_1\' for c in band1.columns]\nband2 = pd.DataFrame(pca_b2.transform(pd_band2))\nband2.columns = [str(c)+\'_2\' for c in band2.columns]\nband3 = pd.DataFrame(pca_b3.transform(pd_band3.values))\nband3.columns = [str(c)+\'_3\' for c in band3.columns]\nband4 = pd.DataFrame(pca_b4.fit_transform(pd_band4.values))\nband4.columns = [str(c)+\'_4\' for c in band4.columns]\nfeatures = pd.concat((band1, band2, band3, band4), axis=1, ignore_index=True).reset_index(drop=True)\nfeatures[\'inc_angle\'] = test[\'inc_angle\']\nfeatures[\'angle_l\'] = test[\'angle_l\']\nfeatures[\'null_angle\'] = test[\'null_angle\']\nfeatures[\'band1_min\'] = pd_band1.min(axis=1, numeric_only=True)\nfeatures[\'band2_min\'] = pd_band2.min(axis=1, numeric_only=True)\nfeatures[\'band3_min\'] = pd_band3.min(axis=1, numeric_only=True)\nfeatures[\'band4_min\'] = pd_band4.min(axis=1, numeric_only=True)\nfeatures[\'band1_max\'] = pd_band1.max(axis=1, numeric_only=True)\nfeatures[\'band2_max\'] = pd_band2.max(axis=1, numeric_only=True)\nfeatures[\'band3_max\'] = pd_band3.max(axis=1, numeric_only=True)\nfeatures[\'band4_max\'] = pd_band4.max(axis=1, numeric_only=True)\nfeatures[\'band1_med\'] = pd_band1.median(axis=1, numeric_only=True)\nfeatures[\'band2_med\'] = pd_band2.median(axis=1, numeric_only=True)\nfeatures[\'band3_med\'] = pd_band3.median(axis=1, numeric_only=True)\nfeatures[\'band4_med\'] = pd_band4.median(axis=1, numeric_only=True)\nfeatures[\'band1_mea\'] = pd_band1.mean(axis=1, numeric_only=True)\nfeatures[\'band2_mea\'] = pd_band2.mean(axis=1, numeric_only=True)\nfeatures[\'band3_mea\'] = pd_band3.mean(axis=1, numeric_only=True)\nfeatures[\'band4_mea\'] = pd_band4.mean(axis=1, numeric_only=True)\ndel pd_band1; del pd_band2; del pd_band3\nfeatures2 = features.copy()\nfeatures.tail()')
 
-x_scaler, y_scaler = get_scalers()
-
-train_polygons_scaled = shapely.affinity.scale(
-    train_polygons, xfact=x_scaler, yfact=y_scaler, origin=(0, 0, 0))
-
-
-# Create a mask from polygons:
 
 # In[ ]:
 
 
-def mask_for_polygons(polygons):
-    img_mask = np.zeros(im_size, np.uint8)
-    if not polygons:
-        return img_mask
-    int_coords = lambda x: np.array(x).round().astype(np.int32)
-    exteriors = [int_coords(poly.exterior.coords) for poly in polygons]
-    interiors = [int_coords(pi.coords) for poly in polygons
-                 for pi in poly.interiors]
-    cv2.fillPoly(img_mask, exteriors, 1)
-    cv2.fillPoly(img_mask, interiors, 0)
-    return img_mask
+get_ipython().run_cell_magic('time', '', "\nlgb_models = []\n#xgb_models = []\ntest['is_iceberg'] = 0.\nfold = 5\nfor i in range(fold):\n    np.random.seed(i)\n    random.seed(i)\n    x1, x2, y1, y2 = model_selection.train_test_split(features1.astype(float), train['is_iceberg'].values, test_size=0.2, random_state=i)\n\n    #print('XGB...', i)\n    #params = {'eta': 0.02, 'max_depth': 4, 'objective': 'multi:softprob', 'eval_metric': 'mlogloss', 'num_class': 2, 'seed': i, 'silent': True}\n    #watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]\n    #xgb_models.append(xgb.train(params, xgb.DMatrix(x1, y1), 2000,  watchlist, verbose_eval=500, early_stopping_rounds=200))\n\n    print('LightGBM...', i)\n    params = {'learning_rate': 0.02, 'max_depth': 7, 'boosting_type': 'gbdt', 'objective': 'multiclass', 'metric' : 'multi_logloss', 'is_training_metric': True, 'num_class': 2, 'seed': i}\n    lgb_models.append(lgb.train(params, lgb.Dataset(x1, label=y1), 2000, lgb.Dataset(x2, label=y2), verbose_eval=500, early_stopping_rounds=200))\n    \n    #test['is_iceberg'] += xgb_models[i].predict(xgb.DMatrix(features2), ntree_limit=xgb_models[i].best_ntree_limit)[:, 1]\n    test['is_iceberg'] += lgb_models[i].predict(features2, num_iteration=lgb_models[i].best_iteration)[:, 1]")
 
-train_mask = mask_for_polygons(train_polygons_scaled)
-
-
-# A helper for nicer display
 
 # In[ ]:
 
 
-def scale_percentile(matrix):
-    w, h, d = matrix.shape
-    matrix = np.reshape(matrix, [w * h, d]).astype(np.float64)
-    # Get 2nd and 98th percentile
-    mins = np.percentile(matrix, 1, axis=0)
-    maxs = np.percentile(matrix, 99, axis=0) - mins
-    matrix = (matrix - mins[None, :]) / maxs[None, :]
-    matrix = np.reshape(matrix, [w, h, d])
-    matrix = matrix.clip(0, 1)
-    return matrix
+test['is_iceberg'] = test['is_iceberg'].clip(0.+1e-15,1.-1e-15)
+test[['id','is_iceberg']].to_csv("submission.csv", index=False)
 
-
-# Check that image and mask are aligned.
-# Image:
 
 # In[ ]:
 
 
-tiff.imshow(255 * scale_percentile(im_rgb[2900:3200,2000:2300]));
+import matplotlib.pyplot as plt
+import seaborn as sns
 
+df = pd.DataFrame({'imp': lgb_models[0].feature_importance(importance_type='gain'), 'col':features2.columns})
+df = df.sort_values(['imp','col'], ascending=[True, False])[:30]
+_ = df.plot(kind='barh', x='col', y='imp', figsize=(7,12))
 
-# And mask:
 
 # In[ ]:
 
 
-def show_mask(m):
-    # hack for nice display
-    tiff.imshow(255 * np.stack([m, m, m]));
-show_mask(train_mask[2900:3200,2000:2300])
+df1 = pd.read_csv('submission.csv')
+df2 = pd.read_csv('../input/explore-stacking-another-hi-lo-and-clip-probs/stack_minmax_bestbase.csv')
+df2.columns = [x+'_' if x not in ['id'] else x for x in df2.columns]
+blend = pd.merge(df1, df2, how='left', on='id')
+for c in df1.columns:
+    if c != 'id':
+        blend[c] = (blend[c] * 0.5)  + (blend[c+'_'] * 0.5)
+blend = blend[df1.columns]
+blend['is_iceberg'] = blend['is_iceberg'].clip(0.+1e-15,1.-1e-15)
+blend.to_csv('blend1.csv', index=False)
 
-
-# Now, let's train a very simple logistic regression classifier, just to get some noisy prediction to show how output mask is processed.
 
 # In[ ]:
 
 
-from sklearn.linear_model import SGDClassifier
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import make_pipeline
-from sklearn.model_selection import cross_val_predict
-from sklearn.metrics import average_precision_score
-
-xs = im_rgb.reshape(-1, 3).astype(np.float32)
-ys = train_mask.reshape(-1)
-pipeline = make_pipeline(StandardScaler(), SGDClassifier(loss='log'))
-
-print('training...')
-# do not care about overfitting here
-pipeline.fit(xs, ys)
-pred_ys = pipeline.predict_proba(xs)[:, 1]
-print('average precision', average_precision_score(ys, pred_ys))
-pred_mask = pred_ys.reshape(train_mask.shape)
-
-
-# Now check predictions:
-
-# In[ ]:
-
-
-show_mask(pred_mask[2900:3200,2000:2300])
-
-
-# We must choose a threshold to turn it into a binary mask:
-
-# In[ ]:
-
-
-threshold = 0.3
-pred_binary_mask = pred_mask >= threshold
-show_mask(pred_binary_mask[2900:3200,2000:2300])
-
-
-# Now it's possible to check Jaccard on the pixel level:
-
-# In[ ]:
-
-
-# check jaccard on the pixel level
-tp, fp, fn = (( pred_binary_mask &  train_mask).sum(),
-              ( pred_binary_mask & ~train_mask).sum(),
-              (~pred_binary_mask &  train_mask).sum())
-print('Pixel jaccard', tp / (tp + fp + fn))
-
-
-# Next is the most interesting bit, creating polygons from bit masks. Please see inline comments:
-
-# In[ ]:
-
-
-def mask_to_polygons(mask, epsilon=10., min_area=10.):
-    # first, find contours with cv2: it's much faster than shapely
-    image, contours, hierarchy = cv2.findContours(
-        ((mask == 1) * 255).astype(np.uint8),
-        cv2.RETR_CCOMP, cv2.CHAIN_APPROX_TC89_KCOS)
-    # create approximate contours to have reasonable submission size
-    approx_contours = [cv2.approxPolyDP(cnt, epsilon, True)
-                       for cnt in contours]
-    if not contours:
-        return MultiPolygon()
-    # now messy stuff to associate parent and child contours
-    cnt_children = defaultdict(list)
-    child_contours = set()
-    assert hierarchy.shape[0] == 1
-    # http://docs.opencv.org/3.1.0/d9/d8b/tutorial_py_contours_hierarchy.html
-    for idx, (_, _, _, parent_idx) in enumerate(hierarchy[0]):
-        if parent_idx != -1:
-            child_contours.add(idx)
-            cnt_children[parent_idx].append(approx_contours[idx])
-    # create actual polygons filtering by area (removes artifacts)
-    all_polygons = []
-    for idx, cnt in enumerate(approx_contours):
-        if idx not in child_contours and cv2.contourArea(cnt) >= min_area:
-            assert cnt.shape[1] == 1
-            poly = Polygon(
-                shell=cnt[:, 0, :],
-                holes=[c[:, 0, :] for c in cnt_children.get(idx, [])
-                       if cv2.contourArea(c) >= min_area])
-            all_polygons.append(poly)
-    # approximating polygons might have created invalid ones, fix them
-    all_polygons = MultiPolygon(all_polygons)
-    if not all_polygons.is_valid:
-        all_polygons = all_polygons.buffer(0)
-        # Sometimes buffer() converts a simple Multipolygon to just a Polygon,
-        # need to keep it a Multi throughout
-        if all_polygons.type == 'Polygon':
-            all_polygons = MultiPolygon([all_polygons])
-    return all_polygons
-
-
-# Turn our prediction to polygons, and then turn back into a mask to check what it looks like:
-
-# In[ ]:
-
-
-pred_polygons = mask_to_polygons(pred_binary_mask)
-pred_poly_mask = mask_for_polygons(pred_polygons)
-show_mask(pred_poly_mask[2900:3200,2000:2300])
-
-
-# Now to create a submission we just scale back to original coordinates
-
-# In[ ]:
-
-
-scaled_pred_polygons = shapely.affinity.scale(
-    pred_polygons, xfact=1 / x_scaler, yfact=1 / y_scaler, origin=(0, 0, 0))
-
-
-# Checking submission size:
-
-# In[ ]:
-
-
-dumped_prediction = shapely.wkt.dumps(scaled_pred_polygons)
-print('Prediction size: {:,} bytes'.format(len(dumped_prediction)))
-final_polygons = shapely.wkt.loads(dumped_prediction)
-
-
-# Now the litmus test: check Jaccard compared to **original** polygons
-# 
-
-# In[ ]:
-
-
-print('Final jaccard',
-      final_polygons.intersection(train_polygons).area /
-      final_polygons.union(train_polygons).area)
+df1 = pd.read_csv('blend1.csv')
+df2 = pd.read_csv('../input/explore-stacking-another-hi-lo-and-clip-probs/stack_minmax_bestbase.csv')
+df2.columns = [x+'_' if x not in ['id'] else x for x in df2.columns]
+blend = pd.merge(df1, df2, how='left', on='id')
+for c in df1.columns:
+    if c != 'id':
+        blend[c] = (blend[c]  + blend[c+'_'])/2 + np.sqrt(blend[c] * blend[c+'_'])
+blend = blend[df1.columns]
+blend['is_iceberg'] = blend['is_iceberg'].clip(0.+1e-15,1.-1e-15)
+blend.to_csv('blend2.csv', index=False)
 

@@ -1,503 +1,365 @@
 
 # coding: utf-8
 
+# ![](https://www.homegoods.com/wp-content/uploads/2016/04/Screen-Shot-2016-04-27-at-10.48.04-AM-630x379.png)
+
+# # Importing the libraries
+
 # In[ ]:
 
 
-# import packages
-
-import pandas as pd
-import numpy as np
-import os
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
-import matplotlib as mpl
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestRegressor
-mpl.rcParams['axes.linewidth'] = 1.5
-mpl.rcParams['axes.unicode_minus'] = False
+import seaborn as sns
+import json
+import csv
+from pandas import DataFrame
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
+# # Retrieving the Data
+
+# In[ ]:
+
+
+with open("../input/train.json") as datafile1: #first check if it's a valid json file or not
+    data1 = json.load(datafile1)
+with open("../input/test.json") as datafile2: #first check if it's a valid json file or not
+    data2 = json.load(datafile2)
+with open("../input/validation.json") as datafile3: #first check if it's a valid json file or not
+    data3 = json.load(datafile3)
+#test = pd.DataFrame(data2)    
+#test.shape
+
+
+# # Convertng JSON format data into Tabular data
+
+# In[ ]:
+
+
+# for training data
+my_dic_data = data1
+keys= my_dic_data.keys()
+dict_you_want1={'my_items1':my_dic_data['annotations']for key in keys}
+dict_you_want2={'my_items2':my_dic_data['images']for key in keys}
+df=pd.DataFrame(dict_you_want1)
+fd = pd.DataFrame(dict_you_want2)
+df2=df['my_items1'].apply(pd.Series)
+#print ("df2",df2.head())
+fd2=fd['my_items2'].apply(pd.Series)
+#print ("fd2",fd2.head())
+train_data = pd.merge(df2, fd2, on='image_id', how='outer')
+
+# for validation data
+my_dic_data = data3
+keys= my_dic_data.keys()
+dict_you_want1={'my_items1':my_dic_data['annotations']for key in keys}
+dict_you_want2={'my_items2':my_dic_data['images']for key in keys}
+df=pd.DataFrame(dict_you_want1)
+fd = pd.DataFrame(dict_you_want2)
+df2=df['my_items1'].apply(pd.Series)
+#print ("df2",df2.head())
+fd2=fd['my_items2'].apply(pd.Series)
+#print ("fd2",fd2.head())
+validation_data = pd.merge(df2, fd2, on='image_id', how='outer')
+
+# for test data
+my_dic_data = data2
+keys= my_dic_data.keys()
+dict_you_want2={'my_items2':my_dic_data['images']for key in keys}
+fd = pd.DataFrame(dict_you_want2)
+test_data=fd['my_items2'].apply(pd.Series)
 
 
 # In[ ]:
 
 
-# read data into DataFrame
+train_data['url'] = train_data['url'].apply(lambda x:str(x[0]))
+test_data['url'] = test_data['url'].apply(lambda x:str(x[0]))
+validation_data['url'] = validation_data['url'].apply(lambda x:str(x[0]))
 
-def make_df(fin):
-    """
-    Args:
-        fin (str) - file name with training or test data
-    Returns:
-        DataFrame with renamed columns (personal preference)
-    """
-    df = pd.read_csv(fin)
-    df = df.rename(columns={'spacegroup' : 'sg',
-                            'number_of_total_atoms' : 'Natoms',
-                            'percent_atom_al' : 'x_Al',
-                            'percent_atom_ga' : 'x_Ga',
-                            'percent_atom_in' : 'x_In',
-                            'lattice_vector_1_ang' : 'a',
-                            'lattice_vector_2_ang' : 'b',
-                            'lattice_vector_3_ang' : 'c',
-                            'lattice_angle_alpha_degree' : 'alpha',
-                            'lattice_angle_beta_degree' : 'beta',
-                            'lattice_angle_gamma_degree' : 'gamma',
-                            'formation_energy_ev_natom' : 'E',
-                            'bandgap_energy_ev' : 'Eg'})
-    return df
 
-# folder which contains data folders
-input_dir = os.path.join('..', 'input')
-# folder which contains competition data
-path_to_train_data = os.path.join(input_dir, 'nomad2018-predict-transparent-conductors')
-# training data
-f_train = os.path.join(path_to_train_data, 'train.csv')
-# make DataFrame of training data
-df_train = make_df(f_train)
-df_train.head()
+# **Training data**
+
+# In[ ]:
+
+
+train_data.head()
+
+
+# **Validation data**
+
+# In[ ]:
+
+
+validation_data.head()
+
+
+# **Test data**
+
+# In[ ]:
+
+
+test_data.head()
 
 
 # In[ ]:
 
 
-# retrieve list of elemental properties
+print("size of training data", train_data.shape)
+print("size of validation data", validation_data.shape)
+print("size of test data", test_data.shape)
 
-def get_prop_list(path_to_element_data):
-    """
-    Args:
-        path_to_element_data (str) - path to folder of elemental property files
-    Returns:
-        list of elemental properties (str) which have corresponding .csv files
-    """
-    return [f[:-4] for f in os.listdir(path_to_element_data)]
 
-# folder which contains element data
-path_to_element_data = os.path.join(input_dir, 'elemental-properties')
-# get list of properties which have data files
-properties = get_prop_list(path_to_element_data)
-print(sorted(properties))
+# # Checking for missing data
+
+# ## Missing Data in training data set
+
+# In[ ]:
+
+
+# missing data in training data set
+total = train_data.isnull().sum().sort_values(ascending = False)
+percent = (train_data.isnull().sum()/train_data.isnull().count()).sort_values(ascending = False)
+missing_train_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_train_data.head()
+
+
+# ## Missing Data in validation data set
+
+# In[ ]:
+
+
+# missing data in validation data set
+total = validation_data.isnull().sum().sort_values(ascending = False)
+percent = (validation_data.isnull().sum()/validation_data.isnull().count()).sort_values(ascending = False)
+missing_validation_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_validation_data.head()
+
+
+# ## Missing data in test data set
+
+# In[ ]:
+
+
+# missing data in test data 
+total = test_data.isnull().sum().sort_values(ascending = False)
+percent = (test_data.isnull().sum()/test_data.isnull().count()).sort_values(ascending = False)
+missing_test_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
+missing_test_data.head()
+
+
+# # Open the URL
+
+# In[ ]:
+
+
+# now open the URL
+temp = 4
+print('image_id', train_data['image_id'][temp])
+print('url:', train_data['url'][temp])
+
+
+# # Lets display some images from URLs
+
+# In[ ]:
+
+
+from IPython.display import Image
+from IPython.core.display import HTML 
+
+def display_category(urls, category_name):
+    img_style = "width: 180px; margin: 0px; float: left; border: 1px solid black;"
+    images_list = ''.join([f"<img style='{img_style}' src='{u}' />" for _, u in urls.head(12).iteritems()])
+
+    display(HTML(images_list))
+
+
+# ### Training data images
+
+# In[ ]:
+
+
+urls = train_data['url'][15:30]
+display_category(urls, "")
+
+
+# ### Test data images
+
+# In[ ]:
+
+
+urls = test_data['url'][15:30]
+display_category(urls, "")
+
+
+# ### validation data images
+
+# In[ ]:
+
+
+urls = validation_data['url'][15:30]
+display_category(urls, "")
 
 
 # In[ ]:
 
 
-# retrieve elemental properties
+# Unique URL's
+train_data.nunique()
 
-def get_prop(prop, path_to_element_data):
-    """
-    Args:
-        prop (str) - name of elemental property
-        path_to_element_data (str) - path to folder of elemental property files
-    Returns:
-        dictionary of {element (str) : property value (float)}
-    """
-    fin = os.path.join(path_to_element_data, prop+'.csv')
-    with open(fin) as f:
-        all_els = {line.split(',')[0] : float(line.split(',')[1][:-1]) for line in f}
-        my_els = ['Al', 'Ga', 'In']
-        return {el : all_els[el] for el in all_els if el in my_els}
 
-# make nested dictionary which maps {property (str) : {element (str) : property value (float)}}
-prop_dict = {prop : get_prop(prop, path_to_element_data) for prop in properties}
-print('The mass of aluminum is %.2f amu' % prop_dict['mass']['Al'])
-
+# # Distribution of labels in training data set
+# 
 
 # In[ ]:
 
 
-# average each property using the composition
+#Class distribution
+plt.figure(figsize = (10, 8))
+plt.title('Category Distribuition')
+sns.distplot(train_data['label_id'])
 
-def avg_prop(x_Al, x_Ga, x_In, prop):
-    """
-    Args:
-        x_Al (float or DataFrame series) - concentration of Al
-        x_Ga (float or DataFrame series) - concentration of Ga
-        x_In (float or DataFrame series) - concentration of In
-        prop (str) - name of elemental property
-    Returns:
-        average property for the compound (float or DataFrame series), 
-        weighted by the elemental concentrations
-    """
-    els = ['Al', 'Ga', 'In']
-    concentration_dict = dict(zip(els, [x_Al, x_Ga, x_In]))
-    return np.sum(prop_dict[prop][el] * concentration_dict[el] for el in els)
-
-# add averaged properties to DataFrame
-for prop in properties:
-    df_train['_'.join(['avg', prop])] = avg_prop(df_train['x_Al'], 
-                                                 df_train['x_Ga'],
-                                                 df_train['x_In'],
-                                                 prop)
-list(df_train)
-
-
-# In[ ]:
-
-
-# calculate the volume of the structure
-
-def get_vol(a, b, c, alpha, beta, gamma):
-    """
-    Args:
-        a (float) - lattice vector 1
-        b (float) - lattice vector 2
-        c (float) - lattice vector 3
-        alpha (float) - lattice angle 1 [radians]
-        beta (float) - lattice angle 2 [radians]
-        gamma (float) - lattice angle 3 [radians]
-    Returns:
-        volume (float) of the parallelepiped unit cell
-    """
-    return a*b*c*np.sqrt(1 + 2*np.cos(alpha)*np.cos(beta)*np.cos(gamma)
-                           - np.cos(alpha)**2
-                           - np.cos(beta)**2
-                           - np.cos(gamma)**2)
-
-# convert lattice angles from degrees to radians for volume calculation
-lattice_angles = ['alpha', 'beta', 'gamma']
-for lang in lattice_angles:
-    df_train['_'.join([lang, 'r'])] = np.pi * df_train[lang] / 180
-    
-# compute the cell volumes 
-df_train['vol'] = get_vol(df_train['a'], df_train['b'], df_train['c'],
-                          df_train['alpha_r'], df_train['beta_r'], df_train['gamma_r'])
-df_train[['a','b','c','alpha_r','beta_r','gamma_r','vol']].head()
-
-
-# In[ ]:
-
-
-# calculate the atomic density
-
-# this is known to correlate with stability or bonding strength
-df_train['atomic_density'] = df_train['Natoms'] / df_train['vol']   
-
-df_train[['a','b','c','alpha','beta','gamma','vol', 'Natoms', 'atomic_density']].head()
-
-
-# In[ ]:
-
-
-# function to visualize data using scatter plots
-
-def plot_scatter(x, y, xlabel, ylabel):
-    """
-    Args:
-        x (str) - DataFrame column for x-axis
-        y (str) - DataFrame column for y-axis
-        xlabel (str) - name for x-axis
-        ylabel (str) - name for y-axis
-    Returns:
-        matplotlib scatter plot of y vs x
-    """
-    s = 75
-    lw = 0
-    alpha = 0.05
-    color = 'blue'
-    marker = 'o'
-    axis_width = 1.5
-    maj_tick_len = 6
-    fontsize = 16
-    label = '__nolegend__'
-    ax = plt.scatter(df_train[x].values, df_train[y].values,
-                     marker=marker, color=color, s=s, 
-                     lw=lw, alpha=alpha, label=label)
-    xrange = abs(df_train[x].max() - df_train[x].min())
-    yrange = abs(df_train[y].max() - df_train[y].min())
-    cushion = 0.1
-    xmin = df_train[x].min() - cushion*xrange
-    xmax = df_train[x].max() + cushion*xrange
-    ymin = df_train[y].min() - cushion*yrange
-    ymax = df_train[y].max() + cushion*yrange
-    ax = plt.xlim([xmin, xmax])
-    ax = plt.ylim([ymin, ymax])
-    ax = plt.xlabel(xlabel, fontsize=fontsize)
-    ax = plt.ylabel(ylabel, fontsize=fontsize)
-    ax = plt.xticks(fontsize=fontsize)
-    ax = plt.yticks(fontsize=fontsize)
-    ax = plt.tick_params('both', length=maj_tick_len, width=axis_width, 
-                         which='major', right=True, top=True)
-    return ax
-
-
-# In[ ]:
-
-
-# visualize the relationship between our target properties and the atomic density
-
-fig1 = plt.figure(1, figsize=(8, 4))
-ax1 = plt.subplot(121)
-ax1 = plot_scatter('atomic_density', 'E', 
-                   'atomic density (atoms/vol)', 'formation energy (eV/atom)')
-ax2 = plt.subplot(122)
-ax2 = plot_scatter('atomic_density', 'Eg', 
-                   'atomic density (atoms/vol)', 'band gap (eV)')
-plt.tight_layout()
 plt.show()
-plt.close()
 
 
-# In[ ]:
-
-
-# visualize some of the element-based features
-
-fig2 = plt.figure(2, figsize=(8, 7))
-ax1 = plt.subplot(221)
-ax1 = plot_scatter('avg_electronegativity', 'E', 
-                   '', 'formation energy (eV/atom)')
-ax2 = plt.subplot(222)
-ax2 = plot_scatter('avg_IP', 'E', 
-                   '', '')
-ax3 = plt.subplot(223)
-ax3 = plot_scatter('avg_electronegativity', 'Eg', 
-                   'average electronegativity', 'band gap (eV)')
-ax4 = plt.subplot(224)
-ax4 = plot_scatter('avg_IP', 'Eg', 
-                   'average ionization potential (eV)', '')
-plt.tight_layout()
-plt.show()
-plt.close()
-
+# # Most frequent labels in training data set
 
 # In[ ]:
 
 
-# visualize the effect of composition on the atomic density and averaged atomic properties
+# Occurance of label_id in decreasing order(Top categories)
+temp = pd.DataFrame(train_data.label_id.value_counts().head(8))
+temp.reset_index(inplace=True)
+temp.columns = ['label_id','count']
+temp
 
-fig3 = plt.figure(3, figsize=(9, 9))
-y1_label = 'atomic density'
-y2_label = 'average mass (amu)'
-y3_label = 'average LUMO (eV)'
-ax1 = plt.subplot(331)
-ax1 = plot_scatter('x_Al', 'atomic_density', 
-                   '', y1_label)
-ax2 = plt.subplot(332)
-ax2 = plot_scatter('x_Ga', 'atomic_density', 
-                   '', '')
-ax3 = plt.subplot(333)
-ax3 = plot_scatter('x_In', 'atomic_density', 
-                   '', '')
-ax4 = plt.subplot(334)
-ax4 = plot_scatter('x_Al', 'avg_mass', 
-                   '', y2_label)
-ax5 = plt.subplot(335)
-ax5 = plot_scatter('x_Ga', 'avg_mass', 
-                   '', '')
-ax6 = plt.subplot(336)
-ax6 = plot_scatter('x_In', 'avg_mass', 
-                   '', '')
-ax7 = plt.subplot(337)
-ax7 = plot_scatter('x_Al', 'avg_LUMO', 
-                   'Al concentration', y3_label)
-ax8 = plt.subplot(338)
-ax8 = plot_scatter('x_Ga', 'avg_LUMO', 
-                   'Ga concentration', '')
-ax9 = plt.subplot(339)
-ax9 = plot_scatter('x_In', 'avg_LUMO', 
-                   'In concentration', '')
-plt.tight_layout()
-plt.show()
-plt.close() 
 
+# * **Most frequent label is 20 followed by 42.**
 
 # In[ ]:
 
 
-# use random forests to quantify the importances of each feature
+plt.figure(figsize=(15,8))
+count = train_data['label_id'].value_counts().head(30)
+sns.barplot(count.index,  count.values,)
+plt.xlabel('label id', fontsize=12)
+plt.ylabel('Cou', fontsize=12)
+plt.title("Distribution of label ids", fontsize=16)
 
-# list of columns not to be used for training
-non_features = ['id', 'E', 'Eg',
-               'alpha_r', 'beta_r', 'gamma_r']
 
-# list of columns to be used for training each model
-features = [col for col in list(df_train) if col not in non_features]
-print('%i features: %s' % (len(features), features))
-
-# make feature matrix
-X = df_train[features].values
-
-# make target columns for each target property
-y_E = df_train['E'].values
-y_Eg = df_train['Eg'].values
-
-# split into training and test for the purposes of this demonstration
-test_size = 0.2
-rstate = 42
-X_train_E, X_test_E, y_train_E, y_test_E = train_test_split(X, y_E, 
-                                                            test_size=test_size,
-                                                            random_state=rstate)
-X_train_Eg, X_test_Eg, y_train_Eg, y_test_Eg = train_test_split(X, y_Eg, 
-                                                                test_size=test_size, 
-                                                                random_state=rstate)
-
-# number of base decision tree estimators
-n_est = 100
-# maximum depth of any given decision tree estimator
-max_depth = 5
-# random state variable
-rstate = 42
-# initialize a random forest algorithm
-rf_E = RandomForestRegressor(n_estimators=n_est, 
-                             max_depth=max_depth,
-                             random_state=rstate)
-rf_Eg = RandomForestRegressor(n_estimators=n_est, 
-                             max_depth=max_depth,
-                             random_state=rstate)
-# fit to training data
-rf_E.fit(X_train_E, y_train_E)
-rf_Eg.fit(X_train_Eg, y_train_Eg)
-
+# # Lets extract the website name and see their occurances
 
 # In[ ]:
 
 
-# report the most important featuers for predicting each target
-
-# collect ranking of most "important" features for E
-importances_E =  rf_E.feature_importances_
-descending_indices_E = np.argsort(importances_E)[::-1]
-sorted_importances_E = [importances_E[idx] for idx in descending_indices_E]
-sorted_features_E = [features[idx] for idx in descending_indices_E]
-print('most important feature for formation energy is %s' % sorted_features_E[0])
-
-# collect ranking of most "important" features for Eg
-importances_Eg =  rf_Eg.feature_importances_
-descending_indices_Eg = np.argsort(importances_Eg)[::-1]
-sorted_importances_Eg = [importances_Eg[idx] for idx in descending_indices_Eg]
-sorted_features_Eg = [features[idx] for idx in descending_indices_Eg]
-print('most important feature for band gap is %s' % sorted_features_Eg[0])
-
-
-# In[ ]:
+# Extract website_name for train data
+temp_list = list()
+for path in train_data['url']:
+    temp_list.append((path.split('//', 1)[1]).split('/', 1)[0])
+train_data['website_name'] = temp_list
+# Extract website_name for test data
+temp_list = list()
+for path in test_data['url']:
+    temp_list.append((path.split('//', 1)[1]).split('/', 1)[0])
+test_data['website_name'] = temp_list
+# Extract website_name for validation data
+temp_list = list()
+for path in validation_data['url']:
+    temp_list.append((path.split('//', 1)[1]).split('/', 1)[0])
+validation_data['website_name'] = temp_list
 
 
-# plot the feature importances
-
-def plot_importances(X_train, sorted_features, sorted_importances):
-    """
-    Args:
-        X_train (nd-array) - feature matrix of shape (number samples, number features)
-        sorted_features (list) - feature names (str)
-        sorted_importances (list) - feature importances (float)
-    Returns:
-        matplotlib bar chart of sorted importances
-    """
-    axis_width = 1.5
-    maj_tick_len = 6
-    fontsize = 14
-    bar_color = 'lightblue'
-    align = 'center'
-    label = '__nolegend__'
-    ax = plt.bar(range(X_train.shape[1]), sorted_importances,
-                 color=bar_color, align=align, label=label)
-    ax = plt.xticks(range(X_train.shape[1]), sorted_features, rotation=90)
-    ax = plt.xlim([-1, X_train.shape[1]])
-    ax = plt.ylabel('Average impurity decrease', fontsize=fontsize)
-    ax = plt.tick_params('both', length=maj_tick_len, width=axis_width, 
-                         which='major', right=True, top=True)
-    ax = plt.xticks(fontsize=fontsize)
-    ax = plt.yticks(fontsize=fontsize)
-    ax = plt.tight_layout()
-    return ax
-
-fig3 = plt.figure(3, figsize=(11,6))
-ax1 = plt.subplot(121)
-ax1 = plot_importances(X_train_E, sorted_features_E, sorted_importances_E)
-ax1 = plt.legend(['formation energy'], fontsize=14, frameon=False)
-ax2 = plt.subplot(122)
-ax2 = plot_importances(X_train_Eg, sorted_features_Eg, sorted_importances_Eg)
-ax2 = plt.legend(['band gap'], fontsize=14, frameon=False)
-plt.tight_layout()
-plt.show()
-plt.close()
-
+# ### We have added one new column "site_name". lets see
 
 # In[ ]:
 
 
-# evaluate performance of the random forest models
+print("Training data size",train_data.shape)
+print("test data size",test_data.shape)
+print("validation data size",validation_data.shape)
 
-def rmsle(actual, predicted):
-    """
-    Args:
-        actual (1d-array) - array of actual values (float)
-        predicted (1d-array) - array of predicted values (float)
-    Returns:
-        root mean square log error (float)
-    """
-    return np.sqrt(np.mean(np.power(np.log1p(actual)-np.log1p(predicted), 2)))
 
-def plot_actual_pred(train_actual, train_pred, 
-                     test_actual, test_pred,
-                     target):
-    """
-    Args:
-        train_actual (1d-array) - actual training values (float)
-        train_pred (1d-array) - predicted training values (float)
-        test_actual (1d-array) - actual test values (float)
-        test_pred (1d-array) - predicted test values (float)
-        target (str) - target property
-    Returns:
-        matplotlib scatter plot of actual vs predicted
-    """
-    s = 75
-    lw = 0
-    alpha = 0.2
-    train_color = 'orange'
-    train_marker = 's'
-    test_color = 'red'
-    test_marker = '^'
-    axis_width = 1.5
-    maj_tick_len = 6
-    fontsize = 16
-    label = '__nolegend__'
-    ax = plt.scatter(train_pred, train_actual,
-                     marker=train_marker, color=train_color, s=s, 
-                     lw=lw, alpha=alpha, label='train')
-    ax = plt.scatter(test_pred, test_actual,
-                     marker=test_marker, color=test_color, s=s, 
-                     lw=lw, alpha=alpha, label='test')
-    ax = plt.legend(frameon=False, fontsize=fontsize, handletextpad=0.4)    
-    all_vals = list(train_pred) + list(train_actual) + list(test_pred) + list(test_actual)
-    full_range = abs(np.max(all_vals) - np.min(all_vals))
-    cushion = 0.1
-    xmin = np.min(all_vals) - cushion*full_range
-    xmax = np.max(all_vals) + cushion*full_range
-    ymin = xmin
-    ymax = xmax    
-    ax = plt.xlim([xmin, xmax])
-    ax = plt.ylim([ymin, ymax])
-    ax = plt.plot([xmin, xmax], [ymin, ymax], 
-                  lw=axis_width, color='black', ls='--', 
-                  label='__nolegend__')
-    ax = plt.xlabel('predicted ' + target, fontsize=fontsize)
-    ax = plt.ylabel('actual ' + target, fontsize=fontsize)
-    ax = plt.xticks(fontsize=fontsize)
-    ax = plt.yticks(fontsize=fontsize)
-    ax = plt.tick_params('both', length=maj_tick_len, width=axis_width, 
-                         which='major', right=True, top=True)
-    return ax  
+# **new training data**
 
-y_train_E_pred = rf_E.predict(X_train_E)
-y_test_E_pred = rf_E.predict(X_test_E)
-target_E = 'formation energy (eV/atom)'
-print('RMSLE for formation energies = %.3f eV/atom (training) and %.3f eV/atom (test)' 
-      % (rmsle(y_train_E, y_train_E_pred),  (rmsle(y_test_E, y_test_E_pred))))
-y_train_Eg_pred = rf_Eg.predict(X_train_Eg)
-y_test_Eg_pred = rf_Eg.predict(X_test_Eg)
-target_Eg = 'band gap (eV)'
-print('RMSLE for band gaps = %.3f eV (training) and %.3f eV (test)' 
-      % (rmsle(y_train_Eg, y_train_Eg_pred), (rmsle(y_test_Eg, y_test_Eg_pred))))
-fig4 = plt.figure(4, figsize=(11,5))
-ax1 = plt.subplot(121)
-ax1 = plot_actual_pred(y_train_E, y_train_E_pred,
-                       y_test_E, y_test_E_pred,
-                       target_E)
-ax2 = plt.subplot(122)
-ax2 = plot_actual_pred(y_train_Eg, y_train_Eg_pred,
-                       y_test_Eg, y_test_Eg_pred,
-                       target_Eg)
-plt.tight_layout()
-plt.show()
-plt.close()
+# In[ ]:
 
+
+train_data.head()
+
+
+# **New test data**
+
+# In[ ]:
+
+
+test_data.head()
+
+
+# **New validation data**
+
+# In[ ]:
+
+
+validation_data.head()
+
+
+# # Top Occurances of websites in the data
+
+# ## Top Occurances of websites in the training data
+
+# In[ ]:
+
+
+print("Total unique websites : ",len(train_data.website_name.value_counts()))
+plt.figure(figsize=(15,8))
+count = train_data.website_name.value_counts().head(10)
+sns.barplot(count.values, count.index)
+for i, v in enumerate(count.values):
+    plt.text(0.8,i,v,color='k',fontsize=12)
+plt.xlabel('Count', fontsize=12)
+plt.ylabel('websites name', fontsize=12)
+plt.title("websites names with their occurances", fontsize=16)
+
+
+# * **Training data is taken from 10291 unique websites.**
+
+# ## Top Occurances of websites in the test data
+
+# In[ ]:
+
+
+print("Total unique websites : ",len(test_data.website_name.value_counts()))
+plt.figure(figsize=(15,8))
+count = test_data.website_name.value_counts().head(10)
+sns.barplot(count.values, count.index)
+for i, v in enumerate(count.values):
+    plt.text(0.8,i,v,color='k',fontsize=12)
+plt.xlabel('Count', fontsize=12)
+plt.ylabel('Website name', fontsize=12)
+plt.title("Website names with their occurances", fontsize=16)
+
+
+# * **Test data is taken from 1847 unique websites.**
+
+# ## Top Occurances of websites in the validation data
+
+# In[ ]:
+
+
+print("Total unique websites : ",len(validation_data.website_name.value_counts()))
+plt.figure(figsize=(15,8))
+count = validation_data.website_name.value_counts().head(10)
+sns.barplot(count.values, count.index)
+for i, v in enumerate(count.values):
+    plt.text(0.8,i,v,color='k',fontsize=12)
+plt.xlabel('Count', fontsize=12)
+plt.ylabel('Website name', fontsize=12)
+plt.title("Website names with their occurances", fontsize=16)
+
+
+# * **Validation data is taken from 1214 unique websites.**
+
+# # More To come. Stayed Tuned.!!

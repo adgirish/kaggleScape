@@ -1,28 +1,28 @@
-# Simple implementation of the (normalized) gini score in numpy
-# Fully vectorized, no python loops, zips, etc.
-# Significantly (>30x) faster than previous implementions
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-import numpy as np 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-def Gini(y_true, y_pred):
-    # check and get number of samples
-    assert y_true.shape == y_pred.shape
-    n_samples = y_true.shape[0]
-    
-    # sort rows on prediction column 
-    # (from largest to smallest)
-    arr = np.array([y_true, y_pred]).transpose()
-    true_order = arr[arr[:,0].argsort()][::-1,0]
-    pred_order = arr[arr[:,1].argsort()][::-1,0]
-    
-    # get Lorenz curves
-    L_true = np.cumsum(true_order) / np.sum(true_order)
-    L_pred = np.cumsum(pred_order) / np.sum(pred_order)
-    L_ones = np.linspace(1/n_samples, 1, n_samples)
-    
-    # get Gini coefficients (area between curves)
-    G_true = np.sum(L_ones - L_true)
-    G_pred = np.sum(L_ones - L_pred)
-    
-    # normalize to true Gini coefficient
-    return G_pred/G_true
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+submission = pd.read_csv('../input/stage2_sample_submission.csv')
+stage1_test = pd.read_csv('../input/test_variants')
+stage2_test = pd.read_csv('../input/stage2_test_variants.csv')
+stage1_solution = pd.read_csv('../input/stage1_solution_filtered.csv')
+
+stage1_solution = stage1_solution.merge(stage1_test, how = 'left', on = 'ID')
+
+stage2_test.merge(
+        stage1_solution.drop('ID', axis = 1), 
+        how = 'left', 
+        on = ['Gene', 'Variation'])\
+    .drop(['Gene', 'Variation'], axis = 1)\
+    .fillna(1)\
+    .to_csv('submission.csv', index = False)

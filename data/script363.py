@@ -1,183 +1,187 @@
 
 # coding: utf-8
 
-# In this notebook, let us explore the given data and understand it so as to build our models. 
+# I start with [Alex Papiu's](https://www.kaggle.com/apapiu/ridge-script) script where he preprocesses the data into a ```scipy.sparse``` matrix and train a neural network. Keras does not like ```scipy.sparse``` matrices and converting the entire training set to a matrix will lead to computer memory issues; so the model is trained in batches: 32 samples at a time, and these few samples can be converted to matrices and fed into the network. 
+#               
+# Also, thanks to Pavel (Pasha) Gyrya's contribution for improving the model. Now there is no need to convert batches to np matrices. 
 # 
-# **Objective:**
+# This requieres a batch generator, which I pieced together from this [stack overflow question](https://stackoverflow.com/questions/41538692/using-sparse-matrices-with-keras-and-tensorflow) and I set up an iterator to make it threadsafe for parallelization. ~~Kagle allows the use of 32 cores which speeds up the training~~. Seems like kaggle only allows four cores.  
 # 
-# Develop algorithms to classify genetic mutations based on clinical evidence (text)
+# I have been tuning the network and it seems like a smaller network with longer epochs yields better results. Currently I have a two hidden layers with 25  and 10 nodes. This is quite small but, with the input layer considered, this network still yields approximately 1.5M parameters!
 # 
-# First let us import the necessary modules.
-
-# In[ ]:
-
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import seaborn as sns
-color = sns.color_palette()
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-pd.options.mode.chained_assignment = None
-pd.options.display.max_columns = 999
-
-
-# Let us list the files present in the input folder.
-
-# In[ ]:
-
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-
-# Let us first read the files as pandas dataframes. 
-
-# In[ ]:
-
-
-train_variants_df = pd.read_csv("../input/training_variants")
-test_variants_df = pd.read_csv("../input/test_variants")
-train_text_df = pd.read_csv("../input/training_text", sep="\|\|", engine='python', header=None, skiprows=1, names=["ID","Text"])
-test_text_df = pd.read_csv("../input/test_text", sep="\|\|", engine='python', header=None, skiprows=1, names=["ID","Text"])
-print("Train and Test variants shape : ",train_variants_df.shape, test_variants_df.shape)
-print("Train and Test text shape : ",train_text_df.shape, test_text_df.shape)
-
-
-# In[ ]:
-
-
-train_variants_df.head()
-
-
-# In[ ]:
-
-
-train_text_df.head()
-
-
-# Looks like the text field is long. So let us take a single row and check the text column for understanding.
-
-# In[ ]:
-
-
-counter = 0
-with open("../input/training_text") as infile:
-    while True:
-        counter += 1
-        line = infile.readline()
-        print(line)
-        if counter==2:
-            break
-
-
-# Wow. This is huge.! Before we analyze more about the text, let us first check the class distribution.
+# Give it a try and let me know what you think. There are still plenty of things on can try:
+# * Add a validation set for early stopping. 
+# * Tune `batch_size`, `samples_per_epoch`, and nodes in hidden layers.
+# * Add dropout.
+# * Add L1 and/or L2 regularization.
+#    
 # 
-# **Class Distribution:**
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-sns.countplot(x="Class", data=train_variants_df)
-plt.ylabel('Frequency', fontsize=12)
-plt.xlabel('Class Count', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.title("Frequency of Classes", fontsize=15)
-plt.show()
-
-
-# **Gene Distribution:**
 # 
 
 # In[ ]:
 
 
-train_genes = train_variants_df.groupby('Gene')['Gene'].count()
+import pandas as pd
+import numpy as np
+import scipy
+import time
+import gc
 
-for i in [2, 5, 10, 20, 50, 100, 300]:
-    print('Genes that appear less than {} times: {}%'.format(i, round((train_genes < i).mean() * 100, 2)))
+from sklearn import metrics
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 
-plt.figure(figsize=(12, 8))
-plt.hist(train_genes.values, bins=50, log=True)
-plt.xlabel('Number of times Gene appeared', fontsize=12)
-plt.ylabel('log of Count', fontsize=12)
-plt.show()
-
-
-# In[ ]:
-
-
-train_variation = train_variants_df.groupby('Variation')['Variation'].count()
-
-for i in [2,3,5,50,100]:
-    print('Genes that appear less than {} times: {}%'.format(i, round((train_variation < i).mean() * 100, 2)))
-
-plt.figure(figsize=(12, 8))
-plt.hist(train_variation.values, bins=50, log=True, color='green')
-plt.xlabel('Number of times Variation appeared', fontsize=12)
-plt.ylabel('log of Count', fontsize=12)
-plt.show()
+from keras.models import Model
+from keras.callbacks import EarlyStopping
+from keras.layers import Dense, Dropout, Activation, Input
 
 
-# Majority of the times, the number of occurrences of the variations are less than 5. 
-# 
-# Now let us do some exploration on the text column.
-
-# In[ ]:
+start_time = time.time()
 
 
-train_text_df["Text_num_words"] = train_text_df["Text"].apply(lambda x: len(str(x).split()) )
-train_text_df["Text_num_chars"] = train_text_df["Text"].apply(lambda x: len(str(x)) )
+def avg_predictions(L):
+    N = len(L)
+    f = L[0]
+    for p in range(1,N):
+        f = f + L[p]
+        f = (1/N)*f
+    return f
+
+def define_model(data, nodes1, nodes2, drop1, drop2):
+    x = Input(shape = (data.shape[1], ), dtype = 'float32', sparse = True)     
+    d1 = Dense(nodes1, activation='relu')(x)
+    d2 = Dropout(drop1)(d1)
+    d3 = Dense(nodes2, activation='sigmoid')(d2)
+    d4 = Dropout(drop2)(d3)
+    out= Dense(1, activation = 'linear')(d4)
+    model = Model(x,out)
+    return model
+    
+
+def preprocess(num_brands, name_min, max_feat_desc, ngrams):
+    print("Preprocessing Data...")
+    NUM_BRANDS = num_brands
+    NAME_MIN_DF = name_min
+    MAX_FEAT_DESCP = max_feat_desc
+    
+    df_train = pd.read_csv('../input/train.tsv', sep='\t')
+    df_train = df_train.reindex(np.random.permutation(df_train.index))
+    df_train.reset_index(inplace=True, drop=True)
+    
+    df_test = pd.read_csv('../input/test.tsv', sep='\t')
+    
+    df = pd.concat([df_train, df_test], 0)
+    nrow_train = df_train.shape[0]
+    Y = np.log1p(df_train["price"])
+    
+    del df_train
+    gc.collect()
+    
+    df["category_name"] = df["category_name"].fillna("Other").astype("category")
+    df["brand_name"] = df["brand_name"].fillna("unknown")
+    
+    pop_brands = df["brand_name"].value_counts().index[:NUM_BRANDS]
+    df.loc[~df["brand_name"].isin(pop_brands), "brand_name"] = "Other"
+    
+    df["item_description"] = df["item_description"].fillna("None")
+    df["item_condition_id"] = df["item_condition_id"].astype("category")
+    df["brand_name"] = df["brand_name"].astype("category")
+    
+    
+    #print("Encodings...")
+    count = CountVectorizer(min_df=NAME_MIN_DF)
+    X_name = count.fit_transform(df["name"])
+    
+    #print("Category Encoders...")
+    unique_categories = pd.Series("/".join(df["category_name"].unique().astype("str")).split("/")).unique()
+    count_category = CountVectorizer()
+    X_category = count_category.fit_transform(df["category_name"])
+    
+    #print("Descp encoders...")
+    count_descp = TfidfVectorizer(max_features = MAX_FEAT_DESCP, 
+                                  ngram_range = (1, ngrams),
+                                  stop_words = "english")
+    X_descp = count_descp.fit_transform(df["item_description"])
+    
+    #print("Brand encoders...")
+    vect_brand = LabelBinarizer(sparse_output=True)
+    X_brand = vect_brand.fit_transform(df["brand_name"])
+    
+    #print("Dummy Encoders...")
+    X_dummies = scipy.sparse.csr_matrix(pd.get_dummies(df[[
+        "item_condition_id", "shipping"]], sparse = True).values)
+    
+    X = scipy.sparse.hstack((X_dummies, 
+                             X_descp,
+                             X_brand,
+                             X_category,
+                             X_name)).tocsr()
+
+    
+    return X[:nrow_train], Y, X[nrow_train:], df_test
+    
+    
+def set_split(X_data, y_data, test_size):
+    
+    N = int(X_data.shape[0]*(1-test_size))
+    
+    return(X_data[:N], X_data[N:], y_data[:N], y_data[N:])
 
 
-# Let us look at the distribution of number of words in the text column.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12, 8))
-sns.distplot(train_text_df.Text_num_words.values, bins=50, kde=False, color='red')
-plt.xlabel('Number of words in text', fontsize=12)
-plt.ylabel('Count', fontsize=12)
-plt.title("Frequency of number of words", fontsize=15)
-plt.show()
+def hms_string(sec_elapsed):
+    h = int(sec_elapsed / (60 * 60))
+    m = int((sec_elapsed % (60 * 60)) / 60)
+    s = sec_elapsed % 60
+    return "{}:{:>02}:{:>05.2f}".format(h, m, s)
 
 
-# The peak is around 4000 words. Now let us look at character level.
-
-# In[ ]:
 
 
-plt.figure(figsize=(12, 8))
-sns.distplot(train_text_df.Text_num_chars.values, bins=50, kde=False, color='brown')
-plt.xlabel('Number of characters in text', fontsize=12)
-plt.ylabel('log of Count', fontsize=12)
-plt.title("Frequency of Number of characters", fontsize=15)
-plt.show()
+start_time = time.time()
+
+X, Y, X_test, df_test = preprocess(2500, 10, 50000, 3)
+
+x_train, x_val, y_train, y_val = set_split(X, Y, test_size=0.10)
+
+elapsed_time = time.time() - start_time
+print("Preprocessing Time: {}".format(hms_string(elapsed_time)))
+
+tpoint1 = time.time()
+print("Fitting Model...")
+
+nodes1 = 64
+nodes2 = 32
+drop1 =  0.30
+drop2 =  0.25
+
+print("Training Model...")
+    
+model = define_model(x_train, nodes1, nodes2, drop1, drop2)
+monitor = EarlyStopping(monitor='val_loss', min_delta=1e-3, patience=3, verbose=1, mode='auto')
+model.compile(loss='mean_squared_error', optimizer='adam')
+
+model.fit(x=x_train, y=y_train,
+          batch_size=600,
+          callbacks=[monitor],
+          validation_data=(x_val, y_val),
+          epochs=10, verbose=0)
+    
+tpoint2 = time.time()
+print("Time Training: {}".format(hms_string(tpoint2-tpoint1)))
+    
+pred = model.predict(x=X_test, batch_size=8000, verbose=0)
 
 
-# The distribution is similar to the previous one. 
-# 
-# Let us now check if we could use the number of words in the text has predictive power.
+tpoint3 = time.time()
+print("Time for Predicting: {}".format(hms_string(tpoint3-tpoint2)))
 
-# In[ ]:
+df_test["price"] = np.expm1(pred)
+df_test[["test_id", "price"]].to_csv("submission_NN.csv", index = False)
 
-
-train_df = pd.merge(train_variants_df, train_text_df, on='ID')
-
-plt.figure(figsize=(12,8))
-sns.boxplot(x='Class', y='Text_num_words', data=train_df)
-plt.xlabel('Class', fontsize=12)
-plt.ylabel('Text - Number of words', fontsize=12)
-plt.show()
+elapsed_time = time.time() - start_time
+print("Total Time: {}".format(hms_string(elapsed_time)))
 
 
-# I think this might be useful to discriminate some of the classes like class 3, 6 from others. So might be good to have in the input features. 
 
-# **More to come. Stay tuned.!**
+
+

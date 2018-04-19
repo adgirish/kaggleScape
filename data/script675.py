@@ -1,541 +1,162 @@
 
 # coding: utf-8
 
-# # Regression / GPUs Dataset Analysis
-# ***
-
-# ***Piotr Skalski - 13.10.2017***
-# 
-# <b>Note:</b> The growth of computer games market has resulted in great development of Graphic Cards. In this Kernel I will use <a href="https://www.kaggle.com/iliassekkaf/computerparts">Computer Parts Dataset</a> and regression models to predict how powerfull will Graphics Cards be in 2025. I will focuse on most important parameters of GPUs like:
-# 
-# * <b>Core Speed [MHz]</b> - The frequency at which the GPU is running. This can be sort of compared to a CPU's operating frequency. "Speed" depends on numerous factors, architecture being one of them. It's not necessarily an apples-to-apples comparison to look at the core clock speed of an older GPU and a newer one (or cross-brand differences), but for sake of ease, greater core frequencies equates faster computing. Be careful with that, though, calculating speed in gaming is never quite so linear.
-# 
-# * <b>Memory Bandwidth [GB/sec]</b> - This is one of the single, most important aspects of graphics processors. Memory bandwidth determines your card's ability to utilize its onboard video RAM efficiently when under stress.
-# 
-# * <b>Memory Size [MB or GB]</b> - VRAM is the storage location for textures and 3D meshes. So the more available, the more complex the scene can be, before it overflows to the standard RAM.
-# 
-# ---
-# 
-# More informations on GPUs parameters: <a href="https://www.gamersnexus.net/guides/717-gpu-dictionary-understanding-gpu-video-card-specs">GPU Dictionary: Understanding GPU & Video Card Specs</a>
-# 
-# ---
-
-# ### Moore's law: Number of transistors in a dense integrated circuit doubles approximately every two years. 
-
-# <img src='https://upload.wikimedia.org/wikipedia/commons/f/fe/GeForce4_Ti_4800SE_NV28_GPU.jpg'>
-
-# # Table of Contents
-
-# * [1. Importing dataset and data preprocessing](#importing_dataset_and_data_preprocessing) <br>
-#    * [1.1. Dataset import](#dataset_import) <br>
-#    * [1.2. Let's summarize the Dataset](#lets_summarize_the_dataset) <br>
-#    * [1.3. Data preprocessing & feature engineering](#data_preprocessing) <br>
-# <br>
-# * [2. Basic data visualization](#basic_data_visualization) <br>
-#    * [2.1. Grouping GPUs by Release Year](#grouping_gpus_by_release_year) <br>
-#    * [2.2. GPU Memory vs Year of Release by Manufacturer](#gpu_memory_vs_year_of_release_by_manufacturer) <br>
-#    * [2.3. GPU manufacturers market share](#gpu_manufacturers_market_share) <br>
-# <br>
-# * [3. GPU Memory](#gpu_memory) <br>
-#     * [3.1. GPU Memory vs Year of Release (Scatter Plot)](#gpu_memory_vs_year_of_release) <br>
-#     * [3.2. Mean GPU Memory vs Year of Release (Line Plot)](#mean_gpu_memory_vs_year_of_release) <br>
-#     * [3.3. Creating theoretic model and fitting exponential curve](#polynomial_regression_prediction_model) <br>
-#     * [3.4. Polynomial regression prediction model](#creating_theoretic_model_and_fitting_exponential_curve) <br>
-#     * [3.5. Selecting best model](#selecting_best_model) <br>
-#     * [3.6. Predicting GPUs mean memory size in 2025](#predicting_gpus_mean_memory_size_in_2025) <br>
-# <br>
-# * [4. Bibliography](#bibliography) <br>
-
-# ## 1. Importing dataset and data preprocessing
-# <a id="importing_dataset_and_data_preprocessing"></a>
-
-# ### 1.1. Dataset import
-# <a id="dataset_import"></a>
-
-# In[1]:
+# In[ ]:
 
 
-import numpy as np
-import pandas as pd
-from scipy.optimize import curve_fit
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import seaborn as sns
 import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
+from skimage import io
+from scipy import ndimage
+from skimage.transform import resize
+import sys
+#reload(sys)
+#sys.setdefaultencoding("utf-8")
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+menu = pd.read_csv('../input/menu.csv')
+#Breakfast = io.imread('D:/Mcdonalds/Breakfast.png')
+#Beef_and_Pork = io.imread('D:/Mcdonalds/Beef & Pork.png')
+#Chicken_and_Fish = io.imread('D:/Mcdonalds/Chicken & Fish.png')
+#Coffee_and_Tea = io.imread('D:/Mcdonalds/Coffee & Tea.png')
+#Salads = io.imread('D:/Mcdonalds/Salads.png')
+#Smoothies_and_Shakes = io.imread('D:/Mcdonalds/Smoothies & Shakes.png')
+#Snacks_and_Sides = io.imread('D:/Mcdonalds/Snacks & Sides.png')
+#Beverages = io.imread('D:/Mcdonalds/Beverages.png')
+#Desserts = io.imread('D:/Mcdonalds/Desserts.png')
+#images = [Breakfast,Beef_and_Pork,Chicken_and_Fish,Coffee_and_Tea,Salads,Smoothies_and_Shakes,Snacks_and_Sides,Beverages,Desserts]
+x1 = menu['Category'].values
+x2 = menu['Item'].values
+x3 = menu['Calories'].values
+x4 = menu['Calories from Fat'].values
+x5 = menu['Trans Fat'].values
+x6 = menu['Sugars'].values
+x7 = menu['Protein'].values
 
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
+x8 = menu['Total Fat (% Daily Value)'].values
+x9 = menu['Saturated Fat (% Daily Value)'].values
+x10 = menu['Cholesterol (% Daily Value)'].values
+x11 = menu['Sodium (% Daily Value)'].values
+x12 = menu['Carbohydrates (% Daily Value)'].values
 
+x13 = menu['Dietary Fiber (% Daily Value)'].values
+x14 = menu['Vitamin A (% Daily Value)'].values
+x15 = menu['Vitamin C (% Daily Value)'].values
+x16 = menu['Calcium (% Daily Value)'].values
+x17 = menu['Iron (% Daily Value)'].values
+x = np.vstack((x1,x2,x3,x4,x5,x6,x7,x8,x9,x10,x11,x12,x13,x14,x15,x16,x17))
+print(x.shape)
+r = 26
+p_max = 10
+for p in range(p_max):
+    plt.figure(figsize=(18.5, r*0.5+2.5),facecolor='#be0c0c')
+    plt.subplots_adjust(bottom=0, left=.01, right=1.4, top=0.9, hspace=.35)
+    plt.subplot(1, 1, 1)
+    plt.title('McDonald\'s Menu - Comparative Nutrition Values - Page '+str(p+1),fontsize=26,fontweight='bold',color='#ffd600')
+    plt.ylim([r+0.2,-6])
+    plt.xlim([-14,16])
 
-# In[2]:
-
-
-# Let's import dataset from csv file
-dataset = pd.read_csv('../input/All_GPUs.csv')
-
-
-# ### 1.2. Let's try to summarize the Dataset
-# <a id="lets_summarize_the_dataset"></a>
-
-# In[3]:
-
-
-dataset.head(10)
-
-
-# In[4]:
-
-
-dataset.info()
-
-
-# <b> NOTE: </b> Right away we can see that there is lots of undefined values. Let's use "Missingno" package which is a most useful and convenient tool in visualising missing values in the dataset. There are only few columns that can by use as reliable source of information for our analysis. Most of columns are incomplete or in wrong format. We will perform data preprocessing to make some columns usefull in our analysis.
-
-# In[5]:
-
-
-import missingno as msno
-# Nullity or missing values by columns
-#msno.matrix(df=dataset, figsize=(20, 8), color=(255/255, 83/255, 51/255))
-msno.bar(df=dataset, figsize=(20, 8), color=(255/255, 83/255, 51/255))
-
-
-# <b>NOTE: </b> Basing on the conducted research we will select columns that represents key data for our project.
-
-# In[6]:
-
-
-key_columns = ['Best_Resolution', 'Core_Speed', 'Manufacturer', 'Memory', 'Memory_Bandwidth', 'Name', 'Release_Date']
-dataset = dataset[key_columns]
-
-
-# ### 1.3. Data preprocessing & feature engineering
-# <a id="data_preprocessing"></a>
-
-# In[7]:
-
-
-dataset['Release_Date']=dataset['Release_Date'].str[1:-1]
-dataset=dataset[dataset['Release_Date'].str.len()==11]
-dataset['Release_Date']=pd.to_datetime(dataset['Release_Date'], format='%d-%b-%Y')
-dataset['Release_Year']=dataset['Release_Date'].dt.year
-dataset['Release_Month']=dataset['Release_Date'].dt.month
-dataset['Release']=dataset['Release_Year'] + dataset['Release_Month']/12
-
-
-# In[8]:
-
-
-dataset['Memory'] = dataset['Memory'].str[:-3].fillna(0).astype(int)
-
-
-# In[9]:
-
-
-def countPixels(x):
-    if pd.isnull(x):
-        return 800*600;
-    else:
-        values = x.split(' x ')
-        return(int(values[0]) * int(values[1]))
-
-dataset['PixelNum'] = dataset['Best_Resolution'].apply(lambda x: countPixels(x))
-
-
-# ## 2. Basic data visualization
-# <a id="basic_data_visualization"></a>
-
-# ### 2.1. Grouping GPUs by Release Year
-# <a id="grouping_gpus_by_release_year"></a>
-
-# In[10]:
-
-
-plt.figure(figsize=(16,8))
-sns.set_style("whitegrid")
-sns.countplot(x="Release_Year", data=dataset, palette="hls");
-plt.title('Grouping GPUs by Release Year', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Number GPUs', fontsize=15)
-plt.ylabel('Release Year', fontsize=15)
-plt.show()
-
-
-# ### 2.2. GPU Memory vs Year of Release by Manufacturer
-# <a id="gpu_memory_vs_year_of_release_by_manufacturer"></a>
-
-# In[11]:
-
-
-data = []
-
-for manufacturer in dataset['Manufacturer'].unique():
+    plt.scatter(-12.5,-3, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+    plt.text(-11.75,-3, 'Daily Limit',verticalalignment='center',fontsize=11,color='black', fontstyle='italic',alpha=1,zorder=1)
+    plt.text(-12.75,-2.3, '2000',fontweight='bold',verticalalignment='center',fontsize=11,color='darkorange', fontstyle='italic',alpha=1,zorder=1)
+    plt.text(-11.75,-2.3, 'calories a day is used for general nutrition advice,',verticalalignment='center',fontsize=11,color='black', fontstyle='italic',alpha=1,zorder=1)
+    plt.text(-11.75,-1.8, 'but calorie needs vary.',verticalalignment='center',fontsize=11,color='black', fontstyle='italic',alpha=1,zorder=1)
+    plt.text(0.5,-5, 'Calories',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(2,-5, 'Calories from Fat',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(3,-5, 'Trans Fat',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(4,-5, 'Sugars',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(5,-5, 'Protein',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(6,-5, 'Total Fat',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(7,-5, 'Saturated Fat',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(8,-5, 'Cholesterol',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(9,-5, 'Sodium',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(10,-5, 'Carbohydrates',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(11,-5, 'Dietary Fiber',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(12,-5, 'Vitamin A',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(13,-5, 'Vitamin C',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(14,-5, 'Calcium',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    plt.text(15,-5, 'Iron',horizontalalignment='right',verticalalignment='top',rotation='vertical',fontsize=13,color='black', alpha=1,zorder=1)
+    j = 0
+    for i in range(p*r,p*r+r):
+        if x1[i] == 'Breakfast':
+            k = 0
+        if x1[i] == 'Beef & Pork':
+            k = 1
+        if x1[i] == 'Chicken & Fish':
+            k = 2
+        if x1[i] == 'Coffee & Tea':
+            k = 3
+        if x1[i] == 'Salads':
+            k = 4
+        if x1[i] == 'Smoothies & Shakes':
+            k = 5
+        if x1[i] == 'Snacks & Sides':
+            k = 6  
+        if x1[i] == 'Beverages':
+            k = 7  
+        if x1[i] == 'Desserts':
+            k = 8  
+        #plt.imshow(ndimage.rotate(images[k], 180), extent=[-13.5,-12.75,j-0.5,j+0.25],aspect= 1,cmap=plt.cm.gray,interpolation = 'none',zorder=0)
+        plt.text(-12.25, j, str(x2[i]), fontsize=13,color='black', alpha=1,zorder=1)
+        if x3[i] > 0:
+            plt.text(0.5,j, x3[i], horizontalalignment='right',fontsize=13,color='darkorange', alpha=1,zorder=1)
+        else:
+            plt.text(0.5, j, '-', horizontalalignment='center',fontsize=13,color='darkorange', alpha=1,zorder=1)
+        if x4[i] > 0:
+            plt.text(2,j, x4[i], horizontalalignment='right',fontsize=13,color='sienna', alpha=1,zorder=1)
+        else:
+            plt.text(2, j, '-', horizontalalignment='center',fontsize=13,color='sienna', alpha=1,zorder=1)
+        if x5[i] > 0:
+            plt.text(3, j, x5[i], horizontalalignment='right',fontsize=13,color='crimson', alpha=1,zorder=1)
+        else:
+            plt.text(3, j, '-', horizontalalignment='center',fontsize=13,color='crimson', alpha=1,zorder=1)
+        if x6[i] > 0:
+            plt.text(4, j, x6[i], horizontalalignment='right',fontsize=13,color='sienna', alpha=1,zorder=1)
+        else:
+            plt.text(4, j, '-', horizontalalignment='center',fontsize=13,color='sienna', alpha=1,zorder=1)
+        if x7[i] > 0:
+            plt.text(5, j, x7[i], horizontalalignment='right',fontsize=13,color='sienna', alpha=1,zorder=1)
+        else:
+            plt.text(5, j, '-', horizontalalignment='center',fontsize=13,color='sienna', alpha=1,zorder=1)
+       
+        plt.scatter(6,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(7,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(8,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(9,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(10,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
     
-    trace_dataset = dataset.loc[dataset['Manufacturer'] == manufacturer]
+        plt.scatter(11,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(12,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(13,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(14,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        plt.scatter(15,j, s=int(100)*3, c='grey', alpha=0.15,zorder=1)
+        
+        plt.scatter(6,j, s=int(x8[i])*3, c='crimson', alpha=0.8,zorder=2)
+        plt.scatter(7,j, s=int(x9[i])*3, c='crimson', alpha=0.8,zorder=2)
+        plt.scatter(8,j, s=int(x10[i])*3, c='crimson', alpha=0.8,zorder=2)
+        plt.scatter(9,j, s=int(x11[i])*3, c='crimson', alpha=0.8,zorder=2)
+        plt.scatter(10,j, s=int(x12[i])*3, c='crimson', alpha=0.8,zorder=2)
     
-    trace = go.Scatter(
-        x = trace_dataset['Release_Year'],
-        y = trace_dataset['Memory'],
-        mode = 'markers',
-        name = manufacturer,
-        marker= dict(symbol="circle",
-                    size = trace_dataset['PixelNum']/100000,
-                    opacity = 0.4,
-                    line= dict(width=1,
-                               color = 'rgb(255, 255, 255)'
-                              ),
-        ),
-        text= dataset['Name']
-    )
-    
-    data.append(trace)
-    
-layout = dict(title = 'GPU Memory vs Year of Release by Manufacturer',
-              width=1000,
-              height=800,
-              paper_bgcolor='rgb(243, 243, 243)',
-              plot_bgcolor='rgb(243, 243, 243)',
-              yaxis = dict(title= 'GPUs Memory',
-                           ticklen= 5,
-                           gridcolor='rgb(255, 255, 255)',
-                           gridwidth= 2),
-              xaxis = dict(title= 'Year of Release',
-                           ticklen= 5,
-                           gridcolor='rgb(255, 255, 255)',
-                           gridwidth= 2)
-             )
+        plt.scatter(11,j, s=int(x13[i])*3, c='seagreen', alpha=0.8,zorder=2)
+        plt.scatter(12,j, s=int(x14[i])*3, c='seagreen', alpha=0.8,zorder=2)
+        plt.scatter(13,j, s=int(x15[i])*3, c='seagreen', alpha=0.8,zorder=2)
+        plt.scatter(14,j, s=int(x16[i])*3, c='seagreen', alpha=0.8,zorder=2)
+        plt.scatter(15,j, s=int(x17[i])*3, c='seagreen', alpha=0.8,zorder=2)
+        j = j + 1
+    plt.xticks([])
+    plt.yticks([])
+    plt.legend()
+    plt.savefig('McDonald_Nutrition_'+str(p+1)+'.png',bbox_inches='tight',facecolor='#be0c0c',dpi=200)
+    plt.show()
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
 
-fig= go.Figure(data=data, layout=layout)
-py.iplot(fig)
-
-
-# <b>NOTE:</b> Circle size represents maximum resolution that is supported by GPU.
-
-# ### 2.3. GPU manufacturers market share
-# <a id="gpu_manufacturers_market_share"></a>
-
-# In[12]:
-
-
-# Transformed dataset - counting how many GPUs were made by each manufacturer each year
-market_share = dataset.reset_index().groupby(['Release_Year','Manufacturer'])["index"].count().reset_index(name="count")
-# Transformed dataset - counting how many GPUs were made each year
-market_share['Sum_By_Year']  = market_share['count'].groupby(market_share["Release_Year"]).transform('sum')
-# List that will hold our data dictionaries
-data = []
-
-markers = [
-    dict(
-        color='rgba(55, 128, 191, 0.7)',
-        line=dict(
-            color='rgba(55, 128, 191, 1.0)',
-            width=2,
-        )
-    ),
-    dict(
-        color='rgba(219, 64, 82, 0.7)',
-        line=dict(
-            color='rgba(219, 64, 82, 1.0)',
-            width=2,
-        )
-    ),
-    dict(
-        color='rgba(0, 168, 107, 0.7)',
-        line=dict(
-            color='rgba(0, 168, 107, 1.0)',
-            width=2,
-        )
-    ),
-    dict(
-        color='rgba(250, 92, 0, 0.7)',
-        line=dict(
-            color='rgba(250, 92, 0, 1.0)',
-            width=2,
-        )
-    )
-]
-
-for i, manufacturer in enumerate(dataset['Manufacturer'].unique()):
-    
-    trace_dataset = market_share.loc[market_share['Manufacturer'] == manufacturer]
-    
-    
-    trace = go.Bar(
-        x = trace_dataset['Release_Year'],
-        y = round(trace_dataset['count'] / trace_dataset['Sum_By_Year'] * 100, 2),
-        name= manufacturer,
-        marker = markers[i],
-    )
-    
-    data.append(trace)
-    
-layout = go.Layout(
-    barmode='stack',
-    title = 'GPU manufacturers market share',
-    width=1000,
-    height=500,
-    paper_bgcolor='rgb(243, 243, 243)',
-    plot_bgcolor='rgb(243, 243, 243)',
-    yaxis = dict(title= 'Manufacturers market share [%]'),
-    xaxis = dict(title= 'Manufacturers')
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
-
-
-# <b>NOTE:</b> It is very likely that dataset for years 2016/2017 is incomplete.
-
-# ## 3. GPU Memory
-# <a id="gpu_memory"></a>
-
-# ### 3.1. GPU Memory vs Year of Release (Scatter Plot)
-# <a id="gpu_memory_vs_year_of_release"></a>
-
-# <b>NOTE:</b> Firstly, lets prepere simple scatter plot and look at relation between year of release and memory size of GPU.
-
-# In[13]:
-
-
-plt.figure(figsize=(16,10))
-sns.set_style("whitegrid")
-plt.title('GPU Memory vs Year of Release', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Year of Release', fontsize=15)
-plt.ylabel('GPU Memory', fontsize=15)
-
-years = dataset["Release"].values
-memory = dataset["Memory"].values
-
-plt.scatter(years, memory, edgecolors='black')
-plt.show()
-
-
-# ### 3.2. Mean GPU Memory vs Year of Release (Line Plot)
-# <a id="mean_gpu_memory_vs_year_of_release"></a>
-
-# <b>NOTE:</b> Now we will calculate mean and median Memory Size of GPU for each year and create line plots to visualize the upward trend. Right away we see that Moore's law quite accurate.
-
-# In[14]:
-
-
-# Numpy array that holds unique release year values
-year_arr = dataset.sort_values("Release_Year")['Release_Year'].unique()
-# Numpy array that holds mean values of GPUs memory for each year
-memory_arr_mean = dataset.groupby('Release_Year')['Memory'].mean().values
-# Numpy array that holds median values of GPUs memory for each year
-memory_arr_median = dataset.groupby('Release_Year')['Memory'].median().values
-
-# Minimal value of release year from dataset
-year_min = year_arr[0]
-# Median size of memory in year_min
-memory_min = memory_arr_median[0]
-
-
-# In[15]:
-
-
-plt.figure()
-plt.figure(figsize=(16,8))
-plt.title('GPU Memory vs Year of Release', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Year of Release', fontsize=15)
-plt.ylabel('GPU Memory', fontsize=15)
-sns.set_style("whitegrid")
-plt.plot(year_arr, memory_arr_mean, label="Mean")
-plt.plot(year_arr, memory_arr_median, label="Median")
-plt.legend(loc=4, prop={'size': 15}, frameon=True,shadow=True, facecolor="white", edgecolor="black")
-plt.show()
-
-
-# ### 3.3. Creating theoretic model and fitting exponential curve
-# <a id="creating_theoretic_model_and_fitting_exponential_curve"></a>
-
-# <b>NOTE:</b> Let's see how above plot would look like in logarithmic scale. If Moore's law is acurate graph should be close to the straight line. As a matter of fact function that would represent memory size calculated using Moore's law taking into account the initial values would have the following form: 
-# 
-# $$f(x)=y_{min}2^{\frac{x-x_{min}}{2}}$$
-# 
-# Where: 
-# * $y_{min}$ - initial size of memory in MB, 
-# * $x_{min}$ - initial year of dataset.
-
-# In[16]:
-
-
-# Short function to calculate size of memory based on Moore's law
-def calculateMooresValue(x, y_trans):
-    return memory_arr_median[0] * 2**((x-y_trans)/2)
-
-# GPU Memory Size calculation based on Moore's Law
-y_pred_moore_law_teoretic = calculateMooresValue(year_arr, int(year_min))
-
-
-# In[17]:
-
-
-# Fitting exponential curve to dataset
-def exponentialCurve(x, a, b, c):
-    return a*2**((x-c)*b)
-
-popt, pcov = curve_fit(exponentialCurve,  year_arr, memory_arr_mean,  p0=(2, 0.5, 1998))
-y_pred_moore_law_fitted = exponentialCurve(year_arr, *popt)
-
-
-# In[18]:
-
-
-plt.figure()
-plt.figure(figsize=(16,8))
-plt.title('GPU Memory vs Year of Release [Logaritmic scale]', fontsize=20, fontweight='bold', y=1.05,)
-plt.xlabel('Year of Release', fontsize=15)
-plt.ylabel('GPU Memory', fontsize=15)
-sns.set_style("whitegrid")
-plt.loglog(year_arr, memory_arr_mean, label="Mean", basex= 2)
-plt.loglog(year_arr, memory_arr_median, label="Median", basex= 2)
-plt.loglog(year_arr, y_pred_moore_law_teoretic, label="Moore's law teoretic", basex= 2)
-plt.loglog(year_arr, y_pred_moore_law_fitted, label="Moore's law fitted", basex= 2)
-plt.legend(loc=4, prop={'size': 15}, frameon=True,shadow=True, facecolor="white", edgecolor="black")
-plt.show()
-
-
-# <b>NOTE:</b> As we can see, mean size of GPUs memory tends to follow teoretic Moore's law curve [green line] but not ideally. I used curve_fit to create second curve from the same family, that will fit dataset better [red line].
-
-# ### 3.4. Polynomial regression prediction model
-# <a id="polynomial_regression_prediction_model"></a>
-
-# In[19]:
-
-
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import PolynomialFeatures
-
-# Fitting Polynomial Regression to the dataset
-poly_reg_2 = PolynomialFeatures(degree = 2, include_bias=False)
-poly_reg_3 = PolynomialFeatures(degree = 3, include_bias=False)
-
-X_poly_2 = poly_reg_2.fit_transform(year_arr.reshape(-1, 1))
-X_poly_3 = poly_reg_3.fit_transform(year_arr.reshape(-1, 1))
-
-lin_reg_2 = LinearRegression()
-lin_reg_3 = LinearRegression()
-
-lin_reg_2.fit(X_poly_2, memory_arr_mean)
-lin_reg_3.fit(X_poly_3, memory_arr_mean)
-
-y_pred_lin_reg_2 = lin_reg_2.predict(poly_reg_2.fit_transform(year_arr.reshape(-1, 1)))
-y_pred_lin_reg_3 = lin_reg_3.predict(poly_reg_3.fit_transform(year_arr.reshape(-1, 1)))
-
-
-# ### 3.5. Selecting best model
-# <a id="selecting_best_model"></a>
-
-# In[20]:
-
-
-from sklearn.metrics import r2_score
-
-# 2nd degree curve
-score = r2_score(y_pred_lin_reg_2, memory_arr_mean)
-print("r2 of 2nd degree curve is equal " + str(round(score, 3)))
-# 3rd degree curve
-score = r2_score(y_pred_lin_reg_3, memory_arr_mean)
-print("r2 of 3rd degree curve is equal " + str(round(score, 3)))
-# Teoretic Moore's Law curve
-score = r2_score(y_pred_moore_law_teoretic, memory_arr_mean)
-print("r2 of Teoretic Moore's Law curve is equal " + str(round(score, 3)))
-# Fitted Moore's Law curve
-score = r2_score(y_pred_moore_law_fitted, memory_arr_mean)
-print("r2 of Fitted Moore's Law curve is equal " + str(round(score, 3)))
-
-
-# <b>NOTE:</b> Basing on above r2 scores I select Fitted Moore's Law curve for predicting GPUs Mean Memory Size.
-
-# In[21]:
-
-
-X_grid = np.arange(min(year_arr), max(year_arr) + 5, 0.1)
-X_grid = X_grid.reshape((len(X_grid), 1))
-
-y_pred_lin_reg_2 = lin_reg_2.predict(poly_reg_2.fit_transform(X_grid))
-y_pred_lin_reg_3 = lin_reg_3.predict(poly_reg_3.fit_transform(X_grid))
-
-X_grid = X_grid.flatten()
-
-y_pred_moore_law_teoretic = calculateMooresValue(X_grid, int(year_min))
-y_pred_moore_law_fitted = exponentialCurve(X_grid, *popt)
-
-trace1 = go.Scatter(
-    x = X_grid,
-    y = y_pred_lin_reg_2,
-    mode = 'lines',
-    name = '2nd degree polynomial'
-)
-trace2 = go.Scatter(
-    x = X_grid,
-    y = y_pred_lin_reg_3,
-    mode = 'lines',
-    name = '3rd degree polynomial'
-)
-trace3 = go.Scatter(
-    x = X_grid,
-    y = y_pred_moore_law_teoretic,
-    mode = 'lines',
-    name = "Teoretic Moore's Law curve"
-)
-trace4 = go.Scatter(
-    x = X_grid,
-    y = y_pred_moore_law_fitted,
-    mode = 'lines',
-    name = "Fitted Moore's Law curve"
-)
-
-data = [trace1, trace2, trace3, trace4]
-
-layout = go.Layout(
-    title = 'Fitting regression model into dataset',
-    width=1000,
-    height=500,
-    paper_bgcolor='rgb(243, 243, 243)',
-    plot_bgcolor='rgb(243, 243, 243)',
-    yaxis = dict(title= 'GPU Memory'),
-    xaxis = dict(title= 'Year of Release'),
-    legend=dict(
-        x=0,
-        y=1,
-        traceorder='normal',
-        font=dict(
-            family='sans-serif',
-            size=12,
-            color='#000'
-        ),
-        bgcolor='#E2E2E2',
-        bordercolor='#FFFFFF',
-        borderwidth=2
-    )
-)
-fig = go.Figure(data=data, layout=layout)
-
-py.iplot(fig)
-
-
-# ### 3.6. Predicting GPUs mean memory size in 2025
-# <a id="predicting_gpus_mean_memory_size_in_2025"></a>
-
-# In[22]:
-
-
-memory_2025 = exponentialCurve(2025, *popt)
-
-
-# In[23]:
-
-
-print("Predicted mean size of GPU memory in 2025 is " + str(round(int(memory_2025) / 1024, 2)) + " GB.")
-
-
-# ## 4. Bibliography
-# <a id="bibliography"></a>
-
-# 1. Moore's law: https://en.wikipedia.org/wiki/Moore%27s_law
-# 2. "Missingno" GitHub repository: https://github.com/ResidentMario/missingno
-# 3. Polynomial regression theory: https://neutrium.net/mathematics/least-squares-fitting-of-a-polynomial/
-
-# # To be continued...

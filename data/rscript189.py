@@ -1,61 +1,64 @@
-import pandas as pd
-import xgboost as xgb
-import csv
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from sklearn.metrics import roc_auc_score
+from sklearn.linear_model import LogisticRegression
+from collections import defaultdict
 
-# XGBoost params:
-xgboost_params = { 
-   "objective": "binary:logistic",
-   "booster": "gbtree",
-   "eval_metric": "auc",
-   "eta": 0.01, # 0.06, #0.01,
-   #"min_child_weight": 240,
-   "subsample": 0.75,
-   "colsample_bytree": 0.68,
-   "max_depth": 7
-}
+usecols = ['ncodpers', 'ind_ahor_fin_ult1', 'ind_aval_fin_ult1', 'ind_cco_fin_ult1',
+       'ind_cder_fin_ult1', 'ind_cno_fin_ult1', 'ind_ctju_fin_ult1',
+       'ind_ctma_fin_ult1', 'ind_ctop_fin_ult1', 'ind_ctpp_fin_ult1',
+       'ind_deco_fin_ult1', 'ind_deme_fin_ult1', 'ind_dela_fin_ult1',
+       'ind_ecue_fin_ult1', 'ind_fond_fin_ult1', 'ind_hip_fin_ult1',
+       'ind_plan_fin_ult1', 'ind_pres_fin_ult1', 'ind_reca_fin_ult1',
+       'ind_tjcr_fin_ult1', 'ind_valo_fin_ult1', 'ind_viv_fin_ult1',
+       'ind_nomina_ult1', 'ind_nom_pens_ult1', 'ind_recibo_ult1']
+       
+df_train = pd.read_csv('../input/train.csv', usecols=usecols)
+sample = pd.read_csv('../input/sample_submission.csv')
 
-print('Load data...')
-train = pd.read_csv("../input/train.csv")
-target = train['target']
-train = train.drop(['ID','target'],axis=1)
-test = pd.read_csv("../input/test.csv")
-ids = test['ID'].values
-test = test.drop(['ID'],axis=1)
-#
-print('Clearing...')
-for (train_name, train_series), (test_name, test_series) in zip(train.iteritems(),test.iteritems()):
-    if train_series.dtype == 'O':
-        #for objects: factorize
-        train[train_name], tmp_indexer = pd.factorize(train[train_name])
-        test[test_name] = tmp_indexer.get_indexer(test[test_name])
-        #but now we have -1 values (NaN)
-    else:
-        #for int or float: fill NaN
-        tmp_len = len(train[train_series.isnull()])
-        if tmp_len>0:
-            train.loc[train_series.isnull(), train_name] = train_series.mean()
-        #and Test
-        tmp_len = len(test[test_series.isnull()])
-        if tmp_len>0:
-            test.loc[test_series.isnull(), test_name] = train_series.mean()  #TODO
+df_train = df_train.drop_duplicates(['ncodpers'], keep='last')
 
-xgtrain = xgb.DMatrix(train.values, target.values)
-xgtest = xgb.DMatrix(test.values)
+df_train.fillna(0, inplace=True)
 
-#Now let's fit the model
-print('Fit the model...')
-boost_round = 5 #1800 CHANGE THIS BEFORE START
-clf = xgb.train(xgboost_params,xgtrain,num_boost_round=boost_round,verbose_eval=True,maximize=False)
+models = {}
+model_preds = {}
+id_preds = defaultdict(list)
+ids = df_train['ncodpers'].values
+for c in df_train.columns:
+    if c != 'ncodpers':
+        print(c)
+        y_train = df_train[c]
+        x_train = df_train.drop([c, 'ncodpers'], 1)
+        
+        clf = LogisticRegression()
+        clf.fit(x_train, y_train)
+        p_train = clf.predict_proba(x_train)[:,1]
+        
+        models[c] = clf
+        model_preds[c] = p_train
+        for id, p in zip(ids, p_train):
+            id_preds[id].append(p)
+            
+        print(roc_auc_score(y_train, p_train))
+        
+already_active = {}
+for row in df_train.values:
+    row = list(row)
+    id = row.pop(0)
+    active = [c[0] for c in zip(df_train.columns[1:], row) if c[1] > 0]
+    already_active[id] = active
+    
+train_preds = {}
+for id, p in id_preds.items():
+    # Here be dragons
+    preds = [i[0] for i in sorted([i for i in zip(df_train.columns[1:], p) if i[0] not in already_active[id]], key=lambda i:i [1], reverse=True)[:7]]
+    train_preds[id] = preds
+    
+test_preds = []
+for row in sample.values:
+    id = row[0]
+    p = train_preds[id]
+    test_preds.append(' '.join(p))
 
-#Make predict
-print('Predict...')
-test_preds = clf.predict(xgtest, ntree_limit=clf.best_iteration)
-# Save results
-#
-predictions_file = open("simple_xgboost_result.csv", "w")
-open_file_object = csv.writer(predictions_file)
-open_file_object.writerow(["ID", "PredictedProb"])
-open_file_object.writerows(zip(ids, test_preds))
-predictions_file.close()
-#
-print('Done.')
+sample['added_products'] = test_preds
+sample.to_csv('collab_sub.csv', index=False)

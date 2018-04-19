@@ -1,214 +1,260 @@
 
 # coding: utf-8
 
-# I found kagglegym_emulation to be very helpfull (https://www.kaggle.com/slothouber/two-sigma-financial-modeling/kagglegym-emulation). What this script does is validating it against the actual kagglegym. I used some snippets from this script https://www.kaggle.com/sankhamukherjee/two-sigma-financial-modeling/prediction-model-elastic-net. 
-# 
-# Vote up if you find it meaningful :)
+# This script shows the full training and prediction pipeline for a pixel-based classifier: we create a mask, train logistic regression on one-pixel patches, make prediction for all pixels, create and smooth polygons from pixels.
 
 # In[ ]:
 
 
-import pandas as pd
+from collections import defaultdict
+import csv
+import sys
+
+import cv2
+from shapely.geometry import MultiPolygon, Polygon
+import shapely.wkt
+import shapely.affinity
 import numpy as np
-from sklearn.metrics import r2_score
-from sklearn.linear_model import ElasticNetCV
-import kagglegym
-import math
+import tifffile as tiff
+
+csv.field_size_limit(sys.maxsize);
 
 
-# In[ ]:
-
-
-# kagglegym_emulation code
-def r_score(y_true, y_pred):
-    r2 = r2_score(y_true, y_pred)
-    r = np.sign(r2) * np.sqrt(np.abs(r2))
-    return max(-1, r)
-
-
-class Observation(object):
-    def __init__(self, train, target, features):
-        self.train = train
-        self.target = target
-        self.features = features
-
-
-class Environment(object):
-    def __init__(self):
-        with pd.HDFStore("../input/train.h5", "r") as hfdata:
-            self.timestamp = 0
-            fullset = hfdata.get("train")
-            self.unique_timestamp = fullset["timestamp"].unique()
-            # Get a list of unique timestamps
-            # use the first half for training and
-            # the second half for the test set
-            n = len(self.unique_timestamp)
-            i = int(n/2)
-            timesplit = self.unique_timestamp[i]
-            self.n = n
-            self.unique_idx = i
-            self.train = fullset[fullset.timestamp < timesplit]
-            self.test = fullset[fullset.timestamp >= timesplit]
-
-            # Needed to compute final score
-            self.full = self.test.loc[:, ['timestamp', 'y']]
-            self.full['y_hat'] = 0.0
-            self.temp_test_y = None
-
-    def reset(self):
-        timesplit = self.unique_timestamp[self.unique_idx]
-
-        self.unique_idx = int(self.n / 2)
-        self.unique_idx += 1
-        subset = self.test[self.test.timestamp == timesplit]
-
-        # reset index to conform to how kagglegym works
-        target = subset.loc[:, ['id', 'y']].reset_index(drop=True)
-        self.temp_test_y = target['y']
-
-        target.loc[:, 'y'] = 0.0  # set the prediction column to zero
-
-        # changed bounds to 0:110 from 1:111 to mimic the behavior
-        # of api for feature
-        features = subset.iloc[:, :110].reset_index(drop=True)
-
-        observation = Observation(self.train, target, features)
-        return observation
-
-    def step(self, target):
-        timesplit = self.unique_timestamp[self.unique_idx-1]
-        # Since full and target have a different index we need
-        # to do a _values trick here to get the assignment working
-        y_hat = target.loc[:, ['y']]
-        self.full.loc[self.full.timestamp == timesplit, ['y_hat']] = y_hat._values
-
-        if self.unique_idx == self.n:
-            done = True
-            observation = None
-            reward = r_score(self.temp_test_y, target.loc[:, 'y'])
-            score = r_score(self.full['y'], self.full['y_hat'])
-            info = {'public_score': score}
-        else:
-            reward = r_score(self.temp_test_y, target.loc[:, 'y'])
-            done = False
-            info = {}
-            timesplit = self.unique_timestamp[self.unique_idx]
-            self.unique_idx += 1
-            subset = self.test[self.test.timestamp == timesplit]
-
-            # reset index to conform to how kagglegym works
-            target = subset.loc[:, ['id', 'y']].reset_index(drop=True)
-            self.temp_test_y = target['y']
-
-            # set the prediction column to zero
-            target.loc[:, 'y'] = 0
-
-            # column bound change on the subset
-            # reset index to conform to how kagglegym works
-            features = subset.iloc[:, 0:110].reset_index(drop=True)
-
-            observation = Observation(self.train, target, features)
-
-        return observation, reward, done, info
-
-    def __str__(self):
-        return "Environment()"
-
-
-def make():
-    return Environment()
-
+# We'll work on buildings (class 1) from image 6120_2_2. Fist load grid sizes and polygons.
 
 # In[ ]:
 
 
-# predictive model wrapper, also see https://www.kaggle.com/sankhamukherjee/two-sigma-financial-modeling/prediction-model-elastic-net
-class fitModel():
-    def __init__(self, model, train, columns):
+IM_ID = '6120_2_2'
+POLY_TYPE = '1'  # buildings
 
-        # first save the model ...
-        self.model   = model
-        self.columns = columns
-        
-        # Get the X, and y values, 
-        y = np.array(train.y)
-        
-        X = train[columns]
-        self.xMeans = X.mean(axis=0) # Remember to save this value
-        self.xStd   = X.std(axis=0)  # Remember to save this value
-
-        X = np.array(X.fillna( self.xMeans ))
-        X = (X - np.array(self.xMeans))/np.array(self.xStd)
-        
-        # fit the model
-        self.model.fit(X, y)
-        
-        return
-    
-    def predict(self, features):
-        X = features[self.columns]
-        X = np.array(X.fillna( self.xMeans ))
-        X = (X - np.array(self.xMeans))/np.array(self.xStd)
-
-        return self.model.predict(X)
-
-
-# In[ ]:
-
-
-def list_match(list_a, list_b):
-    for i, j in zip(list_a, list_b):
-        if i != j:
-            return False
-    return True
-
-
-# In[ ]:
-
-
-# Validaiton of kagglegym_emulation
-env = kagglegym.make()
-env_test = make()
-
-# Check observations
-observation = env.reset()
-observation_test = env_test.reset()
-assert list_match(observation.train.id.values, observation_test.train.id.values)    
-    
-elastic_net = ElasticNetCV()
-columns = ['technical_30', 'technical_20', 'fundamental_11', 'technical_19']
-model = fitModel(elastic_net, observation.train.copy(), columns)
-model_test = fitModel(elastic_net, observation_test.train.copy(), columns)
-
-while True:
-        
-    prediction       = model.predict(observation.features.copy())
-    prediction_test  = model_test.predict(observation_test.features.copy())
-    
-    assert list_match(prediction, prediction_test)
-  
-    
-    target           = observation.target
-    target_test      = observation_test.target
-    target['y'] = prediction
-    target_test['y'] = prediction_test
-        
-    timestamp = observation.features["timestamp"][0]
-    if timestamp % 100 == 0:
-        print(timestamp)
-    
-    observation, reward, done, info = env.step(target)
-    observation_test, reward_test, done_test, info_test = env_test.step(target)
-    
-
-    assert done == done_test
-    assert math.isclose(reward, reward_test, abs_tol=5e-05)
-    
-
-    if done: 
-        assert math.isclose(info['public_score'],info_test['public_score'],  abs_tol=1e-07)
-        print('Info:',info['public_score'],'Info-test:',info_test['public_score'])
+# Load grid size
+x_max = y_min = None
+for _im_id, _x, _y in csv.reader(open('../input/grid_sizes.csv')):
+    if _im_id == IM_ID:
+        x_max, y_min = float(_x), float(_y)
         break
 
+# Load train poly with shapely
+train_polygons = None
+for _im_id, _poly_type, _poly in csv.reader(open('../input/train_wkt_v4.csv')):
+    if _im_id == IM_ID and _poly_type == POLY_TYPE:
+        train_polygons = shapely.wkt.loads(_poly)
+        break
 
-# **VALIDATED SUCCESSFULLY !!!**
+# Read image with tiff
+im_rgb = tiff.imread('../input/three_band/{}.tif'.format(IM_ID)).transpose([1, 2, 0])
+im_size = im_rgb.shape[:2]
+
+
+# Scale polygons to match image:
+
+# In[ ]:
+
+
+def get_scalers():
+    h, w = im_size  # they are flipped so that mask_for_polygons works correctly
+    w_ = w * (w / (w + 1))
+    h_ = h * (h / (h + 1))
+    return w_ / x_max, h_ / y_min
+
+x_scaler, y_scaler = get_scalers()
+
+train_polygons_scaled = shapely.affinity.scale(
+    train_polygons, xfact=x_scaler, yfact=y_scaler, origin=(0, 0, 0))
+
+
+# Create a mask from polygons:
+
+# In[ ]:
+
+
+def mask_for_polygons(polygons):
+    img_mask = np.zeros(im_size, np.uint8)
+    if not polygons:
+        return img_mask
+    int_coords = lambda x: np.array(x).round().astype(np.int32)
+    exteriors = [int_coords(poly.exterior.coords) for poly in polygons]
+    interiors = [int_coords(pi.coords) for poly in polygons
+                 for pi in poly.interiors]
+    cv2.fillPoly(img_mask, exteriors, 1)
+    cv2.fillPoly(img_mask, interiors, 0)
+    return img_mask
+
+train_mask = mask_for_polygons(train_polygons_scaled)
+
+
+# A helper for nicer display
+
+# In[ ]:
+
+
+def scale_percentile(matrix):
+    w, h, d = matrix.shape
+    matrix = np.reshape(matrix, [w * h, d]).astype(np.float64)
+    # Get 2nd and 98th percentile
+    mins = np.percentile(matrix, 1, axis=0)
+    maxs = np.percentile(matrix, 99, axis=0) - mins
+    matrix = (matrix - mins[None, :]) / maxs[None, :]
+    matrix = np.reshape(matrix, [w, h, d])
+    matrix = matrix.clip(0, 1)
+    return matrix
+
+
+# Check that image and mask are aligned.
+# Image:
+
+# In[ ]:
+
+
+tiff.imshow(255 * scale_percentile(im_rgb[2900:3200,2000:2300]));
+
+
+# And mask:
+
+# In[ ]:
+
+
+def show_mask(m):
+    # hack for nice display
+    tiff.imshow(255 * np.stack([m, m, m]));
+show_mask(train_mask[2900:3200,2000:2300])
+
+
+# Now, let's train a very simple logistic regression classifier, just to get some noisy prediction to show how output mask is processed.
+
+# In[ ]:
+
+
+from sklearn.linear_model import SGDClassifier
+from sklearn.preprocessing import StandardScaler
+from sklearn.pipeline import make_pipeline
+from sklearn.model_selection import cross_val_predict
+from sklearn.metrics import average_precision_score
+
+xs = im_rgb.reshape(-1, 3).astype(np.float32)
+ys = train_mask.reshape(-1)
+pipeline = make_pipeline(StandardScaler(), SGDClassifier(loss='log'))
+
+print('training...')
+# do not care about overfitting here
+pipeline.fit(xs, ys)
+pred_ys = pipeline.predict_proba(xs)[:, 1]
+print('average precision', average_precision_score(ys, pred_ys))
+pred_mask = pred_ys.reshape(train_mask.shape)
+
+
+# Now check predictions:
+
+# In[ ]:
+
+
+show_mask(pred_mask[2900:3200,2000:2300])
+
+
+# We must choose a threshold to turn it into a binary mask:
+
+# In[ ]:
+
+
+threshold = 0.3
+pred_binary_mask = pred_mask >= threshold
+show_mask(pred_binary_mask[2900:3200,2000:2300])
+
+
+# Now it's possible to check Jaccard on the pixel level:
+
+# In[ ]:
+
+
+# check jaccard on the pixel level
+tp, fp, fn = (( pred_binary_mask &  train_mask).sum(),
+              ( pred_binary_mask & ~train_mask).sum(),
+              (~pred_binary_mask &  train_mask).sum())
+print('Pixel jaccard', tp / (tp + fp + fn))
+
+
+# Next is the most interesting bit, creating polygons from bit masks. Please see inline comments:
+
+# In[ ]:
+
+
+def mask_to_polygons(mask, epsilon=10., min_area=10.):
+    # first, find contours with cv2: it's much faster than shapely
+    image, contours, hierarchy = cv2.findContours(
+        ((mask == 1) * 255).astype(np.uint8),
+        cv2.RETR_CCOMP, cv2.CHAIN_APPROX_TC89_KCOS)
+    # create approximate contours to have reasonable submission size
+    approx_contours = [cv2.approxPolyDP(cnt, epsilon, True)
+                       for cnt in contours]
+    if not contours:
+        return MultiPolygon()
+    # now messy stuff to associate parent and child contours
+    cnt_children = defaultdict(list)
+    child_contours = set()
+    assert hierarchy.shape[0] == 1
+    # http://docs.opencv.org/3.1.0/d9/d8b/tutorial_py_contours_hierarchy.html
+    for idx, (_, _, _, parent_idx) in enumerate(hierarchy[0]):
+        if parent_idx != -1:
+            child_contours.add(idx)
+            cnt_children[parent_idx].append(approx_contours[idx])
+    # create actual polygons filtering by area (removes artifacts)
+    all_polygons = []
+    for idx, cnt in enumerate(approx_contours):
+        if idx not in child_contours and cv2.contourArea(cnt) >= min_area:
+            assert cnt.shape[1] == 1
+            poly = Polygon(
+                shell=cnt[:, 0, :],
+                holes=[c[:, 0, :] for c in cnt_children.get(idx, [])
+                       if cv2.contourArea(c) >= min_area])
+            all_polygons.append(poly)
+    # approximating polygons might have created invalid ones, fix them
+    all_polygons = MultiPolygon(all_polygons)
+    if not all_polygons.is_valid:
+        all_polygons = all_polygons.buffer(0)
+        # Sometimes buffer() converts a simple Multipolygon to just a Polygon,
+        # need to keep it a Multi throughout
+        if all_polygons.type == 'Polygon':
+            all_polygons = MultiPolygon([all_polygons])
+    return all_polygons
+
+
+# Turn our prediction to polygons, and then turn back into a mask to check what it looks like:
+
+# In[ ]:
+
+
+pred_polygons = mask_to_polygons(pred_binary_mask)
+pred_poly_mask = mask_for_polygons(pred_polygons)
+show_mask(pred_poly_mask[2900:3200,2000:2300])
+
+
+# Now to create a submission we just scale back to original coordinates
+
+# In[ ]:
+
+
+scaled_pred_polygons = shapely.affinity.scale(
+    pred_polygons, xfact=1 / x_scaler, yfact=1 / y_scaler, origin=(0, 0, 0))
+
+
+# Checking submission size:
+
+# In[ ]:
+
+
+dumped_prediction = shapely.wkt.dumps(scaled_pred_polygons)
+print('Prediction size: {:,} bytes'.format(len(dumped_prediction)))
+final_polygons = shapely.wkt.loads(dumped_prediction)
+
+
+# Now the litmus test: check Jaccard compared to **original** polygons
+# 
+
+# In[ ]:
+
+
+print('Final jaccard',
+      final_polygons.intersection(train_polygons).area /
+      final_polygons.union(train_polygons).area)
+

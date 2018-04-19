@@ -1,902 +1,511 @@
 
 # coding: utf-8
 
-# Hi All,  
-# thank you for visiting my kernel. I am beginner in Python programming and specially in data science. So I would be very keen if you could make some comments providing me some tips to be a better. Enjoy:-)
+# # Introduction
+# In this exploratory data analysis, I plan on analyzing the various data sets provided to us. I started with the training and test sets, sample submission, and store, item, and transaction metadata but plan on including the other data sets as well at a later point. Below, I will investigate the distribution of observations with respect to different features. I also inspected the distribution of the target variable, which is unit sales, for outliers. I found some interesting differences between the distribution of observations in the training and tests sets that are worth considering before training models. I also found that, within the store metadata, that store cluster is a subdivision of store type and that one state can have many different store types. Please upvote if you find this useful! Enjoy.
 
 # In[ ]:
 
 
+# import necessary modules
 import numpy as np
 import pandas as pd
-
-
-# Let's import train and test datasets:
-
-# In[ ]:
-
-
-dfTrain = pd.read_csv("../input/train.csv") # importing train dataset
-dfTest = pd.read_csv("../input/test.csv") # importing test dataset
-
-
-# Let's check what is inside:
-
-# In[ ]:
-
-
-dfTrain.head(1).info()
-
-
-# So for train dataset we have 891 records and 12 columns. Three columns contain some null data:   
-# Cabin: 687 nulls    
-# Age: 177 nulls  
-# Embarked: 2 nulls  
-# Let's see what is in test dataset:
-
-# In[ ]:
-
-
-dfTest.head(1).info()
-
-
-# Here we have 418 records. So data are split: 2/3 (train) and 1/3 (test).  
-# Regarding empty records:  
-# Cabin: 327 nulls  
-# Age: 86 nulls  
-# Fare: 1 null  
-
-# I want to set index as PassengerId:
-
-# In[ ]:
-
-
-dfTrain.set_index(['PassengerId'],inplace=True)
-dfTest.set_index(['PassengerId'],inplace=True)
-
-
-# # PART 1: PCLASS
-
-# My intuition says that Pclass could have an impact on Survival as higher class may have better access to lifeboats.  
-# Let's see:
-
-# In[ ]:
-
-
-import matplotlib as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-
-# In[ ]:
-
-
-dfTrain.groupby('Pclass').Survived.mean().plot(kind='bar')
-
-
-# That's true. Passengers from 1st class have better chance to survive than from 3rd. Clear correlation.
-
-# Now I would like to check what would be the score. I will be using Decision Tree classifer as it is quite easy and ideal for category data.
-
-# In[ ]:
-
-
-from sklearn.tree import DecisionTreeClassifier
-
-
-# In[ ]:
-
-
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
-
-
-# What we did? We fit the model (X_train + y) and then made a prediction using X_test. Then we created csv list ready to upload to Kaggle competition. We submitted the file and the result is:
-
-# ![Image](http://i63.tinypic.com/2rmv69g.jpg)
-
-# Quite nice start. 65% accurracy. I am happy;-)
-
-# # PART 2: SEX
-
-# What about sex? It could be also reasonable to check it as women should be passed before men:
-
-# In[ ]:
-
-
-dfTrain.groupby('Sex').Survived.mean().plot(kind='bar')
-
-
-# Wow, what a great correlation!  
-# Now, I am curious to check what is the survival rate for Class and Sex together:
-
-# In[ ]:
-
-
 import seaborn as sns
-
-
-# In[ ]:
-
-
-sns.factorplot("Sex", "Survived", hue="Pclass", data=dfTrain)
-
-
-# This is what I expected. Women from 1st and 2nd class had a chance to survive equals almost 100%!  
-# Respectively men from 2nd and 3rd class had only ~10% chance:-(
-
-# Let's predict the result combining Pclass & Sex:
-
-# In[ ]:
-
-
-dfFull = pd.concat([dfTrain,dfTest])
-dfFull['Sex'] = dfFull['Sex'].map({'male': 0, 'female': 1}).astype(int)
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-
-
-# In[ ]:
-
-
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
-
-
-# ![Image](http://i64.tinypic.com/34ot551.jpg)
-
-# Wow, what a progress! We gained 10% accurracy addding Sex category. Good direction;-)
-
-# # PART 3: PARCH
-
-# I wonder now about the Parch. It tells us how many children/parents travel with the passenger. Does it mean that families were priviliged or better to be a single? Let's check it. 
-
-# In[ ]:
-
-
-dfTrain.groupby('Parch').Survived.mean().plot(kind='bar')
-
-
-# Excellent. It seams there is a bonus for families, at least no bigger than 4. Singles are penalized. Before we build categories let's check number of items in each group:
-# 
-
-# In[ ]:
-
-
-dfFull.Parch.value_counts()
-
-
-# Categories with the items less than ~45 can't be taken as representative, so I make the following split:  
-# 0  
-# 1  
-# 2  
-# 3 and more
-
-# In[ ]:
-
-
-dfFull['ParchCat'] = dfFull.Parch.copy().astype(int)
-dfFull.loc[dfFull.Parch > 2,'ParchCat'] = 3
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-
-
-# Let's double check it:
-
-# In[ ]:
-
-
-dfTrain.groupby('ParchCat').Survived.mean().plot(kind='bar')
-
-
-# I am curious if adding Parch will improve our result:
-
-# In[ ]:
-
-
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex','ParchCat']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex','ParchCat']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
-
-
-# ![Image](http://i63.tinypic.com/154hax1.png)
-
-# Slight change in good direction +1% better;-)
-
-# # Part 4: SibSp
-
-# Naturally, after Parch category, let's check SibSp. It shows number of siblings or spouses.    
-# The question is, wether there is a correlation to Survival rate?
-
-# In[ ]:
-
-
-dfTrain.groupby('SibSp').Survived.mean().plot(kind='bar')
-
-
-# OK, similarly to Parch, having small family onboarded gives better chance to survive.  
-# I want to check how big is each group:
-
-# In[ ]:
-
-
-dfFull.SibSp.value_counts()
-
-
-# Again, categories below 45 items are not respresentative. Let's group them:
-
-# In[ ]:
-
-
-dfFull['SibSpCat'] = dfFull.SibSp.copy().astype(int)
-dfFull.loc[dfFull.SibSp > 2,'SibSpCat'] = 3
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-
-
-# It's time to verify the result:
-
-# In[ ]:
-
-
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex','ParchCat','SibSpCat']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex','ParchCat','SibSpCat']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
-
-
-# ![Image](http://i66.tinypic.com/2v7tf8k.png)
-
-# I am disappointed:-( The result is worse than without SibSp. Likely because Parch digested all glory...  
-# We are removing SibSp from the scope...
-
-# # PART 5: EMBARKED
-
-# I am not optimistic here as I don't believe that departure place could influence survival rate.  
-# However, we need to check it:
-
-# In[ ]:
-
-
-dfTrain.groupby('Embarked').Survived.mean().plot(kind='bar')
-
-
-# Let's recall: C = Cherbourg, Q = Queenstown, S = Southampton  
-# Wow, I am bit surprised. Maybe in Southampton were more males than in Cherbourg or Southhampton passengers chosen third class?
-
-# In[ ]:
-
-
-dfFull.groupby(['Embarked','Sex']).Name.count()
-
-
-# In[ ]:
-
-
-dfFull.groupby(['Embarked','Pclass']).Name.count()
-
-
-# Precisly. Cherbourg passengers are mainly first class. Moreover, no big difference between males and females (M:157, F:113).  
-# Southampton: mainly third class and males twice more the females.  
-# By the way it is interesting comparing countries:  
-# Cherbourg: France  
-# Southampton: England  
-# Quincetown: Ireland  
-# It seems that these days, the richest people were in France..
-
-# Before we start the prediction we need to imput two empty values:
-
-# In[ ]:
-
-
-dfFull[dfFull.Embarked.isnull()]
-
-
-# Let's presume that Fare and Class are related to Port. Having similar passengers with the comparable fare and class we can predict departure port:  
-
-# In[ ]:
-
-
-indexEmbarked = dfFull[dfFull.Embarked.isnull()].index.tolist()
-for indEmb in indexEmbarked:
-    fareEmbarked = dfFull.loc[indEmb].Fare.mean()
-    predictedEmbarked = dfFull[(dfFull.Fare < fareEmbarked*1.1) &
-                           (dfFull.Fare > fareEmbarked*0.9) &
-                           (dfFull.Pclass == dfFull.loc[indEmb].Pclass)].Embarked.mode()
-    dfFull.loc[indEmb,'Embarked'] = predictedEmbarked[0]
-    print(predictedEmbarked)   
-
-
-# It seems both passengers were onboarded in France. They survived...
-
-# Good, we have now all data in Embarked column. Let's make a prediction:
-
-# In[ ]:
-
-
-dfFull['Embarked'] = dfFull['Embarked'].map({'S': 0, 'Q': 1, 'C': 2}).astype(int)
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-
-
-# In[ ]:
-
-
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex','ParchCat','Embarked']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex','ParchCat','Embarked']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
-
-
-# ![Image](http://i68.tinypic.com/162203l.png)
-
-# Wow! + 1.5% accurracy. I am suprised!
-
-# # PART 6: FARE
-
-# Money can't swim, however they may somehow support Class category. Let's verify it:
-
-# Firstly, let's fill empty values:
-
-# In[ ]:
-
-
-nullFares = dfFull[dfFull.Fare.isnull()].index.values
-dfFull.loc[nullFares]
-
-
-# In[ ]:
-
-
-dfFull.loc[nullFares,'Fare']
-dfFull.loc[nullFares,'Fare'] = dfFull[(dfFull.ParchCat == 0) & (dfFull.Pclass ==3 ) & (dfFull.Embarked == 0)].Fare.mean()
-dfFull.loc[[1044]]
-
-
-# We calculated the mean of similar passengers from the same Class, Embarked and ParchCat. Mr Thomas paid ~10 pounds  
-
-# Now, let's see the correlance in the graph:
-
-# In[ ]:
-
-
 import matplotlib.pyplot as plt
-plt.hist([dfTrain[dfTrain['Survived']==1]['Fare'], dfTrain[dfTrain['Survived']==0]['Fare']], stacked=True, color = ['g','r'],
-         bins = 10,label = ['Survived','Not Survived'])
-plt.legend()
-plt.ylabel('No. of Passengers')
-plt.xlabel('Fare')
-
-
-# I think it looks obvious that low fares had less chance to survive.  
-# Let's make a simple split based on mean value:
-
-# In[ ]:
-
-
-fareMean = dfFull.Fare.mean()
-dfFull.loc[dfFull.Fare <= fareMean,'Fare']=0
-dfFull.loc[dfFull.Fare > fareMean,'Fare']=1
-dfFull.Fare.value_counts()
-
-
-# And now we are ready to start a prediction:
-
-# In[ ]:
-
-
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex','ParchCat','Embarked','Fare']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex','ParchCat','Embarked','Fare']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
-
-
-# ![Image](http://i67.tinypic.com/mmsksk.png)
-
-# Well done;-) ~+0.5%. We can improve the result providing more fitted split, but let's leave it at this point.
-
-# ## PART 7: CABIN
-
-# Honestly speaking I am not optimistic here. There are a lot of unique values and actually I don't really know what and where the cabin is. Moreover I have a lot of questions here i.e. does it mean, that empty values don't have a cabin or just data are missed? Hmm...
-
-# Let's start from some analysis:
-
-# In[ ]:
-
-
-dfFull.Cabin.value_counts(dropna=False)
-
-
-# That's a lot of categories. Let's simplify it taking only first letter:
-
-# In[ ]:
-
-
-dfFull.Cabin.str[0].value_counts(dropna=False)
-
-
-# Now it is better. We have to move last two items to N/A and make 'Z' category:
-
-# In[ ]:
-
-
-dfFull['CabinCat'] = dfFull.Cabin.str[0].fillna('Z')
-dfFull.loc[dfFull.CabinCat=='G','CabinCat']= 'Z'
-dfFull.loc[dfFull.CabinCat=='T','CabinCat']= 'Z'
-dfFull['CabinCat'] = dfFull['CabinCat'].map({'A': 0, 'B': 1, 'C': 2, 'D': 3, 'E': 4, 'F': 5, 'Z': 6}).astype(int)
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-dfTrain.groupby('CabinCat').Survived.mean().plot(kind='bar')
-
-
-#  I am not sure. Let's predict:
-
-# In[ ]:
-
-
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex','ParchCat','Embarked','Fare','CabinCat']]
-X_train = pd.get_dummies(X_train)
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex','ParchCat','Embarked','Fare','CabinCat']]
-X_test = pd.get_dummies(X_test)
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
-
-
-# ### score: 0.77990
-
-# The same result as without... No improvement so let's rig it out.
-
-# ## PART 8: NAME 
-
-# Name category is problematic, as only Title seems to be reasonable to take:
-
-# In[ ]:
-
-
-dfFull['Title'] = dfFull.Name.str.extract(' ([A-Za-z]+)\.', expand=False)
-dfFull.Title.value_counts()
-
-
-# All small categories should be taken out. We can put them into new category like Rest or something.  
-# We could also try to impute them putting mean values or... predict it:
-
-# In[ ]:
-
-
-dfFull['TitleCat']=dfFull['Title']
-dfFull.TitleCat.replace(to_replace=['Rev','Dr','Col','Major','Mlle','Ms','Countess','Capt','Dona','Don','Sir','Lady','Jonkheer','Mme'],
-                        value=0, inplace=True)
-dfFull.TitleCat.replace('Mr',1,inplace=True)
-dfFull.TitleCat.replace('Miss',2,inplace=True)
-dfFull.TitleCat.replace('Mrs',3,inplace=True)
-dfFull.TitleCat.replace('Master',4,inplace=True)                                            
-dfFull.TitleCat.value_counts(dropna=False)
-
-
-# Firstly let's check what categories could have an impact on Title by building correlation matrix:
-
-# In[ ]:
-
-
-dfFull.corr().TitleCat
-
-
-# The highest values came from Sex, PrachCat and SibSpCat. We have to resign from Survived as it has only data for Train.
-
-# In[ ]:
-
-
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-dtree = DecisionTreeClassifier()
-X_train = dfFull[dfFull.TitleCat!=0][['Sex','ParchCat','SibSpCat']]
-y = dfFull[dfFull.TitleCat!=0]['TitleCat']
-X_test = dfFull[dfFull.TitleCat==0][['Sex','ParchCat','SibSpCat']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = X_test.index.values,columns=['TitleCat'])
-#print(dfPrediction)
+import gc
 
 
 # In[ ]:
 
 
-dfFull.TitleCat
-dfFull.update(dfPrediction)
+# read data sets (this may take a few minutes)
+df_train = pd.read_csv("../input/train.csv")
+df_test = pd.read_csv("../input/test.csv")
+df_sub = pd.read_csv("../input/sample_submission.csv")
+df_stores = pd.read_csv("../input/stores.csv")
+df_items = pd.read_csv("../input/items.csv")
+df_trans = pd.read_csv("../input/transactions.csv")
+df_oil = pd.read_csv("../input/oil.csv")
+df_holiday = pd.read_csv("../input/holidays_events.csv")
 
 
-# In[ ]:
-
-
-dfFull.loc[dfPrediction.index,['TitleCat','Title','Sex','SibSpCat','ParchCat']]
-
-
-# Data looks accurately. So let's predict the result:
-
-# In[ ]:
-
-
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex','ParchCat','Embarked','Fare','TitleCat']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex','ParchCat','Embarked','Fare','TitleCat']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
-
-
-# ![Image](https://preview.ibb.co/cnw34k/sex_par_emb_far_tit_age.png)
-
-# 79.426%! The progress +1.5%. We are approaching slowly 80%;-) We have still a couple of bullets in the gun: Age, Ticket, tweaking Classifier, second level prediction...
-
-# ## PART 9: AGE
-
-# Let's start from round Age:
+# # Training set
 
 # In[ ]:
 
 
-dfFull['Age'] = dfFull.Age.round()
+# inspect training set
+print(df_train.shape)
+df_train.head()
 
 
-# Now I would like to check what are correlated categories with Age. It will help to prepare prediction.
+# The training set has 125,497,040 rows and 6 columns: row id, date, store number, item number, unit sales (keep in mind that this can be an integer, float, or -1, which represents a returned item), and whether there was a promotion for a particular item. 
 
-# In[ ]:
-
-
-dfFull.corr().Age
-
-
-# OK. We have Pclass, SibSp, CabinCat and TitleCat as the most correlated. Let's use this knowledge:
-
-# In[ ]:
-
-
-X_train = dfFull[dfFull.Age.notnull()][['Pclass','SibSp','CabinCat','TitleCat']]
-X_test = dfFull[dfFull.Age.isnull()][['Pclass','SibSp','CabinCat','TitleCat']]
-y = dfFull.Age.dropna()
-
-
-# Now it is time to predict missing values of Age:
-
-# In[ ]:
-
-
-dtree = DecisionTreeClassifier()
-dtree.fit(X_train, y)
-prediction = dtree.predict(X_test)
-agePrediction = pd.DataFrame(data=prediction,index=X_test.index.values,columns=['Age'])
-dfFull = dfFull.combine_first(agePrediction)
-
-
-# Let's double check it:'
-
-# In[ ]:
-
-
-dfFull.Age.isnull().sum()
-
-
-# Excellent. Now it is time to look deeper into data:
-
-# In[ ]:
-
-
-dfFull['ageBins'] = pd.cut(dfFull['Age'],list(range(0,80,5)))
-
-
-# In[ ]:
-
-
-sns.factorplot("ageBins", "Survived", hue="Sex", data=dfFull.loc[1:891,:],size=7)
-
-
-# 0 means males  
-# 1 means females  
-# Till 5 years old the survival rate is similar to women. It in naturally because woman can take small child very easly.  
-# However around 5-10 something weird is happening. Huge drop on girls event worse than boys.  
-# Let's check what is the number of such young children:  
-
-# In[ ]:
-
-
-dfFull.loc[1:891,:].groupby(['Sex','ageBins']).Name.count()
-
-
-# I thought it will be less.  
-# Let's here assume that above 10 year, everything looks quite normal and the age doesn't play any role in survival.
-
-# In[ ]:
-
-
-dfFull.loc[dfFull.Age <11,'Age'] = 0
-dfFull.loc[(dfFull.Age >=10),'Age'] = 1
-dfFull.Age.value_counts()
-
-
-# As always, let's make a prediction:
-
-# In[ ]:
-
-
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex','ParchCat','Embarked','Fare','TitleCat','Age']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex','ParchCat','Embarked','Fare','TitleCat','Age']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
-
-
-# ![Image](https://preview.ibb.co/iZTO9k/dectree_cla_sex_par_emb_tit_age_far.png)
+# ## Dates
 # 
-
-# Another good step forward. Age category gave us +0.5%. Only one step from 0.8.
-
-# ## PART 10: TICKET 
-
-# Let's start from checking values in Ticket category:
+# Now, let's get a sense of the time range for which the data was collected.
 
 # In[ ]:
 
 
-dfTicket = dfFull.Ticket.value_counts()
-dfTicket.head()
-
-
-# We have tickets assigned to more than one person. It means the same ticket may belong to other family members.
-# Let's make a category, based on ticket occurrences. I hope it will support Parch category.
-
-# In[ ]:
-
-
-lstTicket = dfTicket.loc[dfTicket > 1].index.tolist()
-lstTicketSingle = dfTicket.loc[dfTicket == 1].index.tolist()
+# convert date to datetime
+df_train["date"] =  pd.to_datetime(df_train["date"])
 
 
 # In[ ]:
 
 
-len(lstTicket)
+df_train["date"].dt.year.value_counts(sort = False).plot.bar()
 
 
-# In[ ]:
-
-
-len(lstTicketSingle)
-
-
-# We have 713 single tickets and 216 that belong to family members. Based on ticket we can easly identify family members. For example:
+# They have collected data from 2013 to 2017. There is an increase in the number of observations for each year except 2017 but this is probably because it is not yet over. Note that the training set is quite large so I will focus my analysis hereafter on 2016 data.
 
 # In[ ]:
 
 
-dfFull[dfFull.Ticket=='347082'].Name
+df_train_2016 = df_train[df_train["date"].dt.year == 2016]
+del df_train; gc.collect() # free up some memory
 
 
-# Now, it is time to update ticket number with new category:
-
-# In[ ]:
-
-
-dfFull['TicketCat'] = dfFull['Ticket'].copy()
-
+# Let's take a look at how the data is distributed by month.
 
 # In[ ]:
 
 
-i=1
-for ticket in lstTicket:
-    dfFull.loc[dfFull.Ticket == ticket, 'TicketCat'] = i
-    i+=1
+df_train_2016["date"].dt.month.value_counts(sort = False).plot.bar()
 
 
-# In[ ]:
-
-
-for ticket in lstTicketSingle:
-    dfFull.loc[dfFull.Ticket == ticket, 'TicketCat'] = 0
-
-
-# Let's predict the result:
+# The observations are almost uniformly distributed by month. The maximum occurs in December and the minimum in February. How about by day of the month?
 
 # In[ ]:
 
 
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex','ParchCat','Embarked','Fare','TitleCat','Age','TicketCat']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex','ParchCat','Embarked','Fare','TitleCat','Age','TicketCat']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
+df_train_2016["date"].dt.day.value_counts(sort = False).plot.bar()
 
 
-# ![Image](https://preview.ibb.co/nFyVN5/sex_par_emb_far_tit_age_tic.png)
+# Again, the observations are almost uniformly distributed by day.
 # 
-
-# Well, well, well. Eventually we acheived our target;-) We have 80.383% and still plain dtree algoritm. Let's go further...:-)
-
-# # MISC
-
-# Before we start tweaking the classifier, I would like to check one thing.  
-# In other kernels I saw that some people add name lenght as category. Let's check if it is something worth:
+# ## Stores
+# Now, let's determine how many stores there are and the distribution of observations for each store.
 
 # In[ ]:
 
 
-dfFull['NameLen'] = dfFull['Name'].apply(len)
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex','ParchCat','Embarked','Fare','TitleCat','Age','TicketCat','NameLen']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex','ParchCat','Embarked','Fare','TitleCat','Age','TicketCat','NameLen']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
+df_train_2016["store_nbr"].unique()
 
 
-# ![Image](https://preview.ibb.co/jdKfcF/NameLen.png)
-
-# The result doesn't require commenting...
-
-# Let's make a quick summary:
+# There is data for 54 stores in 2016. At a later point, I will analyze the stores data also provided. Now, how about the distibution of observations for each store?
 
 # In[ ]:
 
 
-dfResult = pd.Series({'Pclass':65.55,
-                      '+Sex':75.59,
-                      '+Parch':76.07,
-                      '+Embarked':77.51,
-                      '+Fare':77.99,
-                      '+Title':79.42,
-                      '+Age':79.90,
-                      '+Ticket':80.38})
-dfResult.sort_values().plot(kind='bar',title='LeaderBoard result (%)')
+df_train_2016["store_nbr"].value_counts(sort = False).plot.bar()
 
 
-# # PART 11: SELECTING THE CLASSIFIER
-
-# We will start from testing number of classifiers to choose the best one for further fitting.  
-# As the first step let's split our Train data into new train/test set:
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-X_train = dfTrain[['Pclass','Sex','ParchCat','SibSpCat','Embarked','Fare','TitleCat','Age','TicketCat']]
-X_test = dfTest[['Pclass','Sex','ParchCat','SibSpCat','Embarked','Fare','TitleCat','Age','TicketCat']]
-y = dfTrain['Survived']
-X_NewTrain, X_NewTest,y_NewTrain, y_NewTest = train_test_split(X_train, y,
-                                         test_size=0.33, # 1/3 test; 2/3 train
-                                          random_state=1410) # seed
-
-
-# and feed a list of classifiers to find the best score:
-
-# In[ ]:
-
-
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier
-from sklearn.svm import LinearSVC, SVC
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.linear_model import LogisticRegression, LinearRegression
-from sklearn.tree import DecisionTreeClassifier
-
-classifiers = [
-    KNeighborsClassifier(),
-    SVC(),
-    DecisionTreeClassifier(),
-    RandomForestClassifier(),
-    AdaBoostClassifier(),
-    GradientBoostingClassifier(),
-    GaussianNB(),
-    LogisticRegression(),
-    LinearSVC()]
-
-for clf in classifiers:
-    name = clf.__class__.__name__
-    clf.fit(X_NewTrain, y_NewTrain)
-    prediction = clf.predict(X_NewTest)
-    rank = pd.DataFrame(data=np.column_stack([prediction, y_NewTest]),
-                                index=X_NewTest.index.values,columns=['Predicted','Real'])
-    accurracy = np.sum(rank.Predicted.values == rank.Real.values)
-    accurracy = accurracy/len(y_NewTest)
-    print(accurracy, name)
-
-
-# Hmm, interesting results. TOP3 is as follows:  
-# 1. GradientBoostingClassifier ~0.82 
-# 2. RandomForestClassifier ~0.81
-# 3. DecisionTreeClassifier ~0.81
-
-# # 12. CONFIRMING SCORE IN KAGGLE SYSTEM
-
-# ### GradientBoostingClassifier: Your submission scored 0.78469  
-# ### RandomForestClassifier: Your submission scored 0.75598  
+# The interpretation of this plot is as follows. The y-axis is the number of observations corresponding to a particular store. A store with more observations does not necessarily outperform a store with fewer observations. This is because some stores may offer a wider range of products but push less volume. This would inflate their numbers in this plot. We can interpret the y-axis as a measure of the store's variety.
 # 
-# The score for other two classifiers is dissapointing, so our first choice using DecisionTree algorithm was right.
-
-# # APPENDIX
-
-# Thanks to Mykhailo Matviiv, who posted a question in comments, why I dropped categories that didn't bring me better result, I decided to run a kernel again adding those two categories: Cabin and SibSp. I don't want to boring you about not satisfied results and I am presententing only the success story adding only SibSp...
-# 
-#  
+# ## Items
+# Now, let's determine how many unique items there are overall and in each store.
 
 # In[ ]:
 
 
-dfTrain = dfFull.loc[1:891,:]
-dfTest = dfFull.loc[892:,:]
-dtree = DecisionTreeClassifier()
-X_train = dfTrain[['Pclass','Sex','ParchCat','SibSpCat','Embarked','Fare','TitleCat','Age','TicketCat','CabinCat']]
-y = dfTrain['Survived']
-X_test = dfTest[['Pclass','Sex','ParchCat','SibSpCat','Embarked','Fare','TitleCat','Age','TicketCat','CabinCat']]
-dtree.fit(X_train,y)
-prediction = dtree.predict(X_test)
-dfPrediction = pd.DataFrame(data=prediction,index = dfTest.index.values,columns=['Survived'])
-contentTestPredObject1 = dfPrediction.to_csv()
-#print(contentTestPredObject1)
+df_train_2016["item_nbr"].unique().shape[0]
 
 
-# ![Image](https://preview.ibb.co/d55ynQ/sex_par_sib_emb_far_tit_age_tic.png)
+# There were 3886 different types of items either sold or returned during 2016.
 
-# ### 0.818181!
-# Concluding, adding the category previously refused could give positive effect at the end.
-# Great tip Mykhailo. I will remeber that rule...
+# In[ ]:
+
+
+stores = np.arange(1, 55)
+items_store = np.zeros((54, ))
+for i, store in enumerate(stores) :
+    items_store[i] = df_train_2016["item_nbr"][df_train_2016["store_nbr"]                                                == store].unique().shape[0]
+sns.barplot(stores, items_store)
+
+
+# As expected, this is very similar to the last bar plot because it measures the variety of items in each store. Interestingly, store 52 has 0 unique items. This is because there is no store number 52.
+# 
+# ## Item sales
+# This is our target variable so it is very important to get a sense of its distribution.
+
+# In[ ]:
+
+
+df_train_2016["unit_sales"].describe()
+
+
+# It is probably a good thing that the mean and median for unit sales is positive, otherwise the company would be losing money. Suprisingly, on one day, 4673 items were returned. I wonder if this corresponds to some sort of outbreak or health concern for a particular product. On the other hand, on another day, 89440 items were purchased. Perhaps this was before some sort of natural disaster (*e.g.* a hurricane).
+# 
+# ## Promotions
+# Now, let's find out how many items were purchased by coupon clippers.
+
+# In[ ]:
+
+
+df_train_2016["onpromotion"].value_counts()
+
+
+# In[ ]:
+
+
+3514584 / (3514584 + 31715287) * 100
+
+
+# About 10% of items are purchased on promotion.
+# 
+# ## Missing data and outliers
+# A less exciting but very important step in this analysis is to determine if any data is missing and if there are any outliers in the target data.
+
+# In[ ]:
+
+
+df_train_2016.isnull().sum()
+
+
+# Yay! There is no missing data in the training set. How about outliers in the target variable?
+
+# In[ ]:
+
+
+unit_sales = df_train_2016["unit_sales"].values
+del df_train_2016; gc.collect()
+
+
+# Again, I had to remove some data to free up memory for plots.
+
+# In[ ]:
+
+
+plt.scatter(x = range(unit_sales.shape[0]), y = np.sort(unit_sales))
+
+
+# This plot isn't super informative but does show us that quite a few outliers exist on the sales side.
+
+# In[ ]:
+
+
+del unit_sales; gc.collect()
+
+
+# # Test set
+
+# In[ ]:
+
+
+# inspect test set
+print(df_test.shape)
+df_test.head()
+
+
+# There are 3,370,464 rows in the test set, which is approximately 1.5 orders of magnitude smaller than the training set. Since the training set is so large, we can afford to reserve more of this data for validation, which will promote more robust predictions. The columns in the test set are similar to those in the training set except the unit sales column is missing. Now, let's determine the range of dates present in the test set and compare to the training set.
+
+# In[ ]:
+
+
+# convert date to datetime
+df_test["date"] =  pd.to_datetime(df_test["date"])
+df_test["date"].dt.year.value_counts(sort = False).plot.bar()
+
+
+# In[ ]:
+
+
+df_test["date"].dt.month.value_counts(sort = False).plot.bar()
+
+
+# In[ ]:
+
+
+df_test["date"].dt.day.value_counts(sort = False).plot.bar()
+
+
+# The test set only samples observations from July 16-31, 2017.
+# 
+# ## Stores
+# Now, let's see if the same store numbers appear in the test set as do in the training set.
+
+# In[ ]:
+
+
+df_test["store_nbr"].value_counts(sort = False).plot.bar()
+
+
+# The stores are sampled uniformly and, unlike the training set, store 52 has observations.
+# 
+# ## Items
+# It's also useful to know how many unique items appear in the test set.
+
+# In[ ]:
+
+
+df_test["item_nbr"].unique().shape[0]
+
+
+# There are actually more unique items in the test set (3901) than in the training set (3886). This makes sense because the supermarket adapts over times to meet the diverse needs of its customers.
+
+# In[ ]:
+
+
+stores = np.arange(1, 55)
+items_store = np.zeros((54, ))
+for i, store in enumerate(stores) :
+    items_store[i] = df_test["item_nbr"][df_test["store_nbr"]                                          == store].unique().shape[0]
+sns.barplot(stores, items_store)
+
+
+# For the test set, the number of unique items in each store (a measure of that stores variety) are exactly the same. This is suprising because we would expect that each store caters to slightly different communities and their needs and therefore the variety should not be uniform. However, it is also possible that their itention was to provide a test set with balanced observations.
+# 
+# ## Promotions
+# Last for the test set, let's see if the percentage of items on sale matches that of the training set.
+
+# In[ ]:
+
+
+df_test["onpromotion"].value_counts()
+
+
+# In[ ]:
+
+
+198597/(198597 + 3171867) * 100
+
+
+# The percentage of items on sale for the test set is a little more than half of that for the training set ($\approx$10%). From this analysis of the test set, we find that while it has a similar structure to that of the training set, it's observations correspond to a time period not sampled by the training set. Additionally, the number of unique items, each stores' variety of items, and the number of observations corresponding to promotional purchases are different than the training set. Therefore, it may be beneficial to sample the training set in a way that more closely matches the distribution of items in the test set.
+
+# # Sample submission
+# Next, let's take a look at what they would like us to submit.
+
+# In[ ]:
+
+
+print(df_sub.shape)
+df_sub.head()
+
+
+# Just like the test set, there are 3,370,464 rows in the sample submission. The submission file has two columns, the row id and the unit sales. Let's see if the row ids in the sample submission match that of the test set.
+
+# In[ ]:
+
+
+(df_sub["id"] - df_test["id"]).sum()
+
+
+# Yes, they do! So, at the very least, our task boils down to predicting the number of unit sales given the date, store number, item number, and promotional status. But we are also provided with other information about the stores, items, transactions, economic health, and holidays. Let's clear some memory before looking at this metadata.
+
+# In[ ]:
+
+
+del df_test, df_sub; gc.collect()
+
+
+# # Stores
+# First, let's inspect the contents of the data set.
+
+# In[ ]:
+
+
+print(df_stores.shape)
+df_stores.head()
+
+
+# Store metadata includes the store number, the city in which the store is located, the state in which the city is located, type, and cluster. A cluster is a similar grouping of stores perhaps in the type of products they sell, their size, or their locations. It is not clear how the different types are defined or how they differ from clusters. Are there any missing values in the stores data set?
+
+# In[ ]:
+
+
+df_stores.isnull().sum()
+
+
+# Nope!
+# 
+# ## Cities
+
+# In[ ]:
+
+
+df_stores["city"].unique().shape[0]
+
+
+# In[ ]:
+
+
+df_stores["city"].value_counts(sort = False).plot.bar()
+
+
+# The 54 stores are located in 22 different cities. The city with the most stores is Quinto and there are a number of cities that only have one store.
+
+# ## State
+
+# In[ ]:
+
+
+print(df_stores["state"].unique().shape[0])
+df_stores["state"].value_counts(sort = False).plot.bar()
+
+
+# Of the 24 provinces in Ecuador (https://en.wikipedia.org/wiki/Provinces_of_Ecuador), 16 of them have supermarkets.
+# 
+# ## Type and cluster
+# Since we don't know what type means and the cluster definition is a little bit vague, let's compare them.
+
+# In[ ]:
+
+
+print(df_stores["type"].unique().shape[0])
+df_stores["type"].value_counts(sort = False).plot.bar()
+
+
+# In[ ]:
+
+
+print(df_stores["cluster"].unique().shape[0])
+df_stores["cluster"].value_counts(sort = False).plot.bar()
+
+
+# From these plots, we can see a few differences between type and cluster. First, there are fewer types (5, A through E) than clusters (1-17). Second, for the most part, there are more stores per type than stores per cluster. Let's see how each cluster is represented by type.
+
+# In[ ]:
+
+
+df_stores.groupby(["type", "cluster"]).size()
+
+
+# For the most part, stores in a particular cluster have one type. However, there is one exception. Cluster 10 can be type B, D, and E. How about state by type?
+
+# In[ ]:
+
+
+df_stores.groupby(["type", "state"]).size()
+
+
+# There are many states that have different types of stores. For example, Guayas has stores of type A, B, D, and E. This tells us that clusters are, for the most part, a subdivision of store type.
+
+# In[ ]:
+
+
+del df_stores; gc.collect()
+
+
+# # Items
+# Now let's take a look at the items metadata.
+
+# In[ ]:
+
+
+print(df_items.shape)
+df_items.head()
+
+
+# The items data has 4100 rows and 4 columns: item number, family, class, and whether or not the item is perishable. Now, let's see how many different item families there are.
+
+# In[ ]:
+
+
+print(df_items["family"].unique().shape[0])
+df_items["family"].value_counts(sort = False).plot.bar()
+
+
+# There are 33 differenet item families ranging from school and office supplies to poulty. The most popular family is called "grocery 1". This must be a generic groceries column. How about item classes?
+
+# In[ ]:
+
+
+print(df_items["class"].unique().shape[0])
+print(df_items["class"].value_counts()[0:5])
+df_items["class"].plot.hist(bins = 50)
+
+
+# There are 337 different item classes and the number of items in each class is plotted above. There is an abundance of items in classes 1016 (133), 1040 (110), 1124 (100), 1034 (98), and 1122 (81). Finally, let's find out the percentage of items that are perishable.
+
+# In[ ]:
+
+
+df_items["perishable"].value_counts()
+
+
+# In[ ]:
+
+
+986 / (986 + 3114) * 100
+
+
+# 24% of the of the items are perishable.
+
+# In[ ]:
+
+
+del df_items; gc.collect()
+
+
+# # Transactions
+# We're getting there only a few more data sets to analyze. Next up is the transactions metadata.
+
+# In[ ]:
+
+
+print(df_trans.shape)
+print(df_trans.head())
+df_trans.isnull().sum()
+
+
+# There are 83488 columns in the transactions data and three columns: date, store number, and the number of transactions. This data tells us how many transactions were made in each store on each business day since they started collecting data. There is also no missing data.
+
+# In[ ]:
+
+
+df_trans["date"] =  pd.to_datetime(df_trans["date"])
+
+
+# In[ ]:
+
+
+df_trans["date"].dt.year.value_counts(sort = False).plot.bar()
+
+
+# There is data from 2013 to 2017 with an increase in the number of observations each year except for 2017, which is not yet complete. This is similar to the training data. This tells us that the number of stores is increasing each year and perhaps they are now open on more days.
+
+# In[ ]:
+
+
+df_trans["date"].dt.month.value_counts(sort = False).plot.bar()
+
+
+# In general, there are more observations for January through July than the colder months. I'm not sure why this is but perhaps there are more store closures during this month for holiday or weather reasons.
+
+# In[ ]:
+
+
+df_trans["date"].dt.day.value_counts(sort = False).plot.bar()
+
+
+# The distribution of observations by day of the month is nearly uniform with minima at the 1st, 25th, and 31st days of the month. The dips at the 1st and 25th are likely due to New Years and Christmas whereas the dip at the 31st is likely due to the fact that not all months have 31 days. Now, let's take a look at the distribution of observations for each store.
+
+# In[ ]:
+
+
+df_trans["store_nbr"].value_counts(sort = False).plot.bar()
+
+
+# There are a lot of stores with > 1600 observations. These were all probably open prior to 2013. Stores with < 1600 observations were all probably opened after 2013, the stores with the fewest observations being opened most recently.
+
+# In[ ]:
+
+
+df_trans["transactions"].plot.hist(bins = 100)
+
+
+# In[ ]:
+
+
+del df_trans; gc.collect()
+
+
+# This is a very informative plot as it tells us that the total number of transactions is approximately Poisson distributed. Perhaps the number of transactions for particular items are also Poisson distributed.
+# 
+# # Conclusion
+# We looked at how the observations in both the training and test sets are distributed by date, store, item, and promotions. We also got more familiar with the distribution of the target value, unit sales, which may require processing to remove outliers. We noticed that there are some differences between the training and test sets with regards to the time period sampled, the number of unique items, each stores' variety, and percentage of sale items. We also discovered that store cluster is a subdivision of store type and that one state can have many different store types.
+# 
+# # Future directions
+# In the future, I plan on exploring the other data sets that were provided. I hope to update this kernel soon! Thanks for reading.

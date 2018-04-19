@@ -1,273 +1,563 @@
 
 # coding: utf-8
 
+# Zillow, and the Zillow Economic Research Team, firmly believe that not only do data want to be free, data are going to be free. Instead of simply publishing raw data, we believe in the power of pushing data up the ladder from raw data bits, to actionable information and finally to unique insight.
+# 
+# This kernel is my attempt to achieve that. 
+
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-import os
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
-import seaborn as sns 
-from mpl_toolkits.basemap import Basemap
-get_ipython().run_line_magic('matplotlib', 'inline')
+plt.style.use('fivethirtyeight')
+import seaborn as sns
+import math
+from matplotlib.ticker import MaxNLocator
+from fbprophet import Prophet
+import squarify
 
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+from IPython.display import HTML
+from subprocess import check_output
+# Any results you write to the current directory are saved as output.
 
-# ### This is just a small script to plot some of the lat/lon data.
 
 # In[ ]:
 
 
-df_events = pd.read_csv("../input/events.csv", dtype={'device_id': np.str})
-df_events.head()
+#Load the data
+State_time_series=pd.read_csv("../input/State_time_series.csv",parse_dates=True)
+State_time_series.Date=pd.to_datetime(State_time_series.Date)
+State_time_series['year'] = State_time_series.Date.dt.year
 
-
-# ### Plot a bunch of different maps showing the locations of the events
 
 # In[ ]:
 
 
-# Set up plot
-df_events_sample = df_events.sample(n=100000)
-plt.figure(1, figsize=(12,6))
+#Get costliest states
+states = set(State_time_series[
+    ~State_time_series['ZHVI_AllHomes'].isnull() &
+    ~State_time_series['Sale_Prices'].isnull()
+                      ]['RegionName'].values)
 
-# Mercator of World
-m1 = Basemap(projection='merc',
-             llcrnrlat=-60,
-             urcrnrlat=65,
-             llcrnrlon=-180,
-             urcrnrlon=180,
-             lat_ts=0,
-             resolution='c')
-
-m1.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
-m1.drawmapboundary(fill_color='#000000')                # black background
-m1.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
-
-# Plot the data
-mxy = m1(df_events_sample["longitude"].tolist(), df_events_sample["latitude"].tolist())
-m1.scatter(mxy[0], mxy[1], s=3, c="#1292db", lw=0, alpha=1, zorder=5)
-
-plt.title("Global view of events")
-plt.show()
+State_time_series_year = State_time_series[State_time_series['RegionName'].isin(states)].copy()
+highest_cost_states = State_time_series_year[['RegionName', 'ZHVI_AllHomes']].groupby('RegionName').max().sort_values(by=['ZHVI_AllHomes'], ascending=False)[:5].index.values.tolist()
+State_time_series_year=State_time_series_year[State_time_series_year.RegionName.isin(highest_cost_states)]
+State_time_series_year.year = State_time_series_year.Date.dt.year
 
 
-# Not surprisingly, most of the events are geo-located in China. We also see a few sporadic ones around the globe, most which look real (e.g., Austalia-Sydney/Melbourne/Perth).
+# In[ ]:
+
+
+# Colorblind-friendly colors
+colors = [[0,0,0], [230/255,159/255,0], [86/255,180/255,233/255], [0,158/255,115/255], 
+          [213/255,94/255,0], [0,114/255,178/255]]
+
+
+States_year_SalePrices=State_time_series_year.groupby([State_time_series_year.year,State_time_series_year.RegionName])['ZHVI_AllHomes'].mean().dropna().reset_index(name='SoldPrice')
+fte_graph=States_year_SalePrices.pivot(index='year', columns='RegionName', values='SoldPrice').plot(figsize=(15,8), color=colors, legend=False)
+fte_graph.figure.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
+fte_graph.tick_params(axis = 'both', which = 'major', labelsize = 18)
+plt.xlabel("")
+fte_graph.set_yticklabels(labels = [-10, '100000   ', '200000   ',  '300000   ', '400000   ',  '500000 $'])
+# Generate a bolded horizontal line at y = 0 
+fte_graph.axhline(y = 100000, color = 'black', linewidth = 1.3, alpha = .7)
+# Add an extra vertical line by tweaking the range of the x-axis
+fte_graph.set_xlim(left = 1996, right = 2017)
+# The signature bar
+
+fte_graph.text(x = 1994, y = 30000,
+    s = '  @Poonam Ligade                                                                                                                                                                        Source: Zillow   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
+
+
+# Adding a title and a subtitle
+fte_graph.text(x = 1994, y = 570000, s = "The Growth of Real Estate Sector in US",
+               fontsize = 26, weight = 'bold', alpha = .75)
+fte_graph.text(x = 1994, y = 550000, 
+               s = 'Increase in House Median Sale Prices from 1996 to 2017 in the US states',
+              fontsize = 19, alpha = .85)
+
+# Add colored labels
+fte_graph.text(x = 2002, y = 390000, s = 'California', color = colors[0], weight = 'bold', rotation = 55,
+              backgroundcolor = '#f0f0f0')
+fte_graph.text(x = 2012, y = 530000, s = 'District of Columbia', color = colors[1], weight = 'bold', rotation = 30,
+              backgroundcolor = '#f0f0f0')
+fte_graph.text(x = 2015, y = 370000, s = 'Hawaii', color = colors[2], weight = 'bold', rotation = 0, 
+               backgroundcolor = '#f0f0f0')
+fte_graph.text(x = 2004, y = 310000, s = 'Massachusetts', color = colors[3], weight = 'bold', rotation = 30,
+              backgroundcolor = '#f0f0f0')
+fte_graph.text(x = 2013, y = 220000, s = 'New Jersey', color = colors[4], weight = 'bold',  rotation = 15,
+              backgroundcolor = '#f0f0f0');
+
+
+# That's FiveThirtyEight style graph. It pretty much self explanatory.
+# These are the top five States which have highest Median Sold Price.
+# 1. DistrictOfColumbia has started from Median Selling price of less than 150 thousand dollars and crossed more than 500 thousand dollars by 2017. 
+# 2. California started around 200 thousand dollars and has reached its highest selling price of around 470 thousand dollars in late  2006 and early 2007 and started decresing there after. 
+
+# In[ ]:
+
+
+fig = plt.figure(figsize=(25, 21))
+regions=State_time_series.RegionName.value_counts().to_frame()
+ax = fig.add_subplot(111, aspect="equal")
+ax = squarify.plot(sizes=regions['RegionName'].values,label=regions.index,
+              color=sns.color_palette('viridis', 52), alpha=1)
+ax.set_xticks([])
+ax.set_yticks([])
+fig=plt.gcf()
+fig.set_size_inches(40,25)
+plt.title("Treemap of House Property counts across different States", fontsize=18)
+plt.show();
+
+
+# All the States recorded have got same number of listings except North Dakota as you can see in upper right yellow corner. United States seems to have added when region name was not available in case on nulls so US have got lowest listings.
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8));
+#plt.figure.gca().xaxis.set_major_locator(MaxNLocator(integer=True))
+
+State_time_series.groupby(State_time_series['year'])['ZHVI_TopTier'].median().plot(linewidth=4,c='g')
+State_time_series.groupby(State_time_series['year'])['ZHVI_MiddleTier'].median().plot(linewidth=4,c='b')
+State_time_series.groupby(State_time_series['year'])['ZHVI_BottomTier'].median().plot(linewidth=4,c='r')
+
+# Generate a bolded horizontal line at y = 0 
+plt.axhline(y = 50000, color = 'black', linewidth = 1.3, alpha = .7)
+# Add an extra vertical line by tweaking the range of the x-axis
+plt.xlim(left = 1996, right = 2017)
+# The signature bar
+plt.text(x = 1996, y = 25000,
+    s = '   Poonam Ligade                                                                                                                                                      Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
+
+# Adding a title and a subtitle
+plt.text(x = 1996, y = 350000, s = "Real Estate Properties ZHVI for different Tiers in US",
+               fontsize = 25, weight = 'bold', alpha = .75)
+plt.text(x = 1996, y = 330000, 
+               s = 'ZVHI values for Top , middle and Bottom Tiers from 1997 to 2017 in the US states',
+              fontsize = 18, alpha = .85);
+
+plt.text(x = 1999, y = 215000, s = 'Top Tier', color = 'g', weight = 'bold', rotation = 35,
+              backgroundcolor = '#f0f0f0')
+plt.text(x = 1999, y = 140000, s = 'Middle Tier', color = 'b', weight = 'bold', rotation = 20,
+              backgroundcolor = '#f0f0f0')
+plt.text(x = 1999, y = 90000, s = 'Bottom Tier', color = 'r', weight = 'bold', rotation = 5,
+              backgroundcolor = '#f0f0f0');
+
+
+# In[ ]:
+
+
+#ZHVI VS. Days On Zillow
+plt.figure(figsize=(20, 6))
+mean_group = State_time_series[['DaysOnZillow_AllHomes','ZHVI_AllHomes']].groupby(['DaysOnZillow_AllHomes'])['ZHVI_AllHomes'].mean()
+plt.plot(mean_group , color=[230/255,159/255,0])
+plt.tick_params(axis = 'both', which = 'major', labelsize = 18)
+
+# The signature bar
+
+plt.text(x = 27, y = -1500,
+    s = '   @Poonam Ligade                                                                                                                                                                                                                                                    Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
+
+
+# Adding a title and a subtitle
+plt.text(x = 30, y = 680000, s = "House Sale Value Decreases as listings ages on Zillow",
+               fontsize = 26, weight = 'bold', alpha = .75)
+plt.text(x = 30, y = 640000, 
+               s = 'As number of Days after house listing is posted on Zillow increases, its Zillow Home Value Index (ZHVI) decreases.',
+              fontsize = 19, alpha = .85);
+
+
+# **Zillow Home Value Index (ZHVI): **A smoothed seasonally adjusted measure of the median estimated home value across a given region and housing type. A dollar denominated alternative to repeat-sales indices. Find a more detailed methodology here: http://www.zillow.com/research/zhvi-methodology-6032/
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8));
+
+plt.scatter(State_time_series_year.DaysOnZillow_AllHomes,State_time_series_year.ZHVI_AllHomes,c="gold");
+plt.scatter(State_time_series_year.DaysOnZillow_AllHomes,State_time_series_year.Sale_Prices,c="green");
+
+# Generate a bolded horizontal line at y = 0 
+plt.axhline(y = 200000, color = 'black', linewidth = 1.3, alpha = .7)
+# Add an extra vertical line by tweaking the range of the x-axis
+plt.xlim(left = 45, right = 225)
+# The signature bar
+
+plt.text(x = 35, y = 160000,
+    s = '   Poonam Ligade                                                                                                                                                      Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
+
+plt.legend(fontsize=12,loc='best',frameon=1,fancybox=1)
+# Adding a title and a subtitle
+plt.text(x = 35, y = 590000, s = "The Linear Relation between Real Estate Sector Sale Prices in US",
+               fontsize = 25, weight = 'bold', alpha = .75)
+plt.text(x = 35, y = 570000, 
+               s = 'Linearity between ZHVI and Median Sold Prices w.r.t Days on Zillow from 1996 to 2017 in the US states',
+              fontsize = 18, alpha = .85);
+
+
+# In[ ]:
+
+
+#ZRI VS. Days On Zillow
+
+plt.figure(figsize=(20, 6))
+mean_group = State_time_series[['DaysOnZillow_AllHomes','ZRI_AllHomes']].groupby(['DaysOnZillow_AllHomes'])['ZRI_AllHomes'].mean().dropna().reset_index(name='ZRI_AllHomes_Mean')
+mean_group=mean_group[(mean_group.DaysOnZillow_AllHomes < 250)]
+mean_group=mean_group[(mean_group.ZRI_AllHomes_Mean > 500)]
+
+plt.plot(mean_group , color=[213/255,94/255,0])
+
+plt.tick_params(axis = 'both', which = 'major', labelsize = 18)
+
+# The signature bar
+
+plt.text(x = -40, y = -500,
+    s = '   @Poonam Ligade                                                                                                                                                                                                                                                    Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
+
+
+# Adding a title and a subtitle
+plt.text(x = -40, y = 3300, s = "House Rent Value Decreases as listing ages on Zillow",
+               fontsize = 26, weight = 'bold', alpha = .75)
+plt.text(x = -40, y = 3000, 
+               s = 'As number of Days after house listing is posted on Zillow increases, its Zillow Rental Index (ZRI) decreases.',
+              fontsize = 19, alpha = .85);
+plt.show();
+
+
+# **Zillow Rent Index (ZRI)**: A smoothed seasonally adjusted measure of the median estimated market rate rent across a given region and housing type. A dollar denominated alternative to repeat-rent indices. Find a more detailed methodology here: http://www.zillow.com/research/zillow-rent-index-methodology-2393/
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8));
+
+plt.scatter(State_time_series_year.DaysOnZillow_AllHomes,State_time_series_year.ZRI_AllHomes,c="orange")
+plt.scatter(State_time_series_year.DaysOnZillow_AllHomes,State_time_series_year.MedianRentalPrice_AllHomes,c="navy");
+
+
+# Generate a bolded horizontal line at y = 0 
+plt.axhline(y = 1400, color = 'black', linewidth = 1.3, alpha = .7)
+# Add an extra vertical line by tweaking the range of the x-axis
+plt.xlim(left = 45, right = 225)
+# The signature bar
+
+plt.text(x = 45, y = 1250,
+    s = '   Poonam Ligade                                                                                                                                                      Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
+
+plt.legend(fontsize=12,loc='best',frameon=1,fancybox=1)
+# Adding a title and a subtitle
+plt.text(x = 45, y = 2870, s = "The Linear Relation between Real Estate Sector Rental Prices in US",
+               fontsize = 25, weight = 'bold', alpha = .75)
+plt.text(x = 45, y = 2800, 
+               s = 'Linearity between ZRVI and Median Rental Prices w.r.t Days on Zillow from 1996 to 2017 in the US states',
+              fontsize = 18, alpha = .85);
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8));
+State_time_series.groupby(State_time_series['year'])['MedianListingPricePerSqft_1Bedroom'].mean().dropna().plot(linewidth=4,c='lightgreen', legend=False)
+State_time_series.groupby(State_time_series['year'])['MedianListingPricePerSqft_2Bedroom'].mean().dropna().plot(linewidth=4,c='b')
+State_time_series.groupby(State_time_series['year'])['MedianListingPricePerSqft_3Bedroom'].mean().dropna().plot(linewidth=4,c='brown')
+State_time_series.groupby(State_time_series['year'])['MedianListingPricePerSqft_4Bedroom'].mean().dropna().plot(linewidth=4,c='purple')
+State_time_series.groupby(State_time_series['year'])['MedianListingPricePerSqft_5BedroomOrMore'].mean().dropna().plot(linewidth=4,c='magenta')
+State_time_series.groupby(State_time_series['year'])['MedianListingPricePerSqft_AllHomes'].mean().dropna().plot(linewidth=4,c='black')
+State_time_series.groupby(State_time_series['year'])['MedianListingPricePerSqft_CondoCoop'].mean().dropna().plot(linewidth=4,c='orange',legend=False)
+State_time_series.groupby(State_time_series['year'])['MedianListingPricePerSqft_DuplexTriplex'].mean().dropna().plot(linewidth=4,c='darkblue',legend=False)
+State_time_series.groupby(State_time_series['year'])['MedianListingPricePerSqft_SingleFamilyResidence'].mean().dropna().plot(linewidth=4,c='red')
+plt.legend(fontsize=12,loc=(2009,200),frameon=1,fancybox=1,bbox_to_anchor=(0.02,1.35), ncol=2)
+
+
+# Generate a bolded horizontal line at y = 0 
+plt.axhline(y = 50, color = 'black', linewidth = 1.3, alpha = .7)
+# Add an extra vertical line by tweaking the range of the x-axis
+plt.xlim(left = 2010, right = 2017)
+# The signature bar
+
+plt.text(x = 2010, y = 30,
+    s = '   Poonam Ligade                                                                                                                                                      Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
+
+# Adding a title and a subtitle
+plt.text(x = 2010, y = 230, s = "Real Estate Listing Prices Per SquareFoot in US",
+               fontsize = 25, weight = 'bold', alpha = .75)
+plt.text(x = 2010, y = 220, 
+               s = 'Median Listing Prices Per Sqft W.r.t Number of Bedrooms from 2010 to 2017 in the US states',
+              fontsize = 18, alpha = .85);
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8));
+
+State_time_series.groupby(State_time_series['year'])['PctOfHomesDecreasingInValues_AllHomes'].median().plot(linewidth=4,c='lightgreen', legend=False)
+State_time_series.groupby(State_time_series['year'])['PctOfHomesIncreasingInValues_AllHomes'].median().plot(linewidth=4,c='b')
+
+# Generate a bolded horizontal line at y = 0 
+plt.axhline(y = 10, color = 'black', linewidth = 1.3, alpha = .7)
+# Add an extra vertical line by tweaking the range of the x-axis
+plt.xlim(left = 1996, right = 2017)
+# The signature bar
+plt.legend()
+plt.text(x = 1996, y = 0,
+    s = '   Poonam Ligade                                                                                                                                                      Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
+
+# Adding a title and a subtitle
+plt.text(x = 1996, y = 95, s = "Real Estate Properties Decresing Vs Increasing in Values in US",
+               fontsize = 25, weight = 'bold', alpha = .75)
+plt.text(x = 1996, y = 90, 
+               s = 'Perentage Of Homes Increasing and Decreasing In Values from 1997 to 2017 in the US states',
+              fontsize = 18, alpha = .85);
+
+
+# Both Lines look so complementory as expected , the deep low and peak around 2008 is due to financial crisis.
+
+# In[ ]:
+
+
+plt.figure(figsize=(15,8));
+
+State_time_series.groupby(State_time_series['year'])['PctOfHomesSellingForGain_AllHomes'].median().plot(linewidth=4,c='lightgreen', legend=False)
+State_time_series.groupby(State_time_series['year'])['PctOfHomesSellingForLoss_AllHomes'].median().plot(linewidth=4,c='gold')
+plt.legend()
+
+# Generate a bolded horizontal line at y = 0 
+plt.axhline(y = 0, color = 'black', linewidth = 1.3, alpha = .7)
+# Add an extra vertical line by tweaking the range of the x-axis
+plt.xlim(left = 2001, right = 2017)
+# The signature bar
+
+plt.text(x = 2001, y = -15,
+    s = '   Poonam Ligade                                                                                                                                                      Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
+
+# Adding a title and a subtitle
+plt.text(x = 2001, y = 110, s = "Real Estate Properties Salling For Gain and Loss in US",
+               fontsize = 25, weight = 'bold', alpha = .75)
+plt.text(x = 2001, y = 105, 
+               s = 'Perentage Of Homes Selling for Gain and Loss  from 2002 to 2017 in the US states',
+              fontsize = 18, alpha = .85);
+
+
 # 
-# One interesting thing is there are a number of events at (lat,lon) = (0,0), and also around that area where there is not much land.
+# This looks beautiful too. Both Lines look so complementory as expected , After 2008 Properties started Selling for loss due to recession and that time only properties selling for gain has decresed .
 
 # In[ ]:
 
 
-df_at0 = df_events[(df_events["longitude"]==0) & (df_events["latitude"]==0)]
-df_near0 = df_events[(df_events["longitude"]>-1) &                     (df_events["longitude"]<1) &                     (df_events["latitude"]>-1) &                     (df_events["latitude"]<1)]
+plt.figure().gca().xaxis.set_major_locator(MaxNLocator(integer=True))
+State_time_series.day=State_time_series.Date.dt.day
+plt.bar(State_time_series.day.value_counts().index,State_time_series.day.value_counts().values,color=colors);
+plt.tick_params(axis = 'both', which = 'major', labelsize = 18)
+# The signature bar
 
-print("# events:", len(df_events))
-print("# at (0,0)", len(df_at0))
-print("# near (0,0)", len(df_near0))
+plt.text(x = 27, y = -1500,
+    s = '   @Poonam Ligade                                            Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
 
 
-# Plot another mercator plot, but zooming in on China
+# Adding a title and a subtitle
+plt.text(x = 27, y = 10000, s = "Recorded Dates ",
+               fontsize = 26, weight = 'bold', alpha = .75)
+plt.text(x = 27, y = 9000, 
+               s = 'The days on which data is captured',
+              fontsize = 19, alpha = .85);
+
 
 # In[ ]:
 
 
-# Sample it down to only the China region
-lon_min, lon_max = 75, 135
-lat_min, lat_max = 15, 55
+plt.figure(figsize=(15,8));
 
-idx_china = (df_events["longitude"]>lon_min) &            (df_events["longitude"]<lon_max) &            (df_events["latitude"]>lat_min) &            (df_events["latitude"]<lat_max)
+State_time_series.groupby(State_time_series['year'])['PctOfListingsWithPriceReductionsSeasAdj_AllHomes'].median().plot(linewidth=4,c='lightgreen', legend=False)
+State_time_series.groupby(State_time_series['year'])['PctOfListingsWithPriceReductionsSeasAdj_CondoCoop'].median().plot(linewidth=4,c='gold')
+State_time_series.groupby(State_time_series['year'])['PctOfListingsWithPriceReductionsSeasAdj_SingleFamilyResidence'].median().plot(linewidth=4,c='red')
 
-df_events_china = df_events[idx_china].sample(n=100000)
+plt.legend(loc='center right')
 
-# Mercator of China
-plt.figure(2, figsize=(12,6))
+# Generate a bolded horizontal line at y = 0 
+plt.axhline(y = 9, color = 'black', linewidth = 1.3, alpha = .7)
+# Add an extra vertical line by tweaking the range of the x-axis
+plt.xlim(left = 2009, right = 2017)
+# The signature bar
 
-m2 = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='i')
+plt.text(x = 2009, y = 8.2,
+    s = '   Poonam Ligade                                                                                                                                                      Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
 
-m2.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
-m2.drawmapboundary(fill_color='#000000')                # black background
-m2.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
-
-# Plot the data
-mxy = m2(df_events_china["longitude"].tolist(), df_events_china["latitude"].tolist())
-m2.scatter(mxy[0], mxy[1], s=5, c="#1292db", lw=0, alpha=0.05, zorder=5)
-
-plt.title("China view of events")
-plt.show()
+# Adding a title and a subtitle
+plt.text(x = 2009, y = 14.1, s = "Real Estate Properties With Price Reductions in US",
+               fontsize = 25, weight = 'bold', alpha = .75)
+plt.text(x = 2009, y = 13.7, 
+               s = 'Perentage Of Homes With Price Reductions Seasonal Adjustments from 2010 to 2017 in the US states',
+              fontsize = 18, alpha = .85);
 
 
-# This is more interesting to visualise, and roughly matches what you'd expect from the population density in China, see e.g.
+# In[ ]:
+
+
+plt.figure(figsize=(15,8));
+State_time_series.groupby(State_time_series['year'])['MedianRentalPricePerSqft_1Bedroom'].mean().dropna().plot(linewidth=4,c='lightgreen', legend=False)
+State_time_series.groupby(State_time_series['year'])['MedianRentalPricePerSqft_2Bedroom'].mean().dropna().plot(linewidth=4,c='b')
+State_time_series.groupby(State_time_series['year'])['MedianRentalPricePerSqft_3Bedroom'].mean().dropna().plot(linewidth=4,c='brown')
+State_time_series.groupby(State_time_series['year'])['MedianRentalPricePerSqft_4Bedroom'].mean().dropna().plot(linewidth=4,c='purple')
+State_time_series.groupby(State_time_series['year'])['MedianRentalPricePerSqft_5BedroomOrMore'].mean().dropna().plot(linewidth=4,c='magenta')
+State_time_series.groupby(State_time_series['year'])['MedianRentalPricePerSqft_AllHomes'].mean().dropna().plot(linewidth=4,c='black')
+State_time_series.groupby(State_time_series['year'])['MedianRentalPricePerSqft_CondoCoop'].mean().dropna().plot(linewidth=4,c='orange',legend=False)
+State_time_series.groupby(State_time_series['year'])['MedianRentalPricePerSqft_DuplexTriplex'].mean().dropna().plot(linewidth=4,c='darkblue',legend=False)
+State_time_series.groupby(State_time_series['year'])['MedianRentalPricePerSqft_SingleFamilyResidence'].mean().dropna().plot(linewidth=4,c='red')
+plt.legend(fontsize=12,loc=(2010,1.65),bbox_to_anchor=(0.02,1.35), ncol=2)
+
+# Generate a bolded horizontal line at y = 0 
+plt.axhline(y = 0.7, color = 'black', linewidth = 1.3, alpha = .7)
+# Add an extra vertical line by tweaking the range of the x-axis
+plt.xlim(left = 2010, right = 2017)
+# The signature bar
+
+plt.text(x = 2010, y = 0.6,
+    s = '   Poonam Ligade                                                                                                                                                      Source: Kaggle   ',
+    fontsize = 14, color = '#f0f0f0', backgroundcolor = 'grey')
+
+# Adding a title and a subtitle
+plt.text(x = 2010, y = 1.6, s = "Real Estate Rental Prices Per SquareFoot in US",
+               fontsize = 25, weight = 'bold', alpha = .75)
+plt.text(x = 2010, y = 1.5, 
+               s = 'Median Rental Prices Per Sqft W.r.t Number of Bedrooms from 2010 to 2017 in the US states',
+              fontsize = 18, alpha = .85);
+
+
+# In[ ]:
+
+
+States_year_SalePrices=State_time_series_year.groupby([State_time_series_year.Date,State_time_series_year.RegionName])['Sale_Prices'].mean().dropna().reset_index(name='Sale_Prices')
+PriceDF=States_year_SalePrices.pivot(index='Date', columns='RegionName', values='Sale_Prices').dropna()#.plot(figsize=(15,8))#, color=colors, legend=False)
+
+t0 = PriceDF.index
+t1 = pd.date_range(pd.to_datetime('30/01/2009'),pd.to_datetime('2017-08-31'),freq='A')
+t2 = pd.date_range(pd.to_datetime('30/01/2009',dayfirst=True),pd.to_datetime('2016-08-31' ,dayfirst=True),freq='M')
+t3 = pd.date_range(pd.to_datetime('30/01/2009',dayfirst=True),pd.to_datetime('2015-08-31',dayfirst=True),freq='Q')
+
+
+
+fig, ax = plt.subplots(nrows=4,ncols=1,figsize=(14,12))
+ax[0].set_title("Increase in House SalePrice for Top US states as shown by Time Frequency")
+PriceDF.reindex(index=t0,columns=highest_cost_states).plot(ax=ax[0], lw=0.8, legend=False);
+#ax[0].set_xlabel('Year')
+ax[0].set_ylabel('SalePrice Daily', fontsize=11)
+PriceDF.reindex(index=t1,columns=highest_cost_states).plot(ax=ax[1], lw=1.0, legend=False);
+ax[1].set_ylabel('SalePrice Yearly', fontsize=11)
+
+PriceDF.reindex(index=t2,columns=highest_cost_states).plot(ax=ax[2], lw=1.2, legend=False); 
+ax[2].set_ylabel('SalePrice Monthly', fontsize=11)
+
+PriceDF.reindex(index=t3,columns=highest_cost_states).plot(ax=ax[3], lw=1.5, legend=False);
+ax[3].set_ylabel('SalePrice Quarterly', fontsize=11)
+
+
+ax[0].legend(loc='lower left',fontsize=13, bbox_to_anchor=(0.02,1.35), ncol=len(highest_cost_states));
+ax[3].set_xlabel('time', fontsize=14);
+
+
+# We can see that there is incresing/upward trend in sale price throughout the years, months , quarters and days. 
+# We can not find much periodicity in this plot . For checking that we have to break down data further. 
 # 
-# http://www.china-food-security.org/images/maps/pop/pop_2_h.jpg
-# 
-# 
+# ## Prediction of 2017 House Prices with Facebook Prophet library
 
 # In[ ]:
 
 
-# Sample it down to only the Beijing region
-lon_min, lon_max = 116, 117
-lat_min, lat_max = 39.75, 40.25
-
-idx_beijing = (df_events["longitude"]>lon_min) &              (df_events["longitude"]<lon_max) &              (df_events["latitude"]>lat_min) &              (df_events["latitude"]<lat_max)
-
-df_events_beijing = df_events[idx_beijing]
-
-# Mercator of Beijing
-plt.figure(3, figsize=(12,6))
-
-m3 = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='c')
-
-m3.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
-m3.drawmapboundary(fill_color='#000000')                # black background
-m3.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
-
-# Plot the data
-mxy = m3(df_events_beijing["longitude"].tolist(), df_events_beijing["latitude"].tolist())
-m3.scatter(mxy[0], mxy[1], s=5, c="#1292db", lw=0, alpha=0.1, zorder=5)
-
-plt.title("Beijing view of events")
-plt.show()
-
-
-# At this scale, you can actually see the finite resolution of the lat/lon values.
-# 
-# ### Now we can try plotting the same for male/female, and show average age per grid
-
-# In[ ]:
-
-
-# Load the train data and join on the events
-df_train = pd.read_csv("../input/gender_age_train.csv", dtype={'device_id': np.str})
-
-df_plot = pd.merge(df_train, df_events_beijing, on="device_id", how="inner")
-
-df_m = df_plot[df_plot["gender"]=="M"]
-df_f = df_plot[df_plot["gender"]=="F"]
+StateDF=State_time_series_year[['Date','ZHVI_AllHomes']]
+StateDF.dropna(inplace=True)
+#prophet expects data in the format as DF('ds','y)
+StateDF['ds']=StateDF['Date']
+StateDF['y']=np.log(StateDF['ZHVI_AllHomes'])
 
 
 # In[ ]:
 
 
-# Male/female plot
-plt.figure(4, figsize=(12,6))
-
-plt.subplot(121)
-m4a = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='c')
-m4a.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
-m4a.drawmapboundary(fill_color='#000000')                # black background
-m4a.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
-mxy = m4a(df_m["longitude"].tolist(), df_m["latitude"].tolist())
-m4a.scatter(mxy[0], mxy[1], s=5, c="#1292db", lw=0, alpha=0.1, zorder=5)
-plt.title("Male events in Beijing")
-
-plt.subplot(122)
-m4b = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='c')
-m4b.fillcontinents(color='#191919',lake_color='#000000') # dark grey land, black lakes
-m4b.drawmapboundary(fill_color='#000000')                # black background
-m4b.drawcountries(linewidth=0.1, color="w")              # thin white line for country borders
-mxy = m4b(df_f["longitude"].tolist(), df_f["latitude"].tolist())
-m4b.scatter(mxy[0], mxy[1], s=5, c="#fd3096", lw=0, alpha=0.1, zorder=5)
-plt.title("Female events in Beijing")
-
-plt.show()
-
-
-# Clearly some different patterns emerging, though it's not immediately clear whether or not this is just because there are different amounts of data for M/F.
-
-# In[ ]:
-
-
-print("# M obs:", len(df_m))
-print("# F obs:", len(df_f))
+del StateDF['Date']
+del StateDF['ZHVI_AllHomes']
+StateDF.head()
 
 
 # In[ ]:
 
 
-# Make a pivot table showing average age per area of a grid, also store the counts
-df_plot["lon_round"] = df_plot["longitude"].round(decimals=2)
-df_plot["lat_round"] = df_plot["latitude"].round(decimals=2)
-
-df_age = pd.pivot_table(df_plot,                        values="age",                        index="lon_round",                        columns="lat_round",                        aggfunc=np.mean)
-
-df_cnt = pd.pivot_table(df_plot,                        values="age",                        index="lon_round",                        columns="lat_round",                        aggfunc="count")
+train=StateDF[:len(StateDF)-40]
+train.shape
 
 
 # In[ ]:
 
 
-# Age plot
-plt.figure(5, figsize=(12,6))
-
-# Plot avg age per grid
-plt.subplot(121)
-m5a = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='c')      
-# Construct a heatmap
-lons = df_age.index.values
-lats = df_age.columns.values
-x, y = np.meshgrid(lons, lats) 
-px, py = m5a(x, y) 
-data_values = df_age.values
-masked_data = np.ma.masked_invalid(data_values.T)
-cmap = plt.cm.viridis
-cmap.set_bad(color="#191919")
-# Plot the heatmap
-m5a.pcolormesh(px, py, masked_data, cmap=cmap, zorder=5)
-m5a.colorbar().set_label("average age")
-plt.title("Average age per grid area in Beijing")
-
-# Plot count per grid
-plt.subplot(122)
-m5b = Basemap(projection='merc',
-             llcrnrlat=lat_min,
-             urcrnrlat=lat_max,
-             llcrnrlon=lon_min,
-             urcrnrlon=lon_max,
-             lat_ts=35,
-             resolution='c')      
-# Construct a heatmap 
-data_values = df_cnt.values
-masked_data = np.ma.masked_invalid(data_values.T)
-cmap = plt.cm.viridis
-cmap.set_bad(color="#191919")
-# Plot the heatmap
-m5b.pcolormesh(px, py, masked_data, cmap=cmap, zorder=5)
-m5b.colorbar().set_label("count")
-plt.title("Event count per grid area in Beijing")
-
-plt.show()
+test=StateDF[len(StateDF)-40:]
+test.shape
 
 
-# Again, clearly some potentially interesting patterns.
+# In[ ]:
+
+
+m = Prophet()
+m.fit(StateDF);
+
+
+# In[ ]:
+
+
+future = m.make_future_dataframe(periods=40) # days for test split
+future.tail()
+
+
+# In[ ]:
+
+
+forecast = m.predict(future)
+forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail()
+
+
+# ## Visualize Forecasted data
+
+# In[ ]:
+
+
+m.plot(forecast);
+
+
+# ## Visualize Components of Forecasted data
+
+# In[ ]:
+
+
+m.plot_components(forecast);
+
+
+# In[ ]:
+
+
+y_truth = test.y.values
+y_forecasted = forecast.iloc[-40:,2].values
+
+
+denominator = (np.abs(y_truth) + np.abs(y_forecasted))
+diff = np.abs(y_truth - y_forecasted) / denominator
+diff[denominator == 0] = 0.0
+

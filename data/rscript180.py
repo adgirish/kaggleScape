@@ -1,78 +1,125 @@
-import sqlite3
+"""
+Caterpillar @ Kaggle
+Adapted from arnaud demytt's R script
+AND
+Gilberto Titericz Junior's python scripts
+__author__ = saihttam
+"""
+
+
+import os
 import pandas as pd
+import numpy as np
+from sklearn.utils import shuffle
+from sklearn.ensemble import ExtraTreesClassifier
+import seaborn as sns
 import matplotlib.pyplot as plt
+from sklearn.cross_validation import ShuffleSplit
+from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble.partial_dependence import plot_partial_dependence
 
-# This script identifies which communication styles receive highest ranks
-# For illustration purposes I defined 3 styles such as Passive, Assertive and Aggressive
-# The list of key words must of course be extended
+np.random.seed(42)
+numerics = ['int16', 'int32', 'int64', 'float16', 'float32', 'float64']
 
-sql_conn = sqlite3.connect('../input/database.sqlite')
+# load training datasets
+train = pd.read_csv(os.path.join('..', 'input', 'train_set.csv'), parse_dates=[2,])
+tube_data = pd.read_csv(os.path.join('..', 'input', 'tube.csv'))
 
-df = pd.read_sql("SELECT score, body FROM May2015 WHERE LENGTH(body) > 5 AND LENGTH(body) < 100 LIMIT 10000", sql_conn)
-    
-keywords = pd.DataFrame({'Passive': pd.Series(['if you have the time','hmm','well','that was my fault','not sure']),
-                         'Assertive': pd.Series(['good idea','great idea','thanks for','good to know','really like', 'too','sorry for']),
-                         'Aggressive': pd.Series(['I shot','fuck','fucking','ass','idiot'])})
+train = pd.merge(train, tube_data, on='tube_assembly_id')
 
-content_summary = pd.DataFrame()
-for col in keywords:
-    content = df[df.body.apply(lambda x: any(keyword in x.split() for keyword in keywords[col]))]
-    content_summary[col] = content.describe().score
+# create some new features
+train['year'] = train.quote_date.dt.year
+train['month'] = train.quote_date.dt.month
+train['week'] = train.quote_date.dt.dayofyear % 52
 
-keys = content_summary.keys()
+train = train.drop(['quote_date', 'tube_assembly_id'], axis=1)
+rs = ShuffleSplit(train.shape[0], n_iter=3, train_size=.2, test_size=.8, random_state=0)
+for train_index, _ in rs:
+    pass
 
-content_summary = content_summary.transpose()
+train = train.iloc[train_index]
+print(train.shape)
+# Adapted from R script, only use top {threshold features from categorical columns}
+newdf = train.select_dtypes(include=numerics)
+numcolumns = newdf.columns.values
 
-# Setting the positions and width for the bars
-pos = list(range(len(content_summary['count'])))
-width = 0.25
+allcolumns = train.columns.values
+nonnumcolumns = list(set(allcolumns) - set(numcolumns))
+print("Numcolumns %s " % numcolumns)
+print("Nonnumcolumns %s " % nonnumcolumns)
 
-# Plotting the bars
-fig, ax = plt.subplots(figsize=(10,5))
+print("Nans before processing: \n {0}".format(train.isnull().sum()))
+train[numcolumns] = train[numcolumns].fillna(-999999)
+train[nonnumcolumns] = train[nonnumcolumns].fillna("NAvalue")
+print("Nans after processing: \n {0}".format(train.isnull().sum()))
 
-clrs = []
-for v in content_summary['mean'].values:
-    if v < 2:
-        clrs.append('#FFC1C1')
-    elif v < 5:
-        clrs.append('#F08080')
-    elif v < 10:
-        clrs.append('#EE6363')
+for col in nonnumcolumns:
+    ser = train[col]
+    counts = ser.value_counts().keys()
+    # print "%s has %d different values before" % (col, len(counts))
+    threshold = 5
+    if len(counts) > threshold:
+        ser[~ser.isin(counts[:threshold])] = "rareValue"
+    if len(counts) <= 1:
+        print("Dropping Column %s with %d values" % (col, len(counts)))
+        train = train.drop(col, axis=1)
     else:
-        clrs.append('r')
+        train[col] = ser.astype('category')
 
-plt.bar(pos,
-        content_summary['count'],
-        width,
-        alpha=0.5,
-        # with color
-        color=clrs,
-        label=keys)
+train = pd.get_dummies(train)
+print("Size after dummies {0}".format(train.shape))
 
-# Set the y axis label
-ax.set_ylabel('Number of comments')
+# Use log for some variables for better visualization
+train["logquantity"] = np.log(train['quantity'])
+train["log1usage"] = np.log1p(train['annual_usage'])
+train["log1radius"] = np.log1p(train['bend_radius'])
+train["log1length"] = np.log1p(train['length'])
+train = train.drop(['quantity', 'annual_usage', 'bend_radius', 'length'], axis=1)
 
-# Set the chart's title
-ax.set_title('Which communication style receives highest ranks?')
+labels = train.cost.values
+Xtrain = train.drop(['cost'], axis=1)
+names = list(Xtrain.columns.values)
+Xtrain = np.array(Xtrain)
 
-# Set the position of the x ticks
-ax.set_xticks([p + 0.5 * width for p in pos])
+label_log = np.log1p(labels)
+Xtrain, label_log = shuffle(Xtrain, label_log, random_state=666)
 
-# Set the labels for the x ticks
-ax.set_xticklabels(keys)
+model = ExtraTreesClassifier(n_estimators=50, max_depth=15)
+model.fit(Xtrain, label_log)
+features = []
 
-# Setting the x-axis and y-axis limits
-plt.xlim(min(pos)-width, max(pos)+width*4)
-plt.ylim([0, max(content_summary['count'])+20])
+# display the relative importance of each attribute
+importances = model.feature_importances_
+indices = np.argsort(importances)[::-1]
 
-rects = ax.patches
+for f in range(len(importances)):
+    print("%d. feature %d (%f), %s" % (f + 1, indices[f], importances[indices[f]], names[indices[f]]))
+    features.append(indices[f])
+    # Print only first 5 most important variables
+    if len(features) >= 5:
+        break
 
-# Now make some labels
-for ii,rect in enumerate(rects):
-        height = rect.get_height()
-        plt.text(rect.get_x()+rect.get_width()/2., 1.02*height, '%s'% ("Score {0:.2f}".format(content_summary['mean'][ii])),
-                 ha='center', va='bottom')
+q = pd.qcut(train["cost"], 5)
+print("Bins are {0}".format(q))
+train['cost_5'] = q
 
-plt.grid()
+fig = plt.figure()
+featurenames = [names[feature] for feature in features]
+featurenames.append('cost_5')
+pg = sns.pairplot(train[featurenames], hue='cost_5', size=2.5)
+pg.savefig('pairplotquintile.png')
 
-plt.savefig("CommunicationStyles.png")
+
+print("Training GBRT...")
+clf = GradientBoostingRegressor(n_estimators=100, max_depth=4,
+                                learning_rate=0.1, loss='huber',
+                                random_state=1)
+clf.fit(Xtrain, label_log)
+print('Convenience plot with ``partial_dependence_plots``')
+
+# 2-D dependence plot
+target_feature = (features[0], features[1])
+features.append(target_feature)
+fig, axs = plot_partial_dependence(clf, Xtrain, features, feature_names=names,
+                                   n_jobs=3, grid_resolution=50)
+fig.savefig('partial.png')

@@ -1,368 +1,344 @@
 
 # coding: utf-8
 
-# # INTRODUCTION
+# # Visual Analysis 
 # 
-# ![](http://unpauseasia.com/wp-content/uploads/2016/05/Nintendo-1-1024x568.jpg)
+# In this notebook I will try to prove some graphical analysis so get a better picture of the database, the goals of the project and how you can improve your score using interesting characteristics of the features. Fisrt lets talk shortly about the databases.
 # 
-# *Picture source: http://unpauseasia.com/wp-content/uploads/2016/05/Nintendo-1-1024x568.jpg*
+# ### train dataframe
+# DonorsChose.org provide us a interesting dataset with a lot of string type variables. This means that the project and the submission that we made will depend conbsiderably on how we build categorical variables and create combinations of these categories to prdict with more accuracy the probability of each application of beeing aproved.
+# * **Variables:**
+#     * id: ID of the application. For each ID application we need to calculate the probability of this application being pproved.
+#     * **teacher_id: **ID of the teacher that is presenting the application. 
+#     * **teacher_prefix: ** The title is important, it give uys information about the  gender and the title of the teacher presenting the project.
+#         * ['Ms.', 'Mrs.', 'Mr.', 'Teacher', 'Dr.', nan].
+#     * **school_state: ** In which state the project will be develop in case it's accepted. I'm not sure but maybe there could be some budget restrictions per state so some states may accept more projects because they have more money.
+#     * **project_submitted_datetime: **  The submitted datetime of the project (No way!!) . This feature it's important for many reasons:
+#         * There could be some seasonality in the events.
+#         * We have to check for specific months in which we found more accpeted projects or a more accpetance rate.
+#         * Maybe the budget for all the projects it's assigned in a particular month , or every X months??
+#         * We should expect that during holydays and vacations there are less submitted projects (we should tottally include holyday information as external data!)
+#     * **project_grade_category: ** For which school grade the project it's oriented. Maybe most of the accepted projects are for small kids because they need special prgrams to learn better? Or maybe to older students that need special materials for science projects?
+#     * **project_subject_categories: **For which academic area the project was proposed? Is it math related? Music related? This is feature is interesting beacuse one application may have multiple areas. For example:
+#         * -Math & Science-, -Math & Science, Applied Learning-,  -Math & Science, Warmth, Care & Hunger-, -History & Civics, Warmth, Care & Hunger- are 4 different categories that share at least one academic area so we may need to apply some string transformations to get a list of academic areas instead of a single-value string. 
+#         EX:  -Math & Science, Applied Learning-, => [Math, Science, Applied Learning]
+#         * We have 51 different categories single-value.
+#         
+#     * **project_subject_subcategories: ** This is something more specific than the category feature. Then again we may need specific words or fields of the subcategory to identify more speciffic groups. Some examples of subcategories are:
+#        * 'ESL, Performing Arts', 'Gym & Fitness, Visual Arts',
+#        * 'Early Development, Health & Life Science',
+#        * 'Foreign Languages, Special Needs',
+#        * We have 407 different subcategories.
+#        
+#     * **project_title: ** Name of the project.
+#         * Just an interesting name:  "Wiggle While We Work" -> 149 different observations with the same name. 0.912751677852349 accpetance rate. Awesome name!! 
+#     * **project_essay_1: **  When presenting the project the teachers have to make a descrption of their application in 4 paragraphs.
+#         * 663.84 words average. 1st paragraph description.  
+#     * **project_essay_2: **
+#         * 833.552 words average  2nd paragraph description.  .
+#     * **project_essay_3: ** 
+#         * 19.70 words average 3rd paragraph description.  96.4% of teacher didn't include a third description paragraph.
+#     * **project_essay_4: **
+#         * 12.435 words average 4th paragraph description.  96.4% of teacher didn't include a third description paragraph.
+#     * **project_resource_summary: ** A description of the resources required for the project.
+#         * Example:   "My students need 6 Ipod Nano's to create and differentiated and engaging way to practice sight words during a literacy station." 
+#     * **teacher_number_of_previously_posted_projects: ** How many applications does the teacher had presented in the past.
+#         * Teachers had presented 11.23 in average.
+#     * **project_is_approved: ** 
+#         * 0.8476823374340949 accpetance rate. This value is really 
 # 
-# The Console wars. The epic battles fought ( and still being fought) amongst the biggest and baddest players in the console gaming industry. This notebook will focus on the 7th Generation and the 8th Generation of the Console wars and the belligerents are as follows : 
+# ### test dataframe
+# Same information of the train dataset without the  **project_is_approved** variable.
 # 
-# **7th GENERATION** : Playstation 3 vs XBOX360 vs Nintendo Wii
+# ### sample_submision dataframe
+# A datafarme with just two columns, id and project_is_approved. As mention in the details of the competition th order of the results doesn't matter. Also, you must predict a probability for the project_is_approved variable and the file should contain a header.
 # 
-# **8th GENERATION** : Playstation 4 vs XBOXONE vs Nintendo WiiU
 # 
-# The aim is to run some visualisations on how some of the features in the dataset are correlated to one another as well as to provide some summary statistics and data analysis on the choice of genres and overall sales made by the different consoles to observe which one emerges with bragging rights. 
 
 # In[ ]:
 
 
-# Import the relevant libaries
+
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import seaborn as sns
-from matplotlib import pyplot as plt
+import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-from brewer2mpl import qualitative
 
-
-# Let's load the video game sales data as "video" and explore the first 5 rows 
-
-# In[ ]:
-
-
-video = pd.read_csv('../input/Video_Games_Sales_as_at_22_Dec_2016.csv')
-video.head()
+import datetime
+import matplotlib.patches as mpatches
 
 
 # In[ ]:
 
 
-print(video.shape)
+# Filepath to main training dataset.
+train_path = '../input/train.csv'
+test_path = '../input/test.csv'
+
+# Read data and store in DataFrame.
+train_data = pd.read_csv(train_path, sep=',', date_parser="project_submitted_datetime")
 
 
-# # GENERAL ANALYSIS & DATA CLEANSING
+# Using the train dataframe we can anwer some questions to select the variables that provide more information about the acceptance rate. For example, is there a correlation between the gender and the acceptance rate of the projects? Is there a correlation between the school state and the acceptance rate? 
 # 
-# Before we start delving into the visuals and stats for the 7th Gen and 8th Gen console wars, let's run some general statistics to get a feel for what we have. Let's start by checking if there exists any nulls in the dataframe by calling the method "isnull().any()" as such:
+# In the following Chunks I will try to answer this kind of questions following the order of the column variables.
 
 # In[ ]:
 
 
-video.isnull().any().any()
+train_data.head()
 
 
-# Well well, it seems that there are nulls indeed. So let's start by getting rid of these pesky nulls via the "dropna" call.
-
-# In[ ]:
-
-
-video = video.dropna(axis=0)
-
-
-# By calling the dataframe method "info()", we also discover that the "User_Score" column which should be best represented numerically, contains strings. Therefore we'll also convert that column to string type
-
-# In[ ]:
-
-
-from tabulate import tabulate
-tabulate(video.info(), headers='keys', tablefmt='psql')
-
-
-# In[ ]:
-
-
-video.Platform.unique()
-
-
-# Per the above, one can see that there are quite a few different platforms in our dataset. For the scope and purpose of this notebook, there are more platforms than required (as we want only the 7th and 8th Generational consoles). Therefore we have to undertake some selective trimming of the data which we will get to in due time.
-
-# ## Jointplots and Correlations of the numeric features
+# ## Acceptance rates analysis.
 # 
-# To inspect the correlations between all the numeric features and see how one feeds into the other, I shall plot a swanky heatmap. First I extract all the numeric columns into a list and create a simple dataframe "video_num" for this heatmap plotting as such
-# After which let us plot some of the numeric features against each other to explore the relations between them  as well as getting accustomed to using Seaborn's plotting capabilities. I therefore first plot the "Critic_Score" and "User_Score" columns as a jointplot (which is good to observe how two different variables are distributed) first to see how they interact:
+# ### Gender and titles.
 
 # In[ ]:
 
 
-str_list = [] # empty list to contain columns with strings (words)
-for colname, colvalue in video.iteritems():
-    if type(colvalue[2]) == str:
-         str_list.append(colname)
-# Get to the numeric columns by inversion            
-num_list = video.columns.difference(str_list) 
-# Create Dataframe containing only numerical features
-video_num = video[num_list]
-f, ax = plt.subplots(figsize=(14, 11))
-plt.title('Pearson Correlation of Video Game Numerical Features')
-# Draw the heatmap using seaborn
-sns.heatmap(video_num.astype(float).corr(),linewidths=0.25,vmax=1.0, 
-            square=True, cmap="cubehelix_r", linecolor='k', annot=True)
+train_data.teacher_prefix.unique()
 
 
 # In[ ]:
 
 
-video['User_Score'] = video['User_Score'].convert_objects(convert_numeric= True)
+prefixAceptance = train_data[["teacher_prefix","project_is_approved"]].groupby("teacher_prefix").mean()
+prefixAceptance["prefix"] = prefixAceptance.index
+
+genderDictionary = {"Ms.": "Female", "Mrs.":"Female", "Mr.":"Male", "Teacher":"Neutral", "Dr.":"Neutral", np.nan:"Neutral"  }
+train_data["gender"] = train_data.teacher_prefix.map( genderDictionary )
+genderAceptance = train_data[["gender","project_is_approved"]].groupby("gender").mean()
+
+titleDictionary = {"Ms.": "Na", "Mrs.":"Na", "Mr.":"Na", "Teacher":"Teacher", "Dr.":"Dr.", np.nan:"Na"  }
+train_data["title"] = train_data.teacher_prefix.map( titleDictionary )
+titleAceptance = train_data[["title","project_is_approved"]].groupby("title").mean()
 
 
 # In[ ]:
 
 
-sns.jointplot(x='Critic_Score',y='User_Score',data=video,
-              kind='hex', cmap= 'afmhot', size=11)
-#video.plot(y= 'Critic_Score', x ='User_Score',kind='hexbin',gridsize=35, 
-#           sharex=False, colormap='afmhot_r', title='Hexbin of Critic_Score and User_Score')
+fig  = plt.figure(figsize=(20,7))
+ax1 = plt.subplot(1,3,1)
+sns.barplot(x = prefixAceptance.index, y =prefixAceptance.project_is_approved )
+ax2 = plt.subplot(1,3,2)
+sns.barplot(x = genderAceptance.index, y =genderAceptance.project_is_approved )
+ax3 = plt.subplot(1,3,3)
+sns.barplot(x = titleAceptance.index, y =titleAceptance.project_is_approved )
 
 
-# As expected, these 2 scores exhibit quite positive Pearson Correlation with one another. This should not be a surprise as on average, if a game is good, both the critic and the user will derive enjoyment out of it and therefore tend to score the game higher and vice-versa. Let's now look at "Critic_Count" and "Critic_Score"
+# It looks like there is not a real correlation between the prefix of the title and the accpetance rate of the projects. 
 
-# In[ ]:
-
-
-sns.jointplot('Critic_Score','Critic_Count',data=video,
-              kind='hex', cmap='afmhot', size=11)
-#video.plot(y= 'Critic_Score', x ='Critic_Count',kind='hexbin',gridsize=40, sharex=False, 
-#           colormap='cubehelix', title='Hexbin of Critic_Score and Critic_Count')
-
-
-# Cool. With this heatmap, the darker colors represent more postive correlations and vice-versa. Therefore, we can already see quite logical connections like "Global_Sales" being very positively correlated to "EU_Sales" etc. Just some interesting things so far. 
-
-# ___
-
-# # 7th GENERATION CONSOLE WAR 
-# 
-# ![](http://gamingillustrated.com/wp-content/uploads/2012/06/consoles.jpg)
-# 
-# 
-# ## Tale of the tape : PS3 vs XBOX360 vs Wii
-# 
-# Onto our first event of the evening, I'll provide some visualisations and summary statistics on the 7th Gen Console wars fought between the 3 main parties alluded to above. First, I will create a dataframe ("video7th") to contain only these 7th Gen consoles and then it's time to do some data poking and inspecting.
+# ### School Satate.
 
 # In[ ]:
 
 
-# Dataframe contain info only on the 7th Gen consoles
-video7th = video[(video['Platform'] == 'Wii') | (video['Platform'] == 'PS3') | (video['Platform'] == 'X360')]
-video7th.shape
+stateAceptance = train_data[["school_state","project_is_approved"]].groupby("school_state").mean()
+stateAceptance["state"] = stateAceptance.index
+
+fig = plt.figure( figsize=(20,10))
+plt.title("Accpetance rate per State")
+sns.barplot(x = stateAceptance.index, y =stateAceptance.project_is_approved )
 
 
-# ### GLOBAL SALES OVER THE YEARS
+# Then again it doesn't seem that the number percentaje of accepted projects change between states. If this wasn't true then we would expect bars of different sizes. Now we can reject the hipotesis that each state have a different budget and that this butget constraints the amount of projects that each state can accept. 
 # 
-# First let's look at these console's global sales over the years and see if we can identify any which left with bragging rights.
-# To do so, I shall aggregate the data via a "groupby" call on the Year_of_Release and "Platform" and then sum the Global_Sales. For visualisation, I will plot stacked barplots and hopefully this will be intuitive enough
+# Just to be sure let's plot the total number projects (applications) per state.
 
 # In[ ]:
 
 
-plt.style.use('dark_background')
-yearlySales = video7th.groupby(['Year_of_Release','Platform']).Global_Sales.sum()
-yearlySales.unstack().plot(kind='bar',stacked=True, colormap= 'PuBu',  
-                           grid=False,  figsize=(13,11))
-plt.title('Stacked Barplot of Global Yearly Sales of the 7th Gen Consoles')
-plt.ylabel('Global Sales')
+stateAceptance = train_data[["school_state","project_is_approved"]].groupby("school_state").count()
+stateAceptance["state"] = stateAceptance.index
+stateAceptance = stateAceptance.sort_values( "project_is_approved", ascending=False)
+
+fig = plt.figure( figsize=(20,10))
+plt.title("Number of applications per State")
+sns.barplot(x = stateAceptance.index, y =stateAceptance.project_is_approved )
 
 
-# First Impressions : Seems the PS3 sales went from strength to strength , XB360 sales (bar a dip in 2009) also generally increased while the Wii sales, which had a strong headstart in the early years of 2006 and 2007 had it's lead eroded by the other 2.
+# This intersting, it looks like there are some states that recieve a lot more applications than others but the acceptance rate it's almost the same for all the states. This tell us that maybe all the states have a fixed rule and they must accept at least 80% of the applications. If this was true then the competition is not about finding the good applications but finding the worst applications.
 
-# ### SALES AGGREGATED BY VIDEO GAME RATINGS
-# 
-# Here, I will take a look at the different video game ratings (i think its E : Everyone, M: Mature, T: Teens) and look at how many sales each of the 3 consoles made
-
-# In[ ]:
-
-
-plt.style.use('dark_background')
-ratingSales = video7th.groupby(['Rating','Platform']).Global_Sales.sum()
-ratingSales.unstack().plot(kind='bar',stacked=True,  colormap= 'Greens', 
-                           grid=False, figsize=(13,11))
-plt.title('Stacked Barplot of Sales per Rating type of the 7th Gen Consoles')
-plt.ylabel('Sales')
-
-
-# First Impressions : Well not much surprise here as we know that the Wii primarily catered to family-oriented fun and therefore it made the largest sales at Rating E for Everyone while it sold negligible M for Mature games. On the other hand, the PS3 and XB360 sold the most M-rated games, something also pretty obvious from both their plethora of shooters, sandbox games and hacking/slashing games. Heck Yeahhhhh!!!
-
-# ### SALES BY GENRE
-# 
-# Finally, let's drill down into the data even further and look at the sales made by the 3 consoles and look at what kind of Genre games defined each console and what differentiated one console from the other. To do, I will aggregate the data via a "groupby" call on the Genre feature and Platform. The resultant plot is as follows:
+# ### Acceptance and Time.
+# in this section we plot the trend of acceptance rates and the number of applications.
 
 # In[ ]:
 
 
-plt.style.use('dark_background')
-genreSales = video7th.groupby(['Genre','Platform']).Global_Sales.sum()
-genreSales.unstack().plot(kind='bar',stacked=True,  colormap= 'Reds', 
-                          grid=False, figsize=(13,11))
-plt.title('Stacked Barplot of Sales per Game Genre')
-plt.ylabel('Sales')
+train_data["project_submitted_datetime"] = pd.to_datetime( train_data.project_submitted_datetime )
+train_data["date"] = train_data.project_submitted_datetime.apply( lambda x: x.date() )
+train_data["month"] = train_data.project_submitted_datetime.apply( lambda x: x.month )
+train_data["weekday"] = train_data.project_submitted_datetime.apply( lambda x: x.weekday )
+train_data["year"] = train_data.project_submitted_datetime.apply( lambda x: x.year )
 
-
-# First Impressions : It seems that for both the PS3 and XB360, their 2 main genres were Action and Shooter games which as we know was the case as they appeal more to the hardcore, action-oriented gamer. The Wii on the other hand, focused on the genre of Sports, Platformers as well as some other Misc games.
-
-# ### TOTAL SALES AND TOTAL USERS
-# 
-# Finally let us look at pie chart visualisations of the total number of Global Sales and total number of users attributed to each of the 3 consoles. The way I am going to present this is to simply add up the Global sales and number of users value for all games. Therefore as a caveat, take the numbers and visualisation with a pinch of salt as this output will be dependent on whether the original dataset was fully inclusive in the first instance.
 
 # In[ ]:
 
 
-# Plotting our pie charts
-# Create a list of colors 
-plt.style.use('seaborn-white')
-colors = ['#008DB8','#00AAAA','#00C69C']
-plt.figure(figsize=(15,11))
-plt.subplot(121)
-plt.pie(
-   video7th.groupby('Platform').Global_Sales.sum(),
-    # with the labels being platform
-    labels=video7th.groupby('Platform').Global_Sales.sum().index,
-    # with no shadows
-    shadow=False,
-    # stating our colors
-    colors=colors,
-    explode=(0.05, 0.05, 0.05),
-    # with the start angle at 90%
-    startangle=90,
-    # with the percent listed as a fraction
-    autopct='%1.1f%%'
-    )
-plt.axis('equal')
-plt.title('Pie Chart of Global Sales')
-plt.subplot(122)
-plt.pie(
-   video7th.groupby('Platform').User_Count.sum(),
-    labels=video7th.groupby('Platform').User_Count.sum().index,
-    shadow=False,
-    colors=colors,
-    explode=(0.05, 0.05, 0.05),
-    startangle=90,
-    autopct='%1.1f%%'
-    )
-plt.axis('equal')
-plt.title('Pie Chart of User Base')
-plt.tight_layout()
-plt.show()
+dateAcceptance = train_data[["date","project_is_approved"]].groupby("date").mean()
+dateAcceptanceCount = train_data[["date","project_is_approved"]].groupby("date").count() 
 
+fig = plt.figure( figsize=(20,6))
+plt.title("Acceptance rate per date and number of applications")
+ax1 = plt.subplot(1,1,1)
+plt.plot(dateAcceptance  )
+ax2 = plt.subplot(1,1,1)
+ax2 = ax1.twinx()
+plt.plot(dateAcceptanceCount, "red"  )
+red_patch = mpatches.Patch(color='red', label='Total number of applications')
+blue_patch = mpatches.Patch(color='blue', label='Acceptance rate')
+plt.legend(handles=[blue_patch, red_patch])
 
-# **Concluding Remarks** 
-# 
-# From the pie charts above as well as the earlier barplots, it seems that both the PS3 and the XB360 were very evenly matched, with the XB360 having the slight edge in global sales. What is obvious is that from these metrics alone, the showing from the Wii could not compete against its other 2 competitors. 
-# 
-# # WINNER : PS3 & XB360 (Two-way Tie)
-
-# ---
-
-# # 8th GENERATION CONSOLE WAR 
-# 
-# ![](https://i0.wp.com/www.absolutegadget.com/wp-content/uploads/2016/01/console_generation_8.jpg?fit=1442%2C900&ssl=1)
-# 
-# ### Tale of the tape : PS4 vs XBOXONE vs WiiU
-# 
-# Onto our second event of the evening and as per the earlier sections,  I'll provide some visualisations and summary statistics on the 8th Gen Console wars. First up, I will create a dataframe ("video8th") to only contain data pertaining to these 3 particular consoles:
 
 # In[ ]:
 
 
-video8th = video[(video['Platform'] == 'WiiU') | (video['Platform'] == 'PS4') | (video['Platform'] == 'XOne')]
-video8th.shape
+monthAcceptance = train_data[["month","project_is_approved"]].groupby("month").mean()
+monthAcceptanceCount = train_data[["month","project_is_approved"]].groupby("month").count() 
+
+fig = plt.figure( figsize=(20,6))
+
+plt.title("Acceptance trend")
+
+ax1 = plt.subplot(1,1,1)
+plt.plot(monthAcceptance  )
+ax2 = plt.subplot(1,1,1)
+ax2 = ax1.twinx()
+plt.plot(monthAcceptanceCount, "red"  )
+
+red_patch = mpatches.Patch(color='red', label='Total number of applications')
+blue_patch = mpatches.Patch(color='blue', label='Acceptance rate')
+plt.legend(handles=[blue_patch, red_patch])
 
 
-# ### GLOBAL SALES OVER THE YEARS
+# In the first trend plot it's hard to notice that there is a negative correlation between the total number of applications and the acceptance rate but using a month aggregation plot allow us to see that the more applications are presented on a given month the lower the acceptance rate. Maybe this happen becauase application analist have more time to read the complete application or maybe beacause they need to accept at least X number of applications.
 # 
-# Following our approach with the 7th Gen data, let's first have a high-level grasp of the sales performance of these 8th Gen games over the years. Therefore I shall once again aggregate the data via a "groupby" call on the Year_of_Release and "Platform" and then sum the Global_Sales with stacked barplots for visualisation.
+# ### Teacher posted applications in the past.
+# 
+# In this section we want to test if the number of past applications hava an impact on the accpetance rate.
+# 
 
 # In[ ]:
 
 
-plt.style.use('dark_background')
-yearlySales = video8th.groupby(['Year_of_Release','Platform']).Global_Sales.sum()
-yearlySales.unstack().plot(kind='bar',stacked=True, colormap= 'Blues',  
-                           grid=False, figsize=(13,11))
-plt.title('Stacked Barplot of Global Yearly Sales of the 8th Gen Consoles')
-plt.ylabel('Global Sales')
+postedAcceptance= train_data[["teacher_number_of_previously_posted_projects","project_is_approved"]].groupby("teacher_number_of_previously_posted_projects").mean()
+postedAcceptanceCount = train_data[["teacher_number_of_previously_posted_projects","project_is_approved"]].groupby("teacher_number_of_previously_posted_projects").count() 
+postedAcceptanceCount = postedAcceptanceCount.rename( columns= {"project_is_approved": "applications_count"})
 
+postedAcceptance =  postedAcceptance.merge( postedAcceptanceCount, right_index=True, left_index= True)
+postedAcceptance = postedAcceptance.sort_index( ascending= True)
 
-# First Impression : It is obvious just by one look that the PS4 global sales exceed those of BOTH the WiiU and XOne combined. This is a very marked deviation from its predecessor's performance in the 7th Gen when the PS3 and XB360 where neck to neck in sales performance over the years. So how can be explain this dominance this time round?
+postedAcceptance50 = postedAcceptance.head(50)
 
-# ### SALES AGGREGATED BY VIDEO GAME RATINGS
-# 
-# Well let's boil our analysis down even further to see if we can investigate this PS4 dominance. Let's look at what kind of audiences (hence looking at the Ratings) these consoles catered their games to
 
 # In[ ]:
 
 
-plt.style.use('dark_background')
-ratingSales = video8th.groupby(['Rating','Platform']).Global_Sales.sum()
-ratingSales.unstack().plot(kind='bar',stacked=True,  colormap= 'Greens', 
-                           grid=False, figsize=(13,11))
-plt.title('Stacked Barplot of Sales per Rating type of the 8th Gen Consoles')
-plt.ylabel('Sales')
 
 
-# First Impression : An Interesting result this time round. Unlike the 7th Gen where there was a clear demarcation in the sense that the PS3 and XB360 produced games primarily for the M for Mature audience while the Wii was for the E for Everyone audience, it seems that the PS4 has decided to cater ( or has somehow appealed more) to both the M and E audience. This could explain their earlier dominance in global sales as they are now taking up both the hardcore gaming audience as well as the casual, family-friendly audience.
+fig = plt.figure( figsize=(20,10))
+fig.suptitle( "Distribution: acceptance rate and number of applications per number of past posted projects", fontsize = 20)
 
-# ### SALES BY GENRE
-# 
-# Finally, let's look at the breakdown by Genre via an aggregation the data with a "groupby" call on the Genre feature and Platform. The resultant plot is as follows:
+ax1 = plt.subplot(2,1,1)
+plt.bar( postedAcceptance50.index, postedAcceptance50.project_is_approved,  color='g') 
+ax2 = plt.subplot(2,1,1)
+ax2 = ax1.twinx()
+plt.bar( postedAcceptance50.index, postedAcceptance50.applications_count, color = 'orange' )
+orange_patch = mpatches.Patch(color='orange', label='Count number of records per previously_posted_projects')
+green_patch = mpatches.Patch(color='green', label='Acceptance rate')
+plt.legend(handles=[green_patch, orange_patch])
+postedAcceptance = postedAcceptance.sort_index( ascending= False)
+postedAcceptance50 = postedAcceptance.head(50)
+
+ax3 = plt.subplot(2,1,2)
+plt.bar( postedAcceptance50.index, postedAcceptance50.project_is_approved,  color='g') 
+ax4 = plt.subplot(2,1,2)
+ax4 = ax3.twinx()
+plt.bar( postedAcceptance50.index, postedAcceptance50.applications_count, color = 'orange' )
+orange_patch = mpatches.Patch(color='orange', label='Count number of records per previously_posted_projects')
+green_patch = mpatches.Patch(color='green', label='Acceptance rate')
+plt.legend(handles=[green_patch, orange_patch])
+
+
+
+# In this plots we can see that the number of previous posted projects doesn't really matter after the certain level. There is a little ascending trend on the acceptance trend when the number of previous posted projects is between 0 and 20. After this level the acceptance rate is almost the same (arround 84%) for all previous posted projects value. We also can see that there are a lot of new teacher sending their applications. The number of teachers with 0 value previous_posted_projects is 50,000 observations
+
+# ###  School grade acceptance rate
 
 # In[ ]:
 
 
-plt.style.use('dark_background')
-genreSales = video8th.groupby(['Genre','Platform']).Global_Sales.sum()
-genreSales.unstack().plot(kind='bar',stacked=True,  colormap= 'Reds', 
-                          grid=False, figsize=(13,11))
-plt.title('Stacked Barplot of Sales per Game Genre')
-plt.ylabel('Sales')
+categoryAceptance = train_data[["project_grade_category","project_is_approved"]].groupby("project_grade_category").mean()
+categoryAceptance = categoryAceptance.sort_values( "project_is_approved", ascending=False)
+
+fig = plt.figure( figsize=(20,10))
+fig.suptitle( "Distribution acceptance rate and number of applications per school grade ", fontsize = 25)
+plt.subplot(2,1,1)
+sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
+
+categoryAceptance = train_data[["project_grade_category","project_is_approved"]].groupby("project_grade_category").sum()
+
+plt.subplot(2,1,2)
+sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
 
 
-# First Impression : Again, this plot is very telling in the sense that the PS4 is clearly trying to gain an inroad into more genres than its predecessor, the PS3. Just from a quick visual glance, one can observe that the PS4 already has the majority of sales in 7 out of 12 of the genres ( 4 out of 12 for the PS3).
-
-# ### TOTAL SALES AND TOTAL USERS
 
 # In[ ]:
 
 
-# Plotting our pie charts
-# Create a list of colors 
-plt.style.use('seaborn-white')
-colors = ['#008DB8','#00AAAA','#00C69C']
-plt.figure(figsize=(15,11))
-plt.subplot(121)
-plt.pie(
-   video8th.groupby('Platform').Global_Sales.sum(),
-    # with the labels being platform
-    labels=video8th.groupby('Platform').Global_Sales.sum().index,
-    # with no shadows
-    shadow=False,
-    # stating our colors
-    colors=colors,
-    explode=(0.05, 0.05, 0.05),
-    # with the start angle at 90%
-    startangle=90,
-    # with the percent listed as a fraction
-    autopct='%1.1f%%'
-    )
-plt.axis('equal')
-plt.title('Pie Chart of 8th Gen Global Sales')
-plt.subplot(122)
-plt.pie(
-   video8th.groupby('Platform').User_Count.sum(),
-    labels=video8th.groupby('Platform').User_Count.sum().index,
-    shadow=False,
-    colors=colors,
-    explode=(0.05, 0.05, 0.05),
-    startangle=90,
-    autopct='%1.1f%%'
-    )
-plt.axis('equal')
-plt.title('Pie Chart of 8th Gen User Base')
-plt.tight_layout()
-plt.show()
+train_data.columnsumns
 
 
-# **Concluding Remarks** 
-# 
-# Unlike the 7th Gen consoles, we have a very clear leader for the 8th Gen consoles, and that would be the PS4, far outstripping the XBOXONE and the WiiU. Although this console war is far from over, it is undoubted that the PS4 has a very big headstart.
-# 
-# # WINNER : PS4 (so far)
+# In[ ]:
+
+
+categoryAceptance = train_data[["project_subject_categories","project_is_approved"]].groupby("project_subject_categories").mean()
+categoryAceptance = categoryAceptance.sort_values( "project_is_approved", ascending=False)
+categoryAceptance = categoryAceptance.head(15)
+categoryAceptanceindex = categoryAceptance.index
+
+fig = plt.figure( figsize=(50,20))
+fig.suptitle( "Distribution acceptance rate and number of applications per category ", fontsize = 50)
+ax1 = plt.subplot(2,1,1)
+ax1.set_title( "Acceptance rate per categort", fontsize = 40)
+
+sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
+
+categoryAceptance = train_data[["project_subject_categories","project_is_approved"]].groupby("project_subject_categories").sum()
+categoryAceptance = categoryAceptance.loc[categoryAceptanceindex]
+
+ax2 = plt.subplot(2,1,2)
+ax2.set_title( "Number of records per category", fontsize = 40)
+
+sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
+
+
+
+# In[ ]:
+
+
+categoryAceptance = train_data[["project_subject_categories","project_is_approved"]].groupby("project_subject_categories").sum()
+categoryAceptance = categoryAceptance.sort_values( "project_is_approved", ascending=False)
+categoryAceptance = categoryAceptance.head(15)
+categoryAceptanceindex = categoryAceptance.index
+
+categoryAceptance = train_data[["project_subject_categories","project_is_approved"]].groupby("project_subject_categories").mean()
+categoryAceptance = categoryAceptance.loc[categoryAceptanceindex]
+
+fig = plt.figure( figsize=(50,20))
+fig.suptitle( "Distribution acceptance rate and number of applications per category ", fontsize = 50)
+plt.title("Category Accpetance")
+ax1 = plt.subplot(2,1,1)
+ax1.set_title( "Acceptance rate per category", fontsize = 40)
+
+sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
+
+categoryAceptance = train_data[["project_subject_categories","project_is_approved"]].groupby("project_subject_categories").sum()
+categoryAceptance = categoryAceptance.loc[categoryAceptanceindex]
+
+ax2 = plt.subplot(2,1,2)
+ax2.set_title( "Number of records per category", fontsize = 40)
+sns.barplot(x = categoryAceptance.index, y =categoryAceptance.project_is_approved )
+
+

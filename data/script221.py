@@ -1,244 +1,218 @@
 
 # coding: utf-8
 
-# # Making predictions over amazon recommendation dataset
-# 
-# ## Predictions
-# The purpose of this analysis is to make up a prediction model where we will be able to predict whether a recommendation is positive or negative. In this analysis, we will not focus on the Score, but only the positive/negative sentiment of the recommendation. 
-# 
-# To do so, we will work on Amazon's recommendation dataset, we will build a Term-doc incidence matrix using term frequency and inverse document frequency ponderation. When the data is ready, we will load it into predicitve algorithms, mainly naïve Bayesian and regression.
-# 
-# In the end, we hope to find a "best" model for predicting the recommendation's sentiment.
-# 
-# ## Loading the data
-# In order to load the data, we will use the SQLITE dataset where we will only fetch the Score and the recommendation summary. 
-# 
-# As we only want to get the global sentiment of the recommendations (positive or negative), we will purposefully ignore all Scores equal to 3. If the score id above 3, then the recommendation wil be set to "postive". Otherwise, it will be set to "negative". 
-# 
-# The data will be split into an training set and a test set with a test set ratio of 0.2
+# # A 1D convolutional net in Keras
+# Very little preprocessing was needed. Batch normalization made a huge difference, and made it possible to achieve perfect classification within the Kaggle kernel.
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-import sqlite3
-import pandas as pd
+#We import libraries for linear algebra, graphs, and evaluation of results
 import numpy as np
-import nltk
-import string
 import matplotlib.pyplot as plt
-import numpy as np
-
-from sklearn.feature_extraction.text import TfidfTransformer
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.cross_validation import train_test_split
-from sklearn.metrics import confusion_matrix
-from sklearn import metrics
-from sklearn.metrics import roc_curve, auc
-from nltk.stem.porter import PorterStemmer
-
-con = sqlite3.connect('../input/database.sqlite')
-
-messages = pd.read_sql_query("""
-SELECT Score, Summary
-FROM Reviews
-WHERE Score != 3
-""", con)
-
-def partition(x):
-    if x < 3:
-        return 'negative'
-    return 'positive'
-
-Score = messages['Score']
-Score = Score.map(partition)
-Summary = messages['Summary']
-X_train, X_test, y_train, y_test = train_test_split(Summary, Score, test_size=0.2, random_state=42)
-
-
-# ## Brief Exploratory analysis
-# 
-# After loading the data, here is what it looks like :
-
-# In[ ]:
-
-
-print(messages.head(20))
-
-
-# After splitting our dataset into X_train, X_test, Y_train, Y_test, we have no more integer score, but an appreciation of it : positive or negative :
-
-# In[ ]:
-
-
-tmp = messages
-tmp['Score'] = tmp['Score'].map(partition)
-print(tmp.head(20))
-
-
-# ## Cleaning the data
-# 
-# To format our data and build the Term-doc incidence matrix, many operations will be performed on the data :
-# - Stemming
-# - Stop words removal
-# - Lowering
-# - Tokenization
-# - Pruning (numbers and punctuation)
-
-# In[ ]:
-
-
-stemmer = PorterStemmer()
-from nltk.corpus import stopwords
-
-def stem_tokens(tokens, stemmer):
-    stemmed = []
-    for item in tokens:
-        stemmed.append(stemmer.stem(item))
-    return stemmed
-
-def tokenize(text):
-    tokens = nltk.word_tokenize(text)
-    #tokens = [word for word in tokens if word not in stopwords.words('english')]
-    stems = stem_tokens(tokens, stemmer)
-    return ' '.join(stems)
-
-intab = string.punctuation
-outtab = "                                "
-trantab = str.maketrans(intab, outtab)
-
-#--- Training set
-
-corpus = []
-for text in X_train:
-    text = text.lower()
-    text = text.translate(trantab)
-    text=tokenize(text)
-    corpus.append(text)
-        
-count_vect = CountVectorizer()
-X_train_counts = count_vect.fit_transform(corpus)        
-        
-tfidf_transformer = TfidfTransformer()
-X_train_tfidf = tfidf_transformer.fit_transform(X_train_counts)
-
-#--- Test set
-
-test_set = []
-for text in X_test:
-    text = text.lower()
-    text = text.translate(trantab)
-    text=tokenize(text)
-    test_set.append(text)
-
-X_new_counts = count_vect.transform(test_set)
-X_test_tfidf = tfidf_transformer.transform(X_new_counts)
-
-from pandas import *
-df = DataFrame({'Before': X_train, 'After': corpus})
-print(df.head(20))
-
-prediction = dict()
-
-
-# ## Applying Multinomial Naïve Bayes learning method
-
-# In[ ]:
-
-
-from sklearn.naive_bayes import MultinomialNB
-model = MultinomialNB().fit(X_train_tfidf, y_train)
-prediction['Multinomial'] = model.predict(X_test_tfidf)
-
-
-# ## Applying Bernoulli Naïve Bayes learning method
-
-# In[ ]:
-
-
-from sklearn.naive_bayes import BernoulliNB
-model = BernoulliNB().fit(X_train_tfidf, y_train)
-prediction['Bernoulli'] = model.predict(X_test_tfidf)
-
-
-# ## Applying Logistic regression learning method
-
-# In[ ]:
-
-
-from sklearn import linear_model
-logreg = linear_model.LogisticRegression(C=1e5)
-logreg.fit(X_train_tfidf, y_train)
-prediction['Logistic'] = logreg.predict(X_test_tfidf)
-
-
-# ## Results
-# 
-# In order to compare our learning algorithms, let's build the ROC curve. The curve with the highest AUC value will show our "best" algorithm.
-# 
-# In first data cleaning, stop-words removal has been used, but the results were much worse. Reason for this result could be that when people want to speak about what is or is not good, they use many small words like "not" for instance, and these words will typically be tagged as stop-words, and will be removed. This is why in the end, it was decided to keep the stop-words. For those who would like to try it by themselves, I have let the stop-words removal as a comment in the cleaning part of the analysis.
-
-# In[ ]:
-
-
-def formatt(x):
-    if x == 'negative':
-        return 0
-    return 1
-vfunc = np.vectorize(formatt)
-
-cmp = 0
-colors = ['b', 'g', 'y', 'm', 'k']
-for model, predicted in prediction.items():
-    false_positive_rate, true_positive_rate, thresholds = roc_curve(y_test.map(formatt), vfunc(predicted))
-    roc_auc = auc(false_positive_rate, true_positive_rate)
-    plt.plot(false_positive_rate, true_positive_rate, colors[cmp], label='%s: AUC %0.2f'% (model,roc_auc))
-    cmp += 1
-
-plt.title('Classifiers comparaison with ROC')
-plt.legend(loc='lower right')
-plt.plot([0,1],[0,1],'r--')
-plt.xlim([-0.1,1.2])
-plt.ylim([-0.1,1.2])
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')
-plt.show()
-
-
-# After plotting the ROC curve, it would appear that the Logistic regression method provides us with the best results, although the AUC value for this method is not outstanding... 
-# 
-# Let's focus on logistic regression, and vizualise the accuracy, recall and confusion matrix of this model:
-
-# In[ ]:
-
-
-print(metrics.classification_report(y_test, prediction['Logistic'], target_names = ["positive", "negative"]))
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_curve, roc_auc_score
+from scipy.ndimage.filters import uniform_filter1d
 
 
 # In[ ]:
 
 
-def plot_confusion_matrix(cm, title='Confusion matrix', cmap=plt.cm.Blues):
-    plt.imshow(cm, interpolation='nearest', cmap=cmap)
-    plt.title(title)
-    plt.colorbar()
-    tick_marks = np.arange(len(set(Score)))
-    plt.xticks(tick_marks, set(Score), rotation=45)
-    plt.yticks(tick_marks, set(Score))
-    plt.tight_layout()
-    plt.ylabel('True label')
-    plt.xlabel('Predicted label')
+#Keras is a high level neural networks library, based on either tensorflow or theano
+from keras.models import Sequential, Model
+from keras.layers import Conv1D, MaxPool1D, Dense, Dropout, Flatten, BatchNormalization, Input, concatenate, Activation
+from keras.optimizers import Adam
+
+
+# ## Load the data
+
+# As the data format is so simple, we do not need pandas.
+
+# In[ ]:
+
+
+INPUT_LIB = '../input/'
+raw_data = np.loadtxt(INPUT_LIB + 'exoTrain.csv', skiprows=1, delimiter=',')
+x_train = raw_data[:, 1:]
+y_train = raw_data[:, 0, np.newaxis] - 1.
+raw_data = np.loadtxt(INPUT_LIB + 'exoTest.csv', skiprows=1, delimiter=',')
+x_test = raw_data[:, 1:]
+y_test = raw_data[:, 0, np.newaxis] - 1.
+del raw_data
+
+
+# Scale each observation to zero mean and unit variance.
+
+# In[ ]:
+
+
+x_train = ((x_train - np.mean(x_train, axis=1).reshape(-1,1)) / 
+           np.std(x_train, axis=1).reshape(-1,1))
+x_test = ((x_test - np.mean(x_test, axis=1).reshape(-1,1)) / 
+          np.std(x_test, axis=1).reshape(-1,1))
+
+
+# This is our only preprocessing step: We add an input corresponding to the running average over
+# 200 time steps. This helps the net ignore high frequency noise and instead look at non-local
+# information. Look at the graphs below to see what it does.
+
+# In[ ]:
+
+
+x_train = np.stack([x_train, uniform_filter1d(x_train, axis=1, size=200)], axis=2)
+x_test = np.stack([x_test, uniform_filter1d(x_test, axis=1, size=200)], axis=2)
+
+
+# ## Train the model
+
+# With the Sequential API for Keras, we only need to add the layers one at a time. Each 1D convolutional layers corresponds to a local filter, and then a pooling layer reduces the data length by approximately a factor 4. At the end, there are two dense layers, just as we would in a typical image classifier. Batch normalization layers speed up convergence. 
+
+# In[ ]:
+
+
+model = Sequential()
+model.add(Conv1D(filters=8, kernel_size=11, activation='relu', input_shape=x_train.shape[1:]))
+model.add(MaxPool1D(strides=4))
+model.add(BatchNormalization())
+model.add(Conv1D(filters=16, kernel_size=11, activation='relu'))
+model.add(MaxPool1D(strides=4))
+model.add(BatchNormalization())
+model.add(Conv1D(filters=32, kernel_size=11, activation='relu'))
+model.add(MaxPool1D(strides=4))
+model.add(BatchNormalization())
+model.add(Conv1D(filters=64, kernel_size=11, activation='relu'))
+model.add(MaxPool1D(strides=4))
+model.add(Flatten())
+model.add(Dropout(0.5))
+model.add(Dense(64, activation='relu'))
+model.add(Dropout(0.25))
+model.add(Dense(64, activation='relu'))
+model.add(Dense(1, activation='sigmoid'))
+
+
+# The data here is extremely unbalanced, with only a few positive examples. To correct for this, I use the positive examples a lot more often, so that the net sees 50% of each over each bats. Also, I generate new examples by rotation them randomly in time. This is called augmentation and is similar to when we rotate/shift examples in image classification.
+
+# In[ ]:
+
+
+def batch_generator(x_train, y_train, batch_size=32):
+    """
+    Gives equal number of positive and negative samples, and rotates them randomly in time
+    """
+    half_batch = batch_size // 2
+    x_batch = np.empty((batch_size, x_train.shape[1], x_train.shape[2]), dtype='float32')
+    y_batch = np.empty((batch_size, y_train.shape[1]), dtype='float32')
     
-# Compute confusion matrix
-cm = confusion_matrix(y_test, prediction['Logistic'])
-np.set_printoptions(precision=2)
-plt.figure()
-plot_confusion_matrix(cm)    
+    yes_idx = np.where(y_train[:,0] == 1.)[0]
+    non_idx = np.where(y_train[:,0] == 0.)[0]
+    
+    while True:
+        np.random.shuffle(yes_idx)
+        np.random.shuffle(non_idx)
+    
+        x_batch[:half_batch] = x_train[yes_idx[:half_batch]]
+        x_batch[half_batch:] = x_train[non_idx[half_batch:batch_size]]
+        y_batch[:half_batch] = y_train[yes_idx[:half_batch]]
+        y_batch[half_batch:] = y_train[non_idx[half_batch:batch_size]]
+    
+        for i in range(batch_size):
+            sz = np.random.randint(x_batch.shape[1])
+            x_batch[i] = np.roll(x_batch[i], sz, axis = 0)
+     
+        yield x_batch, y_batch
 
-cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
-plt.figure()
-plot_confusion_matrix(cm_normalized, title='Normalized confusion matrix')
 
+# The hyperparameters here are chosen to finish training within the Kernel, rather than to get optimal results. On a GPU, I might have chosen a smaller learning rate, and perhaps SGD instead of Adam. As it turned out, results were brilliant anyway.
+
+# In[ ]:
+
+
+#Start with a slightly lower learning rate, to ensure convergence
+model.compile(optimizer=Adam(1e-5), loss = 'binary_crossentropy', metrics=['accuracy'])
+hist = model.fit_generator(batch_generator(x_train, y_train, 32), 
+                           validation_data=(x_test, y_test), 
+                           verbose=0, epochs=5,
+                           steps_per_epoch=x_train.shape[1]//32)
+
+
+# In[ ]:
+
+
+#Then speed things up a little
+model.compile(optimizer=Adam(4e-5), loss = 'binary_crossentropy', metrics=['accuracy'])
+hist = model.fit_generator(batch_generator(x_train, y_train, 32), 
+                           validation_data=(x_test, y_test), 
+                           verbose=2, epochs=40,
+                           steps_per_epoch=x_train.shape[1]//32)
+
+
+# #Evaluate the model
+
+# First we look at convergence
+
+# In[ ]:
+
+
+plt.plot(hist.history['loss'], color='b')
+plt.plot(hist.history['val_loss'], color='r')
+plt.show()
+plt.plot(hist.history['acc'], color='b')
+plt.plot(hist.history['val_acc'], color='r')
 plt.show()
 
+
+# We then use our trained net to classify the test set.
+
+# In[ ]:
+
+
+non_idx = np.where(y_test[:,0] == 0.)[0]
+yes_idx = np.where(y_test[:,0] == 1.)[0]
+y_hat = model.predict(x_test)[:,0]
+
+
+# In[ ]:
+
+
+plt.plot([y_hat[i] for i in yes_idx], 'bo')
+plt.show()
+plt.plot([y_hat[i] for i in non_idx], 'ro')
+plt.show()
+
+
+# These graphs show that the five positive examples all get 0.95-1.00 score. Also, almost all negative examples get score close to zero, except a few in the 0.9-1.0 range. This is encouraging.
+
+# We now choose an optimal cutoff score for classification. Sklearn can help us with this.
+
+# In[ ]:
+
+
+y_true = (y_test[:, 0] + 0.5).astype("int")
+fpr, tpr, thresholds = roc_curve(y_true, y_hat)
+plt.plot(thresholds, 1.-fpr)
+plt.plot(thresholds, tpr)
+plt.show()
+crossover_index = np.min(np.where(1.-fpr <= tpr))
+crossover_cutoff = thresholds[crossover_index]
+crossover_specificity = 1.-fpr[crossover_index]
+print("Crossover at {0:.2f} with specificity {1:.2f}".format(crossover_cutoff, crossover_specificity))
+plt.plot(fpr, tpr)
+plt.show()
+print("ROC area under curve is {0:.2f}".format(roc_auc_score(y_true, y_hat)))
+
+
+# Let's take a look at the misclassified data (if any):
+
+# In[ ]:
+
+
+false_positives = np.where(y_hat * (1. - y_test) > 0.5)[0]
+for i in non_idx:
+    if y_hat[i] > crossover_cutoff:
+        print(i)
+        plt.plot(x_test[i])
+        plt.show()
+
+
+# It seems NASA missed one planet. I take this opportunity to claim it, and hereby name it Kaggle alpha :)

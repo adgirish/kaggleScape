@@ -1,465 +1,452 @@
 
 # coding: utf-8
 
-# In[6]:
+# ## Featured in [The Wall Street Journal][1].
+# 
+#   [1]: https://www.wsj.com/articles/fans-geek-out-over-game-of-thrones-data-1499877067
+
+# In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-
-import pandas as pd
 import numpy as np
+import pandas as pd
 import seaborn as sns
+import matplotlib as mpl
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-plt.style.use('fivethirtyeight')
-import math
-import datetime
-
-# using Basemap for map visualization. Installed it with "conda install basemap"
-from mpl_toolkits.basemap import Basemap
-from matplotlib.animation import FuncAnimation
-from IPython.display import HTML
-
-import folium
-from folium import plugins
-from folium.plugins import HeatMap
-from folium.plugins import FastMarkerCluster
-from folium.plugins import MarkerCluster
-
-import warnings
-warnings.filterwarnings('ignore')
-
-import seaborn as sns
-import folium
-from folium import plugins
-from folium.plugins import HeatMap
-from folium.plugins import FastMarkerCluster
-from folium.plugins import MarkerCluster
-
-
-# ## About Kiva.org
-# 
-# **Kiva envisions a world where all people hold the power to create opportunity for themselves and others.**
-# 
-# Kiva is an international nonprofit, founded in 2005 and based in San Francisco, with a mission to connect people through lending to alleviate poverty. 
-# 
-# In Kaggle Datasets' inaugural Data Science for Good challenge, Kiva is inviting the Kaggle community to help them build more localized models to estimate the poverty levels of residents in the regions where Kiva has active loans. 
-# 
-# This notebook tries to explore the ways to achieve that.
-# 
-# Part 1: EDA
-
-# In[7]:
-
-
-kiva_loans=pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/kiva_loans.csv",parse_dates=['funded_time','date'])
-#kiva_loans.shape
-
-kiva_loans["funded_time"]=pd.to_datetime(kiva_loans.funded_time)
-kiva_loans.dropna()
-kiva_loans["funded_year"]=kiva_loans["date"].dt.year
-kiva_loans["funded_month"]=kiva_loans["date"].dt.month
-
-
-# In[8]:
-
-
-color_dict = {'Food': 'red', 'Transportation': 'pink', 'Arts': 'yellow','Services': 'blue', 'Agriculture': 'green',
-'Manufacturing': 'cyan', 'Wholesale': 'brown', 'Retail': 'Gold', 'Clothing': 'black', 'Construction': 'magenta', 'Health': 'lightgreen',
-'Education': 'crimson', 'Personal Use': 'purple', 'Housing': 'orange', 'Entertainment': 'lightblue'}
-
-loc=pd.read_csv('../input/additional-kiva-snapshot/loan_coords.csv')
-loc.rename(index=str, columns={"loan_id": "id"},inplace=True)
-#loc.head()
-
-
-# In[9]:
-
-
-kiva=pd.merge(kiva_loans, loc,on='id',how="left")
-#kiva.shape
-
-
-# ### Loan locations across the world
-
-# In[10]:
-
-
-p=kiva.plot(kind='scatter', x='longitude', y='latitude',
-                color='green',figsize=(15,10), 
-                title='Loan locations for World Map')
-p.grid(False)
-plt.savefig('Loan-location.png');
-
-
-# In[11]:
-
-
-countries_by_sectors_yearly_funded_amount_mean = kiva.groupby(['country','sector', 'funded_year'])['funded_amount'].mean().unstack()
-#print(countries_by_sectors_yearly_funded_amount_mean.shape)
-#countries_by_sectors_yearly_funded_amount_mean.head()
-
-
-# In[12]:
-
-
-Funded_Regions_BySectors = kiva.groupby(['country','sector']).first()[['latitude', 'longitude']]
-#print(Funded_Regions_BySectors.shape)
-#Funded_Regions_BySectors.head()
-
-
-# In[13]:
-
-
-#code credit: https://www.kaggle.com/pavelevap/global-warming-confirmed-basemap-animation?scriptVersionId=485498
-def get_temp_markers(countries, year):
-    
-    k=0
-    points = np.zeros(990, dtype=[('lon', float, 1),
-                                      ('lat', float, 1),
-                                      ('size',  float, 1),
-                                      ('color', object, '')])
-    cmap = plt.get_cmap('viridis')
-    for i, country in enumerate(random_countries):
-        country=country[0]
-        funds = countries_by_sectors_yearly_funded_amount_mean.loc[country]
-        sectors=funds.index
-        for j , sector in enumerate(sectors):
-            amount = funds.loc[sector].loc[year]
-            if(math.isnan(amount)):
-                break;
-            coords = Funded_Regions_BySectors.loc[country].loc[sector][['latitude', 'longitude']].values
-            lat = float(coords[0])
-            lon = float(coords[1])
-            if(math.isnan(lat)):
-                break;
-            points['lat'][k] = lat
-            if(math.isnan(lon)):
-                break;
-            points['lon'][k] = lon
-            points['size'][k] = amount/5
-            points['color'][k] = color_dict[sector]
-            k=k+1
-            #print(k," ",amount," ",lat," ",lon," ",color_dict[sector])
-    points=points[points['lat']!=0]
-    return points
-
-
-# ### Mean Funded Amount According to scetors in year 2014
-
-# In[14]:
-
-
-fig = plt.figure(figsize=(18, 15))
-cmap = plt.get_cmap('viridis')
-map = Basemap(projection='cyl')
-map.drawmapboundary()
-map.drawcoastlines(color='black')
-map.fillcontinents(color='beige',lake_color='lightblue', zorder=3);
-
-START_YEAR = 2014
-LAST_YEAR = 2017
-n_countries = 65
-random_countries = countries_by_sectors_yearly_funded_amount_mean.sample(n_countries).index
-year_text = plt.text(-170, 80, str(START_YEAR),fontsize=15)
-temp_markers = get_temp_markers(random_countries, START_YEAR)
-
-
-xs, ys = map(temp_markers['lon'], temp_markers['lat'])
-scat = map.scatter(xs, ys, s=temp_markers['size'], c=temp_markers['color'], cmap=cmap, marker='o', 
-                   alpha=0.3, zorder=10)
-plt.title('Mean fundings by sectors for year 2014 ',fontsize=19)
-labels=['Agriculture', 'Food', 'Retail', 'Services', 'Personal Use', 'Housing', 'Clothing', 'Education', 'Transportation',
-        'Arts', 'Health', 'Construction', 'Manufacturing', 'Entertainment', 'Wholesale']
-handles=[scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat]
-plt.legend(handles, labels,  loc = 6
-           , title='Sectors', markerscale=0.3,labelspacing=0.3)
-
-ax = plt.gca()
-leg = ax.get_legend()
-leg.legendHandles[0].set_color('green')
-leg.legendHandles[1].set_color('red')
-leg.legendHandles[2].set_color('gold')
-leg.legendHandles[3].set_color('blue')
-leg.legendHandles[4].set_color('purple')
-leg.legendHandles[5].set_color('orange')
-leg.legendHandles[6].set_color('black')
-leg.legendHandles[7].set_color('crimson')
-leg.legendHandles[8].set_color('pink')
-leg.legendHandles[9].set_color('yellow')
-leg.legendHandles[10].set_color('lightgreen')
-leg.legendHandles[11].set_color('magenta')
-leg.legendHandles[12].set_color('cyan');
-plt.savefig('Mean-fundings-by-sectors-for-year-2014.png');
-
-
-# Above plot shows mean Funded amount granted to borrowers and higher the amount higher the size of markers.
-# Colours are according to sectors.
-# 
-# ### Animated Story
-# If animation is taking time to load, kindly check output tab.
-
-# In[15]:
-
-
-get_ipython().run_line_magic('matplotlib', 'nbagg')
-
-# Create new map 
-fig = plt.figure(figsize=(18, 15))
-cmap = plt.get_cmap('viridis')
-map = Basemap(projection='cyl')
-map.drawmapboundary()
-map.drawcoastlines(color='black')
-map.fillcontinents(color='beige',lake_color='lightblue', zorder=3);
-
-
-# Create  data
-START_YEAR = 2014
-LAST_YEAR = 2017
-n_countries = 80
-random_countries = countries_by_sectors_yearly_funded_amount_mean.sample(n_countries).index
-
-
-# Initialize the map in base position
-temp_markers = get_temp_markers(random_countries, START_YEAR)
-xs, ys = map(temp_markers['lon'], temp_markers['lat'])
-
-# Construct the scatter which we will update during animation
-# as the years change.
-scat = map.scatter(xs, ys, s=temp_markers['size'], c=temp_markers['color'], cmap=cmap, marker='o', 
-                   alpha=0.3, zorder=10)
-year_text = plt.text(-170, 80, str(START_YEAR),fontsize=15)
-text="Mean funded Amount According to Sectors"
-title_text = plt.text(-170, -85, text,fontsize=15)
-labels=['Agriculture', 'Food', 'Retail', 'Services', 'Personal Use', 'Housing', 'Clothing', 'Education', 'Transportation',
-        'Arts', 'Health', 'Construction', 'Manufacturing', 'Entertainment', 'Wholesale']
-handles=[scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat,scat]
-plt.legend(handles, labels,  loc = 6
-           , title='Sectors', markerscale=0.3,labelspacing=0.3)
-
-ax = plt.gca()
-leg = ax.get_legend()
-leg.legendHandles[0].set_color('green')
-leg.legendHandles[1].set_color('red')
-leg.legendHandles[2].set_color('gold')
-leg.legendHandles[3].set_color('blue')
-leg.legendHandles[4].set_color('purple')
-leg.legendHandles[5].set_color('orange')
-leg.legendHandles[6].set_color('black')
-leg.legendHandles[7].set_color('crimson')
-leg.legendHandles[8].set_color('pink')
-leg.legendHandles[9].set_color('yellow')
-leg.legendHandles[10].set_color('lightgreen')
-leg.legendHandles[11].set_color('magenta')
-leg.legendHandles[12].set_color('#eeefff');
-
-
-
-def update(frame_number):
-    # Get an index which we can use to re-spawn the oldest year.
-    current_year = START_YEAR + (frame_number % 4)
-
-    temp_markers = get_temp_markers(random_countries, current_year)
-    xs, ys = map(temp_markers['lon'], temp_markers['lat'])
-
-    # Update the scatter collection, with the new colors, sizes and positions.
-    scat.set_offsets(np.c_[xs, ys])
-    scat.set_color(temp_markers['color'])
-    scat.set_sizes(temp_markers['size'])
-    year_text.set_text(str(current_year))
-    text="Kiva - Mean Funded Amount to Borrowers According to Sectors"
-    title_text.set_text(text)
-
-
-
-# Construct the animation, using the update function as the animation
-# director.
-plt.title('Kiva - Mean fundings by sectors for years 2014-2017 ',fontsize=19)
-ani = FuncAnimation(fig, update, interval=1000,repeat=False,blit=True)
-#plt.show()
+from collections import Counter
+import matplotlib.patches as mpatches
+sns.set_style("white")
 
 
 # In[ ]:
 
 
-ani.save('anim.gif', writer='imagemagick', fps=2)
-import io
-import base64
-filename = 'anim.gif'
-video = io.open(filename, 'r+b').read()
-encoded = base64.b64encode(video)
-HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
+plt.rcParams["axes.labelsize"] = 16.
+plt.rcParams["xtick.labelsize"] = 14.
+plt.rcParams["ytick.labelsize"] = 14.
+plt.rcParams["legend.fontsize"] = 12.
+plt.rcParams["figure.figsize"] = [15., 6.]
 
 
-# In[16]:
+# In[ ]:
 
 
-kiva_mpi_region_locations=pd.read_csv("../input/data-science-for-good-kiva-crowdfunding/kiva_mpi_region_locations.csv")
-#kiva_mpi_region_locations.shape
+battles = pd.read_csv("../input/battles.csv")
+character_deaths = pd.read_csv("../input/character-deaths.csv")
+character_predictions = pd.read_csv("../input/character-predictions.csv")
 
 
-# ### World Regions with MPI 
-# OPHI  calculates the Global Multidimensional Poverty Index MPI, which has been published since 2010 in the United Nations Development Programme’s Human Development Report. 
+# ## New attributes
+# 1. *defender_count* – Number of major houses on defending side
+# 2. *attacker_count* – Number of major houses on attacking side
+# 3. *att_comm_count* – Number of commanders on attacking side
+# 4. *no_of_books* – Number of books a character appeared in
+
+# In[ ]:
+
+
+battles.loc[:, "defender_count"] = (4 - battles[["defender_1", "defender_2", "defender_3", "defender_4"]].isnull().sum(axis = 1))
+battles.loc[:, "attacker_count"] = (4 - battles[["attacker_1", "attacker_2", "attacker_3", "attacker_4"]].isnull().sum(axis = 1))
+battles.loc[:, "att_comm_count"] = [len(x) if type(x) == list else np.nan for x in battles.attacker_commander.str.split(",")]
+character_predictions.loc[:, "no_of_books"] = character_predictions[[x for x in character_predictions.columns if x.startswith("book")]].sum(axis = 1)
+
+
+# # Exploratory Analysis
+
+# ## Major death/capture events by year
+
+# In[ ]:
+
+
+p = battles.groupby('year').sum()[["major_death", "major_capture"]].plot.bar(rot = 0)
+_ = p.set(xlabel = "Year", ylabel = "No. of Death/Capture Events", ylim = (0, 9)), p.legend(["Major Deaths", "Major Captures"])
+
+
+# ## Impact of army size on outcome
+# [Based on ggplot code from this notebook](https://github.com/chrisalbon/war_of_the_five_kings_dataset/blob/master/exploratory_analysis.ipynb)
+
+# In[ ]:
+
+
+data = battles.dropna(axis = 0, subset = [["attacker_size", "defender_size", "attacker_outcome"]]).copy(deep = True)
+colors = [sns.color_palette()[0] if x == "win" else "lightgray" for x in data.attacker_outcome.values]
+p = data.plot.scatter("attacker_size", "defender_size", c = colors, s = 100, lw = 2.)
+_ = p.set(xlabel = "Attacker Size", ylabel = "Defender Size")
+
+
+# ## How often were there more than one major houses on the attacking side?
+
+# In[ ]:
+
+
+p = battles.attacker_count.value_counts().sort_index().plot.bar(rot = 0)
+_ = p.set(xlabel = "No. of Major Attacker Houses", ylabel = "Count")
+
+
+# ## Which pairs fought the most battles?
+
+# In[ ]:
+
+
+#Ignoring records where either attacker_king or defender_king is null. Also ignoring one record where both have the same value.
+c = list(Counter([tuple(set(x)) for x in battles.dropna(subset = ["attacker_king", "defender_king"])[["attacker_king", "defender_king"]].values if len(set(x)) > 1]).items())
+p = pd.DataFrame(c).sort_values(1).plot.barh(figsize = (10, 6))
+_ = p.set(yticklabels = ["%s vs. %s" % (x[0], x[1]) for x in list(zip(*c))[0]], xlabel = "No. of Battles"), p.legend("")
+
+
+# ## How many commanders did armies of different kings have?
+
+# In[ ]:
+
+
+p = sns.boxplot("att_comm_count", "attacker_king", data = battles, saturation = .6, fliersize = 10., palette = ["lightgray", sns.color_palette()[1], "grey", "darkblue"])
+_ = p.set(xlabel = "No. of Attacker Commanders", ylabel = "Attacker King", xticks = range(8))
+
+
+# ## How many major death/capture events occur in each region?
+
+# In[ ]:
+
+
+data = battles.groupby("region").sum()[["major_death", "major_capture"]]
+p = pd.concat([data, battles.region.value_counts().to_frame()], axis = 1).sort_values("region", ascending = False).copy(deep = True).plot.bar(color = [sns.color_palette()[1], "grey", "darkblue"], rot = 0)
+_ = p.set(xlabel = "Region", ylabel = "No. of Events"), p.legend(["Major Deaths", "Major Captures", "No. of Battles"], fontsize = 12.)
+
+
+# ## Is there a relationship between survival and having dead relations?
+
+# In[ ]:
+
+
+data = character_predictions.groupby(["boolDeadRelations", "isAlive"]).count()["S.No"].unstack().copy(deep = True)
+p = data.div(data.sum(axis = 1), axis = 0).plot.barh(stacked = True, rot = 0, width = .5)
+_ = p.set_xlim([0, 1]), p.set(yticklabels = ["No", "Yes"], xticklabels = "", xlabel = "Proportion of Dead vs. Alive", ylabel = "Has Dead Relations"), p.legend(["Dead", "Alive"])
+
+
+# ## How does appearing in more books relate to survival?
+
+# In[ ]:
+
+
+data = character_predictions.groupby(["no_of_books", "isAlive"]).count()["S.No"].unstack().copy(deep = True)
+p = data.div(data.sum(axis = 1), axis = 0).plot.barh(stacked = True, rot = 0, figsize = (15, 8), width = .5)
+_ = p.set(xticklabels = "", xlim = [0, 1], ylabel = "No. of Books", xlabel = "Proportion of Dead vs. Alive"), p.legend(["Dead", "Alive"], loc = "upper right", ncol = 2, borderpad = -.15)
+
+
+# ## How does culture relate to survival?
+# For this, we will rename cultures using (ahem) domain knowledge as many of the culture values map to a single culture.
+
+# In[ ]:
+
+
+cult = {
+    'Summer Islands': ['summer islands', 'summer islander', 'summer isles'],
+    'Ghiscari': ['ghiscari', 'ghiscaricari',  'ghis'],
+    'Asshai': ["asshai'i", 'asshai'],
+    'Lysene': ['lysene', 'lyseni'],
+    'Andal': ['andal', 'andals'],
+    'Braavosi': ['braavosi', 'braavos'],
+    'Dornish': ['dornishmen', 'dorne', 'dornish'],
+    'Myrish': ['myr', 'myrish', 'myrmen'],
+    'Westermen': ['westermen', 'westerman', 'westerlands'],
+    'Westerosi': ['westeros', 'westerosi'],
+    'Stormlander': ['stormlands', 'stormlander'],
+    'Norvoshi': ['norvos', 'norvoshi'],
+    'Northmen': ['the north', 'northmen'],
+    'Free Folk': ['wildling', 'first men', 'free folk'],
+    'Qartheen': ['qartheen', 'qarth'],
+    'Reach': ['the reach', 'reach', 'reachmen'],
+}
+
+def get_cult(value):
+    value = value.lower()
+    v = [k for (k, v) in cult.items() if value in v]
+    return v[0] if len(v) > 0 else value.title()
+
+
+# In[ ]:
+
+
+character_predictions.loc[:, "culture"] = [get_cult(x) for x in character_predictions.culture.fillna("")]
+data = character_predictions.groupby(["culture", "isAlive"]).count()["S.No"].unstack().copy(deep = True)
+data.loc[:, "total"]= data.sum(axis = 1)
+p = data[data.index != ""].sort_values("total")[[0, 1]].plot.barh(stacked = True, rot = 0, figsize = (14, 12),)
+_ = p.set(xlabel = "No. of Characters", ylabel = "Culture"), p.legend(["Dead", "Alive"], loc = "lower right")
+
+
+# ## Do larger armies necessarily win?
+# The results for this one are, well, weird as you can see.
 # 
-# Let's plot Kiva’s estimates as to the geolocation of subnational MPI regions.
-
-# In[17]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-plt.figure(figsize=(12,8))
-sns.barplot(x=kiva_mpi_region_locations.world_region.value_counts().values,y=kiva_mpi_region_locations.world_region.value_counts().index)
-plt.title("World Regions")
-plt.savefig('world regions.png');
-
-
-# ### Let's zoom on african countries with MPI region locations
-
-# In[18]:
-
-
-african_countries = kiva_mpi_region_locations[kiva_mpi_region_locations['world_region']== 'Sub-Saharan Africa']
-plt.figure(figsize=(12,15))
-sns.barplot(x=african_countries.country.value_counts().values,y=african_countries.country.value_counts().index,palette="viridis")
-plt.title("African Countries")
-plt.savefig('african countries.png');
-
-
-# ## Heatmap for Multi-Dimentional Poverty index for world
-
-# In[19]:
-
-
-#remove NANs
-kiva_mpi_region_locations = kiva_mpi_region_locations.dropna(axis=0)
-
-# Create weight column, using date
-kiva_mpi_region_locations['weight'] = kiva_mpi_region_locations.MPI.multiply(15).astype(int)
-#kiva_mpi_region_locations.weight.unique()
-
-
-# In[20]:
-
-
-kiva_loactions_on_heatmap = folium.Map(location=[kiva_mpi_region_locations.lat.mean(), kiva_mpi_region_locations.lon.mean() ],tiles= "Stamen Terrain",
-                    zoom_start = 2) 
-
-# List comprehension to make out list of lists
-heat_data = [[[row['lat'],row['lon']] 
-                for index, row in kiva_mpi_region_locations[kiva_mpi_region_locations['weight'] == i].iterrows()] 
-                 for i in range(0,11)]
-#print(heat_data)
-# Plot it on the map
-hm = plugins.HeatMapWithTime(heat_data,auto_play=True,max_opacity=0.8)
-hm.add_to(kiva_loactions_on_heatmap)
-
-hm.save('world MPI heatmap.html')
-
-# Display the map
-kiva_loactions_on_heatmap
-
-
+# To be fair, though, I have only considered battles with valid values for *attacker\_size* and *defender\_size*, which reduces the record count to 16 down from 37. I am not a GoT fan (yet) nor have I watched the TV series.
 # 
-# Looks like Africa has got highest number of MPI Locations.
+# I read about one of the battles with `NaN` *attacker\_size* on the [GoT Wikia](http://gameofthrones.wikia.com/wiki/Battle_at_the_Mummer's_Ford), wherein the following is stated under the _Forces_ section:
+# > A raiding party was reported by the Riverlands smallfolk refugees but the Iron Throne detachment was met by a considerably larger force.
 # 
-# ### Let's zoom on Africa
-
-# In[21]:
-
-
-heat_df =kiva_mpi_region_locations[kiva_mpi_region_locations['world_region']== 'Sub-Saharan Africa']
-
-#remove NANs
-heat_df = heat_df.dropna(axis=0)
-
-# Create weight column, using date
-heat_df['weight'] = heat_df.MPI.multiply(15).astype(int)
-heat_df = heat_df.dropna(axis=0,subset=['lat','lon', 'weight','LocationName'])
-#heat_df.weight.unique()
-
-
-# In[22]:
-
-
-kiva_loactions_on_heatmap_africa = folium.Map(location=[heat_df.lat.mean(), heat_df.lon.mean() ],tiles= "Stamen Terrain",
-                    zoom_start = 3) 
-
-# List comprehension to make out list of lists
-heat_data = [[[row['lat'],row['lon']] 
-                for index, row in heat_df[heat_df['weight'] == i].iterrows()] 
-                 for i in range(0,11)]
-#print(heat_data)
-# Plot it on the map
-hm = plugins.HeatMapWithTime(heat_data,auto_play=True,max_opacity=0.8)
-hm.add_to(kiva_loactions_on_heatmap_africa)
-hm.save('africa MPI heatmap.html')
-
-# Display the map
-kiva_loactions_on_heatmap_africa
-
-
-# ### Poverty locations for South Asia as per OPHI's MPI
+# Based on this, if we assumed that *attacker\_size* was larger, it would count in favor of the position that larger armies are likelier to win. However, we do not have this data for the remaining 20 battles so we cannot say anything conclusively.
 # 
-# Click on cluster circle to see clustered points
+# **If you are knowledgeable about GoT, do comment below on this.**
 
-# In[23]:
-
-
-kiva_mpi_region_locations_africa = kiva_mpi_region_locations[kiva_mpi_region_locations['world_region'] == 'South Asia']
-kiva_mpi_region_locations_africa.dropna(axis=0, inplace=True)
-m = folium.Map(
-    location=[kiva_mpi_region_locations_africa.lat.mean(), kiva_mpi_region_locations_africa.lon.mean()],
-    tiles='Cartodb Positron',
-    zoom_start=4
-)
-
-marker_cluster = MarkerCluster(
-    name='African Locations',
-    overlay=True,
-    control=False,
-    icon_create_function=None
-)
-
-for k in range(kiva_mpi_region_locations_africa.shape[0]):
-    location = kiva_mpi_region_locations_africa.lat.values[k], kiva_mpi_region_locations_africa.lon.values[k]
-    marker = folium.Marker(location=location,icon=folium.Icon(color='green', icon='ok-sign'))
-    popup = kiva_mpi_region_locations_africa.LocationName.values[k]
-    folium.Popup(popup).add_to(marker)
-    marker_cluster.add_child(marker)
-
-marker_cluster.add_to(m)
-
-folium.LayerControl().add_to(m)
-
-m.save("marker cluster south asia.html")
-m
+# In[ ]:
 
 
-# ### Clustering  locations in Africa
+data = battles.dropna(subset = ["attacker_size", "defender_size"]).copy(deep = True)
+data = pd.concat([(data.attacker_size - data.defender_size).to_frame(), battles[["attacker_outcome"]]], axis = 1, join = "inner")
+data = data[data[0] != 0]
+p = data[0].plot.barh(figsize = (12, 8), width = .8, color = [sns.color_palette()[0] if x == "win" else sns.color_palette()[2] if x == "loss" else "white" for x in data.attacker_outcome.values])
+_ = p.legend(handles = [mpatches.Patch(color = sns.color_palette()[0], label = "Victory", aa = True), mpatches.Patch(color = sns.color_palette()[2], label = "Loss", aa = True)])
+_ = p.axvline(0, color = 'k'), p.set(yticklabels = battles.name.iloc[data.index].values, xlabel = "Difference in Army Size (attacker_size - defender_size)", ylabel = "Battle Name")
+
+
+# ## How often did kings fight different types of battles?
+# The data contains four types of battles of which _Pitched Battle_ is the most frequent and _Razing_ the least.
 # 
-# Click on cluster circle to see clustered points
+# It turns out that _Ambush_ seems to be Robb Stark's favorite type of attack. All five of his _Ambush_ type battles are against Joffrey/Tommen Baratheon. Robb Stark has also been a target of an ambush: twice by Balon/Euron Greyjoy and thrice by Joffrey/Tommen Baratheon.
+# 
+# Balon/Euron Greyjoy has fought each type of battle at least once as an attacker while Joffrey/Tommen Baratheon has done so as a defender.
+# 
+# See chart below.
+# 
+# *(Using code from matplotlib's radar chart [example](http://matplotlib.org/examples/api/radar_chart.html).)*
 
-# In[24]:
-
-
-#%%time
-
-m = folium.Map(
-    location=[kiva_mpi_region_locations_africa.lat.mean(), kiva_mpi_region_locations_africa.lon.mean() ],
-    tiles='Cartodb Positron',
-    zoom_start=4
-)
-
-FastMarkerCluster(data=list(zip(kiva_mpi_region_locations_africa.lat.values, kiva_mpi_region_locations_africa.lon.values))).add_to(m)
-
-folium.LayerControl().add_to(m)
-m.save('africa loc cluster.html')
-
-m
+# In[ ]:
 
 
-# to be continued...
+from matplotlib.path import Path
+from matplotlib.spines import Spine
+from matplotlib.projections.polar import PolarAxes
+from matplotlib.projections import register_projection
+
+def radar_factory(num_vars, frame = "circle"):
+    theta = np.linspace(0, 2 * np.pi, num_vars, endpoint = False)
+    theta += np.pi / 2
+
+    def draw_poly_patch(self):
+        verts = unit_poly_verts(theta)
+        return plt.Polygon(verts, closed = True, edgecolor = 'k')
+
+    def draw_circle_patch(self):
+        return plt.Circle((0.5, 0.5), 0.5)
+
+    patch_dict = {'polygon': draw_poly_patch, 'circle': draw_circle_patch}
+    if frame not in patch_dict: raise ValueError('unknown value for `frame`: %s' % frame)
+
+    class RadarAxes(PolarAxes):
+        name, RESOLUTION, draw_patch = 'radar', 1, patch_dict[frame]
+
+        def fill(self, *args, **kwargs):
+            closed = kwargs.pop("closed", True)
+            return super(RadarAxes, self).fill(closed = closed, *args, **kwargs)
+
+        def plot(self, *args, **kwargs):
+            lines = super(RadarAxes, self).plot(*args, **kwargs)
+            for line in lines: self._close_line(line)
+
+        def _close_line(self, line):
+            x, y = line.get_data()
+            if x[0] != x[-1]:
+                x = np.concatenate((x, [x[0]]))
+                y = np.concatenate((y, [y[0]]))
+                line.set_data(x, y)
+
+        def set_varlabels(self, labels):
+            self.set_thetagrids(np.degrees(theta), labels)
+
+        def _gen_axes_patch(self):
+            return self.draw_patch()
+
+        def _gen_axes_spines(self):
+            if frame == "circle": return PolarAxes._gen_axes_spines(self)
+            spine_type, verts = "circle", unit_poly_verts(theta)
+            verts.append(verts[0])
+            path = Path(verts)
+            spine = Spine(self, spine_type, path)
+            spine.set_transform(self.transAxes)
+            return {'polar': spine}
+    register_projection(RadarAxes)
+    return theta
+
+def unit_poly_verts(theta):
+    x0, y0, r = [0.5] * 3
+    verts = [(r * np.cos(t) + x0, r * np.sin(t) + y0) for t in theta]
+    return verts
+
+kings = list(battles.attacker_king.append(battles.defender_king).fillna("Unknown").unique())
+battle_types = list(battles.battle_type.fillna("Unknown").str.title().unique())
+
+def example_data():
+    data = battles[["battle_type", "attacker_king", "defender_king", "name"]].copy(deep = True).fillna("Unknown")
+    data.loc[:, "battle_type"] = data.battle_type.fillna("Unknown").str.title()
+    grouped, ret_data = data.groupby(["attacker_king", "battle_type"]).count()[["name"]], [battle_types]
+    ret_data.append(("As Attacker King", [[grouped.loc[(kings[j], battle_types[i])].values[0]
+                                    if (kings[j], battle_types[i]) in grouped.index else 0
+                                    for i in range(len(battle_types))] for j in range(len(kings))]))
+    grouped = data.groupby(["defender_king", "battle_type"]).count()[["name"]]
+    ret_data.append(("As Defender King", [[grouped.loc[(kings[j], battle_types[i])].values[0]
+                                    if (kings[j], battle_types[i]) in grouped.index else 0
+                                    for i in range(len(battle_types))] for j in range(len(kings))]))
+    return ret_data
+
+N = 5
+theta, data = radar_factory(N, frame = "polygon"), example_data()
+spoke_labels, fig = data.pop(0), plt.figure(figsize = (14, 14))
+fig.subplots_adjust(wspace = 0.35, hspace = 0.20, top = 0.85, bottom = 0.05)
+colors = sns.color_palette() + ["k"]
+for n, (title, case_data) in enumerate(data):
+    ax, _ = fig.add_subplot(2, 2, n + 1, projection = "radar"), plt.rgrids([1, 2, 3, 4, 5])
+    ax.set_title(title, weight = "bold", position = (0.5, 1.1), horizontalalignment = "center", verticalalignment = "center", fontsize = 13.)
+    for d, color in zip(case_data, colors):
+        ax.plot(theta, d, color = color)
+        ax.fill(theta, d, facecolor = color, alpha = 0.5)
+    ax.set_varlabels(spoke_labels)
+plt.subplot(2, 2, 1)
+labels = kings
+legend = plt.legend(labels, loc = (.95, .95), labelspacing = 0.1)
+plt.setp(legend.get_texts(), fontsize = "large")
+plt.figtext(0.5, 0.965, "Types of Battles Fought By Kings as Attacker/Defender", ha = "center", color = "k", size = 16.)
+plt.show()
+
+
+# In[ ]:
+
+
+death_preds = character_predictions.copy(deep = True)
+
+
+# # Predictive Experiment
+# I have added this quick predictive experiment to complete the analysis. It does not go into too much depth. However, I will try and add more things as and when I get time.
+
+# In[ ]:
+
+
+from xgboost import plot_importance
+from xgboost import XGBClassifier as XGBC
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score, roc_curve, log_loss, confusion_matrix, precision_score, recall_score, classification_report, accuracy_score
+
+
+# ## A bit of preprocessing
+# We quickly convert non-numeric categorical features to numeric. Then we drop some columns and replace missing values with -1.
+
+# In[ ]:
+
+
+death_preds.loc[:, "culture"] = [get_cult(x) for x in death_preds.culture.fillna("")]
+death_preds.loc[:, "title"] = pd.factorize(death_preds.title)[0]
+death_preds.loc[:, "culture"] = pd.factorize(death_preds.culture)[0]
+death_preds.loc[:, "mother"] = pd.factorize(death_preds.mother)[0]
+death_preds.loc[:, "father"] = pd.factorize(death_preds.father)[0]
+death_preds.loc[:, "heir"] = pd.factorize(death_preds.heir)[0]
+death_preds.loc[:, "house"] = pd.factorize(death_preds.house)[0]
+death_preds.loc[:, "spouse"] = pd.factorize(death_preds.spouse)[0]
+
+death_preds.drop(["name", "alive", "pred", "plod", "isAlive", "dateOfBirth"], 1, inplace = True)
+death_preds.columns = map(lambda x: x.replace(".", "").replace("_", ""), death_preds.columns)
+death_preds.fillna(value = -1, inplace = True)
+
+
+# ## Is there a class imbalance?
+# Let us take a look at the class distribution now.
+
+# In[ ]:
+
+
+f, ax = plt.subplots(1, 2, figsize = (15, 7))
+f.suptitle("Class Distribution", fontsize = 18.)
+_ = death_preds.actual.value_counts().plot.bar(ax = ax[0], rot = 0, color = (sns.color_palette()[0], sns.color_palette()[2])).set(xticklabels = ["Alive", "Deceased"])
+_ = death_preds.actual.value_counts().plot.pie(labels = ("Alive", "Deceased"), autopct = "%.2f%%", label = "", fontsize = 13., ax = ax[1],colors = (sns.color_palette()[0], sns.color_palette()[2]), wedgeprops = {"linewidth": 1.5, "edgecolor": "#F7F7F7"}), ax[1].texts[1].set_color("#F7F7F7"), ax[1].texts[3].set_color("#F7F7F7")
+
+
+# The class distribution indicates an imbalance. There are many more characters alive than dead. There are several well-known ways to tackle this problem.
+# 
+# Two of the simplest ways are undersampling and oversampling. In this case, we will undersample the majority class. We will draw ~70% samples without replacement from the minority *Deceased* class. We will draw an equal number of samples (~350) from the majority *Alive* class.
+# 
+# Using this train-test split we will build and compare two models: an XGB Classifier model and a Logistic Regression model.
+
+# In[ ]:
+
+
+X = death_preds[death_preds.actual == 0].sample(350, random_state = 62).append(death_preds[death_preds.actual == 1].sample(350, random_state = 62)).copy(deep = True).astype(np.float64)
+Y = X.actual.values
+tX = death_preds[~death_preds.index.isin(X.index)].copy(deep = True).astype(np.float64)
+tY = tX.actual.values
+X.drop(["SNo", "actual", "DateoFdeath"], 1, inplace = True)
+tX.drop(["SNo", "actual", "DateoFdeath"], 1, inplace = True)
+
+
+# ## XGB Classifier
+
+# In[ ]:
+
+
+clf_xgb = XGBC(subsample = .8, colsample_bytree = .8, seed = 14, max_depth = 3).fit(X, Y)
+preds_xgb = clf_xgb.predict_proba(tX)
+ax = pd.DataFrame(list(clf_xgb.get_booster().get_fscore().items())).set_index(0).sort_values(1).plot.barh(figsize = (12, 8))
+_ = ax.set(frame_on = False, ylim = (0, len(clf_xgb.get_booster().get_fscore())), xticklabels = "", xlabel = "", ylabel = ""), ax.legend("")
+_ = plt.title("XGB Feature Importance", fontsize = 18.)
+
+
+# ## Logistic Regression
+
+# In[ ]:
+
+
+logreg = LogisticRegression(random_state = 14).fit(X, Y)
+preds_lr = logreg.predict_proba(tX)
+
+df = pd.DataFrame(list(zip(tX.columns, logreg.coef_[0])))
+df = df.reindex(df[1].abs().sort_values().index).set_index(0)
+ax = df.plot.barh(width = .6, legend = "", figsize = (12, 9))
+ax.set_title("Logistic Regression Coefficients", y = 1.03, fontsize = 16.)
+_ = ax.set(frame_on = False, xlabel = "", xticklabels = "", ylabel = "")
+
+for i, label in enumerate(list(df.index)):
+    score = df.loc[label][1]
+    ax.annotate('%.2f' % score, (score + (-.12 if score < 0 else .02), i - .2), fontsize = 10.5)
+
+
+# ## Comparison of XGB Classifier and Logistic Regression
+
+# ### Confusion Matrix
+# First we see the confusion matrices for both models. We will normalize these by their row-wise sums before visualizing.
+
+# In[ ]:
+
+
+f, ax = plt.subplots(1, 2, figsize = (15, 8))
+f.suptitle("Normalized Confusion Matrices", fontsize = 18.)
+def make_cm(p, t, axis):
+    cm = confusion_matrix(tY, np.argmax(p, axis = 1))
+    cm = cm.astype('float') / cm.sum(axis = 1)[:, np.newaxis]
+    _ = sns.heatmap(cm, square = True, xticklabels = ["Deceased", "Alive"], annot = True,
+                    annot_kws = {"fontsize": 13}, yticklabels = ["Deceased", "Alive"],
+                    cbar = True, cbar_kws = {"orientation": "horizontal"}, ax = ax[axis], cmap = "Blues").set(
+        xlabel = "Predicted Class", ylabel = "Actual Class", title = t)
+make_cm(preds_xgb, "XGB Classifier", 0)
+make_cm(preds_lr, "Logistic Regression", 1)
+
+
+# ### Scorecard
+# Next, we see the scorecard of both models. We use the handy `classification_report` and a number of other functions from `sklearn.metrics` to look at different evaluation metrics such as AUC, log loss, and accuracy.
+
+# In[ ]:
+
+
+print("XGB Classifier Performance\n" + "=" * 26 + "\n", classification_report(tY, np.argmax(preds_xgb, axis = 1), target_names = ["Deceased", "Alive"]))
+print("AUC      : %.4f" % roc_auc_score(tY, preds_xgb[:, 1]))
+print("Accuracy : %.4f" % accuracy_score(tY, np.argmax(preds_xgb, axis = 1)))
+print("Log Loss : %.4f\n\n" % log_loss(tY, preds_xgb[:, 1]))
+print("Logistic Regression Performance\n" + "=" * 31 + "\n", classification_report(tY, np.argmax(preds_lr, axis = 1), target_names = ["Deceased", "Alive"]))
+print("AUC      : %.4f" % roc_auc_score(tY, preds_lr[:, 1]))
+print("Accuracy : %.4f" % accuracy_score(tY, np.argmax(preds_lr, axis = 1)))
+print("Log Loss : %.4f" % log_loss(tY, preds_lr[:, 1]))
+
+
+# ### ROC Curves
+# Finally, we look at the ROC curves for both models.
+
+# In[ ]:
+
+
+_ = plt.figure(figsize = (8, 8)), plt.plot(*roc_curve(tY, preds_xgb[:, 1])[:2]), plt.plot(*roc_curve(tY, preds_lr[:, 1])[:2], c = sns.color_palette()[1]), plt.legend(["XGB Classifier", "Logistic Regression"], loc = "upper left")
+_ = plt.plot((0., 1.), (0., 1.), "--k", alpha = .7), plt.xlabel("False Positive Rate"), plt.ylabel("True Positive Rate"), plt.title("ROC Curves", fontsize = 16.)
+

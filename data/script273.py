@@ -1,311 +1,215 @@
 
 # coding: utf-8
 
-# # Using the Wisconsin breast cancer diagnostic data set for predictive analysis
-# ## Buddhini Waidyawansa (12-03-2016)
-# Attribute Information:
+# This notebook is a first step to exploring whether it's possible to predict horses races more accurately than the betting markets. It includes feature exploration, feature engineering, a basic XGBoost model, a betting strategy and calculates my profit or loss. 
 # 
-#  - 1) ID number 
-#  - 2) Diagnosis (M = malignant, B = benign) 
-#  
-# -3-32.Ten real-valued features are computed for each cell nucleus:
+# This notebook doesn't rigorously test whether the strategy systematically makes money, but my sense is that it probably doesn't. The results change pretty dramatically when I change the test-train split. This could be because of a bug, or could be because the model is ~random because I have very few features (and I'm not using the most interesting features. 
 # 
-#  - a) radius (mean of distances from center to points on the perimeter) 
-#  - b) texture (standard deviation of gray-scale values) 
-#  - c) perimeter 
-#  - d) area 
-#  - e) smoothness (local variation in radius lengths) 
-#  - f) compactness (perimeter^2 / area - 1.0) 
-#  - g). concavity (severity of concave portions of the contour) 
-#  - h). concave points (number of concave portions of the contour) 
-#  - i). symmetry 
-#  - j). fractal dimension ("coastline approximation" - 1)
+# Hopefully somebody can use this starting point and extend it. I'm happy to answer any questions if you don't understand anything I've done.
 # 
-# The mean, standard error and "worst" or largest (mean of the three largest values) of these features were computed for each image, resulting in 30 features. For instance, field 3 is Mean Radius, field 13 is Radius SE, field 23 is Worst Radius.
+# Ideas for improvements (ordered by priority):
 # 
-# 
-# For this analysis, as a guide to predictive analysis I followed the instructions and discussion on "A Complete Tutorial on Tree Based Modeling from Scratch (in R & Python)" at Analytics Vidhya.
-
-# #Load Libraries
-
-# In[ ]:
-
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# keeps the plots in one place. calls image as static pngs
-get_ipython().run_line_magic('matplotlib', 'inline')
-import matplotlib.pyplot as plt # side-stepping mpl backend
-import matplotlib.gridspec as gridspec # subplots
-import mpld3 as mpl
-
-#Import models from scikit learn module:
-from sklearn.model_selection import train_test_split
-from sklearn.linear_model import LogisticRegression
-from sklearn.cross_validation import KFold   #For K-fold cross validation
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.tree import DecisionTreeClassifier, export_graphviz
-from sklearn import metrics
-
-
-# # Load the data
-
-# In[ ]:
-
-
-df = pd.read_csv("../input/data.csv",header = 0)
-df.head()
-
-
-# # Clean and prepare data
-
-# In[ ]:
-
-
-df.drop('id',axis=1,inplace=True)
-df.drop('Unnamed: 32',axis=1,inplace=True)
-# size of the dataframe
-len(df)
-
-
-# In[ ]:
-
-
-df.diagnosis.unique()
-
-
-# In[ ]:
-
-
-df['diagnosis'] = df['diagnosis'].map({'M':1,'B':0})
-df.head()
-
-
-# # Explore data
-
-# In[ ]:
-
-
-df.describe()
-
-
-# In[ ]:
-
-
-df.describe()
-plt.hist(df['diagnosis'])
-plt.title('Diagnosis (M=1 , B=0)')
-plt.show()
-
-
-# ### nucleus features vs diagnosis
-
-# In[ ]:
-
-
-features_mean=list(df.columns[1:11])
-# split dataframe into two based on diagnosis
-dfM=df[df['diagnosis'] ==1]
-dfB=df[df['diagnosis'] ==0]
-
-
-# In[ ]:
-
-
-#Stack the data
-plt.rcParams.update({'font.size': 8})
-fig, axes = plt.subplots(nrows=5, ncols=2, figsize=(8,10))
-axes = axes.ravel()
-for idx,ax in enumerate(axes):
-    ax.figure
-    binwidth= (max(df[features_mean[idx]]) - min(df[features_mean[idx]]))/50
-    ax.hist([dfM[features_mean[idx]],dfB[features_mean[idx]]], bins=np.arange(min(df[features_mean[idx]]), max(df[features_mean[idx]]) + binwidth, binwidth) , alpha=0.5,stacked=True, normed = True, label=['M','B'],color=['r','g'])
-    ax.legend(loc='upper right')
-    ax.set_title(features_mean[idx])
-plt.tight_layout()
-plt.show()
-
-
-# ###Observations
-# 
-# 1. mean values of cell radius, perimeter, area, compactness, concavity and concave points can be used in classification of the cancer. Larger values of these parameters tends to show a correlation with malignant tumors. 
-# 2. mean values of texture, smoothness, symmetry or fractual dimension does not show a particular preference of one diagnosis over the other. In any of the histograms there are no noticeable large outliers that warrants further cleanup.
-
-# ## Creating a test set and a training set
-# Since this data set is not ordered, I am going to do a simple 70:30 split to create a training data set and a test data set.
-
-# In[ ]:
-
-
-traindf, testdf = train_test_split(df, test_size = 0.3)
-
-
-# ## Model Classification
-# 
-# Here we are going to build a classification model and evaluate its performance using the training set.
-# 
+#  - Include additional features: most importantly form.
+#  - Create a betting strategy where you don't bet on every race but only those where there's a big discrepancy between your predictions and the odds 
+#  - Setup a cross validation framework. 
+#  - Look at feature importance and partial plots to make sure the model is behaving properly.
+#  - I'm treating this as a binary prediction problem (predicting the probability that each horse will win). This throws away information. There are probably better ways to setup the problem. 
+#  - Possibly include a model that also predicts place.
 # 
 
 # In[ ]:
 
 
-#Generic function for making a classification model and accessing the performance. 
-# From AnalyticsVidhya tutorial
-def classification_model(model, data, predictors, outcome):
-  #Fit the model:
-  model.fit(data[predictors],data[outcome])
-  
-  #Make predictions on training set:
-  predictions = model.predict(data[predictors])
-  
-  #Print accuracy
-  accuracy = metrics.accuracy_score(predictions,data[outcome])
-  print("Accuracy : %s" % "{0:.3%}".format(accuracy))
+import pandas as pd
+import xgboost as xgb
+import numpy as np
 
-  #Perform k-fold cross-validation with 5 folds
-  kf = KFold(data.shape[0], n_folds=5)
-  error = []
-  for train, test in kf:
-    # Filter training data
-    train_predictors = (data[predictors].iloc[train,:])
+#useful for displaying wide data frames
+pd.set_option('display.max_columns', 50)
+
+
+# In[ ]:
+
+
+#load the data into Pandas dataframes
+df_market = pd.read_csv("../input/markets.csv")
+df_runners = pd.read_csv("../input/runners.csv",dtype={'barrier': np.int16,'handicap_weight': np.float16})
+
+#for my simple model, I'm ignoring other columns. I recommend starting with form if you're looking to add features
+#df_odds = pd.read_csv("../input/odds.csv")
+#df_form = pd.read_csv("../input/forms.csv")
+#df_condition = pd.read_csv("../input/conditions.csv")
+#df_weather = ("../input/weather.csv")
+#df_rider = ("../input/riders.csv")
+#df_horse = ("../input/horses.csv")
+#df_horse_sex = ("../input/horse_sexes.csv")
+
+
+# #Inital Exploration
+# Looking at the data and some basic relationships
+
+# In[ ]:
+
+
+#look at the first fives rows of the market table
+df_market[0:5]
+
+
+# In[ ]:
+
+
+#look at the first fives rows of the runners table
+df_runners[0:5]
+
+
+# ##Importance of Barrier
+# Horses that draw barriers 1-6 win more often. Horses that draw 16 or worse rarely win 
+
+# In[ ]:
+
+
+#explore the barriers feature: does it look like it impacts chances of victory?
+winners_by_barrier = df_runners[df_runners['position'] == 1][['id','barrier']].groupby('barrier').agg(['count'])
+barrier_count = df_runners[['id','barrier']].groupby('barrier').agg(['count'])
+pct_winner_by_barrier = winners_by_barrier/barrier_count[barrier_count.index.isin(winners_by_barrier.index)]
+ax = pct_winner_by_barrier.plot(kind='bar')
+ax.set_ylabel("Win Percentage")
+
+#this notebook pushes up against memory limits. So I'm aggressive with garbage collection.
+del winners_by_barrier, barrier_count, pct_winner_by_barrier
+
+
+# #Handicap
+# Heavier horses win more often, suggesting that weights aren't a sufficient handicap for better horses
+
+# In[ ]:
+
+
+#explore weight: does it looks like it has an impact?
+winners_by_weight = df_runners[df_runners['position'] == 1][['id','handicap_weight']].groupby('handicap_weight').agg(['count'])
+winners_by_weight = winners_by_weight[winners_by_weight > 30].dropna()
+weight_count = df_runners[['id','handicap_weight']].groupby('handicap_weight').agg(['count'])
+pct_winners_by_weight = winners_by_weight/weight_count[weight_count.index.isin(winners_by_weight.index)]
+ax = pct_winners_by_weight.plot(kind='bar')
+ax.set_ylabel("Win Percentage")
+del winners_by_weight, weight_count, pct_winners_by_weight
+
+
+# #Rider Quality
+# The best riders win ~three times as often as the worst 
+
+# In[ ]:
+
+
+#explore weight: does it looks like it has an impact?
+winners_by_rider = df_runners[df_runners['position'] == 1][['id','rider_id']].groupby('rider_id').agg(['count'])
+#only inclide riders who have more than 10 races
+winners_by_rider =winners_by_rider[winners_by_rider > 10].dropna()
+rider_count = df_runners[['id','rider_id']].groupby('rider_id').agg(['count'])
+rider_count = rider_count[rider_count.index.isin(winners_by_rider.index)]
+pct_winners_by_rider = winners_by_rider/rider_count
+pct_winners_by_rider.columns = ['Win_Percentage']
+pct_winners_by_rider = pct_winners_by_rider.sort_values(by='Win_Percentage',ascending=False)
+ax = pct_winners_by_rider.plot(kind='bar')
+ax.set_ylabel("Win Percentage")
+del winners_by_rider, rider_count, pct_winners_by_rider
+
+
+# #Create Feature Matrix
+# The exploration above suggests that barrier, weight and rider are valuable features for predicting winners. I've included all those features.
+
+# In[ ]:
+
+
+##merge the runners and markets data frames
+df_runners_and_market = pd.merge(df_runners,df_market,left_on='market_id',right_on='id',how='outer')
+df_runners_and_market.index = df_runners_and_market['id_x'] 
+
+
+# In[ ]:
+
+
+numeric_features = ['position','market_id','barrier','handicap_weight']
+categorical_features = ['rider_id']
+
+#convert to factors
+for feature in categorical_features:
+    df_runners_and_market[feature] = df_runners_and_market[feature].astype(str)
+    df_runners_and_market[feature] = df_runners_and_market[feature].replace('nan','0') #have to do this because of a weird random forest bug
+
+    df_features = df_runners_and_market[numeric_features]
+
+for feature in categorical_features:
+    encoded_features = pd.get_dummies(df_runners_and_market[feature])
+    encoded_features.columns = feature + encoded_features.columns
+    df_features = pd.merge(df_features,encoded_features,left_index=True,right_index=True,how='inner') 
+
+#turn the target variable into a binary feature: did or did not win
+df_features['win'] = False
+df_features.loc[df_features['position'] == 1,'win'] = True
+
+#del df_runners_and_market, encoded_features, df_features['position']
+
+
+# #Split between training and test
+# Doing a random split
+
+# In[ ]:
+
+
+training_races = np.random.choice(df_features['market_id'].unique(),size=int(round(0.7*len(df_features['market_id'].unique()),0)),replace=False)
+df_train = df_features[df_features['market_id'].isin(training_races)]
+df_test = df_features[~df_features['market_id'].isin(training_races)]
+
+#del df_features
+
+
+# In[ ]:
+
+
+gbm = xgb.XGBClassifier(objective='binary:logistic').fit(df_train.drop(df_train[['win','position','market_id']],axis=1)
+, df_train['win'])
+predictions = gbm.predict_proba(df_test.drop(df_test[['win','position','market_id']],axis=1))[:,0]
+df_test['predictions'] = predictions
+df_test = df_test[['predictions','win','market_id']]
+#del df_train
+
+
+# #Compare with betting markets
+
+# In[ ]:
+
+
+df_odds = pd.read_csv("../input/odds.csv")
+df_odds = df_odds[df_odds['runner_id'].isin(df_test.index)]
+
+#I take the mean odds for the horse rather than the odds 1 hour before or 10 mins before. You may want to revisit this.
+average_win_odds = df_odds.groupby(['runner_id'])['odds_one_win'].mean()
+
+#delete when odds are 0 because there is no market for this horse
+average_win_odds[average_win_odds == 0] = np.nan
+df_test['odds'] = average_win_odds
+df_test = df_test.dropna(subset=['odds'])
+#given that I predict multiple winners, there's leakage if I don't shuffle the test set (winning horse appears first and I put money on the first horse I predict to win)
+df_test = df_test.iloc[np.random.permutation(len(df_test))]
+
+
+# In[ ]:
+
+
+
+#select the horse I picked as most likely to win
+df_profit = df_test.loc[df_test.groupby("market_id")["predictions"].idxmax()]
+df_profit
+investment = 0
+payout = 0
+for index, row in df_profit.iterrows():
+    investment +=1
     
-    # The target we're using to train the algorithm.
-    train_target = data[outcome].iloc[train]
-    
-    # Training the algorithm using the predictors and target.
-    model.fit(train_predictors, train_target)
-    
-    #Record error from each cross-validation run
-    error.append(model.score(data[predictors].iloc[test,:], data[outcome].iloc[test]))
-    
-    print("Cross-Validation Score : %s" % "{0:.3%}".format(np.mean(error)))
-    
-  #Fit the model again so that it can be refered outside the function:
-  model.fit(data[predictors],data[outcome]) 
+    if (row['win']):
+        payout += row['odds']
 
+investment_return = round((payout - investment)/investment*100,2)
+print("This algorithm and betting system will generate a " + str(investment_return) + "% return\n")
+print("Note: you can't read much from a single run. Best to setup a cross validation framework and look at the return over many runs")
 
-# ### Logistic Regression model
-# 
-# Logistic regression is widely used for classification of discrete data. In this case we will use it for binary (1,0) classification.
-# 
-# Based on the observations in the histogram plots, we can reasonably hypothesize that the cancer diagnosis depends on the mean cell radius, mean perimeter, mean area, mean compactness, mean concavity and mean concave points. We can then  perform a logistic regression analysis using those features as follows:
-
-# In[ ]:
-
-
-predictor_var = ['radius_mean','perimeter_mean','area_mean','compactness_mean','concave points_mean']
-outcome_var='diagnosis'
-model=LogisticRegression()
-classification_model(model,traindf,predictor_var,outcome_var)
-
-
-# The prediction accuracy is reasonable. 
-# What happens if we use just one predictor? 
-# Use the mean_radius:
-
-# In[ ]:
-
-
-predictor_var = ['radius_mean']
-model=LogisticRegression()
-classification_model(model,traindf,predictor_var,outcome_var)
-
-
-# This gives a similar prediction accuracy and a cross-validation score.
-# 
-
-# The accuracy of the predictions are good but not great. The cross-validation scores are reasonable. 
-# Can we do better with another model?
-
-# ### Decision Tree Model
-
-# In[ ]:
-
-
-predictor_var = ['radius_mean','perimeter_mean','area_mean','compactness_mean','concave points_mean']
-model = DecisionTreeClassifier()
-classification_model(model,traindf,predictor_var,outcome_var)
-
-
-# Here we are over-fitting the model probably due to the large number of predictors.
-# Let use a single predictor, the obvious one is the radius of the cell.
-
-# In[ ]:
-
-
-predictor_var = ['radius_mean']
-model = DecisionTreeClassifier()
-classification_model(model,traindf,predictor_var,outcome_var)
-
-
-# The accuracy of the prediction is much much better here.  But does it depend on the predictor?
-
-# Using a single predictor gives a 97% prediction accuracy for this model but the cross-validation score is not that great. 
-
-# ### Randome Forest
-
-# In[ ]:
-
-
-# Use all the features of the nucleus
-predictor_var = features_mean
-model = RandomForestClassifier(n_estimators=100,min_samples_split=25, max_depth=7, max_features=2)
-classification_model(model, traindf,predictor_var,outcome_var)
-
-
-# Using all the features improves the prediction accuracy and the cross-validation score is great.
-
-#  An advantage with Random Forest is that it returns a feature importance matrix which can be used to select features. So lets select the top 5 features and use them as predictors.
-
-# In[ ]:
-
-
-#Create a series with feature importances:
-featimp = pd.Series(model.feature_importances_, index=predictor_var).sort_values(ascending=False)
-print(featimp)
-
-
-# In[ ]:
-
-
-# Using top 5 features
-predictor_var = ['concave points_mean','area_mean','radius_mean','perimeter_mean','concavity_mean',]
-model = RandomForestClassifier(n_estimators=100, min_samples_split=25, max_depth=7, max_features=2)
-classification_model(model,traindf,predictor_var,outcome_var)
-
-
-# Using the top 5 features only changes the prediction accuracy a bit but I think we get a better result if we use all the predictors.
-# 
-# What happens if we use a single predictor as before? Just check.
-
-# In[ ]:
-
-
-predictor_var =  ['radius_mean']
-model = RandomForestClassifier(n_estimators=100)
-classification_model(model, traindf,predictor_var,outcome_var)
-
-
-# This gives a better prediction accuracy too but the cross-validation is not great.
-# 
-
-# ## Using on the test data set
-
-# In[ ]:
-
-
-# Use all the features of the nucleus
-predictor_var = features_mean
-model = RandomForestClassifier(n_estimators=100,min_samples_split=25, max_depth=7, max_features=2)
-classification_model(model, testdf,predictor_var,outcome_var)
-
-
-# The prediction accuracy for the test data set using the above Random Forest model is 95%!
-
-# ## Conclusion
-# 
-# The best model to be used for diagnosing breast cancer as found in this analysis is the Random Forest model with the top 5 predictors, 'concave points_mean','area_mean','radius_mean','perimeter_mean','concavity_mean'. It gives a prediction accuracy of ~95% and a cross-validation score ~ 93% for the test data set.
-# 
-# 
-# I will see if I can improve this more by tweaking the model further and trying out other models in a later version of this analysis.

@@ -1,33 +1,64 @@
-import numpy as np
+# -*- coding: utf-8 -*-
+"""
+Created on Thu Sep 17 16:09:21 2015
+
+@author: Dipayan
+"""
+
+
+from pandas import Series, DataFrame
 import pandas as pd
-from sklearn.ensemble import RandomForestClassifier
-import xgboost as xgb
+import numpy as np
+import nltk
+import re
+from nltk.stem import WordNetLemmatizer
+from sklearn.svm import LinearSVC
+from sklearn.metrics import classification_report
+import sklearn.metrics
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn import grid_search
+from sklearn.linear_model import LogisticRegression
 
-print("Load the training/test data using pandas")
-train = pd.read_csv("../input/training.csv")
-test  = pd.read_csv("../input/test.csv")
 
-print("Eliminate SPDhits, which makes the agreement check fail")
-features = list(train.columns[1:-5])
+# A combination of Word lemmatization + LinearSVC model finally pushes the accuracy score past 80%
 
-print("Train a Random Forest model")
-rf = RandomForestClassifier(n_estimators=100, random_state=1)
-rf.fit(train[features], train["signal"])
+traindf = pd.read_json("../input/train.json")
+traindf['ingredients_clean_string'] = [' , '.join(z).strip() for z in traindf['ingredients']]  
+traindf['ingredients_string'] = [' '.join([WordNetLemmatizer().lemmatize(re.sub('[^A-Za-z]', ' ', line)) for line in lists]).strip() for lists in traindf['ingredients']]       
 
-print("Train a XGBoost model")
-params = {"objective": "binary:logistic",
-          "eta": 0.3,
-          "max_depth": 5,
-          "min_child_weight": 3,
-          "silent": 1,
-          "subsample": 0.7,
-          "colsample_bytree": 0.7,
-          "seed": 1}
-num_trees=250
-gbm = xgb.train(params, xgb.DMatrix(train[features], train["signal"]), num_trees)
+testdf = pd.read_json("../input/test.json") 
+testdf['ingredients_clean_string'] = [' , '.join(z).strip() for z in testdf['ingredients']]
+testdf['ingredients_string'] = [' '.join([WordNetLemmatizer().lemmatize(re.sub('[^A-Za-z]', ' ', line)) for line in lists]).strip() for lists in testdf['ingredients']]       
 
-print("Make predictions on the test set")
-test_probs = (rf.predict_proba(test[features])[:,1] +
-              gbm.predict(xgb.DMatrix(test[features])))/2
-submission = pd.DataFrame({"id": test["id"], "prediction": test_probs})
-submission.to_csv("rf_xgboost_submission.csv", index=False)
+
+
+corpustr = traindf['ingredients_string']
+vectorizertr = TfidfVectorizer(stop_words='english',
+                             ngram_range = ( 1 , 1 ),analyzer="word", 
+                             max_df = .57 , binary=False , token_pattern=r'\w+' , sublinear_tf=False)
+tfidftr=vectorizertr.fit_transform(corpustr).todense()
+corpusts = testdf['ingredients_string']
+vectorizerts = TfidfVectorizer(stop_words='english')
+tfidfts=vectorizertr.transform(corpusts)
+
+predictors_tr = tfidftr
+
+targets_tr = traindf['cuisine']
+
+predictors_ts = tfidfts
+
+
+#classifier = LinearSVC(C=0.80, penalty="l2", dual=False)
+parameters = {'C':[1, 10]}
+#clf = LinearSVC()
+clf = LogisticRegression()
+
+classifier = grid_search.GridSearchCV(clf, parameters)
+
+classifier=classifier.fit(predictors_tr,targets_tr)
+
+predictions=classifier.predict(predictors_ts)
+testdf['cuisine'] = predictions
+testdf = testdf.sort('id' , ascending=True)
+
+testdf[['id' , 'ingredients_clean_string' , 'cuisine' ]].to_csv("submission.csv")

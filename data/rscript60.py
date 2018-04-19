@@ -1,144 +1,245 @@
-import pandas as pd
-import numpy as np
-from sklearn.model_selection import train_test_split
-from multiprocessing import *
-import gc
-import warnings
-warnings.filterwarnings("ignore")
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
 
-import xgboost as xgb
-#######################################
-
-# Thanks Pascal and the1owl 
-
-# Pascal's Recovery https://www.kaggle.com/pnagel/reconstruction-of-ps-reg-03
-# Froza's Baseline https://www.kaggle.com/the1owl/forza-baseline
-
-# single XGB LB 0.285 will release soon.
-
-#######################################
-
-#### Load Data
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-
-### 
-y = train['target'].values
-testid= test['id'].values
-
-train.drop(['id','target'],axis=1,inplace=True)
-test.drop(['id'],axis=1,inplace=True)
-
-### Drop calc
-unwanted = train.columns[train.columns.str.startswith('ps_calc_')]
-train = train.drop(unwanted, axis=1)  
-test = test.drop(unwanted, axis=1)
-
-### Great Recovery from Pascal's materpiece
-### Great Recovery from Pascal's materpiece
-### Great Recovery from Pascal's materpiece
-### Great Recovery from Pascal's materpiece
-### Great Recovery from Pascal's materpiece
-
-def recon(reg):
-    integer = int(np.round((40*reg)**2)) 
-    for a in range(32):
-        if (integer - a) % 31 == 0:
-            A = a
-    M = (integer - A)//31
-    return A, M
-train['ps_reg_A'] = train['ps_reg_03'].apply(lambda x: recon(x)[0])
-train['ps_reg_M'] = train['ps_reg_03'].apply(lambda x: recon(x)[1])
-train['ps_reg_A'].replace(19,-1, inplace=True)
-train['ps_reg_M'].replace(51,-1, inplace=True)
-test['ps_reg_A'] = test['ps_reg_03'].apply(lambda x: recon(x)[0])
-test['ps_reg_M'] = test['ps_reg_03'].apply(lambda x: recon(x)[1])
-test['ps_reg_A'].replace(19,-1, inplace=True)
-test['ps_reg_M'].replace(51,-1, inplace=True)
+import datetime
+import os
+from collections import defaultdict
+import operator
 
 
-### Froza's baseline
-### Froza's baseline
-### Froza's baseline
-### Froza's baseline
+def apk(actual, predicted, k=7):
+    if len(predicted) > k:
+        predicted = predicted[:k]
 
-d_median = train.median(axis=0)
-d_mean = train.mean(axis=0)
-d_skew = train.skew(axis=0)
-one_hot = {c: list(train[c].unique()) for c in train.columns if c not in ['id','target']}
+    score = 0.0
+    num_hits = 0.0
 
-def transform_df(df):
-    df = pd.DataFrame(df)
-    dcol = [c for c in df.columns if c not in ['id','target']]
-    df['ps_car_13_x_ps_reg_03'] = df['ps_car_13'] * df['ps_reg_03']
-    df['negative_one_vals'] = np.sum((df[dcol]==-1).values, axis=1)
-    for c in dcol:
-        if '_bin' not in c: #standard arithmetic
-            df[c+str('_median_range')] = (df[c].values > d_median[c]).astype(np.int)
-            df[c+str('_mean_range')] = (df[c].values > d_mean[c]).astype(np.int)
+    for i, p in enumerate(predicted):
+        if p in actual and p not in predicted[:i]:
+            num_hits += 1.0
+            score += num_hits / (i+1.0)
 
-    for c in one_hot:
-        if len(one_hot[c])>2 and len(one_hot[c]) < 7:
-            for val in one_hot[c]:
-                df[c+'_oh_' + str(val)] = (df[c].values == val).astype(np.int)
-    return df
+    if not actual:
+        return 0.0
 
-def multi_transform(df):
-    print('Init Shape: ', df.shape)
-    p = Pool(cpu_count())
-    df = p.map(transform_df, np.array_split(df, cpu_count()))
-    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
-    p.close(); p.join()
-    print('After Shape: ', df.shape)
-    return df
-
-train = multi_transform(train)
-test = multi_transform(test)
+    return score / min(len(actual), k)
 
 
+def get_hash(arr, type = 0):
+    (fecha_dato, ncodpers, ind_empleado,
+    pais_residencia, sexo, age,
+    fecha_alta, ind_nuevo, antiguedad,
+    indrel, ult_fec_cli_1t, indrel_1mes,
+    tiprel_1mes, indresi, indext,
+    conyuemp, canal_entrada, indfall,
+    tipodom, cod_prov, nomprov,
+    ind_actividad_cliente, renta, segmento) = arr[:24]
 
-### Gini
-
-def ginic(actual, pred):
-    actual = np.asarray(actual) 
-    n = len(actual)
-    a_s = actual[np.argsort(pred)]
-    a_c = a_s.cumsum()
-    giniSum = a_c.sum() / a_s.sum() - (n + 1) / 2.0
-    return giniSum / n
- 
-def gini_normalized(a, p):
-    if p.ndim == 2:
-        p = p[:,1] 
-    return ginic(a, p) / ginic(a, a)
-    
-
-def gini_xgb(preds, dtrain):
-    labels = dtrain.get_label()
-    gini_score = gini_normalized(labels, preds)
-    return 'gini', gini_score
+    if type == 0:
+        return (pais_residencia, sexo, age, ind_nuevo, segmento, ind_empleado, ind_actividad_cliente, indresi, nomprov)
+    else:
+        return (pais_residencia, sexo, age, ind_nuevo, segmento, ind_empleado, ind_actividad_cliente, indresi)
 
 
-### XGB modeling
+def add_data_to_main_arrays(arr, best, overallbest, customer):
+    ncodpers = arr[1]
+    hash1 = get_hash(arr, 0)
+    hash2 = get_hash(arr, 1)
+    part = arr[24:]
+    for i in range(24):
+        if part[i] == '1':
+            if ncodpers in customer:
+                if customer[ncodpers][i] == '0':
+                    best[hash1][i] += 1
+                    best[hash2][i] += 1
+                    overallbest[i] += 1
+            else:
+                best[hash1][i] += 1
+                best[hash2][i] += 1
+                overallbest[i] += 1
+    customer[ncodpers] = part
 
-sub = pd.DataFrame()
-sub['id'] = testid
-params = {'eta': 0.025, 'max_depth': 4, 
-          'subsample': 0.9, 'colsample_bytree': 0.7, 
-          'colsample_bylevel':0.7,
-            'min_child_weight':100,
-            'alpha':4,
-            'objective': 'binary:logistic', 'eval_metric': 'auc', 'seed': 99, 'silent': True}
-x1, x2, y1, y2 = train_test_split(train, y, test_size=0.25, random_state=99)
+
+def sort_main_arrays(best, overallbest):
+    out = dict()
+    for b in best:
+        arr = best[b]
+        srtd = sorted(arr.items(), key=operator.itemgetter(1), reverse=True)
+        out[b] = srtd
+    best = out
+    overallbest = sorted(overallbest.items(), key=operator.itemgetter(1), reverse=True)
+    return best, overallbest
 
 
+def get_predictions(arr1, best, overallbest, customer):
 
-watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]
-model = xgb.train(params, xgb.DMatrix(x1, y1), 5000,  watchlist, feval=gini_xgb, maximize=True, 
-                  verbose_eval=100, early_stopping_rounds=70)
-sub['target'] = model.predict(xgb.DMatrix(test), ntree_limit=model.best_ntree_limit)
+    predicted = []
 
-### Submission
+    hash1 = get_hash(arr1, 0)
+    hash2 = get_hash(arr1, 1)
+    ncodpers = arr1[1]
 
-sub['target'] = model.predict(xgb.DMatrix(test), ntree_limit=model.best_ntree_limit)
-sub.to_csv('Froza_and_Pascal.csv',index=False)
+    # hash 1
+    if len(predicted) < 7:
+        if hash1 in best:
+            for a in best[hash1]:
+                # If user is not new
+                if ncodpers in customer:
+                    if customer[ncodpers][a[0]] == '1':
+                        continue
+                if a[0] not in predicted:
+                    predicted.append(a[0])
+                    if len(predicted) == 7:
+                        break
+
+    # hash 2
+    if len(predicted) < 7:
+        if hash2 in best:
+            for a in best[hash2]:
+                # If user is not new
+                if ncodpers in customer:
+                    if customer[ncodpers][a[0]] == '1':
+                        continue
+                if a[0] not in predicted:
+                    predicted.append(a[0])
+                    if len(predicted) == 7:
+                        break
+
+    # overall
+    if len(predicted) < 7:
+        for a in overallbest:
+            # If user is not new
+            if ncodpers in customer:
+                if customer[ncodpers][a[0]] == '1':
+                    continue
+            if a[0] not in predicted:
+                predicted.append(a[0])
+                if len(predicted) == 7:
+                    break
+
+    return predicted
+
+
+def get_real_values(arr1, customer):
+    real = []
+    ncodpers = arr1[1]
+    arr2 = arr1[24:]
+
+    for i in range(len(arr2)):
+        if arr2[i] == '1':
+            if ncodpers in customer:
+                if customer[ncodpers][i] == '0':
+                    real.append(i)
+            else:
+                real.append(i)
+    return real
+
+
+def run_solution():
+
+    print('Preparing arrays...')
+    f = open("../input/train_ver2.csv", "r")
+    first_line = f.readline().strip()
+    first_line = first_line.replace("\"", "")
+    map_names = first_line.split(",")[24:]
+
+    # Normal variables
+    customer = dict()
+    best = defaultdict(lambda: defaultdict(int))
+    overallbest = defaultdict(int)
+
+    # Validation variables
+    customer_valid = dict()
+    best_valid = defaultdict(lambda: defaultdict(int))
+    overallbest_valid = defaultdict(int)
+
+    valid_part = []
+    # Calc counts
+    total = 0
+    while 1:
+        line = f.readline()[:-1]
+        total += 1
+
+        if line == '':
+            break
+
+        tmp1 = line.split("\"")
+        arr = tmp1[0][:-1].split(",") + [tmp1[1]] + tmp1[2][1:].split(',')
+        arr = [a.strip() for a in arr]
+
+        # Normal part
+        add_data_to_main_arrays(arr, best, overallbest, customer)
+
+        # Valid part
+        if arr[0] != '2016-05-28':
+            add_data_to_main_arrays(arr, best_valid, overallbest_valid, customer_valid)
+        else:
+            valid_part.append(arr)
+
+        if total % 1000000 == 0:
+            print('Process {} lines ...'.format(total))
+            # break
+
+    f.close()
+
+    print('Sort best arrays...')
+    print('Hashes num: ', len(best))
+    print('Valid part: ', len(valid_part))
+
+    # Normal
+    best, overallbest = sort_main_arrays(best, overallbest)
+
+    # Valid
+    best_valid, overallbest_valid = sort_main_arrays(best_valid, overallbest_valid)
+
+    map7 = 0.0
+    print('Validation...')
+    for arr1 in valid_part:
+        predicted = get_predictions(arr1, best_valid, overallbest_valid, customer_valid)
+        real = get_real_values(arr1, customer_valid)
+
+        score = apk(real, predicted)
+        map7 += score
+
+    if len(valid_part) > 0:
+        map7 /= len(valid_part)
+    print('Predicted score: {}'.format(map7))
+
+    print('Generate submission...')
+    sub_file = os.path.join('submission_' + str(map7) + '_' + str(datetime.datetime.now().strftime("%Y-%m-%d-%H-%M")) + '.csv')
+    out = open(sub_file, "w")
+    f = open("../input/test_ver2.csv", "r")
+    f.readline()
+    total = 0
+    out.write("ncodpers,added_products\n")
+
+    while 1:
+        line = f.readline()[:-1]
+        total += 1
+
+        if line == '':
+            break
+
+        tmp1 = line.split("\"")
+        arr = tmp1[0][:-1].split(",") + [tmp1[1]] + tmp1[2][1:].split(',')
+        arr = [a.strip() for a in arr]
+        ncodpers = arr[1]
+        out.write(ncodpers + ',')
+
+        predicted = get_predictions(arr, best, overallbest, customer)
+
+        for p in predicted:
+            out.write(map_names[p] + ' ')
+
+        if total % 1000000 == 0:
+            print('Read {} lines ...'.format(total))
+            # break
+
+        out.write("\n")
+
+    print('Total cases:', str(total))
+    out.close()
+    f.close()
+
+
+if __name__ == "__main__":
+    run_solution()

@@ -1,180 +1,134 @@
 
 # coding: utf-8
 
+# As there are only 4200-ish samples and 350-ish features, I strongly believe this can hit the Curse of Dimensionality. I therefore think a dimensionality reduction is good for this dataset. Let's investigate some methods.
+
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import os
-from PIL import Image
-from skimage.transform import resize
-from random import shuffle
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
+# Import the important libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+import seaborn as sns
 
 
 # In[ ]:
 
 
-list_paths = []
-for subdir, dirs, files in os.walk("../input"):
-    for file in files:
-        #print os.path.join(subdir, file)
-        filepath = subdir + os.sep + file
-        list_paths.append(filepath)
+# Read the data
+df = pd.read_csv("../input/train.csv").set_index("ID")
+
+
+# There are some features that are constants. Let's identify them by looking at the standard deviation (check id std ==0.0) and then drop those features.
+
+# In[ ]:
+
+
+desc = df.describe().transpose()
+columns_to_drop = desc.loc[desc["std"]==0].index.values
+df.drop(columns_to_drop, axis=1, inplace=True)
+
+
+# Just to check which columns we just dropped:
+
+# In[ ]:
+
+
+print(columns_to_drop)
+
+
+# There are some categorical features in X0-X8. Let's count the cardinality and label encode those.
+
+# In[ ]:
+
+
+df08 = df[["X{}".format(x) for x in range(9) if x != 7]]
 
 
 # In[ ]:
 
 
-list_train = [filepath for filepath in list_paths if "train/" in filepath]
-shuffle(list_train)
-list_test = [filepath for filepath in list_paths if "test/" in filepath]
+tot_cardinality = 0
+for c in df08.columns.values:
+    cardinality = len(df08[c].unique())
+    print(c, cardinality)
+    tot_cardinality += cardinality
+print(tot_cardinality)
 
-list_train = list_train
-list_test = list_test
-index = [os.path.basename(filepath) for filepath in list_test]
+
+# We can do some guesses what these are. Can X3 be the day of week? Can X6 be the months of year?  Let's do the label encoding:
+# **Update**: Label encoding does not make sense. I'm updating this to One-Hot encoding.
+
+# In[ ]:
+
+
+df = pd.get_dummies(df, columns=["X{}".format(x) for x in range(9) if x != 7])
+
+
+# I've heard there is an outlier in the target variable. Let's look and remove it.
+
+# In[ ]:
+
+
+# sns.distplot(df.y)
+#(Why do I get a warning?)
+# I get a long warning on the kaggle kernel, I'm commenting this line.
 
 
 # In[ ]:
 
 
-list_classes = list(set([os.path.dirname(filepath).split(os.sep)[-1] for filepath in list_paths if "train" in filepath]))
+# Drop it!
+df.drop(df.loc[df["y"] > 250].index, inplace=True)
+
+
+# ## PCA - Principal component analysis.
+# For the sake of simplicity, do a 2-dimensional PCA. That makes plotting simpler.
+
+# In[ ]:
+
+
+from sklearn.decomposition import PCA
+pca2 = PCA(n_components=2)
+pca2_results = pca2.fit_transform(df.drop(["y"], axis=1))
+
+
+# .... and then we plot it as scatter with the target as a color mapping.
+
+# In[ ]:
+
+
+cmap = sns.cubehelix_palette(as_cmap=True)
+f, ax = plt.subplots(figsize=(20,15))
+points = ax.scatter(pca2_results[:,0], pca2_results[:,1], c=df.y, s=50, cmap=cmap)
+f.colorbar(points)
+plt.show()
+
+
+# Interesting.... it looks like some pattern. Why?
+
+# ## T-SNE  (t-distributed Stochastic Neighbor Embedding)
+# This is a more modern method of dimensionality reduction. I just use it, I have no idea how it actually works. We still do reduction to two dimensions. Makes plotting simple.
+
+# In[ ]:
+
+
+from sklearn.manifold import TSNE
+tsne2 = TSNE(n_components=2)
+tsne2_results = tsne2.fit_transform(df.drop(["y"], axis=1))
 
 
 # In[ ]:
 
 
-list_classes = ['Sony-NEX-7',
- 'Motorola-X',
- 'HTC-1-M7',
- 'Samsung-Galaxy-Note3',
- 'Motorola-Droid-Maxx',
- 'iPhone-4s',
- 'iPhone-6',
- 'LG-Nexus-5x',
- 'Samsung-Galaxy-S4',
- 'Motorola-Nexus-6']
+f, ax = plt.subplots(figsize=(20,15))
+points = ax.scatter(tsne2_results[:,0], tsne2_results[:,1], c=df.y, s=50, cmap=cmap)
+f.colorbar(points)
+plt.show()
 
 
-# In[ ]:
-
-
-def get_class_from_path(filepath):
-    return os.path.dirname(filepath).split(os.sep)[-1]
-
-def read_and_resize(filepath):
-    im_array = np.array(Image.open((filepath)), dtype="uint8")
-    pil_im = Image.fromarray(im_array)
-    new_array = np.array(pil_im.resize((256, 256)))
-    return new_array/255
-
-def label_transform(labels):
-    labels = pd.get_dummies(pd.Series(labels))
-    label_index = labels.columns.values
-
-    return labels, label_index
-
-    
-
-
-# In[ ]:
-
-
-X_train = np.array([read_and_resize(filepath) for filepath in list_train])
-X_test = np.array([read_and_resize(filepath) for filepath in list_test])
-
-
-# In[ ]:
-
-
-labels = [get_class_from_path(filepath) for filepath in list_train]
-y, label_index = label_transform(labels)
-y = np.array(y)
-
-
-# In[ ]:
-
-
-from keras.callbacks import ModelCheckpoint, LearningRateScheduler, EarlyStopping, ReduceLROnPlateau, TensorBoard
-from keras import optimizers, losses, activations, models
-from keras.layers import Convolution2D, Dense, Input, Flatten, Dropout, MaxPooling2D, BatchNormalization, GlobalMaxPool2D, Concatenate
-input_shape = (256, 256, 3)
-nclass = len(label_index)
-def get_model():
-
-    nclass = len(label_index)
-    inp = Input(shape=input_shape)
-    norm_inp = BatchNormalization()(inp)
-    img_1 = Convolution2D(16, kernel_size=3, activation=activations.relu, padding="same")(norm_inp)
-    img_1 = Convolution2D(16, kernel_size=3, activation=activations.relu, padding="same")(img_1)
-    img_1 = MaxPooling2D(pool_size=(3, 3))(img_1)
-    img_1 = Dropout(rate=0.2)(img_1)
-    img_1 = Convolution2D(32, kernel_size=3, activation=activations.relu, padding="same")(img_1)
-    img_1 = Convolution2D(32, kernel_size=3, activation=activations.relu, padding="same")(img_1)
-    img_1 = MaxPooling2D(pool_size=(3, 3))(img_1)
-    img_1 = Dropout(rate=0.2)(img_1)
-    img_1 = Convolution2D(64, kernel_size=2, activation=activations.relu, padding="same")(img_1)
-    img_1 = Convolution2D(20, kernel_size=2, activation=activations.relu, padding="same")(img_1)
-    img_1 = GlobalMaxPool2D()(img_1)
-    img_1 = Dropout(rate=0.2)(img_1)
-    dense_1 = Dense(20, activation=activations.relu)(img_1)
-    dense_1 = Dense(nclass, activation=activations.softmax)(dense_1)
-
-    model = models.Model(inputs=inp, outputs=dense_1)
-    opt = optimizers.Adam()
-
-    model.compile(optimizer=opt, loss=losses.categorical_crossentropy, metrics=['acc'])
-    model.summary()
-    return model
-
-
-# In[ ]:
-
-
-
-model = get_model()
-file_path="weights.best.hdf5"
-
-checkpoint = ModelCheckpoint(file_path, monitor='val_acc', verbose=1, save_best_only=True, mode='max')
-
-early = EarlyStopping(monitor="val_acc", mode="max", patience=1)
-
-callbacks_list = [checkpoint, early] #early
-
-history = model.fit(X_train, y, validation_split=0.1, epochs=3, shuffle=True, verbose=2,
-                              callbacks=callbacks_list)
-
-#print(history)
-
-model.load_weights(file_path)
-
-
-# In[ ]:
-
-
-predicts = model.predict(X_test)
-predicts = np.argmax(predicts, axis=1)
-predicts = [label_index[p] for p in predicts]
-
-
-
-# In[ ]:
-
-
-
-df = pd.DataFrame(columns=['fname', 'camera'])
-df['fname'] = index
-df['camera'] = predicts
-df.to_csv("sub.csv", index=False)
-
+# Ha! Even more interesting! It even looks like we can make some regression out of this set! I'll try that later.
+# 
+# Please upvote if you like this!

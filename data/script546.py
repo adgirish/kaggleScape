@@ -1,224 +1,423 @@
 
 # coding: utf-8
 
-# # Faceting with seaborn
+# In this notebook, we will try and explore the basic information about the dataset given. The dataset for this competition is a relational set of files describing customers' orders over time. 
 # 
-# <table>
-# <tr>
-# <td><img src="https://i.imgur.com/wU9M9gu.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/85d2nIj.png" width="350px"/></td>
-# </tr>
-# <tr>
-# <td style="font-weight:bold; font-size:16px;">Facet Grid</td>
-# <td style="font-weight:bold; font-size:16px;">Pair Plot</td>
-# </tr>
-# <tr>
-# <td>sns.FacetGrid()</td>
-# <td>sns.pairplot()</td>
-# </tr>
-# <tr>
-# <td>Good for data with at least two categorical variables.</td>
-# <td>Good for exploring most kinds of data.</td>
-# </tr>
-# </table>
+# **Objective:** 
 # 
-# So far in this tutorial we've been plotting data in one (univariate) or two (bivariate) dimensions, and we've learned how plotting in `seaborn` works. In this section we'll dive deeper into `seaborn` by exploring **faceting**.
+# The goal of the competition is to predict which products will be in a user's next order. The dataset is anonymized and contains a sample of over 3 million grocery orders from more than 200,000 Instacart users.
 # 
-# Faceting is the act of breaking data variables up across multiple subplots, and combining those subplots into a single figure. So instead of one bar chart, we might have, say, four, arranged together in a grid.
+# For each user, 4 and 100 of their orders are given, with the sequence of products purchased in each order
 # 
-# In this notebook we'll put this technique in action, and see why it's so useful.
+# Let us start by importing the necessary modules.
 
 # In[ ]:
 
 
-import pandas as pd
-pd.set_option('max_columns', None)
-df = pd.read_csv("../input/fifa-18-demo-player-dataset/CompleteDataset.csv", index_col=0)
-
-import re
-import numpy as np
-
-footballers = df.copy()
-footballers['Unit'] = df['Value'].str[-1]
-footballers['Value (M)'] = np.where(footballers['Unit'] == '0', 0, 
-                                    footballers['Value'].str[1:-1].replace(r'[a-zA-Z]',''))
-footballers['Value (M)'] = footballers['Value (M)'].astype(float)
-footballers['Value (M)'] = np.where(footballers['Unit'] == 'M', 
-                                    footballers['Value (M)'], 
-                                    footballers['Value (M)']/1000)
-footballers = footballers.assign(Value=footballers['Value (M)'],
-                                 Position=footballers['Preferred Positions'].str.split().str[0])
-
-
-# (Note: the first code cell above contains some data pre-processing. This is extraneous, and so I've hidden it by default.)
-
-# In[ ]:
-
-
-footballers.head()
-
-
-# In[ ]:
-
-
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt
 import seaborn as sns
+color = sns.color_palette()
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+pd.options.mode.chained_assignment = None  # default='warn'
 
 
-# ## The FacetGrid
-# 
-# The core `seaborn` utility for faceting is the `FacetGrid`. A `FacetGrid` is an object which stores some information on how you want to break up your data visualization.
-# 
-# For example, suppose that we're interested in (as in the previous notebook) comparing strikers and goalkeepers in some way. To do this, we can create a `FacetGrid` with our data, telling it that we want to break the `Position` variable down by `col` (column).
-# 
-# Since we're zeroing in on just two positions in particular, this results in a pair of grids ready for us to "do" something with them:
-
-# In[ ]:
-
-
-df = footballers[footballers['Position'].isin(['ST', 'GK'])]
-g = sns.FacetGrid(df, col="Position")
-
-
-# From there, we use the `map` object method to plot the data into the laid-out grid.
+# Let us list out the files that are present in this competition.!
 
 # In[ ]:
 
 
-df = footballers[footballers['Position'].isin(['ST', 'GK'])]
-g = sns.FacetGrid(df, col="Position")
-g.map(sns.kdeplot, "Overall")
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
 
-# Passing a method into another method like this may take some getting used to, if this is your first time seeing this being done. But once you get used to it, `FacetGrid` is very easy to use.
-# 
-# By using an object to gather "design criteria", `seaborn` does an effective job seamlessly marrying the data *representation* to the data *values*, sparing us the need to lay the plot out ourselves.
-# 
-# We're probably interested in more than just goalkeepers and strikers, however. But if we squeezed all of the possible game positions into one row, the resulting plots would be tiny. `FacetGrid` comes equipped with a `col_wrap` parameter for dealing with this case exactly.
+# Before we dive deep into the exploratory analysis, let us know a little more about the files given. To understand it better, let us first read all the files as dataframe objects and then look at the top few rows.
 
 # In[ ]:
 
 
-df = footballers
-
-g = sns.FacetGrid(df, col="Position", col_wrap=6)
-g.map(sns.kdeplot, "Overall")
-
-
-# So far we've been dealing exclusively with one `col` (column) of data. The "grid" in `FacetGrid`, however, refers to the ability to lay data out by row *and* column.
-# 
-# For example, suppose we're interested in comparing the talent distribution for (goalkeepers and strikers specifically, to keep things succinct) across rival clubs Real Madrid, Atlético Madrid, and FC Barcelona.
-# 
-# As the plot below demonstrates, we can achieve this by passing `row=Position` and `col=Club` parameters into the plot.
-
-# In[ ]:
-
-
-df = footballers[footballers['Position'].isin(['ST', 'GK'])]
-df = df[df['Club'].isin(['Real Madrid CF', 'FC Barcelona', 'Atlético Madrid'])]
-
-g = sns.FacetGrid(df, row="Position", col="Club")
-g.map(sns.violinplot, "Overall")
-
-
-# `FacetGrid` orders the subplots effectively arbitrarily by default. To specify your own ordering explicitly, pass the appropriate argument to the `row_order` and `col_order` parameters.
-
-# In[ ]:
-
-
-df = footballers[footballers['Position'].isin(['ST', 'GK'])]
-df = df[df['Club'].isin(['Real Madrid CF', 'FC Barcelona', 'Atlético Madrid'])]
-
-g = sns.FacetGrid(df, row="Position", col="Club", 
-                  row_order=['GK', 'ST'],
-                  col_order=['Atlético Madrid', 'FC Barcelona', 'Real Madrid CF'])
-g.map(sns.violinplot, "Overall")
-
-
-# `FacetGrid` comes equipped with various lesser parameters as well, but these are the most important ones.
-
-# ## Why facet?
-# 
-# In a nutshell, faceting is the easiest way to make your data visualization multivariate.
-# 
-# Faceting is multivariate because after laying out one (categorical) variable in the rows and another (categorical) variable in the columns, we are already at two variables accounted for before regular plotting has even begun.
-# 
-# And faceting is easy because transitioning from plotting a `kdeplot` to gridding them out, as here, is very simple. It doesn't require learning any new visualization techniques. The limitations are the same ones that held for the plots you use inside.
-# 
-# Faceting does have some important limitations however. It can only be used to break data out across singular or paired categorical variables with very low numeracy&mdash;any more than five or so dimensions in the grid, and the plots become too small (or involve a lot of scrolling). Additionally it involves choosing (or letting Python) an order to plot in, but with nominal categorical variables that choice is distractingly arbitrary.
-# 
-# Nevertheless, faceting is an extremely useful and applicable tool to have in your toolbox.
-
-# ## Pairplot
-# 
-# Now that we understand faceting, it's worth taking a quick once-over of the `seaborn` `pairplot` function.
-# 
-# `pairplot` is a very useful and widely used `seaborn` method for faceting *variables* (as opposed to *variable values*). You pass it a `pandas` `DataFrame` in the right shape, and it returns you a gridded result of your variable values:
-
-# In[ ]:
-
-
-sns.pairplot(footballers[['Overall', 'Potential', 'Value']])
-
-
-# By default `pairplot` will return scatter plots in the main entries and a histogram in the diagonal. `pairplot` is oftentimes the first thing that a data scientist will throw at their data, and it works fantastically well in that capacity, even if sometimes the scatter-and-histogram approach isn't quite appropriate, given the data types.
-
-# # Examples
-# 
-# As in previous notebooks, let's now test ourselves by answering some questions about the plots we've used in this section. Once you have your answers, click on "Output" button below to show the correct answers.
-# 
-# 1. Suppose that we create an `n` by `n` `FacetGrid`. How big can `n` get?
-# 2. What are the two things about faceting which make it appealing?
-# 3. When is `pairplot` most useful?
-
-# In[ ]:
-
-
-from IPython.display import HTML
-HTML("""
-<ol>
-<li>You should try to keep your grid variables down to five or so. Otherwise the plots get too small.</li>
-<li>It's (1) a multivariate technique which (2) is very easy to use.</li>
-<li>Pair plots are most useful when just starting out with a dataset, because they help contextualize relationships within it.</li>
-</ol>
-""")
-
-
-# Next, try forking this kernel, and see if you can replicate the following plots. To see the answers, click the "Input" button to unhide the code and see the answers. Here's the dataset we've been working with:
-
-# In[ ]:
-
-
-import pandas as pd
-import seaborn as sns
-
-pokemon = pd.read_csv("../input/pokemon/Pokemon.csv", index_col=0)
-pokemon.head(3)
+order_products_train_df = pd.read_csv("../input/order_products__train.csv")
+order_products_prior_df = pd.read_csv("../input/order_products__prior.csv")
+orders_df = pd.read_csv("../input/orders.csv")
+products_df = pd.read_csv("../input/products.csv")
+aisles_df = pd.read_csv("../input/aisles.csv")
+departments_df = pd.read_csv("../input/departments.csv")
 
 
 # In[ ]:
 
 
-g = sns.FacetGrid(pokemon, row="Legendary")
-g.map(sns.kdeplot, "Attack")
+orders_df.head()
 
 
 # In[ ]:
 
 
-g = sns.FacetGrid(pokemon, col="Legendary", row="Generation")
-g.map(sns.kdeplot, "Attack")
+order_products_prior_df.head()
 
 
 # In[ ]:
 
 
-sns.pairplot(pokemon[['HP', 'Attack', 'Defense']])
+order_products_train_df.head()
 
 
-# ## Conclusion
+# As we could see, orders.csv has all the information about the given order id like the user who has purchased the order, when was it purchased, days since prior order and so on.
 # 
-# In this notebook we explored `FacetGrid` and `pairplot`, two `seaborn` facilities for faceting your data, and discussed why faceting is so useful in a broad range of cases.
+# The columns present in order_products_train and order_products_prior are same. Then what is the difference between these files.?
 # 
-# This technique is our first dip into multivariate plotting, an idea that we will explore in more depth with two other approaches in the next section.
+# As mentioned earlier, in this dataset, 4 to 100 orders of a customer are given (we will look at this later) and we need to predict the products that will be re-ordered. So the last order of the user has been taken out and divided into train and test sets. All the prior order informations of the customer are present in order_products_prior file.  We can also note that there is a column in orders.csv file called eval_set which tells us as to which of the three datasets (prior, train or test) the given row goes to.
 # 
-# [Click here to go to the next section, "Multivariate plotting"](https://www.kaggle.com/residentmario/multivariate-plotting).
+# Order_products*csv file has more detailed information about the products that been bought in the given order along with the re-ordered status.
+# 
+# Let us first get the count of rows in each of the three sets.
+
+# In[ ]:
+
+
+cnt_srs = orders_df.eval_set.value_counts()
+
+plt.figure(figsize=(12,8))
+sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[1])
+plt.ylabel('Number of Occurrences', fontsize=12)
+plt.xlabel('Eval set type', fontsize=12)
+plt.title('Count of rows in each dataset', fontsize=15)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# In[ ]:
+
+
+def get_unique_count(x):
+    return len(np.unique(x))
+
+cnt_srs = orders_df.groupby("eval_set")["user_id"].aggregate(get_unique_count)
+cnt_srs
+
+
+# So there are 206,209 customers in total. Out of which, the last purchase of 131,209 customers are given as train set and we need to predict for the rest 75,000 customers. 
+# 
+# Now let us validate the claim that 4 to 100 orders of a customer are given. 
+
+# In[ ]:
+
+
+cnt_srs = orders_df.groupby("user_id")["order_number"].aggregate(np.max).reset_index()
+cnt_srs = cnt_srs.order_number.value_counts()
+
+plt.figure(figsize=(12,8))
+sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[2])
+plt.ylabel('Number of Occurrences', fontsize=12)
+plt.xlabel('Maximum order number', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# So there are no orders less than 4 and is max capped at 100 as given in the data page. 
+# 
+# Now let us see how the ordering habit changes with day of week.
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,8))
+sns.countplot(x="order_dow", data=orders_df, color=color[0])
+plt.ylabel('Count', fontsize=12)
+plt.xlabel('Day of week', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.title("Frequency of order by week day", fontsize=15)
+plt.show()
+
+
+# Seems like 0 and 1 is Saturday and Sunday when the orders are high and low during Wednesday.
+# 
+# Now we shall see how the distribution is with respect to time of the day.
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,8))
+sns.countplot(x="order_hour_of_day", data=orders_df, color=color[1])
+plt.ylabel('Count', fontsize=12)
+plt.xlabel('Hour of day', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.title("Frequency of order by hour of day", fontsize=15)
+plt.show()
+
+
+# So majority of the orders are made during day time. Now let us combine the day of week and hour of day to see the distribution.
+
+# In[ ]:
+
+
+grouped_df = orders_df.groupby(["order_dow", "order_hour_of_day"])["order_number"].aggregate("count").reset_index()
+grouped_df = grouped_df.pivot('order_dow', 'order_hour_of_day', 'order_number')
+
+plt.figure(figsize=(12,6))
+sns.heatmap(grouped_df)
+plt.title("Frequency of Day of week Vs Hour of day")
+plt.show()
+
+
+# Seems Satuday evenings and Sunday mornings are the prime time for orders.
+# 
+# Now let us check the time interval between the orders.
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,8))
+sns.countplot(x="days_since_prior_order", data=orders_df, color=color[3])
+plt.ylabel('Count', fontsize=12)
+plt.xlabel('Days since prior order', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.title("Frequency distribution by days since prior order", fontsize=15)
+plt.show()
+
+
+# Looks like customers order once in every week (check the peak at 7 days) or once in a month (peak at 30 days). We could also see smaller peaks at 14, 21 and 28 days (weekly intervals).
+# 
+# Since our objective is to figure out the re-orders, let us check out the re-order percentage in prior set and train set.
+
+# In[ ]:
+
+
+# percentage of re-orders in prior set #
+order_products_prior_df.reordered.sum() / order_products_prior_df.shape[0]
+
+
+# In[ ]:
+
+
+# percentage of re-orders in train set #
+order_products_train_df.reordered.sum() / order_products_train_df.shape[0]
+
+
+# On an average, about 59% of the products in an order are re-ordered products.
+# 
+# **No re-ordered products:**
+# 
+# Now that we have seen 59% of the products are re-ordered, there will also be situations when none of the products are re-ordered. Let us check that now.
+
+# In[ ]:
+
+
+grouped_df = order_products_prior_df.groupby("order_id")["reordered"].aggregate("sum").reset_index()
+grouped_df["reordered"].ix[grouped_df["reordered"]>1] = 1
+grouped_df.reordered.value_counts() / grouped_df.shape[0]
+
+
+# In[ ]:
+
+
+grouped_df = order_products_train_df.groupby("order_id")["reordered"].aggregate("sum").reset_index()
+grouped_df["reordered"].ix[grouped_df["reordered"]>1] = 1
+grouped_df.reordered.value_counts() / grouped_df.shape[0]
+
+
+# About 12% of the orders in prior set has no re-ordered items while in the train set it is 6.5%.
+# 
+# Now let us see the number of products bought in each order.
+
+# In[ ]:
+
+
+grouped_df = order_products_train_df.groupby("order_id")["add_to_cart_order"].aggregate("max").reset_index()
+cnt_srs = grouped_df.add_to_cart_order.value_counts()
+
+plt.figure(figsize=(12,8))
+sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8)
+plt.ylabel('Number of Occurrences', fontsize=12)
+plt.xlabel('Number of products in the given order', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# A right tailed distribution with the maximum value at 5.!
+# 
+# Before we explore the product details, let us look at the other three files as well. 
+
+# In[ ]:
+
+
+products_df.head()
+
+
+# In[ ]:
+
+
+aisles_df.head()
+
+
+# In[ ]:
+
+
+departments_df.head()
+
+
+# Now let us merge these product details with the order_prior details.
+
+# In[ ]:
+
+
+order_products_prior_df = pd.merge(order_products_prior_df, products_df, on='product_id', how='left')
+order_products_prior_df = pd.merge(order_products_prior_df, aisles_df, on='aisle_id', how='left')
+order_products_prior_df = pd.merge(order_products_prior_df, departments_df, on='department_id', how='left')
+order_products_prior_df.head()
+
+
+# In[ ]:
+
+
+cnt_srs = order_products_prior_df['product_name'].value_counts().reset_index().head(20)
+cnt_srs.columns = ['product_name', 'frequency_count']
+cnt_srs
+
+
+# Wow. Most of them are organic products.! Also majority of them are fruits. 
+# 
+# Now let us look at the important aisles.
+
+# In[ ]:
+
+
+cnt_srs = order_products_prior_df['aisle'].value_counts().head(20)
+plt.figure(figsize=(12,8))
+sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[5])
+plt.ylabel('Number of Occurrences', fontsize=12)
+plt.xlabel('Aisle', fontsize=12)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# The top two aisles are fresh fruits and fresh vegetables.! 
+# 
+# **Department Distribution:**
+# 
+# Let us now check the department wise distribution.
+
+# In[ ]:
+
+
+plt.figure(figsize=(10,10))
+temp_series = order_products_prior_df['department'].value_counts()
+labels = (np.array(temp_series.index))
+sizes = (np.array((temp_series / temp_series.sum())*100))
+plt.pie(sizes, labels=labels, 
+        autopct='%1.1f%%', startangle=200)
+plt.title("Departments distribution", fontsize=15)
+plt.show()
+
+
+# Produce is the largest department. Now let us check the reordered percentage of each department. 
+# 
+# **Department wise reorder ratio:**
+
+# In[ ]:
+
+
+grouped_df = order_products_prior_df.groupby(["department"])["reordered"].aggregate("mean").reset_index()
+
+plt.figure(figsize=(12,8))
+sns.pointplot(grouped_df['department'].values, grouped_df['reordered'].values, alpha=0.8, color=color[2])
+plt.ylabel('Reorder ratio', fontsize=12)
+plt.xlabel('Department', fontsize=12)
+plt.title("Department wise reorder ratio", fontsize=15)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# Personal care has lowest reorder ratio and dairy eggs have highest reorder ratio.
+# 
+# **Aisle - Reorder ratio:**
+
+# In[ ]:
+
+
+grouped_df = order_products_prior_df.groupby(["department_id", "aisle"])["reordered"].aggregate("mean").reset_index()
+
+fig, ax = plt.subplots(figsize=(12,20))
+ax.scatter(grouped_df.reordered.values, grouped_df.department_id.values)
+for i, txt in enumerate(grouped_df.aisle.values):
+    ax.annotate(txt, (grouped_df.reordered.values[i], grouped_df.department_id.values[i]), rotation=45, ha='center', va='center', color='green')
+plt.xlabel('Reorder Ratio')
+plt.ylabel('department_id')
+plt.title("Reorder ratio of different aisles", fontsize=15)
+plt.show()
+
+
+# **Add to Cart - Reorder ratio:**
+# 
+# Let us now explore the relationship between how order of adding the product to the cart affects the reorder ratio.
+
+# In[ ]:
+
+
+order_products_prior_df["add_to_cart_order_mod"] = order_products_prior_df["add_to_cart_order"].copy()
+order_products_prior_df["add_to_cart_order_mod"].ix[order_products_prior_df["add_to_cart_order_mod"]>70] = 70
+grouped_df = order_products_prior_df.groupby(["add_to_cart_order_mod"])["reordered"].aggregate("mean").reset_index()
+
+plt.figure(figsize=(12,8))
+sns.pointplot(grouped_df['add_to_cart_order_mod'].values, grouped_df['reordered'].values, alpha=0.8, color=color[2])
+plt.ylabel('Reorder ratio', fontsize=12)
+plt.xlabel('Add to cart order', fontsize=12)
+plt.title("Add to cart order - Reorder ratio", fontsize=15)
+plt.xticks(rotation='vertical')
+plt.show()
+
+
+# **Looks like the products that are added to the cart initially are more likely to be reordered again compared to the ones added later.** This makes sense to me as well since we tend to first order all the products we used to buy frequently and then look out for the new products available. 
+# 
+# **Reorder ratio by Time based variables:**
+
+# In[ ]:
+
+
+order_products_train_df = pd.merge(order_products_train_df, orders_df, on='order_id', how='left')
+grouped_df = order_products_train_df.groupby(["order_dow"])["reordered"].aggregate("mean").reset_index()
+
+plt.figure(figsize=(12,8))
+sns.barplot(grouped_df['order_dow'].values, grouped_df['reordered'].values, alpha=0.8, color=color[3])
+plt.ylabel('Reorder ratio', fontsize=12)
+plt.xlabel('Day of week', fontsize=12)
+plt.title("Reorder ratio across day of week", fontsize=15)
+plt.xticks(rotation='vertical')
+plt.ylim(0.5, 0.7)
+plt.show()
+
+
+# In[ ]:
+
+
+grouped_df = order_products_train_df.groupby(["order_hour_of_day"])["reordered"].aggregate("mean").reset_index()
+
+plt.figure(figsize=(12,8))
+sns.barplot(grouped_df['order_hour_of_day'].values, grouped_df['reordered'].values, alpha=0.8, color=color[4])
+plt.ylabel('Reorder ratio', fontsize=12)
+plt.xlabel('Hour of day', fontsize=12)
+plt.title("Reorder ratio across hour of day", fontsize=15)
+plt.xticks(rotation='vertical')
+plt.ylim(0.5, 0.7)
+plt.show()
+
+
+# In[ ]:
+
+
+
+grouped_df = order_products_train_df.groupby(["order_dow", "order_hour_of_day"])["reordered"].aggregate("mean").reset_index()
+grouped_df = grouped_df.pivot('order_dow', 'order_hour_of_day', 'reordered')
+
+plt.figure(figsize=(12,6))
+sns.heatmap(grouped_df)
+plt.title("Reorder ratio of Day of week Vs Hour of day")
+plt.show()
+
+
+# Looks like reorder ratios are quite high during the early mornings compared to later half of the day.
+
+# **Hope it helped. Please leave your comments / suggestions.**

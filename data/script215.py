@@ -1,371 +1,236 @@
 
 # coding: utf-8
 
-# ## Full run through of raw images to classification with Convolutional Neural Network ##
+# # Indexing, selecting, assigning reference
 # 
-# In this tutorial, we're going to be running through taking raw images that have been labeled for us already, and then feeding them through a convolutional neural network for classification. 
-# 
-# The images are either of dog(s) or cat(s). 
-# 
-# Once you have downloaded and extracted the data from https://www.kaggle.com/c/dogs-vs-cats-redux-kernels-edition/data, you're ready to begin.
-
-# ## Part 1 - Preprocessing ##
-# 
-# <iframe width="560" height="315" src="https://www.youtube.com/embed/gT4F3HGYXf4" frameborder="0" allowfullscreen></iframe>
-# 
-# We've got the data, but we can't exactly just stuff raw images right through our convolutional neural network. First, we need all of the images to be the same size, and then we also will probably want to just grayscale them. Also, the labels of "cat" and "dog" are not useful, we want them to be one-hot arrays. 
-# 
-# Interestingly, we may be approaching a time when our data might not need to be all the same size. Looking into TensorFlow's research blog: https://research.googleblog.com/2017/02/announcing-tensorflow-fold-deep.html
-# 
-# "TensorFlow Fold makes it easy to implement deep-learning models that operate over data of varying size and structure."
-# 
-# Fascinating...but, for now, we'll do it the old fashioned way.
-# 
-# **Package Requirements**
-# numpy (pip install numpy)
-# tqdm (pip install tqdm)
-# 
-# I will be using the GPU version of TensorFlow along with tflearn. 
-# 
-# To install the CPU version of TensorFlow, just do pip install tensorflow
-# To install the GPU version of TensorFlow, you need to get alllll the dependencies and such.
-# 
-# **TensorFlow Installation tutorials:**
-# 
-# https://pythonprogramming.net/how-to-cuda-gpu-tensorflow-deep-learning-tutorial/
-# 
-# TensorFlow on Windows: https://www.youtube.com/watch?v=r7-WPbx8VuY
-# 
-# **Using TensorFlow and concept tutorials:**
-# 
-# Introduction to deep learning with neural networks: https://pythonprogramming.net/neural-networks-machine-learning-tutorial
-# 
-# Introduction to TensorFlow: https://pythonprogramming.net/tensorflow-introduction-machine-learning-tutorial/
-# 
-# Intro to Convolutional Neural Networks: https://pythonprogramming.net/convolutional-neural-network-cnn-machine-learning-tutorial/
-# 
-# Convolutional Neural Network in TensorFlow tutorial: https://pythonprogramming.net/cnn-tensorflow-convolutional-nerual-network-machine-learning-tutorial/
-# 
-# Finally, I will be making use of https://pythonprogramming.net/tflearn-machine-learning-tutorial/. Once you have TensorFlow installed, do pip install tflearn.
-# 
-# First, we'll get our imports and constants for preprocessing:
-# 
+# This is the reference component to the "Indexing, selecting, assigning" section of the Advanced Pandas track. For the workbook component, [click here](https://www.kaggle.com/residentmario/indexing-selecting-assigning-workbook).
 
 # In[ ]:
 
 
-import cv2                 # working with, mainly resizing, images
-import numpy as np         # dealing with arrays
-import os                  # dealing with directories
-from random import shuffle # mixing up or currently ordered data that might lead our network astray in training.
-from tqdm import tqdm      # a nice pretty percentage bar for tasks. Thanks to viewer Daniel Bühler for this suggestion
-
-TRAIN_DIR = '../input/train'
-TEST_DIR = '../input/test'
-IMG_SIZE = 50
-LR = 1e-3
-
-MODEL_NAME = 'dogsvscats-{}-{}.model'.format(LR, '2conv-basic') # just so we remember which saved model is which, sizes must match
+import pandas as pd
+reviews = pd.read_csv("../input/winemag-data-130k-v2.csv", index_col=0)
+pd.set_option("display.max_rows", 5)
 
 
-# Now, our first order of business is to convert the images and labels to array information that we can pass through our network. To do this, we'll need a helper function to convert the image name to an array. 
+# Selecting specific values of a `pandas` `DataFrame` or `Series` to work on is an implicit step in almost any data operation you'll run. Hence a solid understanding of how to slice and dice a dataset is vital.
+
+# ## Naive accessors
 # 
-# Our images are labeled like "cat.1" or "dog.3" and so on, so we can just split out the dog/cat, and then convert to an array like so:
+# Native Python objects provide many good ways of indexing data. `pandas` carries all of these over, which helps make it easy to start with.
+# 
+# Consider this `DataFrame`:
 
 # In[ ]:
 
 
-def label_img(img):
-    word_label = img.split('.')[-3]
-    # conversion to one-hot array [cat,dog]
-    #                            [much cat, no dog]
-    if word_label == 'cat': return [1,0]
-    #                             [no cat, very doggo]
-    elif word_label == 'dog': return [0,1]
+reviews
 
 
-# Now, we can build another function to fully process the training images and their labels into arrays:
+# In Python we can access the property of an object by accessing it as an attribute. A `book` object, for example, might have a `title` property, which we can access by calling `book.title`. Columns in a `pandas` `DataFrame` work in much the same way. 
+# 
+# Hence to access the `country` property of our `reviews` we can use:
 
 # In[ ]:
 
 
-def create_train_data():
-    training_data = []
-    for img in tqdm(os.listdir(TRAIN_DIR)):
-        label = label_img(img)
-        path = os.path.join(TRAIN_DIR,img)
-        img = cv2.imread(path,cv2.IMREAD_GRAYSCALE)
-        img = cv2.resize(img, (IMG_SIZE,IMG_SIZE))
-        training_data.append([np.array(img),np.array(label)])
-    shuffle(training_data)
-    np.save('train_data.npy', training_data)
-    return training_data
+reviews.country
 
 
-# The tqdm module was introduced to me by one of my viewers, it's a really nice, pretty, way to measure where you are in a process, rather than printing things out at intervals...etc, it gives a progress bar. Super neat. 
-# 
-# Anyway, the above function converts the data for us into array data of the image and its label. 
-# 
-# When we've gone through all of the images, we shuffle them, then save. Shuffle modifies a variable in place, so there's no need to re-define it here. 
-# 
-# With this function, we will both save, and return the array data. This way, if we just change the neural network's structure, and not something with the images, like image size..etc..then we can just load the array file and save some processing time. While we're here, we might as well also make a function to process the testing data. This is the *actual* competition test data, NOT the data that we'll use to check the accuracy of our algorithm as we test. This data has no label. 
+# If we have a `dict` object in Python, we can access its values using the indexing (`[]`) operator. Again, we can do the same with `pandas` `DataFrame` columns. It "just works":
 
 # In[ ]:
 
 
-def process_test_data():
-    testing_data = []
-    for img in tqdm(os.listdir(TEST_DIR)):
-        path = os.path.join(TEST_DIR,img)
-        img_num = img.split('.')[0]
-        img = cv2.imread(path,cv2.IMREAD_GRAYSCALE)
-        img = cv2.resize(img, (IMG_SIZE,IMG_SIZE))
-        testing_data.append([np.array(img), img_num])
-        
-    shuffle(testing_data)
-    np.save('test_data.npy', testing_data)
-    return testing_data
+reviews['country']
 
 
-# Now, we can run the training:
+# These are the two ways of selecting a specific columnar `Series` out of a `pandas` `DataFrame`. Neither of them is more or less syntactically valid than the other, but the indexing operator `[]` does have the advantage that it can handle column names with reserved characters in them (e.g. if we had a `country providence` column, `reviews.country providence` wouldn't work).
+# 
+# Doesn't a `pandas` `Series` look kind of like a fancy `dict`? It pretty much is, so it's no surprise that, to drill down to a single specific value, we need only use the indexing operator `[]` once more:
 
 # In[ ]:
 
 
-train_data = create_train_data()
-# If you have already created the dataset:
-#train_data = np.load('train_data.npy')
+reviews['country'][0]
 
 
-# ## Convolutional Neural Network ##
+# ## Index-based selection
 # 
-# <iframe width="560" height="315" src="https://www.youtube.com/embed/Ge65ukmJTzQ" frameborder="0" allowfullscreen></iframe>
+# The indexing operator and attribute selection are nice because they work just like they do in the rest of the Python ecosystem. As a novice, this makes them easy to pick up and use. However, `pandas` has its own accessor operators, `loc` and `iloc`. For more advanced operations, these are the ones you're supposed to be using.
 # 
-# Next, we're ready to define our neural network:
+# `pandas` indexing works in one of two paradigms. The first is **index-based selection**: selecting data based on its numerical position in the data. `iloc` follows this paradigm.
+# 
+# To select the first row of data in this `DataFrame`, we may use the following:
 
 # In[ ]:
 
 
-import tflearn
-from tflearn.layers.conv import conv_2d, max_pool_2d
-from tflearn.layers.core import input_data, dropout, fully_connected
-from tflearn.layers.estimator import regression
-
-convnet = input_data(shape=[None, IMG_SIZE, IMG_SIZE, 1], name='input')
-
-convnet = conv_2d(convnet, 32, 5, activation='relu')
-convnet = max_pool_2d(convnet, 5)
-
-convnet = conv_2d(convnet, 64, 5, activation='relu')
-convnet = max_pool_2d(convnet, 5)
-
-convnet = fully_connected(convnet, 1024, activation='relu')
-convnet = dropout(convnet, 0.8)
-
-convnet = fully_connected(convnet, 2, activation='softmax')
-convnet = regression(convnet, optimizer='adam', learning_rate=LR, loss='categorical_crossentropy', name='targets')
-
-model = tflearn.DNN(convnet, tensorboard_dir='log')
+reviews.iloc[0]
 
 
-# What we have here is a nice, 2 layered convolutional neural network, with a fully connected layer, and then the output layer. It's been debated whether or not a fully connected layer is of any use. I'll leave it in anyway. 
+# Both `loc` and `iloc` are row-first, column-second. This is the opposite of what we do in native Python, which is column-first, row-second.
 # 
-# This exact convnet was good enough for recognizing hand 28x28 written digits. Let's see how it does with cats and dogs at 50x50 resolution. 
-# 
-# <iframe width="560" height="315" src="https://www.youtube.com/embed/ViO56ASqeks" frameborder="0" allowfullscreen></iframe>
-
-# Now, it wont always be the case that you're training the network fresh every time. Maybe first you just want to see how 3 epochs trains, but then, after 3, maybe you're done, or maybe you want to see about 5 epochs. We want to be saving our model after every session, and reloading it if we have a saved version, so I will add this:
+# This means that it's marginally easier to retrieve rows, and marginally harder to get retrieve columns. To get a column with `iloc`, we can do the following:
 
 # In[ ]:
 
 
-if os.path.exists('{}.meta'.format(MODEL_NAME)):
-    model.load(MODEL_NAME)
-    print('model loaded!')
+reviews.iloc[:, 0]
 
 
-# Now, let's split out training and testing data:
+# On its own the `:` operator, which also comes from native Python, means "everything". When combined with other selectors, however, it can be used to indicate a range of values. For example, to select the `country` column from just the first, second, and third row, we would do:
 
 # In[ ]:
 
 
-train = train_data[:-500]
-test = train_data[-500:]
+reviews.iloc[:3, 0]
 
 
-# Now, the training data and testing data are both labeled datasets. The training data is what we'll fit the neural network with, and the test data is what we're going to use to validate the results. The test data will be "out of sample," meaning the testing data will only be used to test the accuracy of the network, not to train it. 
-# 
-# We also have "test" images that we downloaded. THOSE images are not labeled at all, and those are what we'll submit to Kaggle for the competition.
-# 
-# Next, we're going to create our data arrays. For some reason, typical numpy logic like:
-# 
-# array[:,0] and array[:,1] did NOT work for me here. Not sure what I'm doing wrong, so I do this instead to separate my features and labels:
+# Or, to select just the second and third entries, we would do:
 
 # In[ ]:
 
 
-X = np.array([i[0] for i in train]).reshape(-1,IMG_SIZE,IMG_SIZE,1)
-Y = [i[1] for i in train]
-
-test_x = np.array([i[0] for i in test]).reshape(-1,IMG_SIZE,IMG_SIZE,1)
-test_y = [i[1] for i in test]
+reviews.iloc[1:3, 0]
 
 
-# Now we fit for 2 epochs:
+# It's also possible to pass a list:
 
 # In[ ]:
 
 
-model.fit({'input': X}, {'targets': Y}, n_epoch=2, validation_set=({'input': test_x}, {'targets': test_y}), 
-    snapshot_step=50000, show_metric=True, run_id=MODEL_NAME)
+reviews.iloc[[0, 1, 2], 0]
 
 
-# Hmm... it doesn't look like we've gotten anywhere at all. 
-
-# We could keep trying, but, if you haven't made accuracy progress in the first 3 epochs, you're probably not going to at all, unless it's due to overfitment...at least in my experience. 
-# 
-# So... now what?
-
-# ## Size Matters ##
-# 
-# We're gonna need a bigger network
-# 
-# First, we need to reset the graph instance, since we're doing this in a continuous environment:
+# Finally, it's worth knowing that negative numbers can be used in selection. This will start counting forwards from the _end_ of the values. So for example here are the last five elements of the dataset.
 
 # In[ ]:
 
 
-import tensorflow as tf
-tf.reset_default_graph()
+reviews.iloc[-5:]
 
+
+# ## Label-based selection
+# 
+# The second paradigm for attribute selection is the one followed by the `loc` operator: **label-based selection**. In this paradigm it's the data index value, not its position, which matters.
+# 
+# For example, to get the first entry in `reviews`, we would now do the following:
 
 # In[ ]:
 
 
-convnet = input_data(shape=[None, IMG_SIZE, IMG_SIZE, 1], name='input')
-
-convnet = conv_2d(convnet, 32, 5, activation='relu')
-convnet = max_pool_2d(convnet, 5)
-
-convnet = conv_2d(convnet, 64, 5, activation='relu')
-convnet = max_pool_2d(convnet, 5)
-
-convnet = conv_2d(convnet, 32, 5, activation='relu')
-convnet = max_pool_2d(convnet, 5)
-
-convnet = conv_2d(convnet, 64, 5, activation='relu')
-convnet = max_pool_2d(convnet, 5)
-
-convnet = conv_2d(convnet, 32, 5, activation='relu')
-convnet = max_pool_2d(convnet, 5)
-
-convnet = conv_2d(convnet, 64, 5, activation='relu')
-convnet = max_pool_2d(convnet, 5)
-
-convnet = fully_connected(convnet, 1024, activation='relu')
-convnet = dropout(convnet, 0.8)
-
-convnet = fully_connected(convnet, 2, activation='softmax')
-convnet = regression(convnet, optimizer='adam', learning_rate=LR, loss='categorical_crossentropy', name='targets')
-
-model = tflearn.DNN(convnet, tensorboard_dir='log')
+reviews.loc[0, 'country']
 
 
-
-if os.path.exists('{}.meta'.format(MODEL_NAME)):
-    model.load(MODEL_NAME)
-    print('model loaded!')
-
-train = train_data[:-500]
-test = train_data[-500:]
-
-X = np.array([i[0] for i in train]).reshape(-1,IMG_SIZE,IMG_SIZE,1)
-Y = [i[1] for i in train]
-
-test_x = np.array([i[0] for i in test]).reshape(-1,IMG_SIZE,IMG_SIZE,1)
-test_y = [i[1] for i in test]
-
-model.fit({'input': X}, {'targets': Y}, n_epoch=4, validation_set=({'input': test_x}, {'targets': test_y}), 
-    snapshot_step=500, show_metric=True, run_id=MODEL_NAME)
-
-
-# WELL WELL WELL... Looks like we've got a winner. With neural networks, size matters a ton. We went from having apparently un-trainable data to having obviously trainable data, and this was only 3 epochs. 
-# 
-# If you are happy with the model, go ahead and save it:
+# `iloc` is conceptually simpler than `loc` because it ignores the dataset's indices. When we use `iloc` we treat the dataset like a big matrix (a list of lists), one that we have to index into by position. `loc`, by contrast, uses the information in the indices to do its work. Since your dataset usually has meaningful indices, it's usually easier to do things using `loc` instead. For example, here's one operation that's much easier using `loc`:
 
 # In[ ]:
 
 
-model.save(MODEL_NAME)
+reviews.loc[:, ['taster_name', 'taster_twitter_handle', 'points']]
 
 
-# Now we can reload the model, and continue training (we don't NEED to reload the model here since this is continuous and the model is still in memory, but if you were running this as a program you would)
-
-# ## You can be too big##
+# When choosing or transitioning between `loc` and `iloc`, there is one "gotcha" worth keeping in mind, which is that the two methods use slightly different indexing schemes.
 # 
-# Bigger is not always better, there does get to be a limit, at least from my experience. A bigger network figures things out better, and quicker, but tends to also overfit the training data. You can use dropout (sets randomly a certain % of nodes to not take part in the network for more robusts networks) to rectify this slightly, but there does seem to be a limit. 
+# `iloc` uses the Python stdlib indexing scheme, where the first element of the range is included and the last one excluded. So 0:10 will select entries 0,...,9. `loc`, meanwhile, indexes inclusively. So 0:10 will select entries 0,...,10.
 # 
-# Okay, now what? Let's see how we've done!
+# Why the change? Remember that loc can index any stdlib type: strings, for example. If we have a DataFrame with index values `Apples, ..., Potatoes, ...`, and we want to select "all the alphabetical fruit choices between Apples and Potatoes", then it's a heck of a lot more convenient to index `df.loc['Apples':'Potatoes']` than it is to index something like `df.loc['Apples', 'Potatoet]` (`t` coming after `s` in the alphabet).
+# 
+# This is particularly confusing when the `DataFrame` index is a simple numerical list, e.g. `0,...,1000`. In this case `df.iloc[0:1000]` will return 999 entries, while `df.loc[0:1000]` return 1000 of them! Earlier versions of this tutorial did not point this out explicitly, leading to a lot of user confusion on some of the related answers, so we've included this note here explaining this issue.
+# 
+# Otherwise, the semantics of using `loc` are the same as those for `iloc`.
 
-# ## Visually inspecting our network against unlabeled data ##
+# ## Manipulating the index
 # 
-# <iframe width="560" height="315" src="https://www.youtube.com/embed/27FPv1VHSsQ" frameborder="0" allowfullscreen></iframe>
+# Label-based selection derives its power from the labels in the index. Critically, the index we use is not immutable. We can manipulate the index in any way we see fit.
+# 
+# The `set_index` method can be used to do the job. Here is what happens when we `set_index` to the `title` field:
 
 # In[ ]:
 
 
-import matplotlib.pyplot as plt
-
-# if you need to create the data:
-test_data = process_test_data()
-# if you already have some saved:
-#test_data = np.load('test_data.npy')
-
-fig=plt.figure()
-
-for num,data in enumerate(test_data[:12]):
-    # cat: [1,0]
-    # dog: [0,1]
-    
-    img_num = data[1]
-    img_data = data[0]
-    
-    y = fig.add_subplot(3,4,num+1)
-    orig = img_data
-    data = img_data.reshape(IMG_SIZE,IMG_SIZE,1)
-    #model_out = model.predict([data])[0]
-    model_out = model.predict([data])[0]
-    
-    if np.argmax(model_out) == 1: str_label='Dog'
-    else: str_label='Cat'
-        
-    y.imshow(orig,cmap='gray')
-    plt.title(str_label)
-    y.axes.get_xaxis().set_visible(False)
-    y.axes.get_yaxis().set_visible(False)
-plt.show()
+reviews.set_index("title")
 
 
-# Alright, so we made a couple mistakes, but not too bad actually! 
+# Performing a `set_index` is useful if you can come up with an index for the dataset which is better than the current one.
+
+# ## Conditional selection
 # 
-# If you're happy with it, let's compete!
+# So far we've been indexing various strides of data, using structural properties of the `DataFrame` itself. To do *interesting* things with the data, however, we often need to ask questions based on conditions. 
+# 
+# For example, suppose that we're interested specifically in better-than-average wines produced in Italy.
+# 
+# We can start by asking each wine if it's Italian or not:
 
 # In[ ]:
 
 
-with open('submission_file.csv','w') as f:
-    f.write('id,label\n')
-            
-with open('submission_file.csv','a') as f:
-    for data in tqdm(test_data):
-        img_num = data[1]
-        img_data = data[0]
-        orig = img_data
-        data = img_data.reshape(IMG_SIZE,IMG_SIZE,1)
-        model_out = model.predict([data])[0]
-        f.write('{},{}\n'.format(img_num,model_out[1]))
+reviews.country == 'Italy'
 
 
-# Heading to Kaggle > Competitions > Dogs vs. Cats Redux: Kernels Edition... Let's submit!
+# This operation produced a `Series` of `True`/`False` booleans based on the `country` of each record.  This result can then be used inside of `loc` to select the relevant data:
+
+# In[ ]:
+
+
+reviews.loc[reviews.country == 'Italy']
+
+
+# This `DataFrame` has ~20,000 rows. The original had ~130,000. That means that around 15% of wines originate from Italy.
 # 
-# This got me ~700th place with a logloss of 0.55508 when trained out to 10 epochs
+# We also wanted to know which ones are better than average. Wines are reviewed on a 80-to-100 point scale, so this could mean wines that accrued at least 90 points.
+# 
+# We can use the ampersand (`&`) to bring the two questions together:
+
+# In[ ]:
+
+
+reviews.loc[(reviews.country == 'Italy') & (reviews.points >= 90)]
+
+
+# Suppose we'll buy any wine that's made in Italy _or_ which is rated above average. For this we use a pipe (`|`):
+
+# In[ ]:
+
+
+reviews.loc[(reviews.country == 'Italy') | (reviews.points >= 90)]
+
+
+# `pandas` comes with a few pre-built conditional selectors, two of which we will highlight here. The first is `isin`. `isin` is lets you select data whose value "is in" a list of values. For example, here's how we can use it to select wines only from Italy or France:
+
+# In[ ]:
+
+
+reviews.loc[reviews.country.isin(['Italy', 'France'])]
+
+
+# The second is `isnull` (and its companion `notnull`). These methods let you highlight values which are or are not empty (`NaN`). For example, to filter out wines lacking a price tag in the dataset, here's what we would do:
+
+# In[ ]:
+
+
+reviews.loc[reviews.price.notnull()]
+
+
+# ## Assigning data
+# 
+# Going the other way, assigning data to a `DataFrame` is easy. You can assign either a constant value:
+
+# In[ ]:
+
+
+reviews['critic'] = 'everyone'
+reviews['critic']
+
+
+# Or with an iterable of values:
+
+# In[ ]:
+
+
+reviews['index_backwards'] = range(len(reviews), 0, -1)
+reviews['index_backwards']
+
+
+# We will see much more `DataFrame` assignment going on in later sections of this tutorial.

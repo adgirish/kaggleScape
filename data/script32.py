@@ -1,385 +1,203 @@
 
 # coding: utf-8
 
-# In this exploration notebook, we shall try to uncover the basic information about the dataset which will help us build our models / features. 
+# ### All days of the challange:
 # 
-# Let us first import the necessary modules.
+# * [Day 1: Handling missing values](https://www.kaggle.com/rtatman/data-cleaning-challenge-handling-missing-values)
+# * [Day 2: Scaling and normalization](https://www.kaggle.com/rtatman/data-cleaning-challenge-scale-and-normalize-data)
+# * [Day 3: Parsing dates](https://www.kaggle.com/rtatman/data-cleaning-challenge-parsing-dates/)
+# * [Day 4: Character encodings](https://www.kaggle.com/rtatman/data-cleaning-challenge-character-encodings/)
+# * [Day 5: Inconsistent Data Entry](https://www.kaggle.com/rtatman/data-cleaning-challenge-inconsistent-data-entry/)
+# ___
+# Welcome to day 2 of the 5-Day Data Challenge! Today, we're going to be looking at how to scale and normalize data (and what the difference is between the two!). To get started, click the blue "Fork Notebook" button in the upper, right hand corner. This will create a private copy of this notebook that you can edit and play with. Once you're finished with the exercises, you can choose to make your notebook public to share with others. :)
+# 
+# > **Your turn!** As we work through this notebook, you'll see some notebook cells (a block of either code or text) that has "Your Turn!" written in it. These are exercises for you to do to help cement your understanding of the concepts we're talking about. Once you've written the code to answer a specific question, you can run the code by clicking inside the cell (box with code in it) with the code you want to run and then hit CTRL + ENTER (CMD + ENTER on a Mac). You can also click in a cell and then click on the right "play" arrow to the left of the code. If you want to run all the code in your notebook, you can use the double, "fast forward" arrows at the bottom of the notebook editor.
+# 
+# Here's what we're going to do today:
+# 
+# * [Get our environment set up](#Get-our-environment-set-up)
+# * [Scaling vs. Normalization: What's the difference?](#Scaling-vs.-Normalization:-What's-the-difference?)
+# * [Practice scaling](#Practice-scaling)
+# * [Practice normalization](#Practice-normalization)
+# 
+# Let's get started!
+
+# # Get our environment set up
+# ________
+# 
+# The first thing we'll need to do is load in the libraries and datasets we'll be using. 
+# 
+# > **Important!** Make sure you run this cell yourself or the rest of your code won't work!
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
+# modules we'll use
+import pandas as pd
+import numpy as np
+
+# for Box-Cox Transformation
+from scipy import stats
+
+# for min_max scaling
+from mlxtend.preprocessing import minmax_scaling
+
+# plotting modules
 import seaborn as sns
-color = sns.color_palette()
+import matplotlib.pyplot as plt
 
-get_ipython().run_line_magic('matplotlib', 'inline')
+# read in all our data
+kickstarters_2017 = pd.read_csv("../input/kickstarter-projects/ks-projects-201801.csv")
 
-pd.options.mode.chained_assignment = None  # default='warn'
+# set seed for reproducibility
+np.random.seed(0)
 
 
-# Loading the training dataset and looking at the top few rows.
+# Now that we're set up, let's learn about scaling & normalization. (If you like, you can take this opportunity to take a look at some of the data.)
+
+# # Scaling vs. Normalization: What's the difference?
+# ____
+# 
+# One of the reasons that it's easy to get confused between scaling and normalization is because the terms are sometimes used interchangeably and, to make it even more confusing, they are very similar! In both cases, you're transforming the values of numeric variables so that the transformed data points have specific helpful properties. The difference is that, in scaling, you're changing the *range* of your data while in normalization you're changing the *shape of the distribution* of your data. Let's talk a little more in-depth about each of these options. 
+# 
+# ___
+# 
+# ## **Scaling**
+# 
+# This means that you're transforming your data so that it fits within a specific scale, like 0-100 or 0-1.  You want to scale data when you're using methods based on measures of how far apart data points, like [support vector machines, or SVM](https://en.wikipedia.org/wiki/Support_vector_machine) or [k-nearest neighbors, or KNN](https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm). With these algorithms, a change of "1" in any numeric feature is given the same importance. 
+# 
+# For example, you might be looking at the prices of some products in both Yen and US Dollars. One US Dollar is worth about 100 Yen, but if you don't scale your prices methods like SVM or KNN will consider a difference in price of 1 Yen as important as a difference of 1 US Dollar! This clearly doesn't fit with our intuitions of the world. With currency, you can convert between currencies. But what about if you're looking at something like height and weight? It's not entirely clear how many pounds should equal one inch (or how many kilograms should equal one meter).
+# 
+# By scaling your variables, you can help compare different variables on equal footing. To help solidify what scaling looks like, let's look at a made-up example. (Don't worry, we'll work with real data in just a second, this is just to help illustrate my point.)
+# 
 
 # In[ ]:
 
 
-train_df = pd.read_json("../input/train.json")
-train_df.head()
+# generate 1000 data points randomly drawn from an exponential distribution
+original_data = np.random.exponential(size = 1000)
+
+# mix-max scale the data between 0 and 1
+scaled_data = minmax_scaling(original_data, columns = [0])
+
+# plot both together to compare
+fig, ax=plt.subplots(1,2)
+sns.distplot(original_data, ax=ax[0])
+ax[0].set_title("Original Data")
+sns.distplot(scaled_data, ax=ax[1])
+ax[1].set_title("Scaled data")
 
 
-# Wow. This dataset looks interesting. It has numerical features, categorical features, date feature, text features and image features.  
+# Notice that the *shape* of the data doesn't change, but that instead of ranging from 0 to 8ish, it now ranges from 0 to 1.
 # 
-# Let us load the test data as well and check the number of rows in train and test to start with.
+# ___
+# ## Normalization
+# 
+# Scaling just changes the range of your data. Normalization is a more radical transformation. The point of normalization is to change your observations so that they can be described as a normal distribution.
+# 
+# > **[Normal distribution:](https://en.wikipedia.org/wiki/Normal_distribution)** Also known as the "bell curve", this is a specific statistical distribution where a roughly equal observations fall above and below the mean, the mean and the median are the same, and there are more observations closer to the mean. The normal distribution is also known as the Gaussian distribution.
+# 
+# In general, you'll only want to normalize your data if you're going to be using a machine learning or statistics technique that assumes your data is normally distributed. Some examples of these include t-tests, ANOVAs, linear regression, linear discriminant analysis (LDA) and Gaussian naive Bayes. (Pro tip: any method with "Gaussian" in the name probably assumes normality.)
+# 
+# The method were  using to normalize here is called the [Box-Cox Transformation](https://en.wikipedia.org/wiki/Power_transform#Box%E2%80%93Cox_transformation). Let's take a quick peek at what normalizing some data looks like:
 
 # In[ ]:
 
 
-test_df = pd.read_json("../input/test.json")
-print("Train Rows : ", train_df.shape[0])
-print("Test Rows : ", test_df.shape[0])
+# normalize the exponential data with boxcox
+normalized_data = stats.boxcox(original_data)
+
+# plot both together to compare
+fig, ax=plt.subplots(1,2)
+sns.distplot(original_data, ax=ax[0])
+ax[0].set_title("Original Data")
+sns.distplot(normalized_data[0], ax=ax[1])
+ax[1].set_title("Normalized data")
 
 
-# **Target Variable**
+# Notice that the *shape* of our data has changed. Before normalizing it was almost L-shaped. But after normalizing it looks more like the outline of a bell (hence "bell curve"). 
 # 
-# Before delving more into the features, let us first have a look at the target variable 'interest level'
+# ___
+# ## Your turn!
+# 
+# For the following example, decide whether scaling or normalization makes more sense. 
+# 
+# * You want to build a linear regression model to predict someone's grades given how much time they spend on various activities during a normal school week.  You notice that your measurements for how much time students spend studying aren't normally distributed: some students spend almost no time studying and others study for four or more hours every day. Should you scale or normalize this variable?
+# * You're still working on your grades study, but you want to include information on how students perform on several fitness tests as well. You have information on how many jumping jacks and push-ups each student can complete in a minute. However, you notice that students perform far more jumping jacks than push-ups: the average for the former is 40, and for the latter only 10. Should you scale or normalize these variables?
+
+# # Practice scaling
+# ___
+# 
+# To practice scaling and normalization, we're going to be using a dataset of Kickstarter campaigns. (Kickstarter is a website where people can ask people to invest in various projects and concept products.)
+# 
+# Let's start by scaling the goals of each campaign, which is how much money they were asking for.
 
 # In[ ]:
 
 
-int_level = train_df['interest_level'].value_counts()
+# select the usd_goal_real column
+usd_goal = kickstarters_2017.usd_goal_real
 
-plt.figure(figsize=(8,4))
-sns.barplot(int_level.index, int_level.values, alpha=0.8, color=color[1])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Interest level', fontsize=12)
-plt.show()
+# scale the goals from 0 to 1
+scaled_data = minmax_scaling(usd_goal, columns = [0])
+
+# plot the original & scaled data together to compare
+fig, ax=plt.subplots(1,2)
+sns.distplot(kickstarters_2017.usd_goal_real, ax=ax[0])
+ax[0].set_title("Original Data")
+sns.distplot(scaled_data, ax=ax[1])
+ax[1].set_title("Scaled data")
 
 
-# Interest level is low for most of the cases followed by medium and then high which makes sense.
-# 
-# Now let us start looking into the numerical features present in the dataset. Numerical features are
-# 
-#  - bathrooms
-#  - bedrooms
-#  - price
-#  - latitude
-#  - longitude
-# 
-# The last two are actually not numerical variables, but for now let us just consider it to be numerical.
-# 
-# **Bathrooms:**
-# 
-# Let us first start with bathrooms.
+# You can see that scaling changed the scales of the plots dramatically (but not the shape of the data: it looks like most campaigns have small goals but a few have very large ones)
 
 # In[ ]:
 
 
-cnt_srs = train_df['bathrooms'].value_counts()
+# Your turn! 
 
-plt.figure(figsize=(8,4))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[0])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('bathrooms', fontsize=12)
-plt.show()
+# We just scaled the "usd_goal_real" column. What about the "goal" column?
 
 
-# In[ ]:
-
-
-train_df['bathrooms'].ix[train_df['bathrooms']>3] = 3
-plt.figure(figsize=(8,4))
-sns.violinplot(x='interest_level', y='bathrooms', data=train_df)
-plt.xlabel('Interest level', fontsize=12)
-plt.ylabel('bathrooms', fontsize=12)
-plt.show()
-
-
-# Looks like evenly distributed across the interest levels. Now let us look at the next feature 'bedrooms'.
+# # Practice normalization
+# ___
 # 
-# **Bedrooms:**
+# Ok, now let's try practicing normalization. We're going to normalize the amount of money pledged to each campaign.
 
 # In[ ]:
 
 
-cnt_srs = train_df['bedrooms'].value_counts()
+# get the index of all positive pledges (Box-Cox only takes postive values)
+index_of_positive_pledges = kickstarters_2017.usd_pledged_real > 0
 
-plt.figure(figsize=(8,4))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[2])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('bedrooms', fontsize=12)
-plt.show()
+# get only positive pledges (using their indexes)
+positive_pledges = kickstarters_2017.usd_pledged_real.loc[index_of_positive_pledges]
 
+# normalize the pledges (w/ Box-Cox)
+normalized_pledges = stats.boxcox(positive_pledges)[0]
+
+# plot both together to compare
+fig, ax=plt.subplots(1,2)
+sns.distplot(positive_pledges, ax=ax[0])
+ax[0].set_title("Original Data")
+sns.distplot(normalized_pledges, ax=ax[1])
+ax[1].set_title("Normalized data")
+
+
+# It's not perfect (it looks like a lot pledges got very few pledges) but it is much closer to normal!
 
 # In[ ]:
 
 
-plt.figure(figsize=(8,6))
-sns.countplot(x='bedrooms', hue='interest_level', data=train_df)
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('bedrooms', fontsize=12)
-plt.show()
+# Your turn! 
+# We looked as the usd_pledged_real column. What about the "pledged" column? Does it have the same info?
 
 
-# **Price:**
+# And that's it for today! If you have any questions, be sure to post them in the comments below or [on the forums](https://www.kaggle.com/questions-and-answers). 
 # 
-# Now let us look at the price variable distribution.
-
-# In[ ]:
-
-
-plt.figure(figsize=(8,6))
-plt.scatter(range(train_df.shape[0]), np.sort(train_df.price.values))
-plt.xlabel('index', fontsize=12)
-plt.ylabel('price', fontsize=12)
-plt.show()
-
-
-# Looks like there are some outliers in this feature. So let us remove them and then plot again.
-
-# In[ ]:
-
-
-ulimit = np.percentile(train_df.price.values, 99)
-train_df['price'].ix[train_df['price']>ulimit] = ulimit
-
-plt.figure(figsize=(8,6))
-sns.distplot(train_df.price.values, bins=50, kde=True)
-plt.xlabel('price', fontsize=12)
-plt.show()
-
-
-# The distribution is right skewed as we can see.
+# Remember that your notebook is private by default, and in order to share it with other people or ask for help with it, you'll need to make it public. First, you'll need to save a version of your notebook that shows your current work by hitting the "Commit & Run" button. (Your work is saved automatically, but versioning your work lets you go back and look at what it was like at the point you saved it. It also lets you share a nice compiled notebook instead of just the raw code.) Then, once your notebook is finished running, you can go to the Settings tab in the panel to the left (you may have to expand it by hitting the [<] button next to the "Commit & Run" button) and setting the "Visibility" dropdown to "Public".
 # 
-# Now let us look at the latitude and longitude variables.
+# # More practice!
+# ___
 # 
-# **Latitude & Longitude:**
-
-# In[ ]:
-
-
-llimit = np.percentile(train_df.latitude.values, 1)
-ulimit = np.percentile(train_df.latitude.values, 99)
-train_df['latitude'].ix[train_df['latitude']<llimit] = llimit
-train_df['latitude'].ix[train_df['latitude']>ulimit] = ulimit
-
-plt.figure(figsize=(8,6))
-sns.distplot(train_df.latitude.values, bins=50, kde=False)
-plt.xlabel('latitude', fontsize=12)
-plt.show()
-
-
-# So the latitude values are primarily between 40.6 and 40.9. Now let us look at the longitude values.
-
-# In[ ]:
-
-
-llimit = np.percentile(train_df.longitude.values, 1)
-ulimit = np.percentile(train_df.longitude.values, 99)
-train_df['longitude'].ix[train_df['longitude']<llimit] = llimit
-train_df['longitude'].ix[train_df['longitude']>ulimit] = ulimit
-
-plt.figure(figsize=(8,6))
-sns.distplot(train_df.longitude.values, bins=50, kde=False)
-plt.xlabel('longitude', fontsize=12)
-plt.show()
-
-
-# The longitude values range between -73.8 and -74.02. So the data corresponds to the **New York City**.
-# 
-# Now let us plot the same in a map. Thanks to this [kernel][1] by Dotman.
-# 
-# 
-#   [1]: https://www.kaggle.com/dotman/d/fivethirtyeight/uber-pickups-in-new-york-city/data-exploration-and-visualization
-
-# In[ ]:
-
-
-from mpl_toolkits.basemap import Basemap
-from matplotlib import cm
-
-west, south, east, north = -74.02, 40.64, -73.85, 40.86
-
-fig = plt.figure(figsize=(14,10))
-ax = fig.add_subplot(111)
-m = Basemap(projection='merc', llcrnrlat=south, urcrnrlat=north,
-            llcrnrlon=west, urcrnrlon=east, lat_ts=south, resolution='i')
-x, y = m(train_df['longitude'].values, train_df['latitude'].values)
-m.hexbin(x, y, gridsize=200,
-         bins='log', cmap=cm.YlOrRd_r);
-
-
-# **Created:**
-# 
-# Now let us look at the date column 'created' 
-
-# In[ ]:
-
-
-train_df["created"] = pd.to_datetime(train_df["created"])
-train_df["date_created"] = train_df["created"].dt.date
-cnt_srs = train_df['date_created'].value_counts()
-
-
-plt.figure(figsize=(12,4))
-ax = plt.subplot(111)
-ax.bar(cnt_srs.index, cnt_srs.values, alpha=0.8)
-ax.xaxis_date()
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# So we have data from April to June 2016 in our train set. Now let us look at the test set as well and see if they are also from the same date range. 
-
-# In[ ]:
-
-
-test_df["created"] = pd.to_datetime(test_df["created"])
-test_df["date_created"] = test_df["created"].dt.date
-cnt_srs = test_df['date_created'].value_counts()
-
-plt.figure(figsize=(12,4))
-ax = plt.subplot(111)
-ax.bar(cnt_srs.index, cnt_srs.values, alpha=0.8)
-ax.xaxis_date()
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# Looks very similar to the train set dates and so we are good to go.!
-# 
-# We shall also look at the hour-wise listing trend (Just for fun)
-
-# In[ ]:
-
-
-train_df["hour_created"] = train_df["created"].dt.hour
-cnt_srs = train_df['hour_created'].value_counts()
-
-plt.figure(figsize=(12,6))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[3])
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# Looks like listings are created during the early hours of the day (1 to 7am). May be that is when the traffic is less and so the updates are happening.
-# 
-# Now let us look at some of the categorical variables.
-# 
-# **Display Address:**
-
-# In[ ]:
-
-
-cnt_srs = train_df.groupby('display_address')['display_address'].count()
-
-for i in [2, 10, 50, 100, 500]:
-    print('Display_address that appear less than {} times: {}%'.format(i, round((cnt_srs < i).mean() * 100, 2)))
-
-plt.figure(figsize=(12, 6))
-plt.hist(cnt_srs.values, bins=100, log=True, alpha=0.9)
-plt.xlabel('Number of times display_address appeared', fontsize=12)
-plt.ylabel('log(Count)', fontsize=12)
-plt.show()
-
-
-# Most of the display addresses occur less than 100 times in the given dataset. None of the display address occur more than 500 times.
-# 
-# **Number of Photos:**
-# 
-# This competition also has a huge database of photos of the listings. To start with, let us look at the number of photos given for listings.
-
-# In[ ]:
-
-
-train_df["num_photos"] = train_df["photos"].apply(len)
-cnt_srs = train_df['num_photos'].value_counts()
-
-plt.figure(figsize=(12,6))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8)
-plt.xlabel('Number of Photos', fontsize=12)
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.show()
-
-
-# In[ ]:
-
-
-train_df['num_photos'].ix[train_df['num_photos']>12] = 12
-plt.figure(figsize=(12,6))
-sns.violinplot(x="num_photos", y="interest_level", data=train_df, order =['low','medium','high'])
-plt.xlabel('Number of Photos', fontsize=12)
-plt.ylabel('Interest Level', fontsize=12)
-plt.show()
-
-
-# Let us now look at the number of features variable and see its distribution.
-# 
-# **Number of features:**
-
-# In[ ]:
-
-
-train_df["num_features"] = train_df["features"].apply(len)
-cnt_srs = train_df['num_features'].value_counts()
-
-plt.figure(figsize=(12,6))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8)
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Number of features', fontsize=12)
-plt.show()
-
-
-# In[ ]:
-
-
-train_df['num_features'].ix[train_df['num_features']>17] = 17
-plt.figure(figsize=(12,10))
-sns.violinplot(y="num_features", x="interest_level", data=train_df, order =['low','medium','high'])
-plt.xlabel('Interest Level', fontsize=12)
-plt.ylabel('Number of features', fontsize=12)
-plt.show()
-
-
-# **Word Clouds:**
-# 
-# Next we shall look into some for the text features.
-
-# In[ ]:
-
-
-from wordcloud import WordCloud
-
-text = ''
-text_da = ''
-text_desc = ''
-for ind, row in train_df.iterrows():
-    for feature in row['features']:
-        text = " ".join([text, "_".join(feature.strip().split(" "))])
-    text_da = " ".join([text_da,"_".join(row['display_address'].strip().split(" "))])
-    #text_desc = " ".join([text_desc, row['description']])
-text = text.strip()
-text_da = text_da.strip()
-text_desc = text_desc.strip()
-
-plt.figure(figsize=(12,6))
-wordcloud = WordCloud(background_color='white', width=600, height=300, max_font_size=50, max_words=40).generate(text)
-wordcloud.recolor(random_state=0)
-plt.imshow(wordcloud)
-plt.title("Wordcloud for features", fontsize=30)
-plt.axis("off")
-plt.show()
-
-# wordcloud for display address
-plt.figure(figsize=(12,6))
-wordcloud = WordCloud(background_color='white', width=600, height=300, max_font_size=50, max_words=40).generate(text_da)
-wordcloud.recolor(random_state=0)
-plt.imshow(wordcloud)
-plt.title("Wordcloud for Display Address", fontsize=30)
-plt.axis("off")
-plt.show()
-
-
-# **More to come. Stay tuned.!**
-# 
-# Please upvote if you like the notebook :)
+# Try finding a new dataset and pretend you're preparing to preform a [regression analysis](https://www.kaggle.com/rtatman/the-5-day-regression-challenge). ([These datasets are a good start!](https://www.kaggle.com/rtatman/datasets-for-regression-analysis)) Pick three or four variables and decide if you need to normalize or scale any of them and, if you think you should, practice applying the correct technique.

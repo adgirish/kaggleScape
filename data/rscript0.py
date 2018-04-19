@@ -1,59 +1,69 @@
-import numpy as np
 import pandas as pd
-
-from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import cross_val_score
-from scipy.sparse import hstack
+from sklearn.metrics import roc_auc_score
 
-class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
 
-train = pd.read_csv('../input/train.csv').fillna(' ')
-test = pd.read_csv('../input/test.csv').fillna(' ')
+def LeaveOneOut(data1, data2, columnName, useLOO=False):
+    grpOutcomes = data1.groupby(columnName).mean().reset_index()
+    outcomes = data2['outcome'].values
+    x = pd.merge(data2[[columnName, 'outcome']], grpOutcomes,
+                 suffixes=('x_', ''),
+                 how='left',
+                 on=columnName,
+                 left_index=True)['outcome']
+    if(useLOO):
+        x = ((x*x.shape[0])-outcomes)/(x.shape[0]-1)
+    return x.fillna(x.mean())
 
-train_text = train['comment_text']
-test_text = test['comment_text']
-all_text = pd.concat([train_text, test_text])
 
-word_vectorizer = TfidfVectorizer(
-    sublinear_tf=True,
-    strip_accents='unicode',
-    analyzer='word',
-    token_pattern=r'\w{1,}',
-    stop_words='english',
-    ngram_range=(1, 1),
-    max_features=10000)
-word_vectorizer.fit(all_text)
-train_word_features = word_vectorizer.transform(train_text)
-test_word_features = word_vectorizer.transform(test_text)
+def main():
+    directory = '../input/'
+    train = pd.read_csv(directory+'act_train.csv',
+                        usecols=['people_id', 'outcome'])
+    test = pd.read_csv(directory+'act_test.csv',
+                       usecols=['activity_id', 'people_id'])
+    people = pd.read_csv(directory+'people.csv',
+                         usecols=['people_id',
+                                  'group_1',
+                                  'char_2',
+                                  'char_38'])
+    train = pd.merge(train, people,
+                     how='left',
+                     on='people_id',
+                     left_index=True)
+    train.fillna('-999', inplace=True)
+    lootrain = pd.DataFrame()
+    for col in train.columns:
+        if(col != 'outcome' and col != 'people_id'):
+            print(col)
+            lootrain[col] = LeaveOneOut(train, train, col, True).values
+    lr = LogisticRegression(C=100000.0)
+    lr.fit(lootrain[['group_1', 'char_2', 'char_38']], train['outcome'])
+    preds = lr.predict_proba(lootrain[['group_1', 'char_2', 'char_38']])[:, 1]
+    print('roc', roc_auc_score(train.outcome, preds))
+    test = pd.read_csv(directory+'act_test.csv',
+                       usecols=['activity_id', 'people_id'])
+    test = pd.merge(test, people,
+                    how='left',
+                    on='people_id',
+                    left_index=True)
+    test.fillna('-999', inplace=True)
+    activity_id = test.activity_id.values
+    test.drop('activity_id', inplace=True, axis=1)
+    test['outcome'] = 0
+    lootest = pd.DataFrame()
+    for col in train.columns:
+        if(col != 'outcome' and col != 'people_id'):
+            print(col)
+            lootest[col] = LeaveOneOut(train, test, col, False).values
+    preds = lr.predict_proba(lootest[['group_1', 'char_2', 'char_38']])[:, 1]
+    submission = pd.DataFrame()
+    submission['activity_id'] = activity_id
+    submission['outcome'] = preds
+    submission.to_csv('simples.csv', index=False, float_format='%.3f')
 
-char_vectorizer = TfidfVectorizer(
-    sublinear_tf=True,
-    strip_accents='unicode',
-    analyzer='char',
-    stop_words='english',
-    ngram_range=(2, 6),
-    max_features=50000)
-char_vectorizer.fit(all_text)
-train_char_features = char_vectorizer.transform(train_text)
-test_char_features = char_vectorizer.transform(test_text)
 
-train_features = hstack([train_char_features, train_word_features])
-test_features = hstack([test_char_features, test_word_features])
-
-scores = []
-submission = pd.DataFrame.from_dict({'id': test['id']})
-for class_name in class_names:
-    train_target = train[class_name]
-    classifier = LogisticRegression(C=0.1, solver='sag')
-
-    cv_score = np.mean(cross_val_score(classifier, train_features, train_target, cv=3, scoring='roc_auc'))
-    scores.append(cv_score)
-    print('CV score for class {} is {}'.format(class_name, cv_score))
-
-    classifier.fit(train_features, train_target)
-    submission[class_name] = classifier.predict_proba(test_features)[:, 1]
-
-print('Total CV score is {}'.format(np.mean(scores)))
-
-submission.to_csv('submission.csv', index=False)
+if __name__ == "__main__":
+    print('Started')
+    main()
+    print('Finished')

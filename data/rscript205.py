@@ -1,43 +1,48 @@
 """
-Simple background removal code
+This blend propelled me to my top score (0.9870) when used in conjunction with other blends so I am sharing it here in case it helps others too.
+Even though I can't be sure this doesn't overfit, I think there is a good mix of models in there with low correlation. Possible improvements can
+come from adding CNNs to this blend, but I haven't been able to get it to work well.
 
-__author__ : Rangel Dokov
+The models used were ran by Zafar (https://www.kaggle.com/fizzbuzz) on the Cleaned Toxic Comments dataset (https://www.kaggle.com/fizzbuzz/cleaned-toxic-comments).
 
-The basic idea is that we have a foreground object of interest (the dark text)
-and we want to remove everything that is not part of this foreground object.
-
-This should produce results somewhere around 0.06 on the leaderboard.
+Hope this helps!
 """
+
+
+
 import numpy as np
-from scipy import signal
-from PIL import Image
+import pandas as pd
+
+gru_capsule = pd.read_csv('../input/capsule-net-with-gru-on-preprocessed-data/submission.csv')
+gru_pool = pd.read_csv('../input/global-average-pool-on-preprocessed/submission.csv')
+lstm_bi = pd.read_csv('../input/bilstm-on-preprocessed-data/submission.csv')
+lstm_conv = pd.read_csv('../input/bi-lstm-conv-layer-lb-score-0-9840/submission.csv')
+gru_fasttext = pd.read_csv('../input/pooled-gru-fasttext-on-preprocessed-data/submission.csv')
+ridge = pd.read_csv('../input/ridge-on-words-char-n-gram-preprocessed-data/submission.csv')
 
 
-def load_image(path):
-    return np.asarray(Image.open(path))/255.0
 
-def save(path, img):
-    tmp = np.asarray(img*255.0, dtype=np.uint8)
-    Image.fromarray(tmp).save(path)
-
-def denoise_image(inp):
-    # estimate 'background' color by a median filter
-    bg = signal.medfilt2d(inp, 11)
-    save('background.png', bg)
-
-    # compute 'foreground' mask as anything that is significantly darker than
-    # the background
-    mask = inp < bg - 0.1
-    save('foreground_mask.png', mask)
-
-    # return the input value for all pixels in the mask or pure white otherwise
-    return np.where(mask, inp, 1.0)
+from sklearn.preprocessing import minmax_scale
+labels = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
+for label in labels:
+    gru_capsule[label] = minmax_scale(gru_capsule[label])
+    gru_pool[label] = minmax_scale(gru_pool[label])
+    lstm_bi[label] = minmax_scale(lstm_bi[label])
+    lstm_conv[label] = minmax_scale(lstm_conv[label])
+    gru_fasttext[label] = minmax_scale(gru_fasttext[label])
+    ridge[label] = minmax_scale(ridge[label])
 
 
-inp_path = '../input/train/2.png'
-out_path = 'output.png'
 
-inp = load_image(inp_path)
-out = denoise_image(inp)
+submission = pd.DataFrame()
+submission['id'] = gru_capsule['id']
 
-save(out_path, out)
+submission[labels] = (gru_capsule[labels]*1 + \
+                     gru_pool[labels]*1 + \
+                     lstm_bi[labels]*1 + \
+                     lstm_conv[labels]*1 + \
+                     gru_fasttext[labels]*1 + \
+                     ridge[labels]*1) / 6
+
+
+submission.to_csv('preprocessed_blend.csv', index=False)

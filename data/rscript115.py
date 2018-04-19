@@ -1,289 +1,333 @@
-# Starter code for multiple regressors implemented by Leandro dos Santos Coelho
-# Source code based on Forecasting Favorites, 1owl
-# https://www.kaggle.com/the1owl/forecasting-favorites , version 10
+"""
+@author: Chia-Ta Tsai
+#blended with two GBMs (XGBoost and LightGBM)
+#feature transformation was originally from the1owl's kernel, 'Natural Growth Patterns' but refactered afterward. Forked from
+#https://www.kaggle.com/the1owl/natural-growth-patterns-fractals-of-nature
 
+**Updates
+ver07: add garbage collect
+ver06: reverted to ver04 and added footnotes
+ver05: LB 0.2093
+ver04: LB 0.2021
+"""
+from multiprocessing import Pool
+from tqdm import tqdm
+import gc
+#
+import numpy as np # linear algebra
+import pandas as pd # data processing
+import datetime as dt
+#
+from random import choice, sample, shuffle, uniform, seed
+from math import exp, expm1, log1p, log10, log2, sqrt, ceil, floor, isfinite, isnan
+from itertools import combinations
+#import for image processing
+import cv2
+from scipy.stats import kurtosis, skew
+from scipy.ndimage import laplace, sobel
+#evaluation
+from sklearn.model_selection import StratifiedShuffleSplit
+from sklearn.metrics import log_loss
+import xgboost as xgb
+import lightgbm as lgb
 
-import numpy as np
-import pandas as pd
-from sklearn import preprocessing, linear_model, metrics
-import gc; gc.enable()
-import random
+###############################################################################
+def read_jason(file='', loc='../input/'):
 
-# classical tree approach
-from sklearn.tree import DecisionTreeRegressor
-
-# ensemble approaches
-from sklearn.ensemble import ExtraTreesRegressor
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.ensemble import GradientBoostingRegressor
-
-# linear approaches
-from sklearn.linear_model import ElasticNetCV, LassoLarsCV
-from sklearn.linear_model import Ridge, HuberRegressor
-
-import time
-
-np.random.seed(757)
-
-# store the total processing time
-start_time = time.time()
-tcurrent   = start_time
-
-print('Multiple regressors\n')
-print('Datasets reading')
-
-
-# read datasets
-dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8', 'onpromotion':str}
-data = {
-    'tra': pd.read_csv('../input/train.csv', dtype=dtypes, parse_dates=['date']),
-    'tes': pd.read_csv('../input/test.csv', dtype=dtypes, parse_dates=['date']),
-    'ite': pd.read_csv('../input/items.csv'),
-    'sto': pd.read_csv('../input/stores.csv'),
-    'trn': pd.read_csv('../input/transactions.csv', parse_dates=['date']),
-    'hol': pd.read_csv('../input/holidays_events.csv', dtype={'transferred':str}, parse_dates=['date']),
-    'oil': pd.read_csv('../input/oil.csv', parse_dates=['date']),
-    }
-
-
-# dataset processing
-print('Datasets processing')
-
-train = data['tra'][(data['tra']['date'].dt.month == 8) & (data['tra']['date'].dt.day > 15)]
-del data['tra']; gc.collect();
-target = train['unit_sales'].values
-target[target < 0.] = 0.001
-train['unit_sales'] = np.log1p(target)
-
-def df_lbl_enc(df):
-    for c in df.columns:
-        if df[c].dtype == 'object':
-            lbl = preprocessing.LabelEncoder()
-            df[c] = lbl.fit_transform(df[c])
-            print(c)
-    return df
-
-def df_transform(df):
-    df['date'] = pd.to_datetime(df['date'])
-    df['yea'] = df['date'].dt.year
-    df['mon'] = df['date'].dt.month
-    df['day'] = df['date'].dt.day
-    df['date'] = df['date'].dt.dayofweek
-    df['onpromotion'] = df['onpromotion'].map({'False': 0, 'True': 1})
-    df['perishable'] = df['perishable'].map({0:1.0, 1:1.25})
-    df = df.fillna(-1)
-    return df
-
-data['ite'] = df_lbl_enc(data['ite'])
-train = pd.merge(train, data['ite'], how='left', on=['item_nbr'])
-test = pd.merge(data['tes'], data['ite'], how='left', on=['item_nbr'])
-del data['tes']; gc.collect();
-del data['ite']; gc.collect();
-
-train = pd.merge(train, data['trn'], how='left', on=['date','store_nbr'])
-test = pd.merge(test, data['trn'], how='left', on=['date','store_nbr'])
-del data['trn']; gc.collect();
-target = train['transactions'].values
-target[target < 0.] = 0.001
-train['transactions'] = np.log1p(target)
-
-data['sto'] = df_lbl_enc(data['sto'])
-train = pd.merge(train, data['sto'], how='left', on=['store_nbr'])
-test = pd.merge(test, data['sto'], how='left', on=['store_nbr'])
-del data['sto']; gc.collect();
-
-data['hol'] = data['hol'][data['hol']['locale'] == 'National'][['date','transferred']]
-data['hol']['transferred'] = data['hol']['transferred'].map({'False': 0, 'True': 1})
-train = pd.merge(train, data['hol'], how='left', on=['date'])
-test = pd.merge(test, data['hol'], how='left', on=['date'])
-del data['hol']; gc.collect();
-
-train = pd.merge(train, data['oil'], how='left', on=['date'])
-test = pd.merge(test, data['oil'], how='left', on=['date'])
-del data['oil']; gc.collect();
-
-train = df_transform(train)
-test = df_transform(test)
-col = [c for c in train if c not in ['id', 'unit_sales','perishable','transactions']]
-
-x1 = train[(train['yea'] != 2016)]
-x2 = train[(train['yea'] == 2016)]
-del train; gc.collect();
-
-y1 = x1['transactions'].values
-y2 = x2['transactions'].values
-
-def NWRMSLE(y, pred, w):
-    return metrics.mean_squared_error(y, pred, sample_weight=w)**0.5
-
-
-#------------------- forecasting based on multiple regressors (r) models
+    df = pd.read_json('{}{}'.format(loc, file))
+    df['inc_angle'] = df['inc_angle'].replace('na', -1).astype(float)
+    #print(df['inc_angle'].value_counts())
     
-print('\nRunning the basic regressors ...')    
-
-number_regressors_to_test = 12
-
-for method in range(1, number_regressors_to_test+1):
+    band1 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in df["band_1"]])
+    band2 = np.array([np.array(band).astype(np.float32).reshape(75, 75) for band in df["band_2"]])
+    df = df.drop(['band_1', 'band_2'], axis=1)
     
-    # set the seed to generate random numbers
-    ra1 = round(method + 32*method + 92*method) 
-    np.random.seed(ra1)
+    bands = np.stack((band1, band2,  0.5 * (band1 + band2)), axis=-1)
+    del band1, band2
     
+    return df, bands
+
+###############################################################################
+
+
+def run_lgb(params={}, lgb_train=None, lgb_valid=None, lgb_test=None, test_ids=None, nr_round=2000, min_round=100, file=''):
+
+    print('\nLightGBM: {}'.format(params['boosting'])) 
+    model2 = lgb.train(params, 
+                       lgb_train, 
+                       nr_round, 
+                       lgb_valid, 
+                       verbose_eval=50, early_stopping_rounds=min_round)
     
-    print('\nmethod = ', method)
+    pred = model2.predict(lgb_test, num_iteration=model2.best_iteration)
+    #
+    subm = pd.DataFrame({'id': test_ids, 'is_iceberg': pred})
+    subm.to_csv(file, index=False, float_format='%.6f')
+    #   
+    df = pd.DataFrame({'feature':model2.feature_name(), 'importances': model2.feature_importance()})
     
-    if (method==1):
-        print('Linear model (classical)')
-        str_method = 'Linear model'    
-        r = linear_model.LinearRegression(n_jobs=-1)
+    return pred, df
 
-    if (method==2):
-        print('Extra trees 01')
-        str_method = 'ExtraTrees01'
-        r = ExtraTreesRegressor(n_estimators=105, max_depth=6, n_jobs=-1, 
-                                 random_state=ra1, verbose=0, warm_start=True)
-
-    if (method==3):
-        print('Extra trees 02')
-        str_method = 'ExtraTrees02'
-        r = ExtraTreesRegressor(n_estimators=80, max_depth=3, n_jobs=-1, 
-                                 random_state=ra1, verbose=0, warm_start=True)
-
-    if (method==4):
-        print('Random forest 01')
-        str_method = 'RandomForest01'
-        r = RandomForestRegressor(n_estimators=80 , max_depth=5, n_jobs=-1, 
-                                   random_state=ra1, verbose=0, warm_start=True)
-
-    if (method==5):
-        print('Random forest 02')
-        str_method = 'RandomForest02'
-        r = RandomForestRegressor(n_estimators=90, max_depth=4, n_jobs=-1, 
-                                   random_state=ra1, verbose=0, warm_start=True)
-        
-    if (method==6):
-        print('ElasticNet')
-        str_method = 'Elastic Net'
-        r = ElasticNetCV()
-        
-    if (method==7):
-        print('GradientBoosting 01')
-        str_method = 'GradientBoosting01'
-        r = GradientBoostingRegressor(n_estimators=80, max_depth=5, learning_rate = 0.05, 
-                                       random_state=ra1, verbose=0, warm_start=True,
-                                       subsample= 0.6, max_features = 0.6)
-    if (method==8):
-        print('GradientBoosting 02')
-        str_method = 'GradientBoosting02'
-        r = GradientBoostingRegressor(n_estimators=90, max_depth=4, learning_rate = 0.05, 
-                                       random_state=ra1, verbose=0, warm_start=True,
-                                       subsample= 0.8, max_features = 0.5)        
-                                       
-    if (method==9):
-        print('GradientBoosting 03')
-        str_method = 'GradientBoosting03'
-        r = GradientBoostingRegressor(n_estimators=110, max_depth=3, learning_rate = 0.05, 
-                                       random_state=ra1, verbose=0, warm_start=True,
-                                       subsample= 0.85, max_features = 0.74)   
-                                       
-    if (method==10):
-        print('Decision Tree')
-        str_method = 'DecisionTree'
-        r = DecisionTreeRegressor(max_depth=3)
-
-    if (method==11):
-        print('Ridge')
-        str_method = 'Ridge'
-        r = Ridge()
-        
-    if (method==12):
-        print('Huber')
-        str_method = 'Huber'
-        r = HuberRegressor(fit_intercept=True, alpha=0.065, max_iter=160, epsilon=1.2)
-        
-        
-    r.fit(x1[col], y1)
-
-
-    a1 = NWRMSLE(y2, r.predict(x2[col]), x2['perishable'])
-    # part of the output file name
-    N1 = str(a1)
+###############################################################################
+#forked from
+#https://www.kaggle.com/the1owl/planet-understanding-the-amazon-from-space/natural-growth-patterns-fractals-of-nature/notebook
+def img_to_stats(paths):
     
-    test['transactions'] = r.predict(test[col])
-    test['transactions'] = test['transactions'].clip(lower=0.+1e-15)
-
-    col = [c for c in x1 if c not in ['id', 'unit_sales','perishable']]
-    y1 = x1['unit_sales'].values
-    y2 = x2['unit_sales'].values
-
-
-    # set a new seed to generate random numbers
-    ra2 = round(method + 57*method + 182*method) 
-    np.random.seed(ra2)
-
-    if (method==1):
-        r = linear_model.LinearRegression(n_jobs=-1)
+    img_id, img = paths[0], paths[1]
+    
+    #ignored error    
+    np.seterr(divide='ignore', invalid='ignore')
+    
+    bins = 20
+    scl_min, scl_max = -50, 50
+    opt_poly = True
+    #opt_poly = False
+    
+    try:
+        st = []
+        st_interv = []
+        hist_interv = []
+        for i in range(img.shape[2]):
+            img_sub = np.squeeze(img[:, :, i])
+            
+            #median, max and min
+            sub_st = []
+            sub_st += [np.mean(img_sub), np.std(img_sub), np.max(img_sub), np.median(img_sub), np.min(img_sub)]
+            sub_st += [(sub_st[2] - sub_st[3]), (sub_st[2] - sub_st[4]), (sub_st[3] - sub_st[4])] 
+            sub_st += [(sub_st[-3] / sub_st[1]), (sub_st[-2] / sub_st[1]), (sub_st[-1] / sub_st[1])] #normalized by stdev
+            st += sub_st
+            #Laplacian, Sobel, kurtosis and skewness
+            st_trans = []
+            st_trans += [laplace(img_sub, mode='reflect', cval=0.0).ravel().var()] #blurr
+            sobel0 = sobel(img_sub, axis=0, mode='reflect', cval=0.0).ravel().var()
+            sobel1 = sobel(img_sub, axis=1, mode='reflect', cval=0.0).ravel().var()
+            st_trans += [sobel0, sobel1]
+            st_trans += [kurtosis(img_sub.ravel()), skew(img_sub.ravel())]
+            
+            if opt_poly:
+                st_interv.append(sub_st)
+                #
+                st += [x * y for x, y in combinations(st_trans, 2)]
+                st += [x + y for x, y in combinations(st_trans, 2)]
+                st += [x - y for x, y in combinations(st_trans, 2)]                
  
-    if (method==2):
-        r = ExtraTreesRegressor(n_estimators=60, max_depth=6, n_jobs=-1, 
-                                 random_state=ra2, verbose=0, warm_start=True)
+            #hist
+            #hist = list(cv2.calcHist([img], [i], None, [bins], [0., 1.]).flatten())
+            hist = list(np.histogram(img_sub, bins=bins, range=(scl_min, scl_max))[0])
+            hist_interv.append(hist)
+            st += hist
+            st += [hist.index(max(hist))] #only the smallest index w/ max value would be incl
+            st += [np.std(hist), np.max(hist), np.median(hist), (np.max(hist) - np.median(hist))]
 
-    if (method==3):
-        r = ExtraTreesRegressor(n_estimators=90, max_depth=2, n_jobs=-1, 
-                                 random_state=ra2, verbose=0, warm_start=True)
+        if opt_poly:
+            for x, y in combinations(st_interv, 2):
+                st += [float(x[j]) * float(y[j]) for j in range(len(st_interv[0]))]
 
-    if (method==4):
-        r = RandomForestRegressor(n_estimators=80, max_depth=3, n_jobs=-1, 
-                                   random_state=ra2, verbose=0, warm_start=True)
-
-    if (method==5):
-        r = RandomForestRegressor(n_estimators=80, max_depth=5, n_jobs=-1, 
-                                   random_state=ra2, verbose=0, warm_start=True)
-
-    if (method==6):
-        r = ElasticNetCV()
-        
-    if (method==7):
-        r = GradientBoostingRegressor(n_estimators=90, max_depth=3, learning_rate = 0.05, 
-                                       random_state=ra2, verbose=0, warm_start=True,
-                                       subsample= 0.6, max_features = 0.2)
-    if (method==8):
-        r = GradientBoostingRegressor(n_estimators=90, max_depth=4, learning_rate = 0.055, 
-                                       random_state=ra2, verbose=0, warm_start=True,
-                                       subsample= 0.8, max_features = 0.3)
-                                       
-    if (method==9):
-        r = GradientBoostingRegressor(n_estimators=110, max_depth=2, learning_rate = 0.05, 
-                                       random_state=ra2, verbose=0, warm_start=True,
-                                       subsample= 0.7, max_features = 0.5)    
-                        
-    if (method==10):
-        r = DecisionTreeRegressor(max_depth=4)
-        
-    if (method==11):
-        r = Ridge() 
-        
-    if (method==12):
-        r = HuberRegressor(fit_intercept=True, alpha=0.075, max_iter=100, epsilon=1.3)
-        
-
-    r.fit(x1[col], y1)
+            for x, y in combinations(hist_interv, 2):
+                hist_diff = [x[j] * y[j] for j in range(len(hist_interv[0]))]
+                st += [hist_diff.index(max(hist_diff))] #only the smallest index w/ max value would be incl
+                st += [np.std(hist_diff), np.max(hist_diff), np.median(hist_diff), (np.max(hist_diff) - np.median(hist_diff))]
+                
+        #correction
+        nan = -999
+        for i in range(len(st)):
+            if isnan(st[i]) == True:
+                st[i] = nan
+                
+    except:
+        print('except: ')
     
-    a2 = NWRMSLE(y2, r.predict(x2[col]), x2['perishable'])
-    # part of the output file name
-    N2 = str(a2)
-
-    print('Performance: NWRMSLE(1) = ',a1,'NWRMSLE(2) = ',a2)
-
-    test['unit_sales'] = r.predict(test[col])
-    cut = 0.+1e-13 # 0.+1e-15
-    test['unit_sales'] = (np.exp(test['unit_sales']) - 1).clip(lower=cut)
-
-    output_file = 'sub v12 ' + str(str_method) + ' method ' + str(method) + N1 + ' - ' + N2 + '.csv'
- 
-    test[['id','unit_sales']].to_csv(output_file, index=False, float_format='%.2f')
+    return [img_id, st]
 
 
-print( "\nFinished ...")
-nm=(time.time() - start_time)/60
-print ("Total time %s min" % nm)
+def extract_img_stats(paths):
+    imf_d = {}
+    p = Pool(8) #(cpu_count())
+    ret = p.map(img_to_stats, paths)
+    for i in tqdm(range(len(ret)), miniters=100):
+        imf_d[ret[i][0]] = ret[i][1]
+
+    ret = []
+    fdata = [imf_d[i] for i, j in paths]
+    return np.array(fdata, dtype=np.float32)
+
+
+def process(df, bands):
+
+    data = extract_img_stats([(k, v) for k, v in zip(df['id'].tolist(), bands)]); gc.collect()
+    data = np.concatenate([data, df['inc_angle'].values[:, np.newaxis]], axis=-1); gc.collect()
+
+    print(data.shape)
+    return data
+
+###############################################################################
+def save_blend(preds={}, loc='./'):
+    
+    target = 'is_iceberg'
+    
+    w_total = 0.0
+    blend = None
+    df_corr = None
+    print('\nBlending...')
+    for k, v in preds.items():
+        if blend is None:
+            blend = pd.read_csv('{0}/{1}'.format(loc, k))
+            print('load: {0}, w={1}'.format(k, v))
+            
+            df_corr = pd.DataFrame({'id': blend['id'].tolist()})
+            df_corr[k[16:-4]] = blend[target]
+            
+            w_total += v
+            blend[target] = blend[target] * v
+                
+        else:
+            preds_tmp = pd.read_csv('{0}/{1}'.format(loc, k))
+            preds_tmp = blend[['id']].merge(preds_tmp, how='left', on='id')
+            print('load: {0}, w={1}'.format(k, v))
+            df_corr[k[16:-4]] = preds_tmp[target]
+            
+            w_total += v
+            blend[target] += preds_tmp[target] * v
+            del preds_tmp
+            
+    print('\n{}'.format(df_corr.corr()), flush=True)
+    #write submission
+    blend[target] = blend[target] / w_total
+    print('\nPreview: \n{}'.format(blend.head()), flush=True)
+    blend.to_csv('{}subm_blend{:03d}_{}.csv'.format(loc, len(preds), tmp), index=False, float_format='%.6f')
+
+
+###############################################################################
+if __name__ == '__main__':
+    
+    np.random.seed(1017)
+    target = 'is_iceberg'
+    
+    #Load data
+    train, train_bands = read_jason(file='train.json', loc='../input/')
+    test, test_bands = read_jason(file='test.json', loc='../input/')
+
+    train_X = process(df=train, bands=train_bands)
+    train_y = train[target].values
+
+    test_X = process(df=test, bands=test_bands)
+    
+    #results
+    freq = pd.DataFrame()
+    subms = []
+
+    #training
+    test_ratio = 0.2
+    nr_runs = 3
+    split_seed = 25
+    kf = StratifiedShuffleSplit(n_splits=nr_runs, test_size=test_ratio, train_size=None, random_state=split_seed)
+
+    for r, (train_index, test_index) in enumerate(kf.split(train_X, train_y)):
+        print('\nround {:04d} of {:04d}, seed={}'.format(r+1, nr_runs, split_seed))
+            
+        tmp = dt.datetime.now().strftime("%Y-%m-%d-%H-%M")
+        
+        x1, x2 = train_X[train_index], train_X[test_index]
+        y1, y2 = train_y[train_index], train_y[test_index]
+        #x1, x2, y1, y2 = train_test_split(train_X, train_y, test_size=test_ratio, random_state=split_seed + r)
+        print('splitted: {0}, {1}'.format(x1.shape, x2.shape), flush=True)
+        test_X_dup = test_X.copy()
+        
+        #XGB
+        xgb_train = xgb.DMatrix(x1, y1)
+        xgb_valid = xgb.DMatrix(x2, y2)
+        #
+        watchlist = [(xgb_train, 'train'), (xgb_valid, 'valid')]
+        params = {'eta': 0.02, 'max_depth': 4, 'subsample': 0.9, 'colsample_bytree': 0.9, 'objective': 'binary:logistic', 'seed': 99, 'silent': True}
+        params['eta'] = 0.03
+        params['max_depth'] = 4
+        params['subsample'] = 0.9
+        params['eval_metric'] = 'logloss'
+        params['colsample_bytree'] = 0.8
+        params['colsample_bylevel'] = 0.8
+        params['max_delta_step'] = 3
+        #params['gamma'] = 5.0
+        #params['labmda'] = 1
+        params['scale_pos_weight'] = 1.0
+        params['seed'] = split_seed + r
+        nr_round = 2000
+        min_round = 100
+            
+        model1 = xgb.train(params, 
+                           xgb_train, 
+                           nr_round,  
+                           watchlist, 
+                           verbose_eval=50, 
+                           early_stopping_rounds=min_round)
+        
+        pred_xgb = model1.predict(xgb.DMatrix(test_X_dup), ntree_limit=model1.best_ntree_limit+45)
+        
+        #
+        file = 'subm_{}_xgb_{:02d}.csv'.format(tmp, r+1)
+        subm = pd.DataFrame({'id': test['id'].values, target: pred_xgb})
+        subm.to_csv(file, index=False, float_format='%.6f')
+        subms.append(file)    
+    
+        ##LightGBM
+        lgb_train = lgb.Dataset(x1, label=y1, free_raw_data=False)
+        lgb_valid = lgb.Dataset(x2, label=y2, reference=lgb_train, free_raw_data=False)
+        #gbdt
+        params = {'learning_rate': 0.02, 'max_depth': 4, 'boosting': 'gbdt', 'objective': 'binary', 'is_training_metric': False, 'seed': 99}
+        params['boosting'] = 'gbdt'
+        params['metric'] = 'binary_logloss'
+        params['learning_rate'] = 0.03
+        params['max_depth'] = 5
+        params['num_leaves'] = 16 # higher number of leaves
+        params['feature_fraction'] = 0.8 # Controls overfit
+        params['bagging_fraction'] = 0.9    
+        params['bagging_freq'] = 3
+        params['seed'] = split_seed + r
+        #
+        params['verbose'] = -1
+        
+        file = 'subm_{}_lgb_{}_{:02d}.csv'.format(tmp, params['boosting'], r+1)
+        subms.append(file)
+        
+        pred, f_tmp = run_lgb(params=params, 
+                              lgb_train=lgb_train, 
+                              lgb_valid=lgb_valid, 
+                              lgb_test=test_X_dup, 
+                              test_ids=test['id'].values, 
+                              nr_round=nr_round, 
+                              min_round=min_round, 
+                              file=file)
+
+        ##LightGBM
+        #dart
+        params = {'learning_rate': 0.02, 'max_depth': 4, 'boosting': 'gbdt', 'objective': 'binary', 'is_training_metric': False, 'seed': 99}
+        params['boosting'] = 'dart'
+        params['metric'] = 'binary_logloss'
+        params['learning_rate'] = 0.04
+        params['max_depth'] = 5
+        params['num_leaves'] = 16 # higher number of leaves
+        params['feature_fraction'] = 0.8 # Controls overfit
+        params['bagging_fraction'] = 0.9    
+        params['bagging_freq'] = 3
+        params['seed'] = split_seed + r
+        #dart
+        params['drop_rate'] = 0.1
+        params['skip_drop'] = 0.5
+        params['max_drop'] = 10
+        params['verbose'] = -1 
+        
+        file = 'subm_{}_lgb_{}_{:02d}.csv'.format(tmp, params['boosting'], r+1)
+        subms.append(file)
+        
+        pred, f_tmp = run_lgb(params=params, 
+                              lgb_train=lgb_train, 
+                              lgb_valid=lgb_valid, 
+                              lgb_test=test_X_dup, 
+                              test_ids=test['id'].values, 
+                              nr_round=nr_round, 
+                              min_round=min_round, 
+                              file=file)
+        
+    
+    #blending
+    preds = {k: 1.0 for k in subms}
+    save_blend(preds=preds)   

@@ -1,42 +1,26 @@
 import pandas as pd
+import numpy as np
 
-from mlxtend.feature_selection import SequentialFeatureSelector as SFS
+train = pd.read_csv('../input/ru_train.csv', encoding='utf-8')
+train['before'] = train['before'].str.lower()
+train['after'] = train['after'].str.lower()
+train['after_c'] = train['after'].map(lambda x: len(str(x).split()))
+train[~(train['class']=='LETTERS') & (train['after_c']>4)]
+train = train.groupby(['before', 'after'], as_index=False)['sentence_id'].count()
+train = train.sort_values(['sentence_id','before'], ascending=[False, True])
+train = train.drop_duplicates(['before'])
+d = {key: value for (key, value) in train[['before', 'after']].values}
 
-from sklearn.linear_model import LinearRegression
-from sklearn.pipeline import make_pipeline
-from sklearn.feature_extraction import DictVectorizer
+test = pd.read_csv('../input/ru_test.csv')
+test['id'] = test['sentence_id'].astype(str) + '_' + test['token_id'].astype(str)
+test['before_l'] = test['before'].str.lower()
+test['after'] = test['before_l'].map(lambda x: d[x] if x in d else x) #should use same case as original before :)
 
+def fcase(obefore, lbefore, after):
+    if lbefore == after:
+        return obefore
+    else:
+        return after
+test['after'] = test.apply(lambda r: fcase(r['before'],r['before_l'],r['after']), axis=1)
 
-def main():
-    train = pd.read_csv('../input/train.csv')
-    target = train.pop('y')
-    train.pop('ID')
-    test = pd.read_csv('../input/test.csv')
-    test_ids = test.pop('ID')
-
-    for k in train.keys():
-        if len(train[k].unique()) == 1:
-            train.pop(k)
-            test.pop(k)
-
-    train, test = map(lambda df: [row for _, row in df.iterrows()],
-                      (train, test))
-
-    dv = DictVectorizer()
-    sfs = SFS(LinearRegression(),
-              k_features=50,
-              forward=True,
-              floating=False,
-              verbose=2,
-              scoring='r2',
-              cv=3)
-
-    pipe = make_pipeline(dv, sfs, LinearRegression())
-    pipe.fit(train, target)
-    preds = pipe.predict(test)
-    res = pd.DataFrame({'ID': test_ids, 'y': preds})
-    res.to_csv('result.csv', index=False)
-
-
-if __name__ == '__main__':
-    main()
+test[['id','after']].to_csv('submission.csv', index=False)

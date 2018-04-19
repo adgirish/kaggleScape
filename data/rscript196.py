@@ -1,85 +1,246 @@
-'''
-    Approximate calculation of EF1. Based on algorythm from "Dembczy´nski, K., Waegeman, W., Cheng, W., H¨ullermeier, E.: An exact algorithm
-    for F-measure maximization. In: Neural Information Processing Systems (2011)".
-    
-    by @kruegger
-    version 2. Include 'None' as product with probability p_none
-    
-'''
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
 
-'''
-Usage:
+import datetime
+import pandas as pd
+import numpy as np
+from sklearn.cross_validation import KFold
+from sklearn.cross_validation import train_test_split
+from sklearn.metrics import roc_auc_score
+import xgboost as xgb
+import random
+from operator import itemgetter
+import time
+import copy
 
-=> df_group is dataframe with following structure:
-
-    user_id	product_id	order_id	pred	true
-0	    5	3376	    2196797	0.330466	0.0
-1	    5	5999	    2196797	0.330330	0.0
-2	    5	6808	    2196797	0.319509	0.0
-3	    5	8518	    2196797	0.388290	0.0
-4	    5	11777	    2196797	0.535934	0.0
-
-pred - predictions from your model
-true - ground truth
-
-<= dataframe:
-
-    ef1	        products
-0	0.542255	11777 26604 24535 43693 40706 8518 21413 13988...
+random.seed(2016)
 
 
-Scenario:
-
-df - dataset with all predictions
-
-df.head()
-    user_id	product_id	order_id	pred	true
-0	    5	3376	    2196797	0.330466	0.0
-1	    5	5999	    2196797	0.330330	0.0
-2	    5	6808	    2196797	0.319509	0.0
-3	    5	8518	    2196797	0.388290	0.0
-4	    5	11777	    2196797	0.535934	0.0
-...
-
-dfg = df.groupby(['order_id'])
-df_ef1 = dfg.apply(lambda x: calc_approx_ef1(x))
-
-df_ef1['products'].reset_index().to_csv(r'sub.csv', header=['order_id','products'], index=False)
+def create_feature_map(features):
+    outfile = open('xgb.fmap', 'w')
+    for i, feat in enumerate(features):
+        outfile.write('{0}\t{1}\tq\n'.format(i, feat))
+    outfile.close()
 
 
-''' 
-def calc_approx_ef1(df_group):
+def get_importance(gbm, features):
+    create_feature_map(features)
+    importance = gbm.get_fscore(fmap='xgb.fmap')
+    importance = sorted(importance.items(), key=itemgetter(1), reverse=True)
+    return importance
 
-    df = df_group.copy()
-    order_id = np.int(df.iloc[0]['order_id'])
-    
-    df = df.sort_values('pred', ascending=False)[['product_id', 'pred', 'true']]
-    products, preds = (zip(*df.sort_values('pred', ascending=False)[['product_id', 'pred']].values))
-    _true = list(map(int, df['true'].values))
-    pred_none = np.cumprod([1-x for x in preds])[-1]
 
-    # add 'None' as product with p_none
-    # ************************************************************
-    products = list(products)[::-1]
-    preds = list(preds)[::-1]
-    ii = bisect.bisect(preds, pred_none)
-    bisect.insort(preds, pred_none)
-    products.insert(ii, 65535)
-    products = products[::-1]
-    preds = preds[::-1]
-    # ************************************************************
-    
-    pi_sum = np.sum(preds)
-    _len = len(products)
-    mask = np.tril(np.ones((_len, _len)))
-    hi_sum = mask.sum(1)
+def intersect(a, b):
+    return list(set(a) & set(b))
 
-    phi_sum = 2*np.dot(mask, preds)
-    ef1 = phi_sum / (pi_sum+hi_sum)
 
-    ef1_max = np.max(ef1)
+def run_single(train, test, features, target, random_state=0):
+    eta = 0.2
+    max_depth = 5
+    subsample = 0.8
+    colsample_bytree = 0.8
+    start_time = time.time()
 
-    prod_max = ' '.join(map(str, map(int, filter(bool, mask[np.argmax(ef1)]*products))))
-    prod_list = prod_max.replace('65535', 'None') # if ef1_max > pred_none else 'None'
+    print('XGBoost params. ETA: {}, MAX_DEPTH: {}, SUBSAMPLE: {}, COLSAMPLE_BY_TREE: {}'.format(eta, max_depth, subsample, colsample_bytree))
+    params = {
+        "objective": "binary:logistic",
+        "booster" : "gbtree",
+        "eval_metric": "auc",
+        "eta": eta,
+        "tree_method": 'exact',
+        "max_depth": max_depth,
+        "subsample": subsample,
+        "colsample_bytree": colsample_bytree,
+        "silent": 1,
+        "seed": random_state,
+    }
+    num_boost_round = 115
+    early_stopping_rounds = 10
+    test_size = 0.1
 
-    return pd.DataFrame({'products':[prod_list], 'ef1':[ef1_max]})
+    X_train, X_valid = train_test_split(train, test_size=test_size, random_state=random_state)
+    print('Length train:', len(X_train.index))
+    print('Length valid:', len(X_valid.index))
+    y_train = X_train[target]
+    y_valid = X_valid[target]
+    dtrain = xgb.DMatrix(X_train[features], y_train)
+    dvalid = xgb.DMatrix(X_valid[features], y_valid)
+
+    watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
+    gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, early_stopping_rounds=early_stopping_rounds, verbose_eval=True)
+
+    print("Validating...")
+    check = gbm.predict(xgb.DMatrix(X_valid[features]), ntree_limit=gbm.best_iteration+1)
+    score = roc_auc_score(X_valid[target].values, check)
+    print('Check error value: {:.6f}'.format(score))
+
+    imp = get_importance(gbm, features)
+    print('Importance array: ', imp)
+
+    print("Predict test set...")
+    test_prediction = gbm.predict(xgb.DMatrix(test[features]), ntree_limit=gbm.best_iteration+1)
+
+    print('Training time: {} minutes'.format(round((time.time() - start_time)/60, 2)))
+    return test_prediction.tolist(), score
+
+
+def run_kfold(nfolds, train, test, features, target, random_state=0):
+    eta = 0.1
+    max_depth = 5
+    subsample = 0.8
+    colsample_bytree = 0.8
+    start_time = time.time()
+
+    print('XGBoost params. ETA: {}, MAX_DEPTH: {}, SUBSAMPLE: {}, COLSAMPLE_BY_TREE: {}'.format(eta, max_depth, subsample, colsample_bytree))
+    params = {
+        "objective": "binary:logistic",
+        "booster" : "gbtree",
+        "eval_metric": "auc",
+        "eta": eta,
+        "max_depth": max_depth,
+        "subsample": subsample,
+        "colsample_bytree": colsample_bytree,
+        "silent": 1,
+        "seed": random_state
+    }
+    num_boost_round = 50
+    early_stopping_rounds = 10
+
+    yfull_train = dict()
+    yfull_test = copy.deepcopy(test[['activity_id']].astype(object))
+    kf = KFold(len(train.index), n_folds=nfolds, shuffle=True, random_state=random_state)
+    num_fold = 0
+    for train_index, test_index in kf:
+        num_fold += 1
+        print('Start fold {} from {}'.format(num_fold, nfolds))
+        X_train, X_valid = train[features].as_matrix()[train_index], train[features].as_matrix()[test_index]
+        y_train, y_valid = train[target].as_matrix()[train_index], train[target].as_matrix()[test_index]
+        X_test = test[features].as_matrix()
+
+        print('Length train:', len(X_train))
+        print('Length valid:', len(X_valid))
+
+        dtrain = xgb.DMatrix(X_train, y_train)
+        dvalid = xgb.DMatrix(X_valid, y_valid)
+
+        watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
+        gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, early_stopping_rounds=early_stopping_rounds, verbose_eval=True)
+        
+        print("Validating...")
+        yhat = gbm.predict(xgb.DMatrix(X_valid), ntree_limit=gbm.best_iteration+1)
+        score = roc_auc_score(y_valid.tolist(), yhat)
+        print('Check error value: {:.6f}'.format(score))
+
+        # Each time store portion of precicted data in train predicted values
+        for i in range(len(test_index)):
+            yfull_train[test_index[i]] = yhat[i]
+
+        imp = get_importance(gbm, features)
+        print('Importance array: ', imp)
+
+        print("Predict test set...")
+        test_prediction = gbm.predict(xgb.DMatrix(X_test), ntree_limit=gbm.best_iteration+1)
+        yfull_test['kfold_' + str(num_fold)] = test_prediction
+
+    # Copy dict to list
+    train_res = []
+    for i in sorted(yfull_train.keys()):
+        train_res.append(yfull_train[i])
+
+    score = roc_auc_score(train[target], np.array(train_res))
+    print('Check error value: {:.6f}'.format(score))
+
+    # Find mean for KFolds on test
+    merge = []
+    for i in range(1, nfolds+1):
+        merge.append('kfold_' + str(i))
+    yfull_test['mean'] = yfull_test[merge].mean(axis=1)
+
+    print('Training time: {} minutes'.format(round((time.time() - start_time)/60, 2)))
+    return yfull_test['mean'].values, score
+
+
+def create_submission(score, test, prediction):
+    now = datetime.datetime.now()
+    sub_file = 'submission_' + str(score) + '_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
+    print('Writing submission: ', sub_file)
+    f = open(sub_file, 'w')
+    f.write('activity_id,outcome\n')
+    total = 0
+    for id in test['activity_id']:
+        str1 = str(id) + ',' + str(prediction[total])
+        str1 += '\n'
+        total += 1
+        f.write(str1)
+    f.close()
+
+
+def get_features(train, test):
+    trainval = list(train.columns.values)
+    testval = list(test.columns.values)
+    output = intersect(trainval, testval)
+    output.remove('people_id')
+    output.remove('activity_id')
+    return sorted(output)
+
+
+def read_test_train():
+
+    print("Read people.csv...")
+    people = pd.read_csv("../input/people.csv",
+                       dtype={'people_id': np.str,
+                              'activity_id': np.str,
+                              'char_38': np.int32},
+                       parse_dates=['date'])
+
+    print("Load train.csv...")
+    train = pd.read_csv("../input/act_train.csv",
+                        dtype={'people_id': np.str,
+                               'activity_id': np.str,
+                               'outcome': np.int8},
+                        parse_dates=['date'])
+
+    print("Load test.csv...")
+    test = pd.read_csv("../input/act_test.csv",
+                       dtype={'people_id': np.str,
+                              'activity_id': np.str},
+                       parse_dates=['date'])
+
+    print("Process tables...")
+    for table in [train, test]:
+        table['year'] = table['date'].dt.year
+        table['month'] = table['date'].dt.month
+        table['day'] = table['date'].dt.day
+        table.drop('date', axis=1, inplace=True)
+        table['activity_category'] = table['activity_category'].str.lstrip('type ').astype(np.int32)
+        for i in range(1, 11):
+            table['char_' + str(i)].fillna('type -999', inplace=True)
+            table['char_' + str(i)] = table['char_' + str(i)].str.lstrip('type ').astype(np.int32)
+
+    people['year'] = people['date'].dt.year
+    people['month'] = people['date'].dt.month
+    people['day'] = people['date'].dt.day
+    people.drop('date', axis=1, inplace=True)
+    people['group_1'] = people['group_1'].str.lstrip('group ').astype(np.int32)
+    for i in range(1, 10):
+        people['char_' + str(i)] = people['char_' + str(i)].str.lstrip('type ').astype(np.int32)
+    for i in range(10, 38):
+        people['char_' + str(i)] = people['char_' + str(i)].astype(np.int32)
+
+    print("Merge...")
+    train = pd.merge(train, people, how='left', on='people_id', left_index=True)
+    train.fillna(-999, inplace=True)
+    test = pd.merge(test, people, how='left', on='people_id', left_index=True)
+    test.fillna(-999, inplace=True)
+
+    features = get_features(train, test)
+    return train, test, features
+
+
+train, test, features = read_test_train()
+print('Length of train: ', len(train))
+print('Length of test: ', len(test))
+print('Features [{}]: {}'.format(len(features), sorted(features)))
+
+test_prediction, score = run_single(train, test, features, 'outcome')
+# test_prediction, score = run_kfold(3, train, test, features, 'outcome')
+create_submission(score, test, test_prediction)

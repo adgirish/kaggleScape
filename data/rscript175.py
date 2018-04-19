@@ -1,186 +1,221 @@
-"""
-This is an upgraded version of Ceshine's LGBM starter script, simply adding more
-average features and weekly average features on it.
-"""
-from datetime import date, timedelta
-import calendar as ca
+# coding: utf-8
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
+
 import pandas as pd
 import numpy as np
-from sklearn.metrics import mean_squared_error
-import lightgbm as lgb
-print('Loading Data')
-df_train = pd.read_csv(
-    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
-    dtype={'onpromotion': bool},
-    converters={'unit_sales': lambda u: np.log1p(
-        float(u)) if float(u) > 0 else 0},
-    parse_dates=["date"],
-    skiprows=range(1, 66458909)  # 2016-01-01
-)
-item_nbr_u = df_train[df_train.date>pd.datetime(2017,8,10)].item_nbr.unique()
-
-df_test = pd.read_csv(
-    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
-    dtype={'onpromotion': bool},
-    parse_dates=["date"]  # , date_parser=parser
-).set_index(
-    ['store_nbr', 'item_nbr', 'date']
-)
-
-items = pd.read_csv(
-    "../input/items.csv",
-).set_index("item_nbr")
-
-df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
-del df_train
+from collections import Counter
+import operator
+import math
 
 
+INPUT_PATH = '../input/'
 
-promo_2017_train = df_2017.set_index(
-    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
-        level=-1).fillna(False)
-promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
-promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
-promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
-promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
-promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
-del promo_2017_test, promo_2017_train
 
-df_2017 = df_2017.set_index(
-    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
-        level=-1).fillna(0)
-df_2017.columns = df_2017.columns.get_level_values(1)
+def lcm(a, b):
+    """Compute the lowest common multiple of a and b"""
+    # in case of large numbers, using floor division
+    return a * b // math.gcd(a, b)
 
+
+def avg_normalized_happiness(pred, gift, wish):
     
-items = items.reindex(df_2017.index.get_level_values(1))
+    n_children = 1000000 # n children to give
+    n_gift_type = 1000 # n types of gifts available
+    n_gift_quantity = 1000 # each type of gifts are limited to this quantity
+    n_gift_pref = 100 # number of gifts a child ranks
+    n_child_pref = 1000 # number of children a gift ranks
+    twins = math.ceil(0.04 * n_children / 2.) * 2    # 4% of all population, rounded to the closest number
+    triplets = math.ceil(0.005 * n_children / 3.) * 3    # 0.5% of all population, rounded to the closest number
+    ratio_gift_happiness = 2
+    ratio_child_happiness = 2
 
-def get_timespan(df, dt, minus, periods, freq='D'):
-    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
+    # check if triplets have the same gift
+    for t1 in np.arange(0, triplets, 3):
+        triplet1 = pred[t1]
+        triplet2 = pred[t1+1]
+        triplet3 = pred[t1+2]
+        # print(t1, triplet1, triplet2, triplet3)
+        assert triplet1 == triplet2 and triplet2 == triplet3
+                
+    # check if twins have the same gift
+    for t1 in np.arange(triplets, triplets+twins, 2):
+        twin1 = pred[t1]
+        twin2 = pred[t1+1]
+        # print(t1)
+        assert twin1 == twin2
 
-def get_nearwd(date,b_date):
-    date_list = pd.date_range(date-timedelta(140),periods=21,freq='7D').date
-    result = date_list[date_list<=b_date][-1]
-    return result
-def prepare_dataset(t2017, is_train=True):
-    X = pd.DataFrame({
-        "promo_14_2017": get_timespan(promo_2017, t2017, 14, 14).sum(axis=1).values,
-        "promo_60_2017": get_timespan(promo_2017, t2017, 60, 60).sum(axis=1).values,
-        "promo_140_2017": get_timespan(promo_2017, t2017, 140, 140).sum(axis=1).values,
-        "unpromo_16aftsum_2017":(1-get_timespan(promo_2017, t2017+timedelta(16), 16, 16)).iloc[:,1:].sum(axis=1).values, 
-    })
-
-    for i in range(16):
-        X["promo_{}".format(i)] = promo_2017[
-            t2017 + timedelta(days=i)].values.astype(np.uint8)
-        for j in [14,60,140]:
-            X["aft_promo_{}{}".format(i,j)] = (promo_2017[
-                t2017 + timedelta(days=i)]-1).values.astype(np.uint8)
-            X["aft_promo_{}{}".format(i,j)] = X["aft_promo_{}{}".format(i,j)]\
-                                        *X['promo_{}_2017'.format(j)]
-        if i ==15:
-            X["bf_unpromo_{}".format(i)]=0
-        else:
-            X["bf_unpromo_{}".format(i)] = (1-get_timespan(
-                    promo_2017, t2017+timedelta(16), 16-i, 16-i)).iloc[:,1:].sum(
-                            axis=1).values / (15-i) * X['promo_{}'.format(i)]
-
-    for i in range(7):
-        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 28-i, 4, freq='7D').mean(axis=1).values
-        #X['mean_12_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 84-i, 12, freq='7D').mean(axis=1).values
-        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df_2017, t2017, 140-i, 20, freq='7D').mean(axis=1).values        
+    max_child_happiness = n_gift_pref * ratio_child_happiness
+    max_gift_happiness = n_child_pref * ratio_gift_happiness
+    total_child_happiness = 0
+    total_gift_happiness = np.zeros(n_gift_type)
+    
+    for i in range(len(pred)):
+        child_id = i
+        gift_id = pred[i]
         
-        date = get_nearwd(t2017+timedelta(i),t2017)
-        ahead = (t2017-date).days
-        if ahead!=0:
-            X['ahead0_{}'.format(i)] = get_timespan(df_2017, date+timedelta(ahead), ahead, ahead).mean(axis=1).values
-            X['ahead7_{}'.format(i)] = get_timespan(df_2017, date+timedelta(ahead), ahead+7, ahead+7).mean(axis=1).values
-        X["day_1_2017_{}1".format(i)]= get_timespan(df_2017, date, 1, 1).values.ravel()
-        X["day_1_2017_{}2".format(i)]= get_timespan(df_2017, date-timedelta(7), 1, 1).values.ravel()
-        for m in [3,7,14,30,60,140]:
-            X["mean_{}_2017_{}1".format(m,i)]= get_timespan(df_2017, date,m, m).\
-                mean(axis=1).values
-            X["mean_{}_2017_{}2".format(m,i)]= get_timespan(df_2017, date-timedelta(7),m, m).\
-                mean(axis=1).values
-    if is_train:
-        y = df_2017[
-            pd.date_range(t2017, periods=16)
-        ].values
-        return X, y
-    return X
+        # check if child_id and gift_id exist
+        assert child_id < n_children
+        assert gift_id < n_gift_type
+        assert child_id >= 0 
+        assert gift_id >= 0
+        child_happiness = (n_gift_pref - np.where(wish[child_id]==gift_id)[0]) * ratio_child_happiness
+        if not child_happiness:
+            child_happiness = -1
 
-print("Preparing dataset...")
+        gift_happiness = ( n_child_pref - np.where(gift[gift_id]==child_id)[0]) * ratio_gift_happiness
+        if not gift_happiness:
+            gift_happiness = -1
 
-t2017 = date(2017, 7, 5)
-X_l, y_l = [], []
-for i in range(4):
-    delta = timedelta(days=7 * i)
-    X_tmp, y_tmp = prepare_dataset(
-        t2017 + delta
-    )
-    X_l.append(X_tmp)
-    y_l.append(y_tmp)
-X_train = pd.concat(X_l, axis=0)
-y_train = np.concatenate(y_l, axis=0)
-del X_l, y_l
-X_val, y_val = prepare_dataset(date(2017, 7, 26))
-X_test = prepare_dataset(date(2017, 8, 16), is_train=False)
+        total_child_happiness += child_happiness
+        total_gift_happiness[gift_id] += gift_happiness
+        
+    denominator1 = n_children*max_child_happiness
+    denominator2 = n_gift_quantity*max_gift_happiness*n_gift_type
+    common_denom = lcm(denominator1, denominator2)
+    multiplier = common_denom / denominator1
 
-print("Training and predicting models...")
-params = {
-    'num_leaves': 31,
-    'objective': 'regression',
-    'min_data_in_leaf': 200,
-    'learning_rate': 0.07,
-    'feature_fraction': 0.8,
-    'bagging_fraction': 0.85,
-    'bagging_freq': 3,
-    'metric': 'l2_root',
-    'num_threads': 4
-}
+    ret = float(math.pow(total_child_happiness*multiplier,3) + \
+        math.pow(np.sum(total_gift_happiness),3)) / float(math.pow(common_denom,3))
+    return ret
+    
 
-MAX_ROUNDS = 400
-val_pred = []
-test_pred = []
-cate_vars = []
-for i in range(16):
-    print("=" * 50)
-    print("Step %d" % (i+1))
-    print("=" * 50)
-    dtrain = lgb.Dataset(
-        X_train, label=y_train[:, i],
-        categorical_feature=cate_vars,
-        weight=pd.concat([items["perishable"]] * 4) * 0.25 + 1
-    )
-    dval = lgb.Dataset(
-        X_val, label=y_val[:, i], reference=dtrain,
-        weight=items["perishable"] * 0.25 + 1,
-        categorical_feature=cate_vars)
-    bst = lgb.train(
-        params, dtrain, num_boost_round=MAX_ROUNDS,
-        valid_sets=[dtrain, dval], early_stopping_rounds=50, verbose_eval=100
-    )
-    print("\n".join(("%s: %.2f" % x) for x in sorted(
-        zip(X_train.columns, bst.feature_importance("gain")),
-        key=lambda x: x[1], reverse=True
-    )))
-    val_pred.append(bst.predict(
-        X_val, num_iteration=bst.best_iteration or MAX_ROUNDS))
-    test_pred.append(bst.predict(
-        X_test, num_iteration=bst.best_iteration or MAX_ROUNDS))
+def get_overall_hapiness(wish, gift):
 
-print("Validation mse:", mean_squared_error(
-    y_val, np.array(val_pred).transpose())**0.5)
 
-print("Making submission...")
-y_test = np.array(test_pred).transpose()
-df_preds = pd.DataFrame(
-    y_test, index=df_2017.index,
-    columns=pd.date_range("2017-08-16", periods=16)
-).stack().to_frame("unit_sales")
-df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
+    res_child = dict()
+    for i in range(0, wish.shape[0]):
+        for j in range(55):
+            res_child[(i, wish[i][j])] = int(100* (1 + (wish.shape[1] - j)*2))
 
-submission = df_test[["id"]].join(df_preds, how="left").fillna(0).reset_index()
-submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 10000)
-submission.loc[~submission.item_nbr.isin(item_nbr_u),'unit_sales']=0
-del item_nbr_u
-submission[['id','unit_sales']].to_csv('lgb.csv', float_format='%.4f', index=None)
+    res_santa = dict()
+    for i in range(gift.shape[0]):
+        for j in range(gift.shape[1]):
+            res_santa[(gift[i][j], i)] = int((1 + (gift.shape[1] - j)*2))
+
+    positive_cases = list(set(res_santa.keys()) | set(res_child.keys()))
+    print('Positive case tuples (child, gift): {}'.format(len(positive_cases)))
+
+    res = dict()
+    for p in positive_cases:
+        res[p] = 0
+        if p in res_child:
+            res[p] += res_child[p]
+        if p in res_santa:
+            res[p] += res_santa[p]
+    return res
+
+
+def sort_dict_by_values(a, reverse=True):
+    sorted_x = sorted(a.items(), key=operator.itemgetter(1), reverse=reverse)
+    return sorted_x
+
+
+def value_counts_for_list(lst):
+    a = dict(Counter(lst))
+    a = sort_dict_by_values(a, True)
+    return a
+
+
+def get_most_desired_gifts(wish, gift):
+    best_gifts = value_counts_for_list(np.ravel(wish))
+    return best_gifts
+
+
+def recalc_hapiness(happiness, best_gifts, gift):
+    recalc = dict()
+    for b in best_gifts:
+        recalc[b[0]] = b[1] / 2000000
+
+    for h in happiness:
+        c, g = h
+        happiness[h] /= recalc[g]
+
+        # Make triples/twins more happy
+        # if c <= 45000 and happiness[h] < 0.00001:
+        #     happiness[h] = 0.00001
+
+    return happiness
+
+
+def solve():
+    wish = pd.read_csv(INPUT_PATH + 'child_wishlist_v2.csv', header=None).as_matrix()[:, 1:]
+    gift_init = pd.read_csv(INPUT_PATH + 'gift_goodkids_v2.csv', header=None).as_matrix()[:, 1:]
+    gift = gift_init.copy()
+    answ = np.zeros(len(wish), dtype=np.int32)
+    answ[:] = -1
+    gift_count = np.zeros(len(gift), dtype=np.int32)
+
+    happiness = get_overall_hapiness(wish, gift)
+    best_gifts = get_most_desired_gifts(wish, gift)
+    happiness = recalc_hapiness(happiness, best_gifts, gift)
+    sorted_hapiness = sort_dict_by_values(happiness)
+    print('Happiness sorted...')
+
+    for i in range(len(sorted_hapiness)):
+        child = sorted_hapiness[i][0][0]
+        g = sorted_hapiness[i][0][1]
+        if answ[child] != -1:
+            continue
+        if gift_count[g] >= 1000:
+            continue
+        if child <= 5000 and gift_count[g] < 997:
+            if child % 3 == 0:
+                answ[child] = g
+                answ[child+1] = g
+                answ[child+2] = g
+                gift_count[g] += 3
+            elif child % 3 == 1:
+                answ[child] = g
+                answ[child-1] = g
+                answ[child+1] = g
+                gift_count[g] += 3
+            else:
+                answ[child] = g
+                answ[child-1] = g
+                answ[child-2] = g
+                gift_count[g] += 3
+        elif child > 5000 and child <= 45000 and gift_count[g] < 998:
+            if child % 2 == 0:
+                answ[child] = g
+                answ[child - 1] = g
+                gift_count[g] += 2
+            else:
+                answ[child] = g
+                answ[child + 1] = g
+                gift_count[g] += 2
+        elif child > 45000:
+            answ[child] = g
+            gift_count[g] += 1
+
+    print('Left unhappy:', len(answ[answ == -1]))
+    
+    # unhappy children
+    for child in range(45001, len(answ)):
+        if answ[child] == -1:
+            g = np.argmin(gift_count)
+            answ[child] = g
+            gift_count[g] += 1
+
+    if answ.min() == -1:
+        print('Some children without present')
+        exit()
+
+    if gift_count.max() > 1000:
+        print('Some error in kernel: {}'.format(gift_count.max()))
+        exit()
+
+    print('Start score calculation...')
+    # score = avg_normalized_happiness(answ, gift_init, wish)
+    # print('Predicted score: {:.8f}'.format(score))
+    score = avg_normalized_happiness(answ, gift, wish)
+    print('Predicted score: {:.8f}'.format(score))
+
+    out = open('subm_{}.csv'.format(score), 'w')
+    out.write('ChildId,GiftId\n')
+    for i in range(len(answ)):
+        out.write(str(i) + ',' + str(answ[i]) + '\n')
+    out.close()
+
+
+if __name__ == '__main__':
+    solve()

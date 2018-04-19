@@ -1,321 +1,495 @@
 
 # coding: utf-8
 
-# # Transfer learning in kernels with PyTorch
+# # Introduction
+# This is an Exploratory Data Analysis of crime in Vancouver from 2003 to 2017.
 # 
-# Following the same strategy from Beluga's kernel [Use pretrained Keras models](https://www.kaggle.com/gaborfodor/use-pretrained-keras-models-lb-0-3), this kernel uses a dataset with PyTorch pretrained networks weights. 
 # 
-# Training in the CPU is quite slow, but it is still feasible to use a pre-trained network, replace the final layer and train just this last layer. 
-# 
-# Thanks Beluga for your great kernel. This one uses not only the concept but also a lot of the code. 
+# <br>
+# # Importing the Data Analysis and Visualization packages
 
-# In[ ]:
+# In[1]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-import time
+# Import data manipulation packages
 import numpy as np
 import pandas as pd
-import datetime as dt
+
+# Import data visualization packages
 import matplotlib.pyplot as plt
-from mpl_toolkits.axes_grid1 import ImageGrid
-from os import listdir, makedirs, getcwd, remove
-from os.path import isfile, join, abspath, exists, isdir, expanduser
-from PIL import Image
-import torch
-from torch.optim import lr_scheduler
-from torch.autograd import Variable
-from torch.utils.data import Dataset, DataLoader
-import torchvision
-from torchvision import transforms, datasets, models
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# In[ ]:
+# # Processing and Transforming the data
+
+# In[2]:
 
 
-np.random.seed(0)
+# Import CSV file as a pandas df (Data Frame)
+df = pd.read_csv('../input/crime.csv')
+
+# Take a look at the first entries
+df.head()
 
 
-# This [dataset](https://www.kaggle.com/pvlima/pretrained-pytorch-models) has the PyTorch weights for some pre-trained networks.
+# ### Remove unnecessary columns
 # 
-# We have to copy the pretrained models to the cache directory (~/.torch/models) where PyTorch is looking for them.
+# Column MINUTE can be deleted as we don't need to go to the minute level.
+# Columns regarding location (X, Y, Neighbourhood, Hundred block) won't be used in this analysis, but they will be used in the Tableau dashboard (link in the end of this section), so let's keep them for now.
 
-# In[ ]:
-
-
-get_ipython().system('ls ../input/pretrained-pytorch-models/')
+# In[3]:
 
 
-# In[ ]:
+# Dropping column. Use axis = 1 to indicate columns and inplace = True to 'commit' the transaction
+df.drop(['MINUTE'], axis = 1, inplace=True)
 
 
-cache_dir = expanduser(join('~', '.torch'))
-if not exists(cache_dir):
-    makedirs(cache_dir)
-models_dir = join(cache_dir, 'models')
-if not exists(models_dir):
-    makedirs(models_dir)
+# ### Missing Values
+
+# In[4]:
 
 
-# In[ ]:
+# Let's take a look into our data to check for missing values and data types
+df.info()
 
 
-get_ipython().system('cp ../input/pretrained-pytorch-models/* ~/.torch/models/')
+# We can see that we have 530,652 entries, but some columns (HOUR, HUNDRED_BLOCK and NEIGHBOURHOOD) have less, which means that there are missing values. Let's fill them.
+
+# In[5]:
 
 
-# In[ ]:
+# As HOUR is a float data type, I'm filling with a dummy value of '99'. For others, filling with 'N/A'
+df['HOUR'].fillna(99, inplace = True)
+df['NEIGHBOURHOOD'].fillna('N/A', inplace = True)
+df['HUNDRED_BLOCK'].fillna('N/A', inplace = True)
 
 
-get_ipython().system('ls ~/.torch/models')
+# ### Transforming the DATE column
+# The date is separated in different columns (YEAR, MONTH, DAY) , let's combine them into a single column and add it as a new column called 'DATE'
+
+# In[6]:
 
 
-# In[ ]:
+# Use pandas function to_datetime to convert it to a datetime data type
+df['DATE'] = pd.to_datetime({'year':df['YEAR'], 'month':df['MONTH'], 'day':df['DAY']})
 
 
-get_ipython().system('ls ../input/dog-breed-identification')
+# It might be useful to have the day of the week...
+
+# In[7]:
 
 
-# Using just 16 most frequent breeds to keep the running time under the kernel limit
-
-# In[ ]:
-
-
-INPUT_SIZE = 224
-NUM_CLASSES = 16
-data_dir = '../input/dog-breed-identification/'
-labels = pd.read_csv(join(data_dir, 'labels.csv'))
-sample_submission = pd.read_csv(join(data_dir, 'sample_submission.csv'))
-print(len(listdir(join(data_dir, 'train'))), len(labels))
-print(len(listdir(join(data_dir, 'test'))), len(sample_submission))
+# Let's use padas dt.dayofweek (Monday=0 to Sunday=6) and add it as a column called 'DAY_OF_WEEK'
+df['DAY_OF_WEEK'] = df['DATE'].dt.dayofweek
 
 
-# In[ ]:
+# When working with time series data, using the date as the index is helpful.
+
+# In[8]:
 
 
-selected_breed_list = list(labels.groupby('breed').count().sort_values(by='id', ascending=False).head(NUM_CLASSES).index)
-labels = labels[labels['breed'].isin(selected_breed_list)]
-labels['target'] = 1
-labels['rank'] = labels.groupby('breed').rank()['id']
-labels_pivot = labels.pivot('id', 'breed', 'target').reset_index().fillna(0)
-
-train = labels_pivot.sample(frac=0.8)
-valid = labels_pivot[~labels_pivot['id'].isin(train['id'])]
-print(train.shape, valid.shape)
+# Change the index to the colum 'DATE'
+df.index = pd.DatetimeIndex(df['DATE'])
 
 
-# In[ ]:
+# This dataset was extracted in 2017-07-18 and it contains partial data for this month. I'm excluding them to keep full months only.
+
+# In[9]:
 
 
-class DogsDataset(Dataset):
-    def __init__(self, labels, root_dir, subset=False, transform=None):
-        self.labels = labels
-        self.root_dir = root_dir
-        self.transform = transform
-    
-    def __len__(self):
-        return len(self.labels)
-    
-    def __getitem__(self, idx):
-        img_name = '{}.jpg'.format(self.labels.iloc[idx, 0])
-        fullname = join(self.root_dir, img_name)
-        image = Image.open(fullname)
-        labels = self.labels.iloc[idx, 1:].as_matrix().astype('float')
-        labels = np.argmax(labels)
-        if self.transform:
-            image = self.transform(image)
-        return [image, labels]
+# Filtering the data to exclude month of July 2017
+df = df[df['DATE'] < '2017-07-01']
 
 
-# In[ ]:
+# ### Creating Categories
+# Let's see the type of crimes that we have in our data and categorize them.
+
+# In[10]:
 
 
-normalize = transforms.Normalize(
-   mean=[0.485, 0.456, 0.406],
-   std=[0.229, 0.224, 0.225]
-)
-ds_trans = transforms.Compose([transforms.Scale(224),
-                               transforms.CenterCrop(224),
-                               transforms.ToTensor(),
-                               normalize])
-train_ds = DogsDataset(train, data_dir+'train/', transform=ds_trans)
-valid_ds = DogsDataset(valid, data_dir+'train/', transform=ds_trans)
-
-train_dl = DataLoader(train_ds, batch_size=4, shuffle=True, num_workers=4)
-valid_dl = DataLoader(valid_ds, batch_size=4, shuffle=True, num_workers=4)
+# Using pandas value_counts function to aggregate types
+df['TYPE'].value_counts().sort_index()
 
 
-# In[ ]:
+# From the types above, I'm creating the following categories: Break and Enter, Theft, Vehicle Collision, Others
+
+# In[11]:
 
 
-def imshow(axis, inp):
-    """Denormalize and show"""
-    inp = inp.numpy().transpose((1, 2, 0))
-    mean = np.array([0.485, 0.456, 0.406])
-    std = np.array([0.229, 0.224, 0.225])
-    inp = std * inp + mean
-    axis.imshow(inp)
+# Create a function to categorize types, using an 'if' statement.
+def category(crime_type):
+    if 'Theft' in crime_type:
+        return 'Theft'
+    elif 'Break' in crime_type:
+        return 'Break and Enter'
+    elif 'Collision' in crime_type:
+        return 'Vehicle Collision'
+    else:
+        return 'Others'
 
 
-# In[ ]:
+# In[12]:
 
 
-img, label = next(iter(train_dl))
-print(img.size(), label.size())
-fig = plt.figure(1, figsize=(16, 4))
-grid = ImageGrid(fig, 111, nrows_ncols=(1, 4), axes_pad=0.05)    
-for i in range(img.size()[0]):
-    ax = grid[i]
-    imshow(ax, img[i])
+# Apply the function and add it as CATEGORY column
+df['CATEGORY'] = df['TYPE'].apply(category)
 
 
-# # ResNet50
+# Although 'vehicle collision' is included in this data, I'll separate it apart because I believe it is a different kind of crime.
+
+# In[13]:
+
+
+vehicle_collision = df[df['CATEGORY'] == 'Vehicle Collision']
+crimes = df[df['CATEGORY'] != 'Vehicle Collision']
+
+
+# Now we have our data frame named __*crimes*__ ready to analyze.
+
+# # Exploratory Data Analysis
+# ---
+# ### What's the distribution of crimes per day?
+# Let's start with a histogram of crimes per day.
+
+# In[14]:
+
+
+# Using resample('D') to group it by day and size() to return the count
+plt.figure(figsize=(15,6))
+plt.title('Distribution of Crimes per day', fontsize=16)
+plt.tick_params(labelsize=14)
+sns.distplot(crimes.resample('D').size(), bins=60);
+
+
+# * We can see that the distribution looks like a *normal distribution* with a mean around *95 crimes per day*.
 # 
-# ### Just try the model 
-
-# In[ ]:
-
-
-use_gpu = torch.cuda.is_available()
-resnet = models.resnet50(pretrained=True)
-inputs, labels = next(iter(train_dl))
-if use_gpu:
-    resnet = resnet.cuda()
-    inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())   
-else:
-    inputs, labels = Variable(inputs), Variable(labels)
-outputs = resnet(inputs)
-outputs.size()
-
-
-# The model seems to work OK. Resnet outputs probabilities for the imagenet 1000 labels as expected. 
-
-# ### Replace last layer and train
+# * There is one outlier over 600. Let's find out which day it is.
 # 
-# Will replace the last layer with one that predicts the 16 classes. The network weights will be fixed expected for the last layer that is trained.
+# <br>
+# ### Outlier
 
-# In[ ]:
-
-
-def train_model(dataloders, model, criterion, optimizer, scheduler, num_epochs=25):
-    since = time.time()
-    use_gpu = torch.cuda.is_available()
-    best_model_wts = model.state_dict()
-    best_acc = 0.0
-    dataset_sizes = {'train': len(dataloders['train'].dataset), 
-                     'valid': len(dataloders['valid'].dataset)}
-
-    for epoch in range(num_epochs):
-        for phase in ['train', 'valid']:
-            if phase == 'train':
-                scheduler.step()
-                model.train(True)
-            else:
-                model.train(False)
-
-            running_loss = 0.0
-            running_corrects = 0
-
-            for inputs, labels in dataloders[phase]:
-                if use_gpu:
-                    inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
-                else:
-                    inputs, labels = Variable(inputs), Variable(labels)
-
-                optimizer.zero_grad()
-
-                outputs = model(inputs)
-                _, preds = torch.max(outputs.data, 1)
-                loss = criterion(outputs, labels)
-
-                if phase == 'train':
-                    loss.backward()
-                    optimizer.step()
-
-                running_loss += loss.data[0]
-                running_corrects += torch.sum(preds == labels.data)
-            
-            if phase == 'train':
-                train_epoch_loss = running_loss / dataset_sizes[phase]
-                train_epoch_acc = running_corrects / dataset_sizes[phase]
-            else:
-                valid_epoch_loss = running_loss / dataset_sizes[phase]
-                valid_epoch_acc = running_corrects / dataset_sizes[phase]
-                
-            if phase == 'valid' and valid_epoch_acc > best_acc:
-                best_acc = valid_epoch_acc
-                best_model_wts = model.state_dict()
-
-        print('Epoch [{}/{}] train loss: {:.4f} acc: {:.4f} ' 
-              'valid loss: {:.4f} acc: {:.4f}'.format(
-                epoch, num_epochs - 1,
-                train_epoch_loss, train_epoch_acc, 
-                valid_epoch_loss, valid_epoch_acc))
-            
-    print('Best val Acc: {:4f}'.format(best_acc))
-
-    model.load_state_dict(best_model_wts)
-    return model
+# In[15]:
 
 
-# In[ ]:
+# Using idxmax() to find out the index of the max value
+crimes.resample('D').size().idxmax()
 
 
-resnet = models.resnet50(pretrained=True)
-# freeze all model parameters
-for param in resnet.parameters():
-    param.requires_grad = False
+# So the day was 2011-06-15. 
+# 
+# Let's make a *time series graph* with crimes per day.
 
-# new final layer with 16 classes
-num_ftrs = resnet.fc.in_features
-resnet.fc = torch.nn.Linear(num_ftrs, 16)
-if use_gpu:
-    resnet = resnet.cuda()
-
-criterion = torch.nn.CrossEntropyLoss()
-optimizer = torch.optim.SGD(resnet.fc.parameters(), lr=0.001, momentum=0.9)
-exp_lr_scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
-
-dloaders = {'train':train_dl, 'valid':valid_dl}
+# In[16]:
 
 
-# In[ ]:
+# Create a Upper Control Limit (UCL) and a Lower Control Limit (LCL) without the outlier
+crimes_daily = pd.DataFrame(crimes[crimes['DATE'] != '2011-06-15'].resample('D').size())
+crimes_daily['MEAN'] = crimes[crimes['DATE'] != '2011-06-15'].resample('D').size().mean()
+crimes_daily['STD'] = crimes[crimes['DATE'] != '2011-06-15'].resample('D').size().std()
+UCL = crimes_daily['MEAN'] + 3 * crimes_daily['STD']
+LCL = crimes_daily['MEAN'] - 3 * crimes_daily['STD']
+
+# Plot Total crimes per day, UCL, LCL, Moving-average
+plt.figure(figsize=(15,6))
+crimes.resample('D').size().plot(label='Crimes per day')
+UCL.plot(color='red', ls='--', linewidth=1.5, label='UCL')
+LCL.plot(color='red', ls='--', linewidth=1.5, label='LCL')
+crimes_daily['MEAN'].plot(color='red', linewidth=2, label='Average')
+plt.title('Total crimes per day', fontsize=16)
+plt.xlabel('Day')
+plt.ylabel('Number of crimes')
+plt.tick_params(labelsize=14)
+plt.legend(prop={'size':16});
 
 
-start_time = time.time()
-model = train_model(dloaders, resnet, criterion, optimizer, exp_lr_scheduler, num_epochs=2)
-print('Training time: {:10f} minutes'.format((time.time()-start_time)/60))
+# We can see some days over the Control Limits, indicating *signals*. Also, the period of 2003 to 2008 is above the average. Maybe a different Control Limit could be done for that period, but that's ok for now.
+# 
+# Let's focus on the day 2011-06-15 which is way above. Is that an error on the data?
+# 
+# Let's *drill down* and find out...
+
+# In[17]:
 
 
-# In[ ]:
+# Find out how many crimes by getting the length
+len(crimes['2011-06-15'])
 
 
-def visualize_model(dataloders, model, num_images=16):
-    cnt = 0
-    fig = plt.figure(1, figsize=(16, 16))
-    grid = ImageGrid(fig, 111, nrows_ncols=(4, 4), axes_pad=0.05)
-    for i, (inputs, labels) in enumerate(dataloders['valid']):
-        if use_gpu:
-            inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
-        else:
-            inputs, labels = Variable(inputs), Variable(labels)
-
-        outputs = model(inputs)
-        _, preds = torch.max(outputs.data, 1)
-
-        for j in range(inputs.size()[0]):
-            ax = grid[cnt]
-            imshow(ax, inputs.cpu().data[j])
-            ax.text(10, 210, '{}/{}'.format(preds[j], labels.data[j]), 
-                    color='k', backgroundcolor='w', alpha=0.8)
-            cnt += 1
-            if cnt == num_images:
-                return
+# In[18]:
 
 
-# In[ ]:
+# Check how many crimes per type
+crimes['2011-06-15']['TYPE'].value_counts().head(5)
 
 
-visualize_model(dloaders, resnet)
+# In[19]:
 
 
-# This kernel was mainly to test using transfer learning in kernels using PyTorch. Training is slow in CPU but it works.   
+# Check how many crimes per neighbourhood
+crimes['2011-06-15']['NEIGHBOURHOOD'].value_counts().head(5)
+
+
+# In[20]:
+
+
+# Check how many crimes per hour
+crimes['2011-06-15']['HOUR'].value_counts().head(5)
+
+
+# There are 647 occurrences, mostly mischief type, in the Central Business District, around the same hour but no exactly. They don't really seem to be duplicated entries.
+# 
+# 
+# <br>
+# ### The Stanley Cup Riot
+# 
+# I moved to Canada in 2016 and I had no idea if something happened that day, so a Google search showed me it was the Stanley Cup's final game, Boston Bruins vs Vancouver Canucks. There were 155,000 people watching it in the downtown area. Before the game was over, as the Vancouver Canucks was about to loose it, a big riot started. It seems that it was ugly... If you want to know more about it, there is a <a href="http://www2.gov.bc.ca/assets/gov/law-crime-and-justice/criminal-justice/prosecution-service/reports-publications/stanley-cup-riot-prosecutions.pdf" target="_blank">21-pages report</a> by the BC Ministry of Justice.
+# 
+# So that day wasn't an error on the data and it showed me something that happened in Vancouver that I wasn't expecting at all. Interesting...
+# 
+# 
+# <br>
+# ### Which days have the highest and lowest average number crimes?
+
+# In[21]:
+
+
+# Create a pivot table with day and month; another that counts the number of years that each day had; and the average. 
+crimes_pivot_table = crimes[(crimes['DATE'] != '2011-06-15')].pivot_table(values='YEAR', index='DAY', columns='MONTH', aggfunc=len)
+crimes_pivot_table_year_count = crimes[(crimes['DATE'] != '2011-06-15')].pivot_table(values='YEAR', index='DAY', columns='MONTH', aggfunc=lambda x: len(x.unique()))
+crimes_average = crimes_pivot_table/crimes_pivot_table_year_count
+crimes_average.columns = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']
+
+# Using seaborn heatmap
+plt.figure(figsize=(7,9))
+plt.title('Average Number of Crime per Day and Month', fontsize=14)
+sns.heatmap(crimes_average.round(), cmap='seismic', linecolor='grey',linewidths=0.1, cbar=False, annot=True, fmt=".0f");
+
+
+# Blue means good days. Red bad days. White average days.
+# * The calmest day of crime is Christmas Day, December 25 (30% below average). Criminals also celebrate with families...
+# * The worst day is New Year's Day, January 1 (30% above average). And then after Christmas celebration, criminals take advantage of drunk people at parties?
+# * The first day of the month is a busy day for all months.
+# * Halloween (October 30,31 and November 1) are also dangerous days.
+# * The second week of summer months are usually the most dangerous.
+# * BC Day (August 7) long weekend have high averages.
+# 
+# <br>
+# ### Is crime descreasing or increasing?
+# Now let's plot the number of crimes per month and a moving average:
+
+# In[22]:
+
+
+# Using resample 'M' and rolling window 12
+plt.figure(figsize=(15,6))
+crimes.resample('M').size().plot(label='Total per month')
+crimes.resample('M').size().rolling(window=12).mean().plot(color='red', linewidth=5, label='12-months Moving Average')
+
+plt.title('Crimes per month', fontsize=16)
+plt.xlabel('')
+plt.legend(prop={'size':16})
+plt.tick_params(labelsize=16);
+
+
+# * Average number of crimes per month decreased from 4,000 crimes per month to around 2,400 in the period of 2003 to 2011. That's really good!
+#   * Vancouver hosted the 2010 Winter Olympics and the election for host city happened in 2003. So maybe the decrease of crimes is related to this event?
+# 
+# 
+# * From 2011 to 2014, the moving average was around the same.
+# * From 2014, the average has increased and 2016 reached similar leves of 2008.
+# 
+# <br>
+# ### Is this trend the same for all categories?
+# Let's redo the plot but with categories.
+
+# In[23]:
+
+
+# Using pivot_table to groub by date and category, resample 'M' and rolling window 12
+crimes.pivot_table(values='TYPE', index='DATE', columns='CATEGORY', aggfunc=len).resample('M').sum().rolling(window=12).mean().plot(figsize=(15,6), linewidth=4)
+plt.title('Moving Average of Crimes per month by Category', fontsize=16)
+plt.xlabel('')
+plt.legend(prop={'size':16})
+plt.tick_params(labelsize=16);
+
+
+# * Theft is the major category. The decrease and increase that we saw in the average number of crimes per month was mainly because of the variation in this category.
+# 
+# <br>
+# ### Is there any trend within the year?
+# Let's make a heatmap with months and categories
+
+# In[24]:
+
+
+# Create a pivot table with month and category. 
+crimes_pivot_table = crimes.pivot_table(values='TYPE', index='CATEGORY', columns='MONTH', aggfunc=len)
+
+# To compare categories, I'm scaling each category by diving by the max value of each one
+crimes_scaled = pd.DataFrame(crimes_pivot_table.iloc[0] / crimes_pivot_table.iloc[0].max())
+
+# Using a for loop to scale others
+for i in [2,1]:
+    crimes_scaled[crimes_pivot_table.index[i]] =  pd.DataFrame(crimes_pivot_table.iloc[i] / crimes_pivot_table.iloc[i].max())
+                    
+# Using seaborn heatmap
+plt.figure(figsize=(4,4))
+plt.title('Month and Category heatmap', fontsize=14)
+plt.tick_params(labelsize=12)
+sns.heatmap(crimes_scaled, cmap='seismic', linecolor='grey',linewidths=0.1, cbar=False);
+
+
+# * Break and Enter has most incidents in January.
+# * Theft and Others are more frequent during summer months. Maybe because people go out more and there is an increased number of tourists?
+# * December is not a "good month" for Theft and Others. Or are thieves busy with Breaking and Entering people's home while they are travelling?
+# 
+# <br>
+# ### What about Day of the Week?
+
+# In[25]:
+
+
+# Create a pivot table with day of the week and category. 
+crimes_pivot_table = crimes.pivot_table(values='TYPE', index='CATEGORY', columns='DAY_OF_WEEK', aggfunc=len)
+
+# To compare categories, I'm scaling each category by diving by the max value of each one
+crimes_scaled = pd.DataFrame(crimes_pivot_table.iloc[0] / crimes_pivot_table.iloc[0].max())
+
+# Using a for loop to scale row
+for i in [2,1]:
+    crimes_scaled[crimes_pivot_table.index[i]] = crimes_pivot_table.iloc[i] / crimes_pivot_table.iloc[i].max()
+                    
+crimes_scaled.index = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+
+# Using seaborn heatmap
+plt.figure(figsize=(4,4))
+plt.title('Day of the Week and Category heatmap', fontsize=14)
+plt.tick_params(labelsize=12)
+sns.heatmap(crimes_scaled, cmap='seismic', linecolor='grey',linewidths=0.1, cbar=False);
+
+
+# * Break and Enter is more frequent on week days.
+# * Theft and Others on weekends.
+# 
+# <br>
+# ### What hours do crimes happen?
+
+# In[26]:
+
+
+# Create a pivot table with hour and category. 
+crimes_pivot_table = crimes.pivot_table(values='TYPE', index='CATEGORY', columns='HOUR', aggfunc=len)
+
+# To compare categories, I'm scaling each category by diving by the max value of each one
+crimes_scaled = pd.DataFrame(crimes_pivot_table.iloc[0] / crimes_pivot_table.iloc[0].max())
+
+# Using a for loop to scale row
+for i in [2,1]:
+    crimes_scaled[crimes_pivot_table.index[i]] =  pd.DataFrame(crimes_pivot_table.iloc[i] / crimes_pivot_table.iloc[i].max())
+                    
+# Using seaborn heatmap
+plt.figure(figsize=(5,5))
+plt.title('Hour and Category heatmap', fontsize=14)
+plt.tick_params(labelsize=12)
+sns.heatmap(crimes_scaled, cmap='seismic', linecolor='grey',linewidths=0.1, cbar=False);
+
+
+# * Most crimes happen between 17:00 and 20:00.
+# * Break and Enter has some activity between 3 and 5 am.
+# * Theft doesn't occur much in those hours between 3 and 5 as expected, because most people are sleeping.
+# * Category Others doesn't have Hour in most of the entries (they are 'offset to protect privacy').
+#  
+#  
+#  <br>
+# ### Do crimes happen in the same hour for each day of the week?
+
+# In[27]:
+
+
+# Create a pivot table with hour and day of week. 
+crimes_pivot_table = crimes[crimes['HOUR'] != 99].pivot_table(values='TYPE', index='DAY_OF_WEEK', columns='HOUR', aggfunc=len)
+
+# To compare categories, I'm scaling each category by diving by the max value of each one
+crimes_scaled = pd.DataFrame(crimes_pivot_table.loc[0] / crimes_pivot_table.loc[0].max())
+
+# Using a for loop to scale each day
+for i in [1,2,3,4,5,6]:
+    crimes_scaled[i] = crimes_pivot_table.loc[i] / crimes_pivot_table.loc[i].max()
+
+# Rename days of week
+crimes_scaled.columns = ['Mon','Tue','Wed','Thu','Fri','Sat','Sun']
+
+# Using seaborn heatmap
+plt.figure(figsize=(6,6))
+plt.title('Hour and Day of the Week heatmap', fontsize=14)
+plt.tick_params(labelsize=12)
+sns.heatmap(crimes_scaled, cmap='seismic', linecolor='grey',linewidths=0.1, cbar=False);
+
+
+# * Here we can notice that week days have a different pattern than weekends.  It's like there is an additional *"crime working hours"* on weekends.
+# 
+# * It looks like it makes sense that the City wanted to close Granville street clubs one hour earlier... 
+# 
+#   See: <a href="http://www.cbc.ca/news/canada/british-columbia/granville-street-clubs-will-close-their-doors-1-hour-earlier-this-summer-1.4163233" target="_blank">Granville Street clubs will close their doors 1 hour earlier this summer.</a>
+#   
+#   
+# <br>
+# ### Exploring Category "Theft"
+# We saw before that most crimes are in the category "Theft". Let's explore it better
+
+# In[28]:
+
+
+# Let's check what types of theft we have and how many
+crimes[crimes['CATEGORY'] == 'Theft']['TYPE'].value_counts()
+
+
+# *Theft from Vehicle* is the major type. Let's view each type over time.
+
+# In[29]:
+
+
+# Initiate the figure and define size
+plt.figure(1)
+plt.figure(figsize=(15,8))
+
+# Using a for loop to plot each type of crime with a moving average
+i = 221
+for crime_type in crimes[crimes['CATEGORY'] == 'Theft']['TYPE'].unique():    
+    plt.subplot(i);
+    crimes[crimes['TYPE'] == crime_type].resample('M').size().plot(label='Total per month')
+    crimes[crimes['TYPE'] == crime_type].resample('M').size().rolling(window=12).mean().plot(color='red', linewidth=5, label='12-months Moving Average')
+    plt.title(crime_type, fontsize=14)
+    plt.xlabel('')
+    plt.legend(prop={'size':12})
+    plt.tick_params(labelsize=12)
+    i = i + 1
+
+
+# * First, let me start with "Theft of Vehicle:
+#   * It had a major decrease, from an average of around 520 crimes per month in 2003 to around 100 in 2012. That's impressive!
+#   * Although the average has been increasing in the past years, it's way below 2003.
+#   * In 2002, the <a href="http://www.baitcar.com/about-impact-bait-car-program" target="_blank">"Bait Car"</a> program was launched and in 2003 the IMPACT group was formed in response to this peak in theft. It looks like they've been doing a great job!
+#   * Side note: I wonder if this decrease of around 80% in the number of theft had any impact on insurance policies prices...
+# 
+# 
+# * Second, about "Other Theft":
+#   * On the opposite trend, other theft has been increasing, from around 200 to almost 500 crimes per month.
+#   * Is it because stealing a car became too risky, but thieves still need to "make a living"?
+#   
+#   
+# * About "Theft from Vehicle":
+#   * It is the most frequent type.
+#   * It decreased along with "Theft of Vehicle" until 2012, but then it increased significantly.
+#   
+#   
+# * Finally, about "Theft of Bicycle":
+#   * We can see a clear trend within the year. It has peaks during summer months, which is expected.
+#   * The average has also been increasing.
+#   
+#  
+#  <br>
+# ### That's it for now!
+# 
+# I've also created a Tableau dashboard to visualize this data. You can check it: <a href="https://wosaku.github.io/crime-vancouver-dashboard.html">here</a>

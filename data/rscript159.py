@@ -1,165 +1,134 @@
-__author__ = 'n01z3'
+__author__ = 'ZFTurbo: https://kaggle.com/zfturbo'
 
-from keras.models import Model
-from keras.layers import Input, Dense, BatchNormalization, Dropout, merge
-from keras.layers.advanced_activations import LeakyReLU
-import numpy as np
+import datetime
 import pandas as pd
-import glob
-import os
+import numpy as np
+from sklearn.cross_validation import train_test_split
+import xgboost as xgb
+import random
+import zipfile
+import time
+import shutil
+from sklearn.metrics import log_loss
 
-from time import time
+random.seed(2016)
 
-import tensorflow as tf
-from multiprocessing import Pool
+def run_xgb(train, test, features, target, random_state=0):
+    eta = 0.1
+    max_depth = 3
+    subsample = 0.7
+    colsample_bytree = 0.7
+    start_time = time.time()
 
-FOLDER = '/media/n01z3/DATA/dataset/yt8m/' #path to: train, val, test folders with *tfrecord files
+    print('XGBoost params. ETA: {}, MAX_DEPTH: {}, SUBSAMPLE: {}, COLSAMPLE_BY_TREE: {}'.format(eta, max_depth, subsample, colsample_bytree))
+    params = {
+        "objective": "multi:softprob",
+        "num_class": 12,
+        "booster" : "gbtree",
+        "eval_metric": "mlogloss",
+        "eta": eta,
+        "max_depth": max_depth,
+        "subsample": subsample,
+        "colsample_bytree": colsample_bytree,
+        "silent": 1,
+        "seed": random_state,
+    }
+    num_boost_round = 500
+    early_stopping_rounds = 50
+    test_size = 0.3
 
+    X_train, X_valid = train_test_split(train, test_size=test_size, random_state=random_state)
+    print('Length train:', len(X_train.index))
+    print('Length valid:', len(X_valid.index))
+    y_train = X_train[target]
+    y_valid = X_valid[target]
+    dtrain = xgb.DMatrix(X_train[features], y_train)
+    dvalid = xgb.DMatrix(X_valid[features], y_valid)
 
-def ap_at_n(data):
-    # based on https://github.com/google/youtube-8m/blob/master/average_precision_calculator.py
-    predictions, actuals = data
-    n = 20
-    total_num_positives = None
+    watchlist = [(dtrain, 'train'), (dvalid, 'eval')]
+    gbm = xgb.train(params, dtrain, num_boost_round, evals=watchlist, early_stopping_rounds=early_stopping_rounds, verbose_eval=True)
 
-    if len(predictions) != len(actuals):
-        raise ValueError("the shape of predictions and actuals does not match.")
+    print("Validating...")
+    check = gbm.predict(xgb.DMatrix(X_valid[features]), ntree_limit=gbm.best_iteration)
+    score = log_loss(y_valid.tolist(), check)
 
-    if n is not None:
-        if not isinstance(n, int) or n <= 0:
-            raise ValueError("n must be 'None' or a positive integer."
-                             " It was '%s'." % n)
+    print("Predict test set...")
+    test_prediction = gbm.predict(xgb.DMatrix(test[features]), ntree_limit=gbm.best_iteration)
 
-    ap = 0.0
-
-    sortidx = np.argsort(predictions)[::-1]
-
-    if total_num_positives is None:
-        numpos = np.size(np.where(actuals > 0))
-    else:
-        numpos = total_num_positives
-
-    if numpos == 0:
-        return 0
-
-    if n is not None:
-        numpos = min(numpos, n)
-    delta_recall = 1.0 / numpos
-    poscount = 0.0
-
-    # calculate the ap
-    r = len(sortidx)
-    if n is not None:
-        r = min(r, n)
-    for i in range(r):
-        if actuals[sortidx[i]] > 0:
-            poscount += 1
-            ap += poscount / (i + 1) * delta_recall
-    return ap
-
-
-def gap(pred, actual):
-    lst = zip(list(pred), list(actual))
-
-    with Pool() as pool:
-        all = pool.map(ap_at_n, lst)
-
-    return np.mean(all)
+    print('Training time: {} minutes'.format(round((time.time() - start_time)/60, 2)))
+    return test_prediction.tolist(), score
 
 
-def tf_itr(tp='test', batch=1024):
-    tfiles = sorted(glob.glob(os.path.join(FOLDER, tp, '*tfrecord')))
-    print('total files in %s %d' % (tp, len(tfiles)))
-    ids, aud, rgb, lbs = [], [], [], []
-    for fn in tfiles:
-        for example in tf.python_io.tf_record_iterator(fn):
-            tf_example = tf.train.Example.FromString(example)
-
-            ids.append(tf_example.features.feature['video_id'].bytes_list.value[0].decode(encoding='UTF-8'))
-            rgb.append(np.array(tf_example.features.feature['mean_rgb'].float_list.value))
-            aud.append(np.array(tf_example.features.feature['mean_audio'].float_list.value))
-
-            yss = np.array(tf_example.features.feature['labels'].int64_list.value)
-            out = np.zeros(4716).astype(np.int8)
-            for y in yss:
-                out[y] = 1
-            lbs.append(out)
-            if len(ids) >= batch:
-                yield np.array(ids), np.array(aud), np.array(rgb), np.array(lbs)
-                # yield np.array(rgb), np.array(lbs)
-                ids, aud, rgb, lbs = [], [], [], []
+def create_submission(score, test, prediction):
+    # Make Submission
+    now = datetime.datetime.now()
+    sub_file = 'submission_' + str(score) + '_' + str(now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
+    print('Writing submission: ', sub_file)
+    f = open(sub_file, 'w')
+    f.write('device_id,F23-,F24-26,F27-28,F29-32,F33-42,F43+,M22-,M23-26,M27-28,M29-31,M32-38,M39+\n')
+    total = 0
+    test_val = test['device_id'].values
+    for i in range(len(test_val)):
+        str1 = str(test_val[i])
+        for j in range(12):
+            str1 += ',' + str(prediction[i][j])
+        str1 += '\n'
+        total += 1
+        f.write(str1)
+    f.close()
 
 
-def fc_block(x, n=1024, d=0.2):
-    x = Dense(n, init='glorot_normal')(x)
-    x = BatchNormalization()(x)
-    x = LeakyReLU()(x)
-    x = Dropout(d)(x)
-    return x
+def map_column(table, f):
+    labels = sorted(table[f].unique())
+    mappings = dict()
+    for i in range(len(labels)):
+        mappings[labels[i]] = i
+    table = table.replace({f: mappings})
+    return table
 
 
-def build_mod():
-    in1 = Input((128,), name='x1')
-    x1 = fc_block(in1)
+def read_train_test():
+    # Events
+    print('Read events...')
+    events = pd.read_csv("../input/events.csv", dtype={'device_id': np.str})
+    events['counts'] = events.groupby(['device_id'])['event_id'].transform('count')
+    events_small = events[['device_id', 'counts']].drop_duplicates('device_id', keep='first')
 
-    in2 = Input((1024,), name='x2')
-    x2 = fc_block(in2)
+    # Phone brand
+    print('Read brands...')
+    pbd = pd.read_csv("../input/phone_brand_device_model.csv", dtype={'device_id': np.str})
+    pbd.drop_duplicates('device_id', keep='first', inplace=True)
+    pbd = map_column(pbd, 'phone_brand')
+    pbd = map_column(pbd, 'device_model')
 
-    x = merge([x1, x2], mode='concat', concat_axis=1)
-    x = fc_block(x)
-    out = Dense(4716, activation='sigmoid', name='output')(x)
+    # Train
+    print('Read train...')
+    train = pd.read_csv("../input/gender_age_train.csv", dtype={'device_id': np.str})
+    train = map_column(train, 'group')
+    train = train.drop(['age'], axis=1)
+    train = train.drop(['gender'], axis=1)
+    train = pd.merge(train, pbd, how='left', on='device_id', left_index=True)
+    train = pd.merge(train, events_small, how='left', on='device_id', left_index=True)
+    train.fillna(-1, inplace=True)
 
-    model = Model(input=[in1, in2], output=out)
-    model.compile(optimizer='adam', loss='categorical_crossentropy')
-    # model.summary()
-    return model
+    # Test
+    print('Read test...')
+    test = pd.read_csv("../input/gender_age_test.csv", dtype={'device_id': np.str})
+    test = pd.merge(test, pbd, how='left', on='device_id', left_index=True)
+    test = pd.merge(test, events_small, how='left', on='device_id', left_index=True)
+    test.fillna(-1, inplace=True)
 
+    # Features
+    features = list(test.columns.values)
+    features.remove('device_id')
 
-def train():
-    if not os.path.exists('weights'): os.mkdir('weights')
-    batch = 10 * 1024
-    n_itr = 10
-    n_eph = 100
-
-    _, x1_val, x2_val, y_val = next(tf_itr('val', 10000))
-
-    model = build_mod()
-    cnt = 0
-    for e in range(n_eph):
-        for d in tf_itr('train', batch):
-            _, x1_trn, x2_trn, y_trn = d
-            model.train_on_batch({'x1': x1_trn, 'x2': x2_trn}, {'output': y_trn})
-            cnt += 1
-            if cnt % n_itr == 0:
-                y_prd = model.predict({'x1': x1_val, 'x2': x2_val}, verbose=False, batch_size=100)
-                g = gap(y_prd, y_val)
-                print('val GAP %0.5f; epoch: %d; iters: %d' % (g, e, cnt))
-                model.save_weights('weights/%0.5f_%d_%d.h5' % (g, e, cnt))
-
-def conv_pred(el):
-    t = 20
-    idx = np.argsort(el)[::-1]
-    return ' '.join(['{} {:0.5f}'.format(i, el[i]) for i in idx[:t]])
+    return train, test, features
 
 
-def predict():
-    model = build_mod()
-
-    wfn = sorted(glob.glob('weights/*.h5'))[-1]
-    model.load_weights(wfn)
-    print('loaded weight file: %s' % wfn)
-    idx, x1_val, x2_val, _ = next(tf_itr('test', 700640))
-
-    ypd = model.predict({'x1': x1_val, 'x2': x2_val}, verbose=1, batch_size=32)
-    del x1_val, x2_val
-
-    with Pool() as pool:
-        out = pool.map(conv_pred, list(ypd))
-
-    df = pd.DataFrame.from_dict({'VideoId': idx, 'LabelConfidencePairs': out})
-    df.to_csv('subm1', header=True, index=False, columns=['VideoId', 'LabelConfidencePairs'])
-
-
-if __name__ == '__main__':
-    train()
-    predict()
+train, test, features = read_train_test()
+print('Length of train: ', len(train))
+print('Length of test: ', len(test))
+print('Features [{}]: {}'.format(len(features), sorted(features)))
+test_prediction, score = run_xgb(train, test, features, 'group')
+print("LS: {}".format(round(score, 5)))
+create_submission(score, test, test_prediction)

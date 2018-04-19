@@ -1,242 +1,303 @@
 
 # coding: utf-8
 
-# Hello there, everyone.  I did a brief analysis on the "managers" since at first glance the average "interest level" seemed to differ substantially from one to another . 
+# # Introduction
 # 
-# Anyway, let me know what you think about it and like this notebook if you enjoyed reading it (it's my 1st one, be nice :D)
+#    Hi! My name is Eric, I'm an economist from Brazil. I've always been facinated by the real estate market, and mostly shocked (specially in my country) by the amount of subjectivity in it. I find it very weird that people trust so blindly realters with very little to none economical, math or statistical training. Specially when this person's valuations of real estate is highly biased, since they get a comission from it. 
+#    
+#    To me, it's no surprise at all that one of the worst economic crisis of the modern area started in the real estate market. This dataset from Zillow gives us an amazing oportunity to see how were the numbers before 2008 and how are things now. 
+#    
+#    The objective of this notebook, it's try to predict wheter we are moving towards a new crash in the real estate market.
+# 
+#   I'm farely new do datascience so any constructive criticism will be greatly appreciated, and if you like this notebook, don't forget to upvote it. If you use any of the code in it, please, don't forget to give credit and link to this notebook!
 
-# In[ ]:
+# ## 1. Imports 
+# 
+# Let's import and set preferences of a few modules that are going to be necessary for this notebook
+
+# In[1]:
 
 
-# let's load the usual packages first
-import numpy as np
+# Math and data modules
+import numpy as np 
 import pandas as pd
+
+# Data visualization modules
 import matplotlib.pyplot as plt
-
 get_ipython().run_line_magic('matplotlib', 'inline')
+import seaborn as sns
+sns.set_style('darkgrid') # setting the style of the plots
+
+pd.options.display.max_columns = 999 
+pd.options.display.max_rows = 999 
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
 
 
-# ... and get the data...
-
-# In[ ]:
-
-
-train_df = pd.read_json('../input/train.json')
-test_df = pd.read_json('../input/test.json')
-
-
-# First of all, let's see how many different managers we have on both datasets.
-
-# In[ ]:
-
-
-man_train_list = train_df.manager_id.unique()
-man_test_list = test_df.manager_id.unique()
-print("Train: {0}".format(len(man_train_list)))
-print("Test: {0}".format(len(man_test_list)))
-
-
-# There are more managers in the test dataset, which also features more records.
+# ## 2. Handling Data
+# ### Loading data
 # 
-# Let's create a dataframe with all the train and test managers, including the number of entries they are responsible for.
+# Since we are doing a more 'macro' analysis, let's use the State dataset rather than cities or counties. I haven't checked the other datasets, but I'm pretty sure that they would all point towards the same directions.
 
-# In[ ]:
-
-
-temp1 = train_df.groupby('manager_id').count().iloc[:,-1]
-temp2 = test_df.groupby('manager_id').count().iloc[:,-1]
-df_managers = pd.concat([temp1,temp2], axis = 1, join = 'outer')
-df_managers.columns = ['train_count','test_count']
-print(df_managers.head(20))
+# In[2]:
 
 
-# Some managers have entries only in one of the two datasets. But as we will see later, these managers have only very few entries.
+data = pd.read_csv('../input/State_time_series.csv')
+
+
+# In[3]:
+
+
+data.head()
+
+
+# ### Parsing dates
 # 
-# Indeed, a minority of managers are responsible for most of the entries of both dataset
-
-# In[ ]:
-
-
-print(df_managers.sort_values(by = 'train_count', ascending = False).head(10))
-
-
-# This is more clear if one looks at the plots for the cumulative distributions.
-
-# In[ ]:
-
-
-fig, axes = plt.subplots(1,2, figsize = (12,5))
-temp = df_managers['train_count'].dropna().sort_values(ascending = False).reset_index(drop = True)
-axes[0].plot(temp.index+1, temp.cumsum()/temp.sum())
-axes[0].set_title('cumulative train_count')
-
-temp = df_managers['test_count'].dropna().sort_values(ascending = False).reset_index(drop = True)
-axes[1].plot(temp.index+1, temp.cumsum()/temp.sum())
-axes[1].set_title('cumulative test_count')
-
-
-# The Pareto principle, i.e. the 80/20 rule, seems to apply here. As 20% of the managers are roughly responsible for roughly 80% of the entries.
-
-# In[ ]:
-
-
-ix20 = int(len(df_managers['train_count'].dropna())*0.2)
-print("TRAIN: 20% of managers ({0}) responsible for {1:2.2f}% of entries".format(ix20,df_managers['train_count'].sort_values(ascending = False).cumsum().iloc[ix20]/df_managers['train_count'].sum()*100))
-
-ix20 = int(len(df_managers['test_count'].dropna())*0.2)
-print("TEST: 20% of managers ({0}) responsible for {1:2.2f}% of entries".format(ix20, df_managers['test_count'].sort_values(ascending = False).cumsum().iloc[ix20]/df_managers['test_count'].sum()*100))
-
-
-# As mentioned before, fortunately, these top contributors are the same for both datasets. The managers featuring in only one of the two datasets usually have very few entries.
-
-# In[ ]:
-
-
-man_not_in_test = set(man_train_list) - set(man_test_list)
-man_not_in_train = set(man_test_list) - set(man_train_list)
-
-print("{} managers are featured in train.json but not in test.json".format(len(man_not_in_test)))
-print("{} managers are featured in test.json but not in train.json".format(len(man_not_in_train)))
-
-
-# In[ ]:
-
-
-print(df_managers.loc[list(man_not_in_test)]['train_count'].describe())
-print(df_managers.loc[list(man_not_in_train)]['test_count'].describe())
-
-
-# Besides, it looks like there is a strong correlation between the number of entries of the contributors in both datasets.
-
-# In[ ]:
-
-
-df_managers.sort_values(by = 'train_count', ascending = False).head(1000).corr()
-
-
-# In[ ]:
-
-
-df_managers.sort_values(by = 'train_count', ascending = False).head(100).plot.scatter(x = 'train_count', y = 'test_count')
-
-
-# Now let's focus on the training dataset and on the "interest_level" of its top 100 contributors.
-# These folks account for a whopping 35% of the entries. The 1st alone for over 5% of them! That's quite a lot. 
+# Since we are going to analyse the market by year, we need to transform our Date column, which is a string now, into a datetime format and then extract the year from it.
 # 
-# According to the discussion above, similar figures are expected for the test dataset.
+# Then, we can start grouping data by the new 'Year' feature and ploting it to have an idea of how they behaved during the years.  Let's start by an obvious one, the median of sold price.
 
-# In[ ]:
-
-
-temp = df_managers['train_count'].sort_values(ascending = False).head(100)
-temp = pd.concat([temp,temp.cumsum()/df_managers['train_count'].sum()*100], axis = 1).reset_index()
-temp.columns = ['manager_id','count','percentage']
-print(temp)
+# In[4]:
 
 
-# Let's isolate the entries relative to these 100 managers with the "interest_level" column as well. We create dummies from this latter column as they are easier to work with.
-
-# In[ ]:
-
-
-man_list = df_managers['train_count'].sort_values(ascending = False).head(100).index
-ixes = train_df.manager_id.isin(man_list)
-df100 = train_df[ixes][['manager_id','interest_level']]
-interest_dummies = pd.get_dummies(df100.interest_level)
-df100 = pd.concat([df100,interest_dummies[['low','medium','high']]], axis = 1).drop('interest_level', axis = 1)
-
-print("The top100 contributors account for {} entries\n".format(len(df100)))
-
-print(df100.head(10))
+data['Date'] = pd.to_datetime(data['Date'])
+data['Year'] = data['Date'].apply(lambda x: x.year)
 
 
-# Before continuing, let's give them some fake identities based on the most common first and last names in the US.
+# ## 3. Selling Prices
 
-# In[ ]:
-
-
-import itertools
-
-# 50 most common surnames in the 90s (http://surnames.behindthename.com/top/lists/united-states/1990)
-last_names = ['Smith', 'Johnson', 'Williams', 'Jones', 'Brown', 'Davis', 'Miller', 'Wilson', 'Moore', 
- 'Taylor', 'Anderson', 'Thomas', 'Jackson', 'White', 'Harris', 'Martin', 'Thompson', 'Garcia', 
- 'Martinez', 'Robinson', 'Clark', 'Rodriguez', 'Lewis', 'Lee', 'Walker', 'Hall', 'Allen', 'Young',
- 'Hernandez', 'King', 'Wright', 'Lopez', 'Hill', 'Scott', 'Green', 'Adams', 'Baker', 'Gonzalez', 'Nelson', 
- 'Carter', 'Mitchell', 'Perez', 'Roberts', 'Turner', 'Phillips', 'Campbell', 'Parker', 'Evans', 'Edwards', 'Collins']
-
-# 10 most common first names for females and males (names.mongabay.com) 
-first_names = ['Mary',  'Patricia',  'Linda',  'Barbara',  'Elizabeth',  
-               'Jennifer',  'Maria',  'Susan',  'Margaret',  'Dorothy',
-               'James', 'John', 'Robert', 'Michael', 'William', 'David',
-               'Richard', 'Charles', 'Joseph', 'Thomas']
-
-names = [first + ' ' + last for first,last in (itertools.product(first_names, last_names))]
-
-# shuffle them
-np.random.seed(12345)
-np.random.shuffle(names)
-
-dictionary = dict(zip(man_list, names))
-df100.loc[df100.manager_id.isin(dictionary), 'manager_id' ] = df100['manager_id'].map(dictionary)
-print(df100.head())
+# In[5]:
 
 
-# In[ ]:
+data.groupby(data['Year'])['MedianSoldPrice_AllHomes'].mean().dropna().plot(linewidth=4, figsize=(15, 6))
+plt.title('Median Sold Prices by Year', fontsize=14)
+plt.ylabel('Price\n')
+plt.show()
 
 
-# see if the name coincides
-print(names[:10])
-print(df100.groupby('manager_id').count().sort_values(by = 'low', ascending = False).head(10))
+# We can see that before 2005, prices were growing pretty much exponetially and that things started to slowdown around 2006 but still going up, and then, subprime crisis exploded in 2008 and prices started to drop, untill around 2012, when they started to climb back up again. The dataset is missing information from 2017, but we can see that prices have bounced back to pre '08 levels, does it mean that we are on the verge of a new crash in the market? Let's investigate it a little further.
+
+# ### By states
+
+# In[6]:
 
 
-# Splendid... we have their names now, so let's proceed and compute their average performances in terms of "interest level" so we can spot who's a pro and who's not. 
+states = data.groupby(data['RegionName'])['MedianSoldPrice_AllHomes'].mean().dropna().sort_values(ascending=False).index
+values = data.groupby(data['RegionName'])['MedianSoldPrice_AllHomes'].mean().dropna().sort_values(ascending=False).values
+plt.figure(figsize=(15, 15))
+sns.barplot(y=states, x=values, color='blue')
+plt.title('Median Price by State', fontsize=14)
+plt.xlabel('Price', fontsize=12)
+plt.ylabel('State', fontsize=12)
+print('Highest Median Price ${:,.2f} in {}'.format(round(values[0], 2), states[0]))
+print('Lowest Median Price ${:,.2f} in {}'.format(round(values[-1], 2), states[-1]))
 
-# In[ ]:
 
-
-gby = pd.concat([df100.groupby('manager_id').mean(),df100.groupby('manager_id').count()], axis = 1).iloc[:,:-2]
-gby.columns = ['low','medium','high','count']
-gby.sort_values(by = 'count', ascending = False).head(10)
-
-
-# Their performances seem very different, even for people with similar number of entries.
+# ## 4. Rent Prices
 # 
-# Indeed they are..
+# Usually the rent values are a percentage of the real estate selling price. But it's ratio is influenced by interest rates. I expect it to have the same behaviour as the Selling Price data.
 
-# In[ ]:
-
-
-gby.sort_values(by = 'count', ascending = False).drop('count', axis = 1).plot(kind = 'bar', stacked = True, figsize = (15,5))
-plt.figure()
-gby.sort_values(by = 'count', ascending = False)['count'].plot(kind = 'bar', figsize = (15,5))
+# In[7]:
 
 
-# I think this high diversity should be accounted for when building our predictive model! 
+data.groupby(data['Year'])['MedianRentalPrice_AllHomes'].mean().dropna().plot(linewidth=4, figsize=(15, 6))
+plt.title('Median Rental Prices', fontsize=14)
+plt.ylabel('Price\n')
+plt.show()
+
+
+#  Unfortunatelly, in this data set, the rent series only has values after 2010, but we can see that it seems to have the same trends as the selling prices. But the interesting thing here is that, even though prices growth has slowed down in the last years. Rent prices have actually speeded up. I'd say this is probably a result of the FED's monetary policy, increasing interest rates in the past years.
+
+# ### By state
+
+# In[8]:
+
+
+states = data.groupby(data['RegionName'])['MedianRentalPrice_AllHomes'].mean().dropna().sort_values(ascending=False).index
+values = data.groupby(data['RegionName'])['MedianRentalPrice_AllHomes'].mean().dropna().sort_values(ascending=False).values
+plt.figure(figsize=(15, 15))
+sns.barplot(y=states, x=values, color='blue')
+plt.title('Rental Price by State', fontsize=14)
+plt.xlabel('Price', fontsize=12)
+plt.ylabel('State', fontsize=12)
+print('Highest Median Price ${:,.2f} in {}'.format(round(values[0], 2), states[0]))
+print('Lowest Median Price ${} in {}'.format(round(values[-1], 2), states[-1]))
+
+
+# ## 5. How Long to Sell?
 # 
-# It would be interesting to rank the managers based on their intereset levels. For instance, we could compute their "skill" by assigning 0 points for "lows", 1 for "mediums" and 2 for "highs". Since they have different number of entries, let's quickly do so by multiplying the average results.
+# One interesting thing we can check is how long it takes to sell a house, and how it changed through out the years. I'd say this is a very good thermometer of how the real estate market is!
 
-# In[ ]:
-
-
-gby['skill'] = gby['medium']*1 + gby['high']*2 
-
-print("Top performers")
-print(gby.sort_values(by = 'skill', ascending = False).reset_index().head())
-print("\nWorst performers")
-print(gby.sort_values(by = 'skill', ascending = False).reset_index().tail())
+# In[9]:
 
 
-# Dorothy Turner and Dorothy Lopez are rocking it! Poor Dorothy Martinez instead should consider moving to another industry... 402 entries, all of them uninspiring (btw I did not pick the random seed to have all the Dorothies here...).
+plt.title('Days to Sell a House', fontsize=14)
+data.groupby(data['Year'])['DaysOnZillow_AllHomes'].mean().dropna().plot(linewidth=4, figsize=(15, 6))
+plt.ylabel('Days\n')
+plt.show()
+
+
+# We can see that since this series started in 2010, it's been getting easier and easier to sell a house. The average was around 130 days in 2010 and in 2017 it's around 95 days.
+
+# ### By State
+
+# In[10]:
+
+
+states = data.groupby(data['RegionName'])['DaysOnZillow_AllHomes'].mean().dropna().sort_values(ascending=False).index
+values = data.groupby(data['RegionName'])['DaysOnZillow_AllHomes'].mean().dropna().sort_values(ascending=False).values
+plt.figure(figsize=(13, 15))
+sns.barplot(y=states, x=values, color='blue')
+plt.title('Median Days on Zillow', fontsize=14)
+plt.xlabel('Days', fontsize=12)
+plt.ylabel('State', fontsize=12)
+print('Hardest to sell in {} with {} days'.format(states[0], round(values[0], 2)))
+print('Easiest to sell in {} with {} days'.format(states[-1], round(values[-1], 2)))
+
+
+# ## 7. Foreclosures
 # 
-# I won't go deeper to try to explain why these performances are so different. It seems though like most of the managers do a poor job (I am sure it ain't their fault, is just that the properties they handle are not that cool after all...).
+# I expect that the ratio of houses sold as foreclosure increased around 2008, let's check that.  And to have relatively inverse tendencies to the price.
+
+# In[11]:
+
+
+f, ax = plt.subplots(2, 1, figsize=(15, 12))
+data.groupby(data['Year'])['HomesSoldAsForeclosuresRatio_AllHomes'].mean().plot(linewidth=4, ax=ax[0])
+ax[0].set_title('Homes Sold as Foreclosure Ratio')
+ax[0].set_ylabel('Ratio')
+data.groupby(data['Year'])['MedianSoldPrice_AllHomes'].mean().plot(linewidth=4, ax=ax[1])
+ax[1].set_title('Median Sold Price')
+ax[1].set_ylabel('Price')
+plt.show()
+
+
+# And as we expected, the ratio of houses sold as foreclosure started climbing drastically around 2006 and peaked in 2010 and started to go down since then. 
+
+# ### By state
+
+# In[12]:
+
+
+states = data.groupby(data['RegionName'])['HomesSoldAsForeclosuresRatio_AllHomes'].mean().dropna().sort_values(ascending=False).index
+values = data.groupby(data['RegionName'])['HomesSoldAsForeclosuresRatio_AllHomes'].mean().dropna().sort_values(ascending=False).values
+plt.figure(figsize=(15, 15))
+sns.barplot(y=states, x=values, color='blue')
+plt.title('Homes Sold as Foreclosure Ratio', fontsize=14)
+plt.xlabel('Ratio', fontsize=12)
+plt.ylabel('State', fontsize=12)
+print('Highest foreclosure ratio of {} in {}'.format(round(values[0], 2), states[0]))
+print('Lowest foreclosure ratio of {} in {}'.format(round(values[-1], 2), states[-1]))
+
+
+# ## 8. Price increase, decrease, gain and loss
 # 
-# Cheers!
+# Let's check the percentage of increase, decrease, gain and loss in value of real estate through the years.
+
+# In[13]:
+
+
+f, ax = plt.subplots(2, 2, figsize=(15, 12))
+
+data.groupby(data['Year'])['PctOfHomesDecreasingInValues_AllHomes'].mean().dropna().plot(linewidth=4, ax=ax[0, 0])
+data.groupby(data['Year'])['PctOfHomesIncreasingInValues_AllHomes'].mean().dropna().plot(linewidth=4, ax=ax[1, 0])
+data.groupby(data['Year'])['PctOfHomesSellingForGain_AllHomes'].mean().dropna().plot(linewidth=4, ax=ax[1, 1])
+data.groupby(data['Year'])['PctOfHomesSellingForLoss_AllHomes'].mean().dropna().plot(linewidth=4, ax=ax[0, 1])
+ax[0, 0].set_title('Percentage Of Homes Decreasing in Value')
+ax[0, 1].set_title('Percentage Of Homes Selling for Loss')
+ax[1, 0].set_title('Percentage Of Homes Increasing in Value')
+ax[1, 1].set_title('Percentage Of Homes Selling for Gain')
+plt.show()
+
+
+# It seems a little bit obvious, but we can see that before the recession, real estate was increasing in value, during it was losing value and after it started gaining value again. The increase is almost perfectly correlated with the decrease in value. It's interesting to see that the amount of homes selling for loss increased during the recession and the amount selling for gain decreased during it.
+
+# ## 9. Which estates suffered the most with the crash?
 # 
-# p.s.: I did a similar analysis on "building_id" here --> https://www.kaggle.com/den3b81/two-sigma-connect-rental-listing-inquiries/some-insights-on-building-id
+# Just as a fun fact, we can check which cities suffered the most from the crash, and which ones recovered the best. First, let's find which years had the highest and lowest median sold prices.
 
-# In[ ]:
+# In[14]:
 
 
-gby.skill.plot(kind = 'hist')
-print(gby.mean())
+max_price = data.groupby(data['Year'])['MedianSoldPrice_AllHomes'].mean().max()
+max_year  = data.groupby(data['Year'])['MedianSoldPrice_AllHomes'].mean().argmax()
+min_price = data.groupby(data['Year'])['MedianSoldPrice_AllHomes'].mean().min()
+min_year = data.groupby(data['Year'])['MedianSoldPrice_AllHomes'].mean().argmin()
+print('Max median price of ${:,.2f} in {}'.format(max_price, max_year))
+print('Min median price of ${:,.2f} in {}'.format(min_price, min_year))
 
+
+# Ok... so, the lowest median price was in 1996. I think it's unlikely that prices will fall back to the same levels that they were two decade ago, mostly because of inflation. Anyway... if we find the lowest price after 2007 (which was the year with the highest prices), we can find which was the worst year for the real estate market after the crash.
+
+# In[15]:
+
+
+min_year_after07  = data.groupby(data['Year'])['MedianSoldPrice_AllHomes'].mean()[11:].argmin()
+min_price_after07 = data.groupby(data['Year'])['MedianSoldPrice_AllHomes'].mean()[11:].min()
+print('Min median price after \'07 of ${:,.2f} in {}'.format(min_price_after07, min_year_after07))
+
+
+# It looks like the worst year for the real estate market was 2012. Now we let's look at how the prices were looking by estate in those years.
+# 
+# We can make a dataframe with the prices in those years and create a columns with the % variation.
+
+# In[16]:
+
+
+values_07 = data[data['Year'] == 2007].groupby(data['RegionName'])['MedianSoldPrice_AllHomes'].mean().dropna().values
+estates   = data[data['Year'] == 2007].groupby(data['RegionName'])['MedianSoldPrice_AllHomes'].mean().dropna().index
+values_12 = data[data['Year'] == 2012].groupby(data['RegionName'])['MedianSoldPrice_AllHomes'].mean().dropna().values
+df = pd.DataFrame({'2007 Price': values_07, 
+                   '2012 Price': values_12}, index=estates)
+df['Variation'] = round((df['2012 Price'] - df['2007 Price'])/df['2007 Price'], 2)
+
+
+# In[21]:
+
+
+estates = df['Variation'].sort_values(ascending=True).head(5).index
+values  = df['Variation'].sort_values(ascending=True).head(5).values
+print(df['Variation'].sort_values(ascending=True)[:5])
+plt.figure(figsize=(10, 8))
+plt.title('Price Variation 07 x 12 by State',fontsize=14)
+plt.xticks(fontsize=8)
+plt.yticks(fontsize=8)
+plt.ylabel('Price Variation\n', fontsize=12)
+sns.barplot(x=estates, y=values)
+plt.xlabel('\nRegion Name', fontsize=12)
+plt.ylim(0, -0.6)
+plt.show()
+
+
+# So the states that suffered the most with the subprime crisis regarding prices of real estate were Nevada, Florida, California, Arizona and Illinois.
+
+# # Conclusion
+
+# In[18]:
+
+
+prices = [data[data['Year'] == 2006]['MedianSoldPrice_AllHomes'].mean(),
+         data[data['Year'] == 2008]['MedianSoldPrice_AllHomes'].mean(),
+         data[data['Year'] == 2012]['MedianSoldPrice_AllHomes'].mean(),
+         data[data['Year'] == 2016]['MedianSoldPrice_AllHomes'].mean()]
+years = [2006, 2008, 2012, 2016]
+print('Median prices in 2006: ${:,.2f}'.format(round(prices[0], 2)))
+print('Median prices in 2008: ${:,.2f}'.format(round(prices[1], 2)))
+print('Median prices at 2012: ${:,.2f}'.format(round(prices[2], 2)))
+print('Median prices in 2016: ${:,.2f}'.format(round(prices[3], 2)))
+plt.figure(figsize=(10, 8))
+sns.barplot(y=prices, x=years)
+plt.title('Price by Year', fontsize=14)
+plt.xticks(fontsize=12)
+plt.xlabel('Year', fontsize=12)
+plt.yticks(fontsize=12)
+plt.ylabel('Price\n', fontsize=12)
+plt.show()
+
+
+# From our short analysis, we can see that right before the 2008 subprime crisis, the growth in price of real estate started to slow down, from a previous exponential increase, at the same time, percentage os homes selling for a loss started to increase and also the ratio of homes sold as foreclosure. Looking back, we can see that it was possible to identify that something was weird in the real estate market, the thing is, that it's hard to realize before it happens. 
+# 
+# At the moment, we can see that Prices are back at pre 2008 levels, but from the data we can conclude that there is no risk of another crisis in the real estate market, since variables like homes sold as foreclosure, time to sell and homes selling for loss are down.
+
+# If you've made it this far in the notebook, thank you for reading! Don't forget to upvote if you liked it or if it helped you in any way.

@@ -1,157 +1,217 @@
 
 # coding: utf-8
 
-# In[1]:
+# ### *Use this one simple trick to get to the top of the leaderboard - Grandmasters hate him!*
+# 
+# Here's quite a high-level EDA - since the data is so huge, we want to get a better understanding of what we actually have.
+# 
+# If this EDA helps you, make sure to leave an upvote to motivate me to make more! :)
+# 
+# First off: What files do we have?
+
+# In[ ]:
 
 
-import time
-start_time = time.time()
-from sklearn.model_selection import train_test_split
-import sys, os, re, csv, codecs, numpy as np, pandas as pd
-np.random.seed(32)
-os.environ["OMP_NUM_THREADS"] = "4"
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
-from keras.layers import Dense, Input, LSTM, Embedding, Dropout, Activation, Conv1D
-from keras.layers import Bidirectional, GlobalMaxPool1D, MaxPooling1D, Add, Flatten
-from keras.layers import GlobalAveragePooling1D, GlobalMaxPooling1D, concatenate, SpatialDropout1D
-from keras.models import Model, load_model
-from keras import initializers, regularizers, constraints, optimizers, layers, callbacks
-from keras import backend as K
-from keras.engine import InputSpec, Layer
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import os
+import gc # We're gonna be clearing memory a lot
+import matplotlib.pyplot as plt
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+p = sns.color_palette()
+
+print('# File sizes')
+for f in os.listdir('../input'):
+    if 'zip' not in f:
+        print(f.ljust(30) + str(round(os.path.getsize('../input/' + f) / 1000000, 2)) + 'MB')
 
 
-# In[2]:
+# Wow, that's a lot of data! Let's start off by looking at the clicks_train.csv and clicks_test.csv files, as these contain the main things we need.
+# 
+# Each display has a certain number of adverts. Let's look at the distribution of these advert counts, and see if they are consistent between train and test.
+
+# In[ ]:
 
 
-import logging
-from sklearn.metrics import roc_auc_score
-from keras.callbacks import Callback
-
-class RocAucEvaluation(Callback):
-    def __init__(self, validation_data=(), interval=1):
-        super(Callback, self).__init__()
-
-        self.interval = interval
-        self.X_val, self.y_val = validation_data
-
-    def on_epoch_end(self, epoch, logs={}):
-        if epoch % self.interval == 0:
-            y_pred = self.model.predict(self.X_val, verbose=0)
-            score = roc_auc_score(self.y_val, y_pred)
-            print("\n ROC-AUC - epoch: {:d} - score: {:.6f}".format(epoch+1, score))
+df_train = pd.read_csv('../input/clicks_train.csv')
+df_test = pd.read_csv('../input/clicks_test.csv')
 
 
-# In[3]:
+# In[ ]:
 
 
-train = pd.read_csv("../input/jigsaw-toxic-comment-classification-challenge/train.csv")
-test = pd.read_csv("../input/jigsaw-toxic-comment-classification-challenge/test.csv")
-# embedding_path = "../input/fasttext-crawl-300d-2m/crawl-300d-2M.vec"
-embedding_path = "../input/glove840b300dtxt/glove.840B.300d.txt"
-embed_size = 300
-max_features = 100000
-max_len = 150
+sizes_train = df_train.groupby('display_id')['ad_id'].count().value_counts()
+sizes_test = df_test.groupby('display_id')['ad_id'].count().value_counts()
+sizes_train = sizes_train / np.sum(sizes_train)
+sizes_test = sizes_test / np.sum(sizes_test)
+
+plt.figure(figsize=(12,4))
+sns.barplot(sizes_train.index, sizes_train.values, alpha=0.8, color=p[0], label='train')
+sns.barplot(sizes_test.index, sizes_test.values, alpha=0.6, color=p[1], label='test')
+plt.legend()
+plt.xlabel('Number of Ads in display', fontsize=12)
+plt.ylabel('Proportion of set', fontsize=12)
 
 
-# In[4]:
+# This looks like a perfect split to me! So we can assume the distribution to be the same within the sets - no weird trickery going on here.
+# 
+# What about adverts? How many adverts are there that are very often used, and how many are rare?
+
+# In[ ]:
 
 
-list_classes = ["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]
-y = train[list_classes].values
-train["comment_text"].fillna("no comment")
-test["comment_text"].fillna("no comment")
-X_train, X_valid, Y_train, Y_valid = train_test_split(train, y, test_size = 0.1)
+ad_usage_train = df_train.groupby('ad_id')['ad_id'].count()
+
+for i in [2, 10, 50, 100, 1000]:
+    print('Ads that appear less than {} times: {}%'.format(i, round((ad_usage_train < i).mean() * 100, 2)))
+
+plt.figure(figsize=(12, 6))
+plt.hist(ad_usage_train.values, bins=50, log=True)
+plt.xlabel('Number of times ad appeared', fontsize=12)
+plt.ylabel('log(Count of displays with ad)', fontsize=12)
+plt.show()
 
 
-# In[5]:
+# Here we can see that a **huge** number of ads appear just a few times in the training set (so much that we have to use a log graph to show it), with two-thirds having less than 10 appearances. This shows us that we have to be able to predict whether someone will click on an ad not just based on the past data of that specific ad, but also by linking it to other adverts.
+# 
+# I think this is the underlying challenge that Outbrain has for us.
+# 
+# Before we move on, let's check how many ads in the test set are not in the training set.
+
+# In[ ]:
 
 
-raw_text_train = X_train["comment_text"].str.lower()
-raw_text_valid = X_valid["comment_text"].str.lower()
-raw_text_test = test["comment_text"].str.lower()
-
-tk = Tokenizer(num_words = max_features, lower = True)
-tk.fit_on_texts(raw_text_train)
-X_train["comment_seq"] = tk.texts_to_sequences(raw_text_train)
-X_valid["comment_seq"] = tk.texts_to_sequences(raw_text_valid)
-test["comment_seq"] = tk.texts_to_sequences(raw_text_test)
-
-X_train = pad_sequences(X_train.comment_seq, maxlen = max_len)
-X_valid = pad_sequences(X_valid.comment_seq, maxlen = max_len)
-test = pad_sequences(test.comment_seq, maxlen = max_len)
+ad_prop = len(set(df_test.ad_id.unique()).intersection(df_train.ad_id.unique())) / len(df_test.ad_id.unique())
+print('Proportion of test ads in test that are in training: {}%'.format(round(ad_prop * 100, 2)))
 
 
-# In[6]:
+# This number is a little more reasonable, with 88% of ads appearing in both sets.
+# 
+# ## Events
+# 
+# Let's move on to the events file. I'm not going to cover the [timestamp](https://www.kaggle.com/joconnor/outbrain-click-prediction/date-exploration-and-train-test-split) or the [location](https://www.kaggle.com/andreyg/outbrain-click-prediction/explore-user-base-by-geo), since these have already been beautifully explored - you can click the links to view those EDAs.
+
+# In[ ]:
 
 
-def get_coefs(word,*arr): return word, np.asarray(arr, dtype='float32')
-embedding_index = dict(get_coefs(*o.strip().split(" ")) for o in open(embedding_path))
+try:del df_train,df_test # Being nice to Azure
+except:pass;gc.collect()
+
+events = pd.read_csv('../input/events.csv')
+print('Shape:', events.shape)
+print('Columns', events.columns.tolist())
+events.head()
 
 
-# In[7]:
+# In[ ]:
 
 
-word_index = tk.word_index
-nb_words = min(max_features, len(word_index))
-embedding_matrix = np.zeros((nb_words, embed_size))
-for word, i in word_index.items():
-    if i >= max_features: continue
-    embedding_vector = embedding_index.get(word)
-    if embedding_vector is not None: embedding_matrix[i] = embedding_vector
+plat = events.platform.value_counts()
+
+print(plat)
+print('\nUnique values of platform:', events.platform.unique())
 
 
-# In[8]:
+# This is very interesting, notice how 1, 2 and 3 are repeated twice in the platform, once as floats, and once as strings.
+# 
+# This might become useful in the future (leak? :P) - but for now, I'm just going to treat them as the same thing.
+
+# In[ ]:
 
 
-from keras.optimizers import Adam, RMSprop
-from keras.callbacks import EarlyStopping, ModelCheckpoint, LearningRateScheduler
-from keras.layers import GRU, BatchNormalization, Conv1D, MaxPooling1D
+events.platform = events.platform.astype(str)
+plat = events.platform.value_counts()
 
-file_path = "best_model.hdf5"
-check_point = ModelCheckpoint(file_path, monitor = "val_loss", verbose = 1,
-                              save_best_only = True, mode = "min")
-ra_val = RocAucEvaluation(validation_data=(X_valid, Y_valid), interval = 1)
-early_stop = EarlyStopping(monitor = "val_loss", mode = "min", patience = 5)
-
-def build_model(lr = 0.0, lr_d = 0.0, units = 0, dr = 0.0):
-    inp = Input(shape = (max_len,))
-    x = Embedding(max_features, embed_size, weights = [embedding_matrix], trainable = False)(inp)
-    x = SpatialDropout1D(dr)(x)
-
-    x = Bidirectional(GRU(units, return_sequences = True))(x)
-    x = Conv1D(64, kernel_size = 2, padding = "valid", kernel_initializer = "he_uniform")(x)
-    avg_pool = GlobalAveragePooling1D()(x)
-    max_pool = GlobalMaxPooling1D()(x)
-    x = concatenate([avg_pool, max_pool])
-
-    x = Dense(6, activation = "sigmoid")(x)
-    model = Model(inputs = inp, outputs = x)
-    model.compile(loss = "binary_crossentropy", optimizer = Adam(lr = lr, decay = lr_d), metrics = ["accuracy"])
-    history = model.fit(X_train, Y_train, batch_size = 128, epochs = 4, validation_data = (X_valid, Y_valid), 
-                        verbose = 1, callbacks = [ra_val, check_point, early_stop])
-    model = load_model(file_path)
-    return model
+plt.figure(figsize=(12,4))
+sns.barplot(plat.index, plat.values, alpha=0.8, color=p[2])
+plt.xlabel('Platform', fontsize=12)
+plt.ylabel('Occurence count', fontsize=12)
 
 
-# In[9]:
+# It's still unclear what the platform means, but it's possible that it's things like computers, phones, tablets etc. 
+# 
+# The `\\N`s and string numbers may have come from the way that a file was parsed while creating the dataset, but it's still a mystery. If anyone has any other ideas, I'd love to hear them!
+# 
+# Let's do some quick analysis on the UUID next.
+
+# In[ ]:
 
 
-model = build_model(lr = 1e-3, lr_d = 0, units = 128, dr = 0.2)
-pred = model.predict(test, batch_size = 1024, verbose = 1)
+uuid_counts = events.groupby('uuid')['uuid'].count().sort_values()
+
+print(uuid_counts.tail())
+
+for i in [2, 5, 10]:
+    print('Users that appear less than {} times: {}%'.format(i, round((uuid_counts < i).mean() * 100, 2)))
+    
+plt.figure(figsize=(12, 4))
+plt.hist(uuid_counts.values, bins=50, log=True)
+plt.xlabel('Number of times user appeared in set', fontsize=12)
+plt.ylabel('log(Count of users)', fontsize=12)
+plt.show()
 
 
-# In[10]:
+# Here we see a distribution much like the ad ids, with 88% of users being unique - there will be little scope of building user-based recommendation profiles here.
+# 
+# I'd love to look at things like whether the same user ever clicks on the same ad twice, or whether a user transverses the training & testing set, but we're limited by the Kernels memory limit here :(
+# 
+# ## Categories
+# 
+# Outbrain has some content classification algorithms, and they have provided us with the output from these classifications. Let's take a look at some of the most popular classifications.
+
+# In[ ]:
 
 
-submission = pd.read_csv("../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv")
-submission[list_classes] = (pred)
-submission.to_csv("submission.csv", index = False)
-print("[{}] Completed!".format(time.time() - start_time))
+try:del events
+except:pass;gc.collect()
+
+topics = pd.read_csv('../input/documents_topics.csv')
+print('Columns:',topics.columns.tolist())
+print('Number of unique topics:', len(topics.topic_id.unique()))
+
+topics.head()
 
 
-# In[11]:
+# In[ ]:
 
 
-submission.head()
+topic_ids = topics.groupby('topic_id')['confidence_level'].count().sort_values()
 
+for i in [10000, 50000, 100000, 200000]:
+    print('Number of topics that appear more than {} times: {}'
+          .format(i, (topic_ids > i).sum()))
+
+plt.figure(figsize=(12, 4))
+sns.barplot(topic_ids.index, topic_ids.values, order=topic_ids.index, alpha=1, color=p[5])
+plt.xlabel('Document Topics', fontsize=12)
+plt.ylabel('Total occurences', fontsize=12)
+plt.show()
+
+
+# In[ ]:
+
+
+cat = pd.read_csv('../input/documents_categories.csv')
+print('Columns:', cat.columns.tolist())
+print('Number of unique categories:', len(cat.category_id.unique()))
+
+cat_ids = cat.groupby('category_id')['confidence_level'].count().sort_values()
+
+for i in [1000, 10000, 50000, 100000]:
+    print('Number of categories that appear more than {} times: {}'
+          .format(i, (cat_ids > i).sum()))
+
+plt.figure(figsize=(12, 4))
+sns.barplot(cat_ids.index, cat_ids.values, order=cat_ids.index, alpha=1, color=p[3])
+plt.xlabel('Document Categories', fontsize=12)
+plt.ylabel('Total occurences', fontsize=12)
+plt.show()
+
+
+# That's it for today, folks!
+# 
+# Hopefully this helps you think of some ideas - I'll continue updating this as I do more exploration over the next few days.
+# 
+# Once again, please upvote if this was useful :P

@@ -1,76 +1,100 @@
-import numpy as np
-import pandas as pd
-from sklearn.preprocessing import LabelEncoder
-from xgboost.sklearn import XGBClassifier
+#!/usr/bin/python3.5
+# -*- coding:utf-8 -*-
+# Created Time: Fri 02 Mar 2018 03:58:07 PM CST
+# Purpose: download image
+# Mail: tracyliang18@gmail.com
+# Adapted to python 3 by Aloisio Dourado in Sun Mar 11 2018
 
-np.random.seed(0)
+# Note to Kagglers: This script will not run directly in Kaggle kernels. You
+# need to download it and run it on your local machine.
 
-#Loading data
-df_train = pd.read_csv('../input/train_users.csv')
-df_test = pd.read_csv('../input/test_users.csv')
-labels = df_train['country_destination'].values
-df_train = df_train.drop(['country_destination'], axis=1)
-id_test = df_test['id']
-piv_train = df_train.shape[0]
+# Images that already exist will not be downloaded again, so the script can
+# resume a partially completed download. All images will be saved in the JPG
+# format with 90% compression quality.
 
-#Creating a DataFrame with train+test data
-df_all = pd.concat((df_train, df_test), axis=0, ignore_index=True)
-#Removing id and date_first_booking
-df_all = df_all.drop(['id', 'date_first_booking'], axis=1)
-#Filling nan
-df_all = df_all.fillna(-1)
+import sys, os, multiprocessing, urllib3, csv
+from PIL import Image
+from io import BytesIO
+from tqdm  import tqdm
+import json
 
-#####Feature engineering#######
-#date_account_created
-dac = np.vstack(df_all.date_account_created.astype(str).apply(lambda x: list(map(int, x.split('-')))).values)
-df_all['dac_year'] = dac[:,0]
-df_all['dac_month'] = dac[:,1]
-df_all['dac_day'] = dac[:,2]
-df_all = df_all.drop(['date_account_created'], axis=1)
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-#timestamp_first_active
-tfa = np.vstack(df_all.timestamp_first_active.astype(str).apply(lambda x: list(map(int, [x[:4],x[4:6],x[6:8],x[8:10],x[10:12],x[12:14]]))).values)
-df_all['tfa_year'] = tfa[:,0]
-df_all['tfa_month'] = tfa[:,1]
-df_all['tfa_day'] = tfa[:,2]
-df_all = df_all.drop(['timestamp_first_active'], axis=1)
+def ParseData(data_file):
+  ann = {}
+  if 'train' in data_file or 'validation' in data_file:
+      _ann = json.load(open(data_file))['annotations']
+      for a in _ann:
+        ann[a['image_id']] = a['label_id']
 
-#Age
-av = df_all.age.values
-df_all['age'] = np.where(np.logical_or(av<14, av>100), -1, av)
-
-#One-hot-encoding features
-ohe_feats = ['gender', 'signup_method', 'signup_flow', 'language', 'affiliate_channel', 'affiliate_provider', 'first_affiliate_tracked', 'signup_app', 'first_device_type', 'first_browser']
-for f in ohe_feats:
-    df_all_dummy = pd.get_dummies(df_all[f], prefix=f)
-    df_all = df_all.drop([f], axis=1)
-    df_all = pd.concat((df_all, df_all_dummy), axis=1)
-
-#Splitting train and test
-vals = df_all.values
-X = vals[:piv_train]
-le = LabelEncoder()
-y = le.fit_transform(labels)   
-X_test = vals[piv_train:]
-
-#Classifier
-xgb = XGBClassifier(max_depth=6, learning_rate=0.3, n_estimators=25,
-                    objective='multi:softprob', subsample=0.5, colsample_bytree=0.5, seed=0)                  
-xgb.fit(X, y)
-y_pred = xgb.predict_proba(X_test)  
-
-#Taking the 5 classes with highest probabilities
-ids = []  #list of ids
-cts = []  #list of countries
-for i in range(len(id_test)):
-    idx = id_test[i]
-    ids += [idx] * 5
-    cts += le.inverse_transform(np.argsort(y_pred[i])[::-1])[:5].tolist()
-
-#Generate submission
-sub = pd.DataFrame(np.column_stack((ids, cts)), columns=['id', 'country'])
-sub.to_csv('sub.csv',index=False)
+  key_url_list = []
+  j = json.load(open(data_file))
+  images = j['images']
+  for item in images:
+    assert len(item['url']) == 1
+    url = item['url'][0]
+    id_ = item['image_id']
+    if id_ in ann:
+        id_ = "{}_{}".format(id_, ann[id_])
+    key_url_list.append((id_, url))
+  return key_url_list
 
 
-  
-    
+
+
+def DownloadImage(key_url):
+  out_dir = sys.argv[2]
+  (key, url) = key_url
+  filename = os.path.join(out_dir, '%s.jpg' % key)
+
+  if os.path.exists(filename):
+    print('Image %s already exists. Skipping download.' % filename)
+    return
+
+  try:
+    #print('Trying to get %s.' % url)
+    http = urllib3.PoolManager()
+    response = http.request('GET', url)
+    image_data = response.data
+  except:
+    print('Warning: Could not download image %s from %s' % (key, url))
+    return
+
+  try:
+    pil_image = Image.open(BytesIO(image_data))
+  except:
+    print('Warning: Failed to parse image %s %s' % (key,url))
+    return
+
+  try:
+    pil_image_rgb = pil_image.convert('RGB')
+  except:
+    print('Warning: Failed to convert image %s to RGB' % key)
+    return
+
+  try:
+    pil_image_rgb.save(filename, format='JPEG', quality=90)
+  except:
+    print('Warning: Failed to save image %s' % filename)
+    return
+
+
+def Run():
+  if len(sys.argv) != 3:
+    print('Syntax: %s <train|validation|test.json> <output_dir/>' % sys.argv[0])
+    sys.exit(0)
+  (data_file, out_dir) = sys.argv[1:]
+
+  if not os.path.exists(out_dir):
+    os.mkdir(out_dir)
+
+  key_url_list = ParseData(data_file)
+  pool = multiprocessing.Pool(processes=12)
+
+  with tqdm(total=len(key_url_list)) as t:
+    for _ in pool.imap_unordered(DownloadImage, key_url_list):
+      t.update(1)
+
+
+if __name__ == '__main__':
+  Run()

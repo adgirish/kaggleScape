@@ -1,163 +1,242 @@
 
 # coding: utf-8
 
-# In this simple notebook, we will use CatBoost to predict the price using only categorical features.
+# # Plant Seedlings Segmentation with pure Computer Vision
 
-# In[ ]:
+# First of all, thanks for the popularity of this kernel. I hope it will help for you to create more accurate predictions
 
+# In[1]:
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import catboost as cboost
 
 get_ipython().run_line_magic('matplotlib', 'inline')
+import os
+import matplotlib
+import matplotlib.pyplot as plt
+import pandas as pd
+import cv2
+import numpy as np
+from glob import glob
+import seaborn as sns
 
 
-# In[ ]:
+# In[2]:
 
 
-df_train = pd.read_csv('../input/train.tsv', sep='\t', index_col='train_id')
-df_test = pd.read_csv('../input/test.tsv', sep='\t', index_col='test_id')
+BASE_DATA_FOLDER = "../input"
+TRAin_DATA_FOLDER = os.path.join(BASE_DATA_FOLDER, "train")
 
 
-# In[ ]:
+# ### Read images
+# First, I'll just read all the images. The images are in BGR (Blue/Green/Red) format because OpenCV uses this.
+# 
+# Btw... If you'd like to use RGB format, than you can use it, it won't effect the segmentation because we will use the HSV (Hue/Saturation/Value) color space for that.
+
+# In[3]:
 
 
-# Sneak peek on data
-df_train.sample(10, random_state=42)
+images_per_class = {}
+for class_folder_name in os.listdir(TRAin_DATA_FOLDER):
+    class_folder_path = os.path.join(TRAin_DATA_FOLDER, class_folder_name)
+    class_label = class_folder_name
+    images_per_class[class_label] = []
+    for image_path in glob(os.path.join(class_folder_path, "*.png")):
+        image_bgr = cv2.imread(image_path, cv2.IMREAD_COLOR)
+        images_per_class[class_label].append(image_bgr)
 
 
-# In[ ]:
+# ### Number of images per class
+
+# In[4]:
 
 
-# Log price distribution
-(df_train.price + 1).apply(np.log10).hist(bins=50);
+for key,value in images_per_class.items():
+    print("{0} -> {1}".format(key, len(value)))
 
 
-# In[ ]:
+# ### Plot images
+# Plot images so we can see what the input looks like
+
+# In[5]:
 
 
-# We only use categorical features in this naive approach
-categorical_features = ['item_condition_id', 'category_name', 'brand_name', 'shipping']
+def plot_for_class(label):
+    nb_rows = 3
+    nb_cols = 3
+    fig, axs = plt.subplots(nb_rows, nb_cols, figsize=(6, 6))
 
-df_x_train = df_train[categorical_features].copy()
-df_x_test = df_test[categorical_features].copy()
-df_y_log = np.log(df_train['price']+1)
+    n = 0
+    for i in range(0, nb_rows):
+        for j in range(0, nb_cols):
+            axs[i, j].xaxis.set_ticklabels([])
+            axs[i, j].yaxis.set_ticklabels([])
+            axs[i, j].imshow(images_per_class[label][n])
+            n += 1        
 
 
-# In[ ]:
+# In[6]:
 
 
-# Factorize both train and test (avoid unseen categories in train)
-# def factorize(train, test, col, min_count):
-#     cat_ids = sorted(set(train[col].dropna().unique()) | set(test[col].dropna().unique()))
+plot_for_class("Small-flowered Cranesbill")
 
-#     cat_ids = {k:i for i, k in enumerate(cat_ids)}
-#     cat_ids[np.nan] = -1
 
-#     train[col] = train[col].map(cat_ids)
-#     test[col]  = test[col].map(cat_ids)
-def factorize(train, test, col, min_count):
-    train_cat_count = train[col].value_counts()
-    test_cat_count = test[col].value_counts()
+# In[7]:
+
+
+plot_for_class("Maize")
+
+
+# ### Preprocessing for the images:
+# 
+# Now comes the interesting and fun part!
+# 
+# I created separate functions so if you'd like to use these it is easier.
+# 
+# In the next block I'll explain what I am doing to make the segmentation happen.
+
+# In[8]:
+
+
+def create_mask_for_plant(image):
+    image_hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    sensitivity = 35
+    lower_hsv = np.array([60 - sensitivity, 100, 50])
+    upper_hsv = np.array([60 + sensitivity, 255, 255])
+
+    mask = cv2.inRange(image_hsv, lower_hsv, upper_hsv)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11,11))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     
-    train_cat = set(train_cat_count[(train_cat_count >= min_count)].index)
+    return mask
 
-    cat_ids = {k:i for i, k in enumerate(sorted(train_cat))}
-    cat_ids[np.nan] = -1
-    
-    train[col] = train[col].map(cat_ids)
-    train[col] = train[col].fillna(len(cat_ids))  # Create 'other' category
+def segment_plant(image):
+    mask = create_mask_for_plant(image)
+    output = cv2.bitwise_and(image, image, mask = mask)
+    return output
 
-    test[col] = test[col].map(cat_ids)
-    test[col] = test[col].fillna(len(cat_ids))
-
-# Factorize string columns
-factorize(df_x_train, df_x_test, 'category_name', min_count=50)
-factorize(df_x_train, df_x_test, 'brand_name', min_count=50)
+def sharpen_image(image):
+    image_blurred = cv2.GaussianBlur(image, (0, 0), 3)
+    image_sharp = cv2.addWeighted(image, 1.5, image_blurred, -0.5, 0)
+    return image_sharp
 
 
-# In[ ]:
+# The `create_mask_for_plant` function: This function returns an image mask: Matrix with shape `(image_height, image_width)`. In this matrix there are only `0` and `1` values. The 1 values define the interesting part of the original image. But the question is...How do we create this mask?
+# 
+# This is a simple object detection problem, where we can use the color of the object.
+# 
+# The HSV color-space is suitable for color detection because with the Hue we can define the color and the saturation and value will define "different kinds" of the color. (For example it will detect the red, darker red, lighter red too). We cannot do this with the original BGR color space.
+# 
+# ![](https://www.mathworks.com/help/images/hsvcone.gif)
+# 
+# *image from https://www.mathworks.com/help/images/convert-from-hsv-to-rgb-color-space.html*
+# 
+# We have to set a range, which color should be detected:
+# 
+#     sensitivity = 35
+#     lower_hsv = np.array([60 - sensitivity, 100, 50])
+#     upper_hsv = np.array([60 + sensitivity, 255, 255])
+#     
+# After the mask is created with the `inRange` function, we can do a little *CV magic* (not close to magic, because this is almost the most basic thing in CV, but it is a cool buzzword, and this opertation is as awesome as simple it is) which is called *morphological operations* ([You can read more here](https://www.cs.auckland.ac.nz/courses/compsci773s1c/lectures/ImageProcessing-html/topic4.htm)).
+# 
+# Basically with the *Close* operation we would like to keep the shape of the original objects (1 blobs on the mask image) but close the small holes. That way we can clarify our detection mask more.
+# 
+# ![](https://homepages.inf.ed.ac.uk/rbf/HIPR2/figs/closebin.gif)
+# 
+# *image from https://www.cs.auckland.ac.nz/courses/compsci773s1c/lectures/ImageProcessing-html/topic4.htm*
+# 
+# After these steps we created the mask for the object.
+# 
+
+# In[9]:
 
 
-df_x_train.nunique()
+# Test image to see the changes
+image = images_per_class["Small-flowered Cranesbill"][97]
+
+image_mask = create_mask_for_plant(image)
+image_segmented = segment_plant(image)
+image_sharpen = sharpen_image(image_segmented)
+
+fig, axs = plt.subplots(1, 4, figsize=(20, 20))
+axs[0].imshow(image)
+axs[1].imshow(image_mask)
+axs[2].imshow(image_segmented)
+axs[3].imshow(image_sharpen)
 
 
-# In[ ]:
+# After this step we can see that the image on the right is more recognizable than the original image on the left.
+
+# ----------------------------------------------
+
+# From the mask image what we created (because we need that for the segmentation), we can extract some features. For example we can see how the area of the plant changes based on their classes.
+
+# Of course from the contours we can extract much more information than the area of the
+# contour and the number of components, but this is the one I would like to show you.
+# 
+# Additional read: https://en.wikipedia.org/wiki/Image_moment
+
+# In[10]:
 
 
-# Create train and test Pool of train
-ptrain = cboost.Pool(df_x_train, df_y_log, cat_features=np.arange(len(categorical_features)),
-                     column_description=categorical_features)
+def find_contours(mask_image):
+    return cv2.findContours(mask_image, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
 
-ptest = cboost.Pool(df_x_test, cat_features=np.arange(len(categorical_features)),
-                     column_description=categorical_features)
+def calculate_largest_contour_area(contours):
+    if len(contours) == 0:
+        return 0
+    c = max(contours, key=cv2.contourArea)
+    return cv2.contourArea(c)
 
-# Add subsample of train for cross-validation speed
-# sub_idx = np.random.choice(len(df_x_train), int(len(df_x_train) * 0.5), replace=False)
-# ptrain_sub = cboost.Pool(df_x_train.iloc[sub_idx], df_y_log.iloc[sub_idx],
-#                      cat_features=np.arange(len(categorical_features)),
-#                      column_description=categorical_features)
-
-
-# In[ ]:
-
-
-# Tune your parameters here!
-cboost_params = {
-    'nan_mode': 'Min',
-    'loss_function': 'RMSE',  # Try 'LogLinQuantile' as well
-    'iterations': 200,
-    'learning_rate': 1.0,
-    'depth': 11,
-    'verbose': True
-}
-
-best_iter = cboost_params['iterations']  # Initial 'guess' it not using CV
-
-# cv_result = cboost.cv(cboost_params, ptrain_sub, fold_count=3)
-
-# df_cv_result = pd.DataFrame({'train': cv_result['RMSE_train_avg'],
-#                              'valid': cv_result['RMSE_test_avg']})
-
-# # Best results
-# print('Best results:')
-# best_iter = df_cv_result.valid.argmin()+1
-# df_cv_bestresult = df_cv_result.iloc[best_iter-1]
-# print(df_cv_bestresult)
-
-# fig, ax = plt.subplots(1, 2, figsize=(15, 6))
-# df_cv_result.plot(ax=ax[0])
-
-# ax[1].plot(df_cv_result.train, df_cv_result.valid, 'o-')
-# ax[1].scatter([df_cv_bestresult['train']], [df_cv_bestresult['valid']], c='red')
-# ax[1].set_xlabel('train')
-# ax[1].set_ylabel('valid')
+def calculate_contours_area(contours, min_contour_area = 250):
+    area = 0
+    for c in contours:
+        c_area = cv2.contourArea(c)
+        if c_area >= min_contour_area:
+            area += c_area
+    return area
 
 
-# In[ ]:
+# In[11]:
 
 
-# Train model on full data
-model = cboost.CatBoostRegressor(**dict(cboost_params, verbose=False, iterations=best_iter))
+areas = []
+larges_contour_areas = []
+labels = []
+nb_of_contours = []
+images_height = []
+images_width = []
 
-fit_model = model.fit(ptrain)
+for class_label in images_per_class.keys():
+    for image in images_per_class[class_label]:
+        mask = create_mask_for_plant(image)
+        contours = find_contours(mask)
+        
+        area = calculate_contours_area(contours)
+        largest_area = calculate_largest_contour_area(contours)
+        height, width, channels = image.shape
+        
+        images_height.append(height)
+        images_width.append(width)
+        areas.append(area)
+        nb_of_contours.append(len(contours))
+        larges_contour_areas.append(largest_area)
+        labels.append(class_label)
 
 
-# In[ ]:
+# In[12]:
 
 
-# Predict test and save to .csv
-df_test['price_log'] = fit_model.predict(ptest).clip(0)  # Avoid negative prices
-
-df_test['price'] = np.exp(df_test['price_log'])-1
-
-df_test[['price']].round(5).to_csv('submission.csv', index=True)
-
-
-# In[ ]:
+features_df = pd.DataFrame()
+features_df["label"] = labels
+features_df["area"] = areas
+features_df["largest_area"] = larges_contour_areas
+features_df["number_of_components"] = nb_of_contours
+features_df["height"] = images_height
+features_df["width"] = images_width
 
 
-get_ipython().system('head submission.csv')
+# In[13]:
+
+
+features_df.groupby("label").describe()
 

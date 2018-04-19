@@ -1,121 +1,235 @@
 import numpy as np
-np.random.seed(42)
 import pandas as pd
-
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import roc_auc_score
-
-from keras.models import Model
-from keras.layers import Input, Embedding, Dense, Conv2D, MaxPool2D
-from keras.layers import Reshape, Flatten, Concatenate, Dropout, SpatialDropout1D
-from keras.preprocessing import text, sequence
-from keras.callbacks import Callback
-
-import warnings
-warnings.filterwarnings('ignore')
-
 import os
-os.environ['OMP_NUM_THREADS'] = '4'
+
+import lightgbm as lgb
+from sklearn.naive_bayes import MultinomialNB
+
+from tqdm import tqdm
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, log_loss
+from sklearn.model_selection import KFold
+
+tqdm.pandas()
+
+data_path = '../input/'
+classes = {
+    'EAP': 0,
+    'HPL': 1,
+    'MWS': 2
+}
+alphabet = 'abcdefghijklmnopqrstuvwxyz'
+
+train = pd.read_csv(os.path.join(data_path, 'train.csv'))
+train['author'] = train['author'].apply(lambda x: classes[x])
+
+test = pd.read_csv(os.path.join(data_path, 'test.csv'))
+id_test = test['id'].values
+
+# Clean text
+punctuation = ['.', '..', '...', ',', ':', ';', '-', '*', '"', '!', '?']
+def clean_text(x):
+    x.lower()
+    for p in punctuation:
+        x.replace(p, '')
+    return x
+
+train['text_cleaned'] = train['text'].apply(lambda x: clean_text(x))
+test['text_cleaned'] = test['text'].apply(lambda x: clean_text(x))
+
+# Count Vectorizer
+cvect = CountVectorizer(ngram_range=(1, 3), stop_words='english')
+cvect.fit(pd.concat((train['text_cleaned'], test['text_cleaned']), axis=0))
+cvect_train = cvect.transform(train['text_cleaned'])
+cvect_test = cvect.transform(test['text_cleaned'])
+
+# TFIDF
+tfidf = TfidfVectorizer(ngram_range=(1, 1), stop_words='english')
+tfidf.fit(pd.concat((train['text_cleaned'], test['text_cleaned']), axis=0))
+tfidf_train = tfidf.transform(train['text_cleaned'])
+tfidf_test = tfidf.transform(test['text_cleaned'])
+
+def extract_features(df):
+    df['len'] = df['text'].apply(lambda x: len(x))
+    df['n_words'] = df['text'].apply(lambda x: len(x.split(' ')))
+    df['n_.'] = df['text'].str.count('\.')
+    df['n_...'] = df['text'].str.count('\...')
+    df['n_,'] = df['text'].str.count('\,')
+    df['n_:'] = df['text'].str.count('\:')
+    df['n_;'] = df['text'].str.count('\;')
+    df['n_-'] = df['text'].str.count('\-')
+    df['n_?'] = df['text'].str.count('\?')
+    df['n_!'] = df['text'].str.count('\!')
+    df['n_\''] = df['text'].str.count('\'')
+    df['n_"'] = df['text'].str.count('\"')
+
+    # First words in a sentence
+    df['n_The '] = df['text'].str.count('The ')
+    df['n_I '] = df['text'].str.count('I ')
+    df['n_It '] = df['text'].str.count('It ')
+    df['n_He '] = df['text'].str.count('He ')
+    df['n_Me '] = df['text'].str.count('Me ')
+    df['n_She '] = df['text'].str.count('She ')
+    df['n_We '] = df['text'].str.count('We ')
+    df['n_They '] = df['text'].str.count('They ')
+    df['n_You '] = df['text'].str.count('You ')
+
+    # Find numbers of different combinations
+    for c in tqdm(alphabet.upper()):
+        df['n_' + c] = df['text'].str.count(c)
+        df['n_' + c + '.'] = df['text'].str.count(c + '\.')
+        df['n_' + c + ','] = df['text'].str.count(c + '\,')
+
+        for c2 in alphabet:
+            df['n_' + c + c2] = df['text'].str.count(c + c2)
+            df['n_' + c + c2 + '.'] = df['text'].str.count(c + c2 + '\.')
+            df['n_' + c + c2 + ','] = df['text'].str.count(c + c2 + '\,')
+
+    for c in tqdm(alphabet):
+        df['n_' + c + '.'] = df['text'].str.count(c + '\.')
+        df['n_' + c + ','] = df['text'].str.count(c + '\,')
+        df['n_' + c + '?'] = df['text'].str.count(c + '\?')
+        df['n_' + c + ';'] = df['text'].str.count(c + '\;')
+        df['n_' + c + ':'] = df['text'].str.count(c + '\:')
+
+        for c2 in alphabet:
+            df['n_' + c + c2 + '.'] = df['text'].str.count(c + c2 + '\.')
+            df['n_' + c + c2 + ','] = df['text'].str.count(c + c2 + '\,')
+            df['n_' + c + c2 + '?'] = df['text'].str.count(c + c2 + '\?')
+            df['n_' + c + c2 + ';'] = df['text'].str.count(c + c2 + '\;')
+            df['n_' + c + c2 + ':'] = df['text'].str.count(c + c2 + '\:')
+            df['n_' + c + ', ' + c2] = df['text'].str.count(c + '\, ' + c2)
+
+    # And now starting processing of cleaned text
+    for c in tqdm(alphabet):
+        df['n_' + c] = df['text_cleaned'].str.count(c)
+        df['n_' + c + ' '] = df['text_cleaned'].str.count(c + ' ')
+        df['n_' + ' ' + c] = df['text_cleaned'].str.count(' ' + c)
+
+        for c2 in alphabet:
+            df['n_' + c + c2] = df['text_cleaned'].str.count(c + c2)
+            df['n_' + c + c2 + ' '] = df['text_cleaned'].str.count(c + c2 + ' ')
+            df['n_' + ' ' + c + c2] = df['text_cleaned'].str.count(' ' + c + c2)
+            df['n_' + c + ' ' + c2] = df['text_cleaned'].str.count(c + ' ' + c2)
+
+            for c3 in alphabet:
+                df['n_' + c + c2 + c3] = df['text_cleaned'].str.count(c + c2 + c3)
+                # df['n_' + c + ' ' + c2 + c3] = df['text_cleaned'].str.count(c + ' ' + c2 + c3)
+                # df['n_' + c + c2 + ' ' + c3] = df['text_cleaned'].str.count(c + c2 + ' ' + c3)
+
+    df['n_the'] = df['text_cleaned'].str.count('the ')
+    df['n_ a '] = df['text_cleaned'].str.count(' a ')
+    df['n_appear'] = df['text_cleaned'].str.count('appear')
+    df['n_little'] = df['text_cleaned'].str.count('little')
+    df['n_was '] = df['text_cleaned'].str.count('was ')
+    df['n_one '] = df['text_cleaned'].str.count('one ')
+    df['n_two '] = df['text_cleaned'].str.count('two ')
+    df['n_three '] = df['text_cleaned'].str.count('three ')
+    df['n_ten '] = df['text_cleaned'].str.count('ten ')
+    df['n_is '] = df['text_cleaned'].str.count('is ')
+    df['n_are '] = df['text_cleaned'].str.count('are ')
+    df['n_ed'] = df['text_cleaned'].str.count('ed ')
+    df['n_however'] = df['text_cleaned'].str.count('however')
+    df['n_ to '] = df['text_cleaned'].str.count(' to ')
+    df['n_into'] = df['text_cleaned'].str.count('into')
+    df['n_about '] = df['text_cleaned'].str.count('about ')
+    df['n_th'] = df['text_cleaned'].str.count('th')
+    df['n_er'] = df['text_cleaned'].str.count('er')
+    df['n_ex'] = df['text_cleaned'].str.count('ex')
+    df['n_an '] = df['text_cleaned'].str.count('an ')
+    df['n_ground'] = df['text_cleaned'].str.count('ground')
+    df['n_any'] = df['text_cleaned'].str.count('any')
+    df['n_silence'] = df['text_cleaned'].str.count('silence')
+    df['n_wall'] = df['text_cleaned'].str.count('wall')
+
+    df.drop(['id', 'text', 'text_cleaned'], axis=1, inplace=True)
+
+print('Processing train...')
+extract_features(train)
+print('Processing test...')
+extract_features(test)
+
+print('train.shape = ' + str(train.shape) + ', test.shape = ' + str(test.shape))
+
+# Drop non-relevant columns
+print('Searching for columns with non-changing values...')
+counts = train.sum(axis=0)
+cols_to_drop = counts[counts == 0].index.values
+train.drop(cols_to_drop, axis=1, inplace=True)
+test.drop(cols_to_drop, axis=1, inplace=True)
+print('Dropped ' + str(len(cols_to_drop)) + ' columns.')
+print('train.shape = ' + str(train.shape) + ', test.shape = ' + str(test.shape))
+
+print('Searching for columns with low STD...')
+counts = train.std(axis=0)
+cols_to_drop = counts[counts < 0.01].index.values
+train.drop(cols_to_drop, axis=1, inplace=True)
+test.drop(cols_to_drop, axis=1, inplace=True)
+print('Dropped ' + str(len(cols_to_drop)) + ' columns.')
+print('train.shape = ' + str(train.shape) + ', test.shape = ' + str(test.shape))
+
+# Split train dataset on train and CV
+X = np.concatenate((train.drop('author', axis=1), tfidf_train.toarray()), axis=1)
+y = train['author'].values
+X_test = np.concatenate((test, tfidf_test.toarray()), axis=1)
+
+p_valid = []
+p_test = []
 
 
-EMBEDDING_FILE = '../input/fasttext-crawl-300d-2m/crawl-300d-2M.vec'
+kf = KFold(n_splits=5, shuffle=False, random_state=0)
+for train_index, valid_index in kf.split(X):
+    X_train, X_valid = X[train_index], X[valid_index]
+    y_train, y_valid = y[train_index], y[valid_index]
 
-train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv')
-test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv')
-submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
+    # LightGBM
+    d_train = lgb.Dataset(X_train, label=y_train)
+    d_valid = lgb.Dataset(X_valid, label=y_valid)
 
-X_train = train["comment_text"].fillna("fillna").values
-y_train = train[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]].values
-X_test = test["comment_text"].fillna("fillna").values
+    params = {
+        'max_depth': 27, 
+        'learning_rate': 0.1,
+        'verbose': 0, 
+        'early_stopping_round': 120,
+        'metric': 'multi_logloss',
+        'objective': 'multiclass',
+        'num_classes': 3,
+        'nthread': 1
+    }
+    n_estimators = 5000
+    model = lgb.train(params, d_train, n_estimators, [d_train, d_valid], verbose_eval=200)
 
+    p_valid.append(model.predict(X_valid, num_iteration=model.best_iteration))
+    acc = accuracy_score(y_valid, np.argmax(p_valid[-1], axis=1))
+    logloss = log_loss(y_valid, p_valid[-1])
+    print('LGB:\tAccuracy = ' + str(round(acc, 6)) + ',\tLogLoss = ' + str(round(logloss, 6)))
+    p_test.append(model.predict(X_test, num_iteration=model.best_iteration))
 
-max_features = 100000
-maxlen = 200
-embed_size = 300
+    # MultinomialNB Count Vectorizer
+    X_train, X_valid = cvect_train[train_index], cvect_train[valid_index]
+    y_train, y_valid = y[train_index], y[valid_index]
+    print('X_train.shape = ' + str(X_train.shape) + ', y_train.shape = ' + str(y_train.shape))
+    print('X_valid.shape = ' + str(X_valid.shape) + ', y_valid.shape = ' + str(y_valid.shape))
 
-tokenizer = text.Tokenizer(num_words=max_features)
-tokenizer.fit_on_texts(list(X_train) + list(X_test))
-X_train = tokenizer.texts_to_sequences(X_train)
-X_test = tokenizer.texts_to_sequences(X_test)
-x_train = sequence.pad_sequences(X_train, maxlen=maxlen)
-x_test = sequence.pad_sequences(X_test, maxlen=maxlen)
+    model = MultinomialNB()
+    model.fit(X_train, y_train)
+    p_valid.append(model.predict_proba(X_valid))
+    acc = accuracy_score(y_valid, np.argmax(p_valid[-1], axis=1))
+    logloss = log_loss(y_valid, p_valid[-1])
+    print('MNBc:\tAccuracy = ' + str(round(acc, 6)) + ',\tLogLoss = ' + str(round(logloss, 6)))
+    p_test.append(model.predict_proba(cvect_test))
+    # break
 
+# Ensemble
+print('Ensemble contains ' + str(len(p_valid)) + ' models.')
+p_test_ens = np.mean(p_test, axis=0)
 
-def get_coefs(word, *arr): return word, np.asarray(arr, dtype='float32')
-embeddings_index = dict(get_coefs(*o.rstrip().rsplit(' ')) for o in open(EMBEDDING_FILE))
-
-word_index = tokenizer.word_index
-nb_words = min(max_features, len(word_index))
-embedding_matrix = np.zeros((nb_words, embed_size))
-for word, i in word_index.items():
-    if i >= max_features: continue
-    embedding_vector = embeddings_index.get(word)
-    if embedding_vector is not None: embedding_matrix[i] = embedding_vector
-
-
-class RocAucEvaluation(Callback):
-    def __init__(self, validation_data=(), interval=1):
-        super(Callback, self).__init__()
-
-        self.interval = interval
-        self.X_val, self.y_val = validation_data
-
-    def on_epoch_end(self, epoch, logs={}):
-        if epoch % self.interval == 0:
-            y_pred = self.model.predict(self.X_val, verbose=0)
-            score = roc_auc_score(self.y_val, y_pred)
-            print("\n ROC-AUC - epoch: %d - score: %.6f \n" % (epoch+1, score))
-
-
-filter_sizes = [1,2,3,5]
-num_filters = 32
-
-def get_model():    
-    inp = Input(shape=(maxlen, ))
-    x = Embedding(max_features, embed_size, weights=[embedding_matrix])(inp)
-    x = SpatialDropout1D(0.4)(x)
-    x = Reshape((maxlen, embed_size, 1))(x)
-    
-    conv_0 = Conv2D(num_filters, kernel_size=(filter_sizes[0], embed_size), kernel_initializer='normal',
-                                                                                    activation='elu')(x)
-    conv_1 = Conv2D(num_filters, kernel_size=(filter_sizes[1], embed_size), kernel_initializer='normal',
-                                                                                    activation='elu')(x)
-    conv_2 = Conv2D(num_filters, kernel_size=(filter_sizes[2], embed_size), kernel_initializer='normal',
-                                                                                    activation='elu')(x)
-    conv_3 = Conv2D(num_filters, kernel_size=(filter_sizes[3], embed_size), kernel_initializer='normal',
-                                                                                    activation='elu')(x)
-    
-    maxpool_0 = MaxPool2D(pool_size=(maxlen - filter_sizes[0] + 1, 1))(conv_0)
-    maxpool_1 = MaxPool2D(pool_size=(maxlen - filter_sizes[1] + 1, 1))(conv_1)
-    maxpool_2 = MaxPool2D(pool_size=(maxlen - filter_sizes[2] + 1, 1))(conv_2)
-    maxpool_3 = MaxPool2D(pool_size=(maxlen - filter_sizes[3] + 1, 1))(conv_3)
-        
-    z = Concatenate(axis=1)([maxpool_0, maxpool_1, maxpool_2, maxpool_3])   
-    z = Flatten()(z)
-    z = Dropout(0.1)(z)
-        
-    outp = Dense(6, activation="sigmoid")(z)
-    
-    model = Model(inputs=inp, outputs=outp)
-    model.compile(loss='binary_crossentropy',
-                  optimizer='adam',
-                  metrics=['accuracy'])
-
-    return model
-
-model = get_model()
-
-
-batch_size = 256
-epochs = 3
-
-X_tra, X_val, y_tra, y_val = train_test_split(x_train, y_train, train_size=0.95, random_state=233)
-RocAuc = RocAucEvaluation(validation_data=(X_val, y_val), interval=1)
-
-hist = model.fit(X_tra, y_tra, batch_size=batch_size, epochs=epochs, validation_data=(X_val, y_val),
-                 callbacks=[RocAuc], verbose=2)
-
-
-y_pred = model.predict(x_test, batch_size=1024)
-submission[["toxic", "severe_toxic", "obscene", "threat", "insult", "identity_hate"]] = y_pred
-submission.to_csv('submission.csv', index=False)
+# Prepare submission
+subm = pd.DataFrame()
+subm['id'] = id_test
+subm['EAP'] = p_test_ens[:, 0]
+subm['HPL'] = p_test_ens[:, 1]
+subm['MWS'] = p_test_ens[:, 2]
+subm.to_csv('subm.csv', index=False)
+print('Done')

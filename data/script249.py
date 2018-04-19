@@ -1,200 +1,266 @@
 
 # coding: utf-8
 
-# After publishing a [LGBM kernel](https://www.kaggle.com/ogrellier/lgbm-with-words-and-chars-n-gram), 
-# [@Sergei Fironov](https://www.kaggle.com/sergeifironov]) pointed out substantial differences between AUC scores averaged by fold and full OOF AUC, which is mainly due to the fact AUC is not linear.
-# 
-# So I decided to publish a kernel showing significant distribution differences between each fold predictions.
-# 
-# I believe we have to tackle this issue before successfully stacking models.
+# # Import Libraries #
 
-# In[1]:
+# In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
+import pandas as pd
+import numpy as np
+
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import Normalizer
+from sklearn.cross_validation import cross_val_score
+from sklearn.preprocessing import Imputer
+
+from scipy.stats import skew
+
 import seaborn as sns
-from bokeh.io import output_file, show, output_notebook
-from bokeh.layouts import column, gridplot
-from bokeh.plotting import figure
-from bokeh.palettes import brewer
-output_notebook()
-from sklearn.metrics import roc_auc_score, roc_curve
-from sklearn.model_selection import KFold
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+plt.style.use('ggplot')
 
 
-# Read Out-Of-Fold predictions
+# #Import Data#
 
-# In[2]:
-
-
-oof_dir = '../input/lgbm-with-words-and-chars-n-gram/'
-oof = pd.read_csv(oof_dir +"lvl0_lgbm_clean_oof.csv")
+# In[ ]:
 
 
-# In[3]:
+train = '../input/train.csv'
+test = '../input/test.csv'
+
+df_train = pd.read_csv(train)
+df_test = pd.read_csv(test)
 
 
-class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
-class_preds = [c_ + "_oof" for c_ in class_names]
-folds = KFold(n_splits=4, shuffle=True, random_state=1)
-
-
-# To show what's happening I often like to display F1 scores against probability thresholds. This shows how different each fold behaves for the same threshold. 
+# #Define Median Absolute Deviation Function#
 # 
-# When folds do not behave properly for the same threshold the overall AUC will usually degrade and optimal weights found on OOF data may not yield good results when applied to test predictions.
+# Function found in this link: http://stackoverflow.com/a/22357811/5082694
 
-# In[4]:
+# In[ ]:
 
 
-figures = []
-for i_class, class_name in enumerate(class_names):
-    # create a new plot for current class
-    # Compute full score :
-    full = roc_auc_score(oof[class_names[i_class]], oof[class_preds[i_class]])
-    # Compute average score
-    avg = 0.0
-    for n_fold, (_, val_idx) in enumerate(folds.split(oof)):
-        avg += roc_auc_score(oof[class_names[i_class]].iloc[val_idx], oof[class_preds[i_class]].iloc[val_idx]) / folds.n_splits
+def is_outlier(points, thresh = 3.5):
+    if len(points.shape) == 1:
+        points = points[:,None]
+    median = np.median(points, axis=0)
+    diff = np.sum((points - median)**2, axis=-1)
+    diff = np.sqrt(diff)
+    med_abs_deviation = np.median(diff)
+
+    modified_z_score = 0.6745 * diff / med_abs_deviation
+
+    return modified_z_score > thresh
+
+
+# # Remove Skew from SalesPrice data#
+
+# In[ ]:
+
+
+target = df_train[df_train.columns.values[-1]]
+target_log = np.log(target)
+
+plt.figure(figsize=(10,5))
+plt.subplot(1,2,1)
+sns.distplot(target, bins=50)
+plt.title('Original Data')
+plt.xlabel('Sale Price')
+
+plt.subplot(1,2,2)
+sns.distplot(target_log, bins=50)
+plt.title('Natural Log of Data')
+plt.xlabel('Natural Log of Sale Price')
+plt.tight_layout()
+
+
+# # Merge Train and Test to evaluate ranges and missing values #
+# This was done primarily to ensure that Categorical data in the training and testing data sets were consistent.
+
+# In[ ]:
+
+
+df_train = df_train[df_train.columns.values[:-1]]
+df = df_train.append(df_test, ignore_index = True)
+
+
+# #Find all categorical data#
+
+# In[ ]:
+
+
+cats = []
+for col in df.columns.values:
+    if df[col].dtype == 'object':
+        cats.append(col)
+
+
+# # Create separte datasets for Continuous vs Categorical #
+# Creating two data sets allowed me to handle the data in more appropriate ways.
+
+# In[ ]:
+
+
+df_cont = df.drop(cats, axis=1)
+df_cat = df[cats]
+
+
+# # Handle Missing Data for continuous data #
+# 
+#  - If any column contains more than 50 entries of missing data, drop the column
+#  - If any column contains fewer that 50 entries of missing data, replace those missing values with the median for that column
+#  - Remove outliers using Median Absolute Deviation
+#  - Calculate skewness for each variable and if greater than 0.75 transform it
+#  - Apply the sklearn.Normalizer to each column
+
+# In[ ]:
+
+
+for col in df_cont.columns.values:
+    if np.sum(df_cont[col].isnull()) > 50:
+        df_cont = df_cont.drop(col, axis = 1)
+    elif np.sum(df_cont[col].isnull()) > 0:
+        median = df_cont[col].median()
+        idx = np.where(df_cont[col].isnull())[0]
+        df_cont[col].iloc[idx] = median
+
+        outliers = np.where(is_outlier(df_cont[col]))
+        df_cont[col].iloc[outliers] = median
+        
+        if skew(df_cont[col]) > 0.75:
+            df_cont[col] = np.log(df_cont[col])
+            df_cont[col] = df_cont[col].apply(lambda x: 0 if x == -np.inf else x)
+        
+        df_cont[col] = Normalizer().fit_transform(df_cont[col].reshape(1,-1))[0]
+
+
+# # Handle Missing Data for Categorical Data #
+# 
+#  - If any column contains more than 50 entries of missing data, drop the column
+#  - If any column contains fewer that 50 entries of missing data, replace those values with the 'MIA'
+#  - Apply the sklearn.LabelEncoder
+#  - For each categorical variable determine the number of unique values and for each, create a new column that is binary
+
+# In[ ]:
+
+
+for col in df_cat.columns.values:
+    if np.sum(df_cat[col].isnull()) > 50:
+        df_cat = df_cat.drop(col, axis = 1)
+        continue
+    elif np.sum(df_cat[col].isnull()) > 0:
+        df_cat[col] = df_cat[col].fillna('MIA')
+        
+    df_cat[col] = LabelEncoder().fit_transform(df_cat[col])
     
-    s = figure(plot_width=750, plot_height=300, 
-               title="F1 score vs threshold for %s full oof %.6f / avg fold %.6f" % (class_name, full, avg))
-    
-    for n_fold, (_, val_idx) in enumerate(folds.split(oof)):
-        # Get False positives, true positives and the list of thresholds used to compute them
-        fpr, tpr, thresholds = roc_curve(oof[class_names[i_class]].iloc[val_idx], 
-                                         oof[class_preds[i_class]].iloc[val_idx])
-        # Compute recall, precision and f1_score
-        recall = tpr
-        precision = tpr / (fpr + tpr + 1e-5)
-        f1_scores = 2 * precision * recall / (precision + recall + 1e-5)
-        # Finally plot the f1_scores against thresholds
-        s.line(thresholds, f1_scores, name="Fold %d" % n_fold, color=brewer["Set1"][4][n_fold])
-    figures.append(s)
-
-# put the results in a column and show
-show(column(figures))
+    num_cols = df_cat[col].max()
+    for i in range(num_cols):
+        col_name = col + '_' + str(i)
+        df_cat[col_name] = df_cat[col].apply(lambda x: 1 if x == i else 0)
+        
+    df_cat = df_cat.drop(col, axis = 1)
 
 
-# We can now clearly see problems on severe_toxic, threat and identity_hate.
+# # Merge Numeric and Categorical Datasets and Create Training and Testing Data #
+
+# In[ ]:
+
+
+df_new = df_cont.join(df_cat)
+
+df_train = df_new.iloc[:len(df_train) - 1]
+df_train = df_train.join(target_log)
+
+df_test = df_new.iloc[len(df_train) + 1:]
+
+X_train = df_train[df_train.columns.values[1:-1]]
+y_train = df_train[df_train.columns.values[-1]]
+
+X_test = df_test[df_test.columns.values[1:]]
+
+
+# # Create Estimator and Apply Cross Validation #
 # 
-# Another way to look at this uses the AUC curve directly.
-
-# In[5]:
-
-
-figures = []
-for i_class, class_name in enumerate(class_names):
-    # create a new plot for current class
-    # Compute full score :
-    full = roc_auc_score(oof[class_names[i_class]], oof[class_preds[i_class]])
-    # Compute average score
-    avg = 0.0
-    for n_fold, (_, val_idx) in enumerate(folds.split(oof)):
-        avg += roc_auc_score(oof[class_names[i_class]].iloc[val_idx], oof[class_preds[i_class]].iloc[val_idx]) / folds.n_splits
-    
-    s = figure(plot_width=400, plot_height=400, 
-               title="%s ROC curves OOF %.6f / Mean %.6f" % (class_name, full, avg))
-    
-    for n_fold, (_, val_idx) in enumerate(folds.split(oof)):
-        # Get False positives, true positives and the list of thresholds used to compute them
-        fpr, tpr, thresholds = roc_curve(oof[class_names[i_class]].iloc[val_idx], 
-                                         oof[class_preds[i_class]].iloc[val_idx])
-        s.line(fpr, tpr, name="Fold %d" % n_fold, color=brewer["Set1"][4][n_fold])
-        s.line([0, 1], [0, 1], color='navy', line_width=1, line_dash="dashed")
-
-    figures.append(s)
-
-# put the results in a column and show
-show(gridplot(np.array_split(figures, 3)))
-
-
-# ROC curves are even clearer on that matter as we clearly see curves have the same shape for toxic, obscene and insult while there are significant differences for the last 3 classes.
+# We can gauge the accuracy of our model by implementing an multi-fold cross validation and outputting the score.  In this case I chose to run 15 iterations and output the score as Root Mean Squared Error.
 # 
-# The problem now is we don't know if there are even further differences between OOF probabilities and Test predictions. If this were the case this would undermine any stacking attempt. 
-# 
-# As a matter of fact we can't use ROC curves or F1 scores since Kaggle teams do not let us access test ground truth, and this really is a shame ;-)  
-# 
-# Can we see anything interesting in the probability distributions themselves?
+# The results range from ~0.11-0.17 with a mean of ~0.14.
 
-# In[7]:
+# In[ ]:
 
 
-# Read submission data 
-sub = pd.read_csv(oof_dir +"lvl0_lgbm_clean_sub.csv")
-figures = []
-for i_class, class_name in enumerate(class_names):
-    s = figure(plot_width=600, plot_height=300, 
-               title="Probability logits for %s" % class_name)
+from sklearn.metrics import make_scorer, mean_squared_error
+scorer = make_scorer(mean_squared_error, False)
 
-    for n_fold, (_, val_idx) in enumerate(folds.split(oof)):
-        probas = oof[class_preds[i_class]].values[val_idx]
-        p_log = np.log((probas + 1e-5) / (1 - probas + 1e-5))
-        hist, edges = np.histogram(p_log, density=True, bins=50)
-        s.line(edges[:50], hist, legend="Fold %d" % n_fold, color=brewer["Set1"][4][n_fold])
-    
-    oof_probas = oof[class_preds[i_class]].values
-    oof_logit = np.log((oof_probas + 1e-5) / (1 - oof_probas + 1e-5))
-    hist, edges = np.histogram(oof_logit, density=True, bins=50)
-    s.line(edges[:50], hist, legend="Full OOF", color=brewer["Paired"][6][1], line_width=3)
-    
-    sub_probas = sub[class_name].values
-    sub_logit = np.log((sub_probas + 1e-5) / (1 - sub_probas + 1e-5))
-    hist, edges = np.histogram(sub_logit, density=True, bins=50)
-    s.line(edges[:50], hist, legend="Test", color=brewer["Paired"][6][5], line_width=3)
-    figures.append(s)
+clf = RandomForestRegressor(n_estimators=500, n_jobs=-1)
+cv_score = np.sqrt(-cross_val_score(estimator=clf, X=X_train, y=y_train, cv=15, scoring = scorer))
 
-# put the results in a column and show
-show(column(figures))
+plt.figure(figsize=(10,5))
+plt.bar(range(len(cv_score)), cv_score)
+plt.title('Cross Validation Score')
+plt.ylabel('RMSE')
+plt.xlabel('Iteration')
+
+plt.plot(range(len(cv_score) + 1), [cv_score.mean()] * (len(cv_score) + 1))
+plt.tight_layout()
 
 
-# I can hear you shout :  he should have started here... Agreed !
+# # Evaluate Feature Significance #
 # 
-# Things are cristal clear now and we have a way to make sure what we do in OOF will translate to test probabilities... or not ! 
+# Investigating feature importance is a relatively straight forward process:
 # 
+#  1. Out feature importance coefficients
+#  2. Map coefficients to their feature name
+#  3. Sort features in descending order
 # 
-# As a conclusion I would say that using these OOF outputs for stacking may not be the best idea, especially for severe_toxic and threat.
+# Given our choice of model and methods for preprocessing data the most significant features are:
 # 
-# Probabilities need to be aligned before any stacking and Im' planning on using a simple LogisticRegression for this purpose.
-# 
-# More on this later...
+#  1. OverallQual
+#  2. GrLivArea
+#  3. TotalBsmtSF
+#  4. GarageArea
 # 
 
-# UPDATE: 
+# In[ ]:
+
+
+# Fit model with training data
+clf.fit(X_train, y_train)
+
+# Output feature importance coefficients, map them to their feature name, and sort values
+coef = pd.Series(clf.feature_importances_, index = X_train.columns).sort_values(ascending=False)
+
+plt.figure(figsize=(10, 5))
+coef.head(25).plot(kind='bar')
+plt.title('Feature Significance')
+plt.tight_layout()
+
+
+# # Visualize Predicted vs. Actual Sales Price #
 # 
-# I'm currently running a fork of LightGBM kernel trying to align probabilities.  LogisticRegression gives even worse results but I may be using wrong parameters. I decided to try pd.Series().rank(), which is appropriate for AUC metric. Things are looking better at least on the OOF side but I still need to check the submission predictions. Once the kernel looks right I'll use the output to add a few graphs here.
-
-# In fact I don't need to wait for the kernell to complete since I can simply use the rank() method directly on the OOF data. So let's have a try!
-
-# In[11]:
-
-
-figures = []
-for i_class, class_name in enumerate(class_names):
-    s = figure(plot_width=600, plot_height=300, 
-               title="Probability logits for %s using rank()" % class_name)
-
-    for n_fold, (_, val_idx) in enumerate(folds.split(oof)):
-        probas = (1 + oof[class_preds[i_class]].iloc[val_idx].rank().values) / (len(val_idx) + 1)
-        p_log = np.log((probas + 1e-5) / (1 - probas + 1e-5))
-        hist, edges = np.histogram(p_log, density=True, bins=50)
-        s.line(edges[:50], hist, legend="Fold %d" % n_fold, color=brewer["Set1"][4][n_fold])
-    
-    oof_probas = (1 + oof[class_preds[i_class]].rank().values) / (oof.shape[0] + 1)
-    oof_logit = np.log((oof_probas + 1e-5) / (1 - oof_probas + 1e-5))
-    hist, edges = np.histogram(oof_logit, density=True, bins=50)
-    s.line(edges[:50], hist, legend="Full OOF", color=brewer["Paired"][6][1], line_width=3)
-    
-    sub_probas = (1 + sub[class_name].rank().values) / (sub.shape[0] + 1)
-    sub_logit = np.log((sub_probas + 1e-5) / (1 - sub_probas + 1e-5))
-    hist, edges = np.histogram(sub_logit, density=True, bins=50)
-    s.line(edges[:50], hist, legend="Test", color=brewer["Paired"][6][5], line_width=3)
-    figures.append(s)
-
-# put the results in a column and show
-show(column(figures))
-
-
-# Ok I think the figures speak for themselves. However I ould still urge you to check your OOF and test predictions since I have a few models that have weird behaviors on the far left or right side of the graph even with rank() !
+# In order to visualize our predicted values vs our actual values we need to split our data into training and testing data sets.  This can easily be accomplished using sklearn's **train_test_split** module.
 # 
+# We will train the model using a random sampling of our data set and then compare visually against the actual values.
+
+# In[ ]:
+
+
+from sklearn.cross_validation import train_test_split
+
+X_train1, X_test1, y_train1, y_test1 = train_test_split(X_train, y_train)
+clf = RandomForestRegressor(n_estimators=500, n_jobs=-1)
+
+clf.fit(X_train1, y_train1)
+y_pred = clf.predict(X_test1)
+
+plt.figure(figsize=(10, 5))
+plt.scatter(y_test1, y_pred, s=20)
+plt.title('Predicted vs. Actual')
+plt.xlabel('Actual Sale Price')
+plt.ylabel('Predicted Sale Price')
+
+plt.plot([min(y_test1), max(y_test1)], [min(y_test1), max(y_test1)])
+plt.tight_layout()
+

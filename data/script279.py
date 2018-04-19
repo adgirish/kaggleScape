@@ -1,137 +1,127 @@
 
 # coding: utf-8
 
+# # Exploring BNP Data Distributions
+# 
+# Hopefully this will run on Kaggle servers.  You should see a lot of plots (I can only see one right now, before pressing view HTML output).  
+# If it doesn't I guess you'll have to run the code on your own machine. 
+
 # In[ ]:
 
 
-import os
+# imports
 import numpy as np
 import pandas as pd
-from skimage.util.montage import montage2d
 import matplotlib.pyplot as plt
-base_path = os.path.join('..', 'input')
-
-
-# # Concatenate and Reshape
-# Here we load the data and then combine the two bands and recombine them into a single image/tensor for training
-
-# In[ ]:
-
-
-def load_and_format(in_path):
-    out_df = pd.read_json(in_path)
-    out_images = out_df.apply(lambda c_row: [np.stack([c_row['band_1'],c_row['band_2']], -1).reshape((75,75,2))],1)
-    out_images = np.stack(out_images).squeeze()
-    return out_df, out_images
-train_df, train_images = load_and_format(os.path.join(base_path, 'train.json'))
-print('training', train_df.shape, 'loaded', train_images.shape)
-test_df, test_images = load_and_format(os.path.join(base_path, 'test.json'))
-print('testing', test_df.shape, 'loaded', test_images.shape)
-train_df.sample(3)
-
-
-# # Show single examples
-
-# In[ ]:
-
-
-fig, (ax1, ax2) = plt.subplots(1,2, figsize = (12, 6))
-ax1.matshow(train_images[0,:,:,0])
-ax1.set_title('Band 1')
-ax2.matshow(train_images[0,:,:,1])
-ax2.set_title('Band 2')
-
-
-# # Training Overview
-# Here we use the montage functionality of skimage to make preview tiles of randomly selected icebergs and ships. This helps us get a better idea about the diversity in the data.
-
-# In[ ]:
-
-
-fig, (ax1s, ax2s) = plt.subplots(2,2, figsize = (8,8))
-obj_list = dict(ships = train_df.query('is_iceberg==0').sample(16).index,
-     icebergs = train_df.query('is_iceberg==1').sample(16).index)
-for ax1, ax2, (obj_type, idx_list) in zip(ax1s, ax2s, obj_list.items()):
-    ax1.imshow(montage2d(train_images[idx_list,:,:,0]))
-    ax1.set_title('%s Band 1' % obj_type)
-    ax1.axis('off')
-    ax2.imshow(montage2d(train_images[idx_list,:,:,1]))
-    ax2.set_title('%s Band 2' % obj_type)
-    ax2.axis('off')
-
-
-# # Testing Data Overview
-# To see how different the test data looks from the training and it looks like the data is much messier (multiple objects, different skews and angles). Clearly we will require some augmentation to do well here
-
-# In[ ]:
-
-
-fig, (ax1, ax2) = plt.subplots(1,2, figsize = (12,12))
-idx_list = test_df.sample(49).index
-obj_type = 'Test Data'
-ax1.imshow(montage2d(test_images[idx_list,:,:,0]))
-ax1.set_title('%s Band 1' % obj_type)
-ax1.axis('off')
-ax2.imshow(montage2d(test_images[idx_list,:,:,1]))
-ax2.set_title('%s Band 2' % obj_type)
-ax2.axis('off')
-
-
-# # Simple CNN
-# While the competition explicitly mentioned these are not like 'normal' images and the values have meaning, I am going to be lazy and treat them like 'normal' images and dump them into a magical CNN and hope good things pop out.
-
-# In[ ]:
-
-
-from sklearn.model_selection import train_test_split
-from keras.utils.np_utils import to_categorical
-X_train, X_test, y_train, y_test = train_test_split(train_images,
-                                                   to_categorical(train_df['is_iceberg']),
-                                                    random_state = 2017,
-                                                    test_size = 0.5
-                                                   )
-print('Train', X_train.shape, y_train.shape)
-print('Validation', X_test.shape, y_test.shape)
+from sklearn import preprocessing
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
 # In[ ]:
 
 
-from keras.models import Sequential
-from keras.layers import Conv2D, BatchNormalization, Dropout, MaxPooling2D, GlobalMaxPooling2D, Dense
-simple_cnn = Sequential()
-simple_cnn.add(BatchNormalization(input_shape = (75, 75, 2)))
-for i in range(4):
-    simple_cnn.add(Conv2D(8*2**i, kernel_size = (3,3)))
-    simple_cnn.add(MaxPooling2D((2,2)))
-simple_cnn.add(GlobalMaxPooling2D())
-simple_cnn.add(Dropout(0.5))
-simple_cnn.add(Dense(8))
-simple_cnn.add(Dense(2, activation = 'softmax'))
-simple_cnn.compile(optimizer='adam', loss = 'binary_crossentropy', metrics = ['accuracy'])
-simple_cnn.summary()
+# Read the Data
+train = pd.read_csv("../input/train.csv")
+train = train.drop(['ID'],axis=1)
+test = pd.read_csv("../input/test.csv")
+test = test.drop(['ID'],axis=1)
+target = train.target
+featureNames = train.columns.values
 
 
 # In[ ]:
 
 
-simple_cnn.fit(X_train, y_train, validation_data = (X_test, y_test), epochs = 10, shuffle = True)
+# Function to convert to hexavigesimal base
+def az_to_int(az,nanVal=None):
+    if az==az:  #catch NaN
+        hv = 0
+        for i in range(len(az)):
+            hv += (ord(az[i].lower())-ord('a')+1)*26**(len(az)-1-i)
+        return hv
+    else:
+        if nanVal is not None:
+            return nanVal
+        else:
+            return az
 
-
-# # Make Predictions
-# Here we make predictions on the output and export the CSV so we can submit
 
 # In[ ]:
 
 
-test_predictions = simple_cnn.predict(test_images)
+# Prepare the data: combine, process, split
+test['target'] = -999
+all_data = train.append(test)
 
+# convert v22 to hexavigesimal
+all_data.v22 = all_data.v22.apply(az_to_int)
+
+for c in all_data.columns.values:
+    if all_data[c].dtype=='object':
+        all_data[c], tmpItter = all_data[c].factorize()
+
+# replace all NA's with -1
+all_data.fillna(-1, inplace=True)
+
+# split the data
+train = all_data[all_data['target']>-999]
+test = all_data[all_data['target']==-999]
+test = test.drop(['target'],axis=1)
+
+
+# ## Plot Descriptions
+# 
+# ### Histogram Plots on the the left:
+# * Blue:  All of the train data (normalized)
+# * Red:  Train Data where the target variable is one (again normalized)
+# * Na's are -1, so the first column is usually large
+# 
+# ### CDF Plots on the right:
+# * Blue and red as before
+# * Black line is the difference in the CDF's (x10 + 0.5 for visualization)
+# 
+# ### A few interesting insights:
+# * It's easy to see why v50 is such a powerful predictor
+# * Somewhat counterintuitive, most of the features have more NA's when the target is true.  This is indicated both by the first red bar on the left being higher than the blue and by the cdf difference line being negative at the start.  Perhaps it's the presence of certain information, not the lack of it, that prevents fast-track processing.
+# * With v22 coded in hexavigesimal, there is some large scale structure in the pdf, and possibly some structure in the CDF difference plot
 
 # In[ ]:
 
 
-pred_df = test_df[['id']].copy()
-pred_df['is_iceberg'] = test_predictions[:,1]
-pred_df.to_csv('predictions.csv', index = False)
-pred_df.sample(3)
+plt.rcParams['figure.max_open_warning']=300
+nbins=20
+for c in  featureNames:
+    if train[c].dtype != 'object' and c != 'target':
+        if c=='v22':
+            hbins = 100
+        else:
+            hbins = nbins
+        fig=plt.figure(figsize=(14,4))
+        ax1 = fig.add_subplot(1,2,1) 
+        
+        dataset1 = train[c][~np.isnan(train[c])]
+        dataset2 = train[c][~np.isnan(train[c]) & train.target]
+        
+        # left plot
+        hd = ax1.hist((dataset1, dataset2), bins=hbins, histtype='bar',normed=True,
+                        color=["blue", "red"],label=['all','target=1'])
+        ax1.set_xlabel('Feature: '+c)
+        ax1.set_xlim((-1,max(train[c])))
+        
+        binwidth = hd[1][1]-hd[1][0]
+        midpts = (hd[1][:-1]+hd[1][1:])/2
+        cdf_all= np.cumsum(hd[0][0])*binwidth
+        cdf_ones = np.cumsum(hd[0][1])*binwidth
+
+        # right plot
+        ax2 = fig.add_subplot(1,2,2) 
+        ax2.set_ylim((0,1))
+        ax2.set_xlim((0,nbins))
+        ax2.plot(midpts,cdf_all,color='b')
+        ax2.plot(midpts,cdf_ones,color='r')
+        ax2.plot(midpts,0.5+10*(cdf_all-cdf_ones),color='k')
+        ax2.grid()
+        ax2.set_xlim((-1,max(train[c])))
+        ax2.set_xlabel('cdfs plus cdf_diff*10+0.5')
+        ax2.axhline(0.5,color='gray',linestyle='--')
 

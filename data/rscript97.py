@@ -1,154 +1,167 @@
-import numpy as np
+## Reference:
+# https://www.kaggle.com/georsara1/95-auc-score-in-train-sample-with-neural-nets
+# https://www.kaggle.com/lopuhin/mercari-golf-0-3875-cv-in-75-loc-1900-s
+# https://www.kaggle.com/shujian/s2-fm-ftrl-cnn-efficient-v8-final
+# https://www.kaggle.com/danofer/downsampling-for-fun-speed
+
+
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+np.random.seed(697)
+import os
+print(os.listdir("../input"))
+
+# Any results you write to the current directory are saved as output.
+import os; os.environ['OMP_NUM_THREADS'] = '4'
+from contextlib import contextmanager
+from functools import partial
+from operator import itemgetter
+from multiprocessing.pool import ThreadPool
+import time
+from typing import List, Dict
+from scipy.sparse import csr_matrix, hstack
 import pandas as pd
-from sklearn import ensemble, neighbors, linear_model, metrics, preprocessing
-from datetime import datetime
-import glob, re
-
-# from JdPaletto & the1owl1
-# JdPaletto - https://www.kaggle.com/jdpaletto/surprised-yet-part2-lb-0-503?scriptVersionId=1867420
-# the1owl1 - https://www.kaggle.com/the1owl/surprise-me
-
-data = {
-    'tra': pd.read_csv('../input/air_visit_data.csv'),
-    'as': pd.read_csv('../input/air_store_info.csv'),
-    'hs': pd.read_csv('../input/hpg_store_info.csv'),
-    'ar': pd.read_csv('../input/air_reserve.csv'),
-    'hr': pd.read_csv('../input/hpg_reserve.csv'),
-    'id': pd.read_csv('../input/store_id_relation.csv'),
-    'tes': pd.read_csv('../input/sample_submission.csv'),
-    'hol': pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date':'visit_date'})
-    }
-
-data['hr'] = pd.merge(data['hr'], data['id'], how='inner', on=['hpg_store_id'])
-
-for df in ['ar','hr']:
-    data[df]['visit_datetime'] = pd.to_datetime(data[df]['visit_datetime'])
-    data[df]['visit_datetime'] = data[df]['visit_datetime'].dt.date
-    data[df]['reserve_datetime'] = pd.to_datetime(data[df]['reserve_datetime'])
-    data[df]['reserve_datetime'] = data[df]['reserve_datetime'].dt.date
-    data[df]['reserve_datetime_diff'] = data[df].apply(
-        lambda r: (r['visit_datetime'] - r['reserve_datetime']).days, axis=1)
-    data[df] = data[df].groupby(['air_store_id','visit_datetime'], as_index=False)[[
-        'reserve_datetime_diff', 'reserve_visitors']].sum().rename(columns={'visit_datetime':'visit_date'})
-
-data['tra']['visit_date'] = pd.to_datetime(data['tra']['visit_date'])
-data['tra']['dow'] = data['tra']['visit_date'].dt.dayofweek
-data['tra']['year'] = data['tra']['visit_date'].dt.year
-data['tra']['month'] = data['tra']['visit_date'].dt.month
-data['tra']['visit_date'] = data['tra']['visit_date'].dt.date
-
-data['tes']['visit_date'] = data['tes']['id'].map(lambda x: str(x).split('_')[2])
-data['tes']['air_store_id'] = data['tes']['id'].map(lambda x: '_'.join(x.split('_')[:2]))
-data['tes']['visit_date'] = pd.to_datetime(data['tes']['visit_date'])
-data['tes']['dow'] = data['tes']['visit_date'].dt.dayofweek
-data['tes']['year'] = data['tes']['visit_date'].dt.year
-data['tes']['month'] = data['tes']['visit_date'].dt.month
-data['tes']['visit_date'] = data['tes']['visit_date'].dt.date
-
-unique_stores = data['tes']['air_store_id'].unique()
-stores = pd.concat([pd.DataFrame({'air_store_id': unique_stores, 'dow': 
-    [i]*len(unique_stores)}) for i in range(7)], axis=0, ignore_index=True).reset_index(drop=True)
-
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
-    'visitors'].min().rename(columns={'visitors':'min_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
-    'visitors'].mean().rename(columns={'visitors':'mean_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
-    'visitors'].median().rename(columns={'visitors':'median_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
-    'visitors'].max().rename(columns={'visitors':'max_visitors'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow'])
-tmp = data['tra'].groupby(['air_store_id','dow'], as_index=False)[
-    'visitors'].count().rename(columns={'visitors':'count_observations'})
-stores = pd.merge(stores, tmp, how='left', on=['air_store_id','dow']) 
-
-stores = pd.merge(stores, data['as'], how='left', on=['air_store_id']) 
-lbl = preprocessing.LabelEncoder()
-stores['air_genre_name'] = lbl.fit_transform(stores['air_genre_name'])
-stores['air_area_name'] = lbl.fit_transform(stores['air_area_name'])
-
-data['hol']['visit_date'] = pd.to_datetime(data['hol']['visit_date'])
-data['hol']['day_of_week'] = lbl.fit_transform(data['hol']['day_of_week'])
-data['hol']['visit_date'] = data['hol']['visit_date'].dt.date
-train = pd.merge(data['tra'], data['hol'], how='left', on=['visit_date']) 
-test = pd.merge(data['tes'], data['hol'], how='left', on=['visit_date']) 
-
-train = pd.merge(data['tra'], stores, how='left', on=['air_store_id','dow']) 
-test = pd.merge(data['tes'], stores, how='left', on=['air_store_id','dow'])
-
-for df in ['ar','hr']:
-    train = pd.merge(train, data[df], how='left', on=['air_store_id','visit_date']) 
-    test = pd.merge(test, data[df], how='left', on=['air_store_id','visit_date'])
-
-col = [c for c in train if c not in ['id', 'air_store_id','visit_date','visitors']]
-train = train.fillna(-1)
-test = test.fillna(-1)
-
-def RMSLE(y, pred):
-    return metrics.mean_squared_error(y, pred)**0.5
-
-etc = ensemble.ExtraTreesRegressor(n_estimators=225, max_depth=5, n_jobs=-1, random_state=3)
-knn = neighbors.KNeighborsRegressor(n_jobs=-1, n_neighbors=4)
-etc.fit(train[col], np.log1p(train['visitors'].values))
-knn.fit(train[col], np.log1p(train['visitors'].values))
-
-test['visitors'] = (etc.predict(test[col]) / 2) +(knn.predict(test[col]) / 2)
-test['visitors'] = np.expm1(test['visitors']).clip(lower=0.)
-sub1 = test[['id','visitors']].copy()
+import numpy as np
+from sklearn.feature_extraction import DictVectorizer, FeatureHasher
+from sklearn.feature_extraction.text import TfidfVectorizer as Tfidf
+from sklearn.pipeline import make_pipeline, make_union, Pipeline
+from sklearn.preprocessing import FunctionTransformer, StandardScaler
+from sklearn.metrics import mean_squared_log_error
+from sklearn.model_selection import KFold
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import train_test_split
+from keras.models import Sequential
+from keras.layers import Activation, Dense, Dropout
+from keras import optimizers
+import dask.dataframe as dd
+import gc
 
 
-# from hklee
-# https://www.kaggle.com/zeemeen/weighted-mean-comparisons-lb-0-497-1st/code
-dfs = { re.search('/([^/\.]*)\.csv', fn).group(1):
-    pd.read_csv(fn)for fn in glob.glob('../input/*.csv')}
 
-for k, v in dfs.items(): locals()[k] = v
+cols = ['app', 'device', 'os', 'channel', 'time_month', 'time_day', 'time_hr', 'time_min', 'time_sec']  
+# cols = ['app', 'device', 'os', 'channel', 'time_hr'] 
 
-wkend_holidays = date_info.apply(
-    (lambda x:(x.day_of_week=='Sunday' or x.day_of_week=='Saturday') and x.holiday_flg==1), axis=1)
-date_info.loc[wkend_holidays, 'holiday_flg'] = 0
-date_info['weight'] = ((date_info.index + 1) / len(date_info)) ** 5  
+dtypes = {
+        'ip':'uint32',
+        'app': 'uint16',
+        'device': 'uint16',
+        'os': 'uint16',
+        'channel': 'uint16',
+        'is_attributed': 'uint8'
+        }
+        
 
-visit_data = air_visit_data.merge(date_info, left_on='visit_date', right_on='calendar_date', how='left')
-visit_data.drop('calendar_date', axis=1, inplace=True)
-visit_data['visitors'] = visit_data.visitors.map(pd.np.log1p)
-
-wmean = lambda x:( (x.weight * x.visitors).sum() / x.weight.sum() )
-visitors = visit_data.groupby(['air_store_id', 'day_of_week', 'holiday_flg']).apply(wmean).reset_index()
-visitors.rename(columns={0:'visitors'}, inplace=True) # cumbersome, should be better ways.
-
-sample_submission['air_store_id'] = sample_submission.id.map(lambda x: '_'.join(x.split('_')[:-1]))
-sample_submission['calendar_date'] = sample_submission.id.map(lambda x: x.split('_')[2])
-sample_submission.drop('visitors', axis=1, inplace=True)
-sample_submission = sample_submission.merge(date_info, on='calendar_date', how='left')
-sample_submission = sample_submission.merge(visitors, on=[
-    'air_store_id', 'day_of_week', 'holiday_flg'], how='left')
-
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
-    visitors[visitors.holiday_flg==0], on=('air_store_id', 'day_of_week'), 
-    how='left')['visitors_y'].values
-
-missings = sample_submission.visitors.isnull()
-sample_submission.loc[missings, 'visitors'] = sample_submission[missings].merge(
-    visitors[['air_store_id', 'visitors']].groupby('air_store_id').mean().reset_index(), 
-    on='air_store_id', how='left')['visitors_y'].values
+# Self made one hot encoding, can save the dict
+# https://www.kaggle.com/shujian/s2-fm-ftrl-cnn-efficient-v8-final
+def fit_dummy(list_data):
+    n_data = len(list_data)
+    n_cat = 0
+    d_data = {}
+    for cat in list_data:
+        if cat not in d_data:
+            d_data[cat] = n_cat
+            n_cat += 1
+    d_data['<NOT_SHOWN>'] = n_cat
+    res = np.zeros(shape=(n_data, n_cat + 1))
+    for i, v in enumerate(list_data):
+        res[i, d_data[v]] = 1
+    return csr_matrix(res), d_data
     
-sample_submission['visitors'] = sample_submission.visitors.map(pd.np.expm1)
-sub2 = sample_submission[['id', 'visitors']].copy()
-sub_merge = pd.merge(sub1, sub2, on='id', how='inner')
+def transform_dummy(list_data, d_data):
+    n_data = len(list_data)
+    n_cat = len(d_data)
+    res = np.zeros(shape=(n_data, n_cat))
+    for i, v in enumerate(list_data):
+        if v in d_data:
+            res[i, d_data[v]] = 1
+        else:
+            res[i, n_cat - 1] = 1
+    return csr_matrix(res)
 
-## Arithmetric Mean 
-sub_merge['visitors'] = (sub_merge['visitors_x'] + sub_merge['visitors_y'])/2
-sub_merge[['id', 'visitors']].to_csv('sub_math_mean.csv', index=False)
 
-## Geometric Mean  
-sub_merge['visitors'] = (sub_merge['visitors_x'] * sub_merge['visitors_y']) ** (1/2)
-sub_merge[['id', 'visitors']].to_csv('sub_geo_mean.csv', index=False)
+@contextmanager
+def timer(name):
+    t0 = time.time()
+    yield
+    print(f'[{name}] done in {time.time() - t0:.0f} s')
 
-## Harmonic Mean 
-sub_merge['visitors'] = 2/(1/sub_merge['visitors_x'] + 1/sub_merge['visitors_y'])
-sub_merge[['id', 'visitors']].to_csv('sub_hrm_mean.csv', index=False)
+def preprocess(df: pd.DataFrame) -> pd.DataFrame:
+    df['time_month'] = df.click_time.str[5:7]
+    df['time_day']   = df.click_time.str[8:10]
+    df['time_hr']    = df.click_time.str[11:13]
+    df['time_min']   = df.click_time.str[14:16]
+    df['time_sec']   = df.click_time.str[17:20]
+    return df[cols]
+
+def main():
+    with timer('process train'):
+        dask_df = dd.read_csv('../input/train.csv',dtype=dtypes)
+        df_pos = dask_df[(dask_df['is_attributed'] == 1)].compute()
+        df_neg = dask_df[(dask_df['is_attributed'] == 0)].compute()
+        df_pos = df_pos.sample(n=5000)
+        df_neg = df_neg.sample(n=2000000)
+        train = pd.concat([df_pos,df_neg]).sample(frac=1)
+        print(len(train))
+        del dask_df, df_pos, df_neg; gc.collect()
+        
+        y_train = train['is_attributed'].values.reshape(-1, 1) 
+        train = preprocess(train)
+        dicts = []
+        Xs_train = []
+        for col in cols:
+            tmp = fit_dummy(train[col].tolist())
+            Xs_train.append(tmp[0])
+            dicts.append(tmp[1])
+
+        train_sparse = hstack(tuple(Xs_train)).tocsr()
+        
+        X_train, X_valid, y_train, y_valid = train_test_split(train_sparse, y_train, test_size = 0.2, random_state= 1984, stratify = y_train)
+
+        print(f'X_train: {X_train.shape} of {X_train.dtype}')
+        del train, train_sparse; gc.collect()
+
+    with timer('train and val'):
+        model = Sequential()
+        model.add(Dense(48, input_dim=X_train.shape[1], kernel_initializer='normal', activation="tanh"))
+        model.add(Dropout(0.5))
+        model.add(Dense(24, activation="tanh"))
+        model.add(Dropout(0.5))
+        model.add(Dense(1))
+        model.add(Activation("sigmoid"))
+        model.compile(loss='binary_crossentropy', optimizer='adam')
+        for i in range(3):
+            with timer(f'epoch {i + 1}'):
+                model.fit(x=X_train, y=y_train, batch_size=64, epochs=1, verbose=2)
+     
+        y_val_pred = model.predict(X_valid)[:, 0]
+        print('Valid AUC: {:.4f}'.format(roc_auc_score(y_valid, y_val_pred)))
+        del X_train, X_valid, y_train, y_valid; gc.collect()
+    
+
+    with timer('process test'):   
+        y_preds = []
+        for test in pd.read_csv('../input/test.csv', chunksize= 2e6):
+            test = preprocess(test)
+            Xs_test = []
+            for i, col in enumerate(cols):
+                Xs_test.append(transform_dummy(test[col].tolist(), dicts[i]))
+ 
+            X_test = hstack(tuple(Xs_test)).tocsr()
+            y_preds += model.predict(X_test)[:, 0].tolist()
+
+    with timer('test'):
+        
+        sub = pd.read_csv("../input/sample_submission.csv")
+        sub['is_attributed'] = y_preds
+        sub.to_csv('sub_mlp.csv', index=False)
+        print(sub.head())
+
+if __name__ == '__main__':
+    main()

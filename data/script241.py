@@ -1,146 +1,134 @@
 
 # coding: utf-8
 
-# # Word2Vec on Instacart products
-# ### The goal of this kernel is to try a Word2Vec model on the data of product orders
-# ### The orders can act as sentences and product ids can act as words, in this kernel we will see if the model will learn any useful information about the products from the order history of all users, maybe in the future this can be used as input to a classifier that recommends products.
-# ## This gave me a slight increase in my LB score, so it's a useful feature
-# ### Please upvote if you like it and let me know in the discussion if you have any remarks/ideas
-# ### I also further explain the kernel in a blog post: http://omarito.me/word2vec-product-recommendations/
+# # OpenMP Performance Sensitivity to the Number of Threads Used
+# 
+# ## TL;DR  
+# 
+# *When using Kaggle Kernels, be aware that Kaggle's backend environment reports more CPUs than are available to your Kernel's execution. Some commonly used libraries default values for performance tuning parameters are **significantly sub-optimal** in this environment.  In particular, when using `xgboost` or other `OpenMP` based libraries, we suggest you start your Python kernels with `import os ; os.environ['OMP_NUM_THREADS'] = '4'`, prior to any other import.  Similarly for R, use `library(OpenMPController)` followed by `omp_set_num_threads(4)`.*
+# 
+# ## Full Version
+# 
+# As covered in our [blog](http://blog.kaggle.com/2017/09/21/product-launch-amped-up-kernels-resources-code-tips-hidden-cells/), an individual Kernel executing on Kaggle gets 4 logical CPUs worth of compute.
+# 
+# However, currently (and subject to change), a Kaggle Kernel actually runs on a Google Compute Engine (GCE) VM which has 32 logical CPUs.  That is the CPU count you will see when you query the system, e.g. using the `multiprocessing` Python library:
 
-# ### Load the needed libraries
+# In[ ]:
+
+
+import multiprocessing
+print(multiprocessing.cpu_count())
+
+
+# While the system has 32 CPUs and your Kernel may use all 32 of these within a given Kernel session, the Docker container the Kernel runs in is limited to use only 4 CPUs worth of time over an arbitrary (but short) period of time.
+# 
+# **In summary, while your Kernel only effectively can use 4 CPUs, the system reports the presence of 32 CPUs.**
+# 
+# ## Why does this matter?
+# 
+# Many computation libraries allow you to  benefit from parallelism by making use of multiple logical CPUs when these are available to you.  When a CPU-bound computation can be executed in parallel (from the type of algorithm involved and the capabilities of the implementation) and can benefit from it (the inputs are large enough that the implied fixed-cost overhead is largely amortized), you would typically get the best performance (smallest running time) by using as many computation threads as you have logical CPUs available.  Most of these libraries will enable parallelism when these conditions are met, use that most optimal thread count, by default.
+# 
+# Let's take the example of `xgboost`, a popular library that provides gradient boosted decision trees, and in particular in this notebook, its Python interface.
+# 
+# Our `xgboost` installation is built with [GNU OpenMP](https://gcc.gnu.org/onlinedocs/libgomp) (a.k.a. GOMP) support to handle the parallelism aspects.  Let's find out what GOMP's configuration looks like in Kaggle Kernels' runtime:
+
+# In[ ]:
+
+
+# We can use the OMP_DISPLAY_ENV environment variable to have GOMP output its
+# configuration to stderr. That is done from C++ (libgomp) by operating on the
+# process's stderr file descriptor. Jupyter doesn't properly intercept operations
+# on that file descriptor (it only intercepts the Python space `sys.stderr`).
+# So let's do that here first:
+import os
+import sys
+
+stderr_fileno = 2  # sys.stderr.fileno(), if Jupyter hadn't messed with it.
+rpipe, wpipe = os.pipe()
+os.dup2(wpipe, stderr_fileno)
+
+os.environ['OMP_DISPLAY_ENV'] = 'TRUE'
+import xgboost as xgb
+os.close(stderr_fileno)
+os.close(wpipe)
+print(os.read(rpipe, 2**10).decode())
+
+
+# You can find the meaning of each of these environment variables in [GOMPs documenation](https://gcc.gnu.org/onlinedocs/libgomp/Environment-Variables.html).
+# 
+# A relevant one to discuss though, is `OMP_NUM_THREADS`.  As the output shows, it defaulted to `32`, which is our system's CPU count.  Let's see how this setting fares in a simple training of the Mercari dataset:
 
 # In[ ]:
 
 
 import pandas as pd
+import matplotlib.pyplot as plt
 import numpy as np
-import gensim
-from matplotlib import pyplot as plt
-from sklearn.decomposition import PCA
+import time
+import xgboost as xgb
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-
-# ### Load the Data
 
 # In[ ]:
 
 
-train_orders = pd.read_csv("../input/order_products__train.csv")
-prior_orders = pd.read_csv("../input/order_products__prior.csv")
-products = pd.read_csv("../input/products.csv").set_index('product_id')
+train_dataset = pd.read_csv('../input/train.tsv', sep='\t')
+ignore_columns = (
+    'name', 'item_description', 'brand_name', 'category_name', 'train_id', 'test_id', 'price')
+train_columns = [c for c in train_dataset.columns if c not in ignore_columns]
+dtrain = xgb.DMatrix(train_dataset[train_columns], train_dataset['price'])
+params = {'silent': 1}
+num_rounds = 100
 
+def train(params, dtrain, num_rounds):
+    """Returns the duration to train a model with given parameters."""
+    start_time = time.time()
+    xgb.train(params, dtrain, num_rounds, [(dtrain, 'train')], verbose_eval=False)
+    return time.time() - start_time
 
-# ### Turn the product ID to a string
-# #### This is necessary because Gensim's Word2Vec expects sentences, so we have to resort to this dirty workaround
 
 # In[ ]:
 
 
-train_orders["product_id"] = train_orders["product_id"].astype(str)
-prior_orders["product_id"] = prior_orders["product_id"].astype(str)
+print('duration: %.2fs' % train(params, dtrain, num_rounds))
 
 
-# ### Extract the ordered products in each order
-
-# In[ ]:
-
-
-train_products = train_orders.groupby("order_id").apply(lambda order: order['product_id'].tolist())
-prior_products = prior_orders.groupby("order_id").apply(lambda order: order['product_id'].tolist())
-
-
-# ### Create the final sentences
+# Let's see how this looks when we use only 4 threads, which is how many CPUs we actually can use in the Kaggle Kernels environment.
+# 
+# `OMP_NUM_THREADS` can no longer be used to influence the number of threads used at this point, as it is only read once by `xgboost` and/or GOMP.   We can however set the `xgboost` `nthread` parameter to have it reconfigure this at run-time:
 
 # In[ ]:
 
 
-sentences = prior_products.append(train_products)
-longest = np.max(sentences.apply(len))
-sentences = sentences.values
+params['nthread'] = 4
+print('duration: %.2fs' % train(params, dtrain, num_rounds))
 
 
-# ### Train Word2Vec model
-# #### I have modified the window size to be equal to the longest order in our dataset. I've explained why in a blog post that is further explaining this kernel in details
-# http://omarito.me/word2vec-product-recommendations/
-
-# In[ ]:
-
-
-model = gensim.models.Word2Vec(sentences, size=100, window=longest, min_count=2, workers=4)
-
-
-# ### Organize data for visualization
+# The difference is very significant, and suprisingly [x] so:  While spawning more threads than there are CPUs available isn't helpful and causes multiple threads to be multiplexed on a single CPU, it is unclear why that overhead causes `xgboost` to perform slower by several multiples.
+# 
+# *[x] Not to you?  Please let me know in comments what you see the cause for this might be!*
+# 
+# Here is some more data:
+# 
 
 # In[ ]:
 
 
-vocab = list(model.wv.vocab.keys())
+results = pd.DataFrame()
+for nthread in (1, 2, 4, 8, 16, 32):
+    params['nthread'] = nthread
+    durs = []
+    for i in range(16):
+        durs.append(train(params, dtrain, num_rounds))
+    results[nthread] = durs
+    print('nthread = %d, durations = %s' % (nthread, ', '.join(['%.2fs' % d for d in durs])))
 
-
-# ### PCA transform the vectors into 2d
 
 # In[ ]:
 
 
-pca = PCA(n_components=2)
-pca.fit(model.wv.syn0)
-
-
-# ### Some helpers for visualization
-
-# In[ ]:
-
-
-def get_batch(vocab, model, n_batches=3):
-    output = list()
-    for i in range(0, n_batches):
-        rand_int = np.random.randint(len(vocab), size=1)[0]
-        suggestions = model.most_similar(positive=[vocab[rand_int]], topn=5)
-        suggest = list()
-        for i in suggestions:
-            suggest.append(i[0])
-        output += suggest
-        output.append(vocab[rand_int])
-    return output
-
-def plot_with_labels(low_dim_embs, labels, filename='tsne.png'):
-    """From Tensorflow's tutorial."""
-    assert low_dim_embs.shape[0] >= len(labels), "More labels than embeddings"
-    plt.figure(figsize=(18, 18))  #in inches
-    for i, label in enumerate(labels):
-        x, y = low_dim_embs[i,:]
-        plt.scatter(x, y)
-        plt.annotate(label,
-                     xy=(x, y),
-                     xytext=(5, 2),
-                     textcoords='offset points',
-                     ha='right',
-                     va='bottom')
-#     plt.savefig(filename)
-    plt.show()
-
-
-# ### Visualize a random sample
-
-# In[ ]:
-
-
-embeds = []
-labels = []
-for item in get_batch(vocab, model, n_batches=3):
-    embeds.append(model[item])
-    labels.append(products.loc[int(item)]['product_name'])
-embeds = np.array(embeds)
-embeds = pca.fit_transform(embeds)
-plot_with_labels(embeds, labels)
-
-
-# ### Save the model
-
-# In[ ]:
-
-
-model.save("product2vec.model")
+fig = plt.figure(figsize=(12, 6))
+plt.errorbar(results.columns, results.mean(), yerr=results.std(), linestyle='-', fmt='o', ecolor='g', capthick=2)
+plt.xlabel('nthread', fontsize=18)
+plt.ylabel('duration (s)', fontsize=18)
+plt.figsize=(12, 6)
 

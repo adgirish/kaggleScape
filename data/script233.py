@@ -1,172 +1,95 @@
 
 # coding: utf-8
 
-# # Visualizing Word Vectors with t-SNE
-# 
-# TSNE is pretty useful when it comes to visualizing similarity between objects. It works by taking a group of high-dimensional (100 dimensions via Word2Vec) vocabulary word feature vectors, then compresses them down to 2-dimensional x,y coordinate pairs. The idea is to keep similar words close together on the plane, while maximizing the distance between dissimilar words. 
-# 
-# ### Steps
-# 
-# 1. Clean the data
-# 2. Build a corpus
-# 3. Train a Word2Vec Model
-# 4. Visualize t-SNE representations of the most common words 
-# 
-# Credit: Some of the code was inspired by this awesome [NLP repo][1]. 
-# 
-# 
-# 
-# 
-#   [1]: https://github.com/rouseguy/DeepLearningNLP_Py
+# ## Word Share Model
+# The word_match_share feature is surprisingly predictive. In this notebook, we make a quick Pandas-only model that gets 0.356 LB without machine learning. It just groups on binned word_match_share values and then averages the label.
 
 # In[ ]:
 
 
-import pandas as pd
-pd.options.mode.chained_assignment = None 
 import numpy as np
-import re
-import nltk
-
-from gensim.models import word2vec
-
-from sklearn.manifold import TSNE
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-data = pd.read_csv('../input/train.csv').sample(50000, random_state=23)
+import pandas as pd
+tr = pd.read_csv('../input/train.csv')
+te = pd.read_csv('../input/test.csv')
+from nltk.corpus import stopwords
+SCALE = 0.3627
 
 
-# In[ ]:
-
-
-STOP_WORDS = nltk.corpus.stopwords.words()
-
-def clean_sentence(val):
-    "remove chars that are not letters or numbers, downcase, then remove stop words"
-    regex = re.compile('([^\s\w]|_)+')
-    sentence = regex.sub('', val).lower()
-    sentence = sentence.split(" ")
-    
-    for word in list(sentence):
-        if word in STOP_WORDS:
-            sentence.remove(word)  
-            
-    sentence = " ".join(sentence)
-    return sentence
-
-def clean_dataframe(data):
-    "drop nans, then apply 'clean_sentence' function to question1 and 2"
-    data = data.dropna(how="any")
-    
-    for col in ['question1', 'question2']:
-        data[col] = data[col].apply(clean_sentence)
-    
-    return data
-
-data = clean_dataframe(data)
-data.head(5)
-
-
-# In[ ]:
-
-
-def build_corpus(data):
-    "Creates a list of lists containing words from each sentence"
-    corpus = []
-    for col in ['question1', 'question2']:
-        for sentence in data[col].iteritems():
-            word_list = sentence[1].split(" ")
-            corpus.append(word_list)
-            
-    return corpus
-
-corpus = build_corpus(data)        
-corpus[0:2]
-
-
-# # Word 2 Vec
+# As noted in the kernel [How many 1's are in the public LB][1], the mean label on the test set is about 0.175, which is quite different from the training mean of 0.369. The constant SCALE above is an odds ratio. We use it to shift the mean label of the predictions from that of the training set to that of the test set. This is needed because the evaluation metric for this competition is log loss, which is sensitive to the mean prediction.       
+# $$SCALE = \frac{\frac{y_{te}}{1 - y_{te}}}{\frac{y_{tr}}{1 - y_{tr}}}$$    
+# Where y_te is the mean test label and y_tr is the mean training set label.
 # 
-# The Word to Vec model produces a vocabulary, with each word being represented by an n-dimensional numpy array (100 values in this example)
+# 
+#   [1]: https://www.kaggle.com/davidthaler/quora-question-pairs/how-many-1-s-are-in-the-public-lb
+
+# This model uses only one feature, which is the ever-popular word_match_share feature. The version below is Pandas-centric, but is equivalent to other versions available in the kernels.
 
 # In[ ]:
 
 
-model = word2vec.Word2Vec(corpus, size=100, window=20, min_count=200, workers=4)
-model.wv['trump']
+def word_match_share(x):
+    '''
+    The much-loved word_match_share feature.
 
-
-# In[ ]:
-
-
-def tsne_plot(model):
-    "Creates and TSNE model and plots it"
-    labels = []
-    tokens = []
-
-    for word in model.wv.vocab:
-        tokens.append(model[word])
-        labels.append(word)
-    
-    tsne_model = TSNE(perplexity=40, n_components=2, init='pca', n_iter=2500, random_state=23)
-    new_values = tsne_model.fit_transform(tokens)
-
-    x = []
-    y = []
-    for value in new_values:
-        x.append(value[0])
-        y.append(value[1])
+    Args:
+        x: source data with question1/2
         
-    plt.figure(figsize=(16, 16)) 
-    for i in range(len(x)):
-        plt.scatter(x[i],y[i])
-        plt.annotate(labels[i],
-                     xy=(x[i], y[i]),
-                     xytext=(5, 2),
-                     textcoords='offset points',
-                     ha='right',
-                     va='bottom')
-    plt.show()
+    Returns:
+        word_match_share as a pandas Series
+    '''
+    stops = set(stopwords.words('english'))
+    q1 = x.question1.fillna(' ').str.lower().str.split()
+    q2 = x.question2.fillna(' ').str.lower().str.split()
+    q1 = q1.map(lambda l : set(l) - stops)
+    q2 = q2.map(lambda l : set(l) - stops)
+    q = pd.DataFrame({'q1':q1, 'q2':q2})
+    q['len_inter'] = q.apply(lambda row : len(row['q1'] & row['q2']), axis=1)
+    q['len_tot'] = q.q1.map(len) + q.q2.map(len)
+    return (2 * q.len_inter / q.len_tot).fillna(0)
+
+
+# To make our model, all we do is group on binned values of word_match_share, and then count the number of positives and total values, scaling the positives by SCALE to adjust the mean prediction. Then we compute binned word_match_share for the test set and apply those values, with a little bit of Laplace smoothing to get rid of extreme values based on low counts.
+
+# In[ ]:
+
+
+def bin_model(tr, te, bins=100, vpos=1, vss=3):
+    '''
+    Runs a Pandas table model using the word_match_share feature.
+    
+    Args:
+        tr: pandas DataFrame with question1/2 in it
+        te: test data frame
+        bins: word shares are rounded to whole numbers after multiplying by bins.
+        v_pos: number of virtual positives for smoothing (can be non-integer)
+        vss: virtual sample size for smoothing (can be non-integer)
+        
+    Returns:
+        submission in a Pandas Data Frame.
+    '''
+    tr['word_share'] = word_match_share(tr)
+    tr['binned_share'] = (bins * tr.word_share).round()
+    pos = tr.groupby('binned_share').is_duplicate.sum()
+    cts = tr.binned_share.value_counts()
+    te['word_share'] = word_match_share(te)
+    te['binned_share'] = (bins * te.word_share).round()
+    te_pos = te.binned_share.map(pos, na_action='ignore').fillna(0)
+    te_cts = te.binned_share.map(cts, na_action='ignore').fillna(0)
+    prob = (te_pos + vpos) / (te_cts + vss)
+    odds = prob / (1 - prob)
+    scaled_odds = SCALE * odds
+    scaled_prob = scaled_odds / (1 + scaled_odds)
+    sub = te[['test_id']].copy()
+    sub['is_duplicate'] = scaled_prob
+    return sub
 
 
 # In[ ]:
 
 
-tsne_plot(model)
+sub = bin_model(tr, te)
+sub.to_csv('no_ml_model.csv', index=False, float_format='%.6f')
+sub.head(10)
 
 
-# In[ ]:
-
-
-# A more selective model
-model = word2vec.Word2Vec(corpus, size=100, window=20, min_count=500, workers=4)
-tsne_plot(model)
-
-
-# In[ ]:
-
-
-# A less selective model
-model = word2vec.Word2Vec(corpus, size=100, window=20, min_count=100, workers=4)
-tsne_plot(model)
-
-
-# # It's Becoming Hard to Read
-# 
-# With a dataset this large, its difficult to make an easy-to-read TSNE visualization. What you can do is use the model to look up the most similar words from any given point. 
-
-# In[ ]:
-
-
-model.most_similar('trump')
-
-
-# In[ ]:
-
-
-model.most_similar('universe')
-
-
-# # The End
-# 
-# Good luck!
+# And that should do it... :)

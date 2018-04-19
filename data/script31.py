@@ -1,423 +1,1045 @@
 
 # coding: utf-8
 
-# In this notebook, we will try and explore the basic information about the dataset given. The dataset for this competition is a relational set of files describing customers' orders over time. 
+# # CrowdFunding compatible with Crowd benifits?
+# Kiva.org is an online crowdfunding platform to extend financial services to poor and financially excluded people around the world. Kiva lenders have provided over $1 billion dollars in loans to over 2 million people. In order to set investment priorities, help inform lenders, and understand their target communities, knowing the level of poverty of each borrower is critical.
+# * *Goal*: To estimate welfare level of borrower in specific region. To analyse MPI(Multidimensional Poverty Index) in different part of world.
 # 
-# **Objective:** 
+# ***
 # 
-# The goal of the competition is to predict which products will be in a user's next order. The dataset is anonymized and contains a sample of over 3 million grocery orders from more than 200,000 Instacart users.
-# 
-# For each user, 4 and 100 of their orders are given, with the sequence of products purchased in each order
-# 
-# Let us start by importing the necessary modules.
+# **Steps** 
+# 1. [Load pacakges](#Load-pacakges)
+# 2. [Read data set](#Read-data-set)
+# 3. [Glimpse data set](#Glimpse-data-set)
+# 4. [Kiva Loans](#Kiva-Loans)
+# 5. [Kiva MPI (Multidimensional Poverty Index)](#Kiva-MPI-(Multidimensional-Poverty-Index))
+# 6. [Human Development Report](#HDI)
 
-# In[ ]:
+# ### Load required modules 
+# Let's load required modules for analysis
+
+# In[1]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import seaborn as sns
-color = sns.color_palette()
+import pandas as pd  # Data analysis
+import numpy as np #Data analysis
+import seaborn as sns # Data visualization
+import matplotlib.pyplot as plt # Data Visualization 
+import  matplotlib.gridspec as gridspec # subplots and grid
+from wordcloud import WordCloud, STOPWORDS # Visualize text
 
+import json
+import folium # Map
+import folium.plugins as plugins # Map
+from mpl_toolkits.basemap import Basemap # Map
+
+import warnings
+warnings.filterwarnings('ignore')
+import scipy.stats
+import gc
+
+# Plotting style and setting
+plt.style.use('fivethirtyeight') #Plot style
+#plt.style.use('bmh')
+plt.rc('axes', labelsize=12) # plot setting
+plt.rc('xtick', labelsize=12)
+plt.rc('ytick', labelsize=12)
+pd.options.display.max_rows = 100
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-pd.options.mode.chained_assignment = None  # default='warn'
+
+# ### Read data set
+# Read dataset using pandas
+
+# In[2]:
 
 
-# Let us list out the files that are present in this competition.!
+#path = 'file/' # local file loaction
+path = '../input/data-science-for-good-kiva-crowdfunding/'
+loan = pd.read_csv(path+'kiva_loans.csv')
+mpi = pd.read_csv(path+'kiva_mpi_region_locations.csv')
+#loan_theme = pd.read_csv(path+'loan_theme_ids.csv')
+#loan_theme_region = pd.read_csv(path+'loan_themes_by_region.csv')
 
-# In[ ]:
+# MPI
+#mpi_world = pd.read_csv('file/MPI_national.csv')
+#mpi_subnational = pd.read_csv('file/MPI_subnational.csv')
 
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-
-# Before we dive deep into the exploratory analysis, let us know a little more about the files given. To understand it better, let us first read all the files as dataframe objects and then look at the top few rows.
-
-# In[ ]:
-
-
-order_products_train_df = pd.read_csv("../input/order_products__train.csv")
-order_products_prior_df = pd.read_csv("../input/order_products__prior.csv")
-orders_df = pd.read_csv("../input/orders.csv")
-products_df = pd.read_csv("../input/products.csv")
-aisles_df = pd.read_csv("../input/aisles.csv")
-departments_df = pd.read_csv("../input/departments.csv")
+#HDI
+path = '../input/human-development-index-hdi/'  
+hdi = pd.read_csv(path+'HDI.csv')
+continent_hdi = pd.read_csv(path+'Continent_HDI.csv')
+geo_world_data = json.load(open(path+'countries.geojson'))
 
 
-# In[ ]:
+# In[3]:
 
 
-orders_df.head()
+# Custom fuction for misssing value, data type, Unique value
+def basic_details(df):
+    print('Number of rows {} and columns {}'.format(df.shape[0],df.shape[1]))
+    k = pd.DataFrame()
+    k['dtype'] = df.dtypes
+    k['Number of unique value'] = df.nunique()
+    k['Missing value'] = df.isnull().sum()
+    k['% missing value'] = df.isnull().sum()/df.shape[0]
+    return k
 
 
-# In[ ]:
-
-
-order_products_prior_df.head()
-
-
-# In[ ]:
-
-
-order_products_train_df.head()
-
-
-# As we could see, orders.csv has all the information about the given order id like the user who has purchased the order, when was it purchased, days since prior order and so on.
+# ### Glimpse data set
+#  Let's look at the few top row in the data set and also determine missing value, data type..
 # 
-# The columns present in order_products_train and order_products_prior are same. Then what is the difference between these files.?
+# #### Kiva Loans
+
+# In[4]:
+
+
+loan.head()
+
+
+# In[5]:
+
+
+loan.describe()
+
+
+# In[6]:
+
+
+loan.describe(include=['O']) # Discribe categorical data
+
+
+# In[7]:
+
+
+# basic details
+basic_details(loan).T
+
+
+# The loan data set consist of 20 columns and 671205 rows. There are 5 numerical columns and 15 categorical columns.
+
+# ### MPI
+# MPI (Multidimensional Poverty Index))
+
+# In[8]:
+
+
+mpi.head()
+
+
+# In[9]:
+
+
+basic_details(mpi).T
+
+
+# In[10]:
+
+
+mpi.describe(include=['O']) # Discribe categorical data
+
+
+# ***
+# ## Kiva Loans
+# Kiva.org is an online crowdfunding platform to extend financial services to poor and financially excluded people around the world.
 # 
-# As mentioned earlier, in this dataset, 4 to 100 orders of a customer are given (we will look at this later) and we need to predict the products that will be re-ordered. So the last order of the user has been taken out and divided into train and test sets. All the prior order informations of the customer are present in order_products_prior file.  We can also note that there is a column in orders.csv file called eval_set which tells us as to which of the three datasets (prior, train or test) the given row goes to.
+# #### Distribution of Fund amount
+# The distribution of funded amount given by the Kiva to borrowers.
+
+# In[11]:
+
+
+f,ax = plt.subplots(1,3,figsize=(16,6))
+sns.distplot(loan['funded_amount'],ax=ax[0])
+ax[0].set_title('Distribution of funded_amount')
+ax[0].set_xlabel('Funded Amount')
+
+ulimit = np.percentile(loan['funded_amount'],99)
+llimit= np.percentile(loan['funded_amount'],1)
+value = loan[(llimit<loan['funded_amount'])&(loan['funded_amount']<ulimit)]['funded_amount']
+sns.distplot(value,color='r',ax=ax[1])
+ax[1].set_title('Distribution of funded_amount by removing outliers');
+ax[1].set_xlabel('Funded Amount')
+
+ax[2].scatter(np.sort(loan['funded_amount'].values),range(loan.shape[0]),)
+ax[2].set_title('Distribution of funded_amount');
+ax[2].set_xlabel('Funded Amount')
+ax[2].set_ylabel('Index')
+plt.subplots_adjust(wspace=0.3)
+
+
+# > The funded amount is recieved by kiva.org by different people for the purpose of activity. The fund amount varies from 0 to 100k $USD$, fund is most concerntrated with in 2000 $USD$. 
+# In second plot oultier data is removed. These outlier data are 1st and 99th quatile/percentile. The percentile can computed using numpy module. The outliers in data set is remove, even after removal data is not normally distributed. 
 # 
-# Order_products*csv file has more detailed information about the products that been bought in the given order along with the re-ordered status.
+# ### Distribution of Loan amount
+# The distribution of loan amount given by the Kiva to borrowers.
+
+# In[12]:
+
+
+f,ax = plt.subplots(1,3,figsize=(16,6))
+sns.distplot(loan['loan_amount'],ax=ax[0])
+ax[0].set_title('Distribution of Loan amount')
+ax[0].set_xlabel('Loan Amount')
+
+ulimit = np.percentile(loan['loan_amount'],99)
+llimit= np.percentile(loan['loan_amount'],1)
+value = loan[(llimit<loan['loan_amount'])&(loan['loan_amount']<ulimit)]['loan_amount']
+sns.distplot(value,color='r',ax=ax[1])
+ax[1].set_xlabel('Loan Amount')
+ax[1].set_title('Distribution of Loan amount by removing outliers');
+
+ax[2].scatter(np.sort(loan['loan_amount'].values),range(loan.shape[0]),)
+ax[2].set_title('Distribution of Loan amount');
+ax[2].set_xlabel('Loan Amount')
+ax[2].set_ylabel('Index')
+plt.subplots_adjust(wspace=0.3)
+
+
+# > The loan amount varies from 0 to 100k $USD$, fund is most concerntrated with in 2000 $USD$. The outliers in data set is remove, even after removal data is not normal, data is right skewed. If we look at the third plot  is also not normally distributed
+
+# ### Distribution of Listed country
+# Let's look at top recipent of loan by counties from kiva
+
+# In[13]:
+
+
+m = folium.Map(location=[0,0],zoom_start=2)
+
+poo = loan.groupby(['country_code']).agg({'count','count'})['id'].reset_index()
+
+m.choropleth(geo_data= geo_world_data,
+             data = poo, columns=['country_code','count'],key_on='feature.properties.wb_a2',name='Listed Country',
+             fill_opacity=1,fill_color='YlOrBr',highlight=True, 
+             threshold_scale=[100,1000,2000,4000,6000,10000],
+            legend_name='Count')
+
+folium.LayerControl().add_to(m)
+m
+
+
+# In[14]:
+
+
+f,ax = plt.subplots(1,2,figsize=(16,8))
+poo = loan['country'].value_counts()[:10]
+sns.barplot(poo.values,poo.index, palette='Wistia', ax=ax[0])
+ax[0].set_title('Distribution of Top listed Countries')
+ax[0].set_xlabel('Count')
+
+for i, v in enumerate(poo.values): 
+            ax[0].text(.6,i, round(v,2),fontsize=10,color='k')
+poo = loan.groupby('country').mean()['loan_amount'].sort_values(ascending=False)[:10]
+sns.barplot(poo.values, poo.index, palette='cool', ax=ax[1])
+ax[1].set_title('Distribution of Top Average loan amount by country')
+ax[1].set_ylabel('')
+ax[1].set_xlabel('Average Loan Amount')
+
+for i, v in enumerate(poo.values): 
+            ax[1].text(.6,i, round(v,2),fontsize=10,color='k')
+
+plt.subplots_adjust(wspace=0.5);
+
+
+# * The Philippines followed Kenya are top recipent of loan
+# * The Cote D'Ivoire and Mauritania are top average loan
+# * If we look at the top listed country is different than average loan amount by country
 # 
-# Let us first get the count of rows in each of the three sets.
+# **Let's look at boxplot of loan by country sorted Average amount ** 
 
-# In[ ]:
+# In[15]:
 
 
-cnt_srs = orders_df.eval_set.value_counts()
+plt.figure(figsize=(16,8))
 
-plt.figure(figsize=(12,8))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[1])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Eval set type', fontsize=12)
-plt.title('Count of rows in each dataset', fontsize=15)
-plt.xticks(rotation='vertical')
+poo = loan.groupby('country').mean()['loan_amount'].sort_values(ascending=False)
+sns.boxplot(loan['country'], np.log(loan['loan_amount']), palette='spring',order=poo.index)
+plt.xlabel('')
+plt.ylabel('Loan amount ($log10$)')
+plt.title('Boxplot of loan amount($log10$)')
+plt.xticks(rotation=90);
+
+
+# In[16]:
+
+
+print("Cote D'Ivoire",loan[loan['country'] == "Cote D'Ivoire"]['loan_amount'])
+print("Mauritania",loan[loan['country'] == "Mauritania"]['loan_amount'])
+
+
+# * The Cote D'Ivoire and Mauritania are top average loan, but if look at the boxplot it look like both country have take loan only once.
+# * How both countries have taken very high loan? 
+# 
+# ### Distribution of region
+# Let's look at the region to business utilise loan amount
+
+# In[17]:
+
+
+f,ax = plt.subplots(1,2,figsize=(16,8))
+poo = loan['region'].value_counts()[:10]
+sns.barplot(poo.values,poo.index, palette='Wistia', ax=ax[0])
+ax[0].set_title('Distribution of Top listed Region')
+ax[0].set_xlabel('Count')
+
+for i, v in enumerate(poo.values): 
+            ax[0].text(.6,i, round(v,2),fontsize=10,color='k')
+poo = loan.groupby('region').mean()['loan_amount'].sort_values(ascending=False)[:10]
+sns.barplot(poo.values, poo.index, palette='cool', ax=ax[1])
+ax[1].set_title('Distribution of Top Average loan amount by Region')
+ax[1].set_ylabel('')
+ax[1].set_xlabel('Average Loan Amount')
+
+for i, v in enumerate(poo.values): 
+            ax[1].text(.6,i, round(v,2),fontsize=10,color='k')
+
+plt.subplots_adjust(wspace=0.5);
+
+
+# ### Distribution of sector
+# Let's look at the sector to business utilise loan amount
+
+# In[18]:
+
+
+plt.figure( figsize =(16,8))
+gridspec.GridSpec(2,2)
+
+plt.subplot2grid((1,2),(0,0))
+poo = loan['sector'].value_counts()
+#plt.pie(poo.values, labels = poo.index, autopct='%1.1f%%',colors=sns.color_palette('Wistia'),startangle=60,)
+sns.barplot(poo.values,poo.index,palette='Wistia')
+for i, v in enumerate(poo.values): 
+            plt.text(.6,i, round(v,2),fontsize=10,color='k')
+plt.title('Distribution of listed sector')
+
+plt.subplot2grid((1,2),(0,1))
+poo = loan.groupby('sector').mean()['loan_amount'].sort_values(ascending=False)
+sns.barplot(poo.values,poo.index,palette='cool')
+plt.title('Distribution of Average loan amount by sector')
+plt.xlabel('Average Loan Amount')
+for i, v in enumerate(poo.values): 
+            plt.text(.6,i, round(v,2),fontsize=10,color='k')
+
+
+# In[19]:
+
+
+# Joy plot 
+tmp = loan[['loan_amount','sector']]
+tmp['loan_amount'] = np.log(tmp['loan_amount'])
+g = sns.FacetGrid(tmp,row='sector',hue='sector',aspect=15, size=0.6)
+
+# Draw the densities in a few steps
+g.map(sns.kdeplot, "loan_amount", clip_on=False, shade=True, alpha=1, lw=1.5, bw=.2)
+g.map(sns.kdeplot, "loan_amount", clip_on=False, color="w", lw=2, bw=.2)
+g.map(plt.axhline, y=0, lw=2, clip_on=False)
+
+# Define and use a simple function to label the plot in axes coordinates
+def label(x, color, label):
+    ax = plt.gca()
+    ax.text(0, .2, label, fontweight="bold", color=color, 
+            ha="left", va="center", transform=ax.transAxes)
+
+g.map(label, "loan_amount")
+
+# Set the subplots to overlap
+g.fig.subplots_adjust(hspace=0)
+
+# Remove axes details that don't play will with overlap
+g.set_titles("")
+g.set(yticks=[])
+g.set(xlabel = 'loan amount (log)')
+g.despine(bottom=True, left=True)
+g.savefig('joy.png')
+
+
+# >The loan given for agriculture sector is top followed by food sector. When we look at the average loan for agriculture which much lesser than Entertainment sector. The entertainment sector account for 830 loan application where as agriculture 180302 but still average loan amount for entertainment  sector is top in the list. 
+# 
+# >The joy plot of loan amount is draw in second row, where loan amount is transformed to $log10$ and ordered by average loan amount
+
+# ### Distribution of Activity
+# what are the activity caried out by use loan amount?
+
+# In[20]:
+
+
+f,ax = plt.subplots(1,2,figsize=(16,8))
+poo = loan['activity'].value_counts()[:10]
+sns.barplot(poo.values,poo.index, palette='Wistia',ax= ax[0])
+ax[0].set_title('Distribution of Top listed Activity')
+ax[0].set_xlabel('Count')
+for i, v in enumerate(poo.values): 
+            ax[0].text(.6,i, round(v,2),fontsize=10,color='k')
+
+poo = loan.groupby('activity').mean()['loan_amount'].sort_values(ascending=False)[:10]
+sns.barplot(poo.values, poo.index, palette='cool', ax=ax[1])
+ax[1].set_title('Distribution of Top Average loan amount by activity')
+ax[1].set_ylabel('')
+ax[1].set_xlabel('Average Loan Amount')
+for i, v in enumerate(poo.values): 
+            ax[1].text(1,i, round(v,2),fontsize=10,color='k')
+plt.subplots_adjust(wspace=0.4)
+
+
+# >As we seen agriculture is sector accounts for top loan applied, so in the agriculture sector Farming, Pigs, Agriculture activity are top caried out. The people spending more on education as higher education cost increase by year. The loa taken for General store, Personal Housing Expenses is top in the list. As we all these activity are in rural area. 
+# 
+# >The average loan amount for technology accounts for highest in the list. There different techonlogy such as Communication, renewable energy are also having more average loan amounts spend. The used shoes activity 
+# 
+
+# 
+# ### Distribution of repayment interval
+# Let's look at the polular repayment interval
+
+# In[21]:
+
+
+plt.figure(figsize =(16,8))
+gridspec.GridSpec(2,2)
+
+plt.subplot2grid((1,2),(0,0))
+poo = loan['repayment_interval'].value_counts()
+plt.pie(poo.values,labels= poo.index,autopct='%1.1f%%',startangle=60,colors=sns.color_palette('cool',desat=.7))
+plt.title('Distribution of listed repayment_interval')
+
+plt.subplot2grid((1,2),(0,1))
+poo = loan.groupby('repayment_interval').mean()['loan_amount'].sort_values(ascending=False)
+sns.barplot(poo.values,poo.index, palette='Wistia')
+plt.title('Distribution of Average loan amount by Repayment')
+plt.xlabel('Average Loan Amount')
+plt.ylabel('')
+for i, v in enumerate(poo.values): 
+            plt.text(1,i, round(v,2),fontsize=10,color='b')
+
+
+# Joy plot 
+tmp = loan[['loan_amount','repayment_interval']]
+tmp['loan_amount'] = np.log(tmp['loan_amount'])
+g = sns.FacetGrid(tmp,row='repayment_interval',hue='repayment_interval',aspect=15, size=0.6)
+
+# Draw the densities in a few steps
+g.map(sns.kdeplot, "loan_amount", clip_on=False, shade=True, alpha=1, lw=1.5, bw=.2)
+g.map(sns.kdeplot, "loan_amount", clip_on=False, color="w", lw=2, bw=.2)
+g.map(plt.axhline, y=0, lw=2, clip_on=False)
+
+# Define and use a simple function to label the plot in axes coordinates
+def label(x, color, label):
+    ax = plt.gca()
+    ax.text(0, .2, label, fontweight="bold", color=color, 
+            ha="left", va="center", transform=ax.transAxes)
+
+g.map(label, "loan_amount")
+
+# Set the subplots to overlap
+g.fig.subplots_adjust(hspace=0)
+
+# Remove axes details that don't play will with overlap
+g.set_titles("")
+g.set(yticks=[])
+g.set(xlabel = 'loan amount (log)')
+g.despine(bottom=True, left=True)
+        
+plt.subplots_adjust(wspace=0.3);
+
+
+# >The more than 50% repayment made monthly where as 38% irregualr, 10% bullet. If we look at second plot the average loan amount 945$USD$ monthly follwed by 896$USD$ bullet. The bullet repayment when loan borrower count not repay with in loan term.
+
+# ### Top Country by  Repayment Interval
+# Let's look at the countries popular repayment interval
+
+# In[22]:
+
+
+f,ax = plt.subplots(2,2,figsize=(16,12))
+axs = ax.ravel()
+for i,c in enumerate(loan['repayment_interval'].unique()):
+    k = loan[loan['repayment_interval'] == c]
+    agg = k.groupby(['country']).mean()['loan_amount'].sort_values(ascending=False).dropna()[:10]
+    if i<4:
+        sns.barplot(x = agg.values,y = agg.index, ax= axs[i],palette=sns.color_palette('cool',n_colors=i+1))
+        axs[i].set_title('Average loan amount for country by \n Repayment Interval: {}'.format(c))
+        axs[i].set_ylabel('')
+        axs[i].set_xlabel('Average Loan amount')
+        for j, v in enumerate(agg.values): 
+            axs[i].text(1,j, round(v,2),fontsize=10,color='k')
+plt.subplots_adjust(wspace=0.4,hspace=0.3)
+
+
+# * The average loan amount recoverd by type of repayment interval for differne country
+# * Kenya is only country which pay loan by weekly
+# 
+# ### Distribution of terms in months
+# Let's look at term of loan in month
+
+# In[23]:
+
+
+plt.figure(figsize=(16,6))
+poo = loan['term_in_months'].value_counts().iloc[:20]
+sns.barplot(y = poo.values, x = poo.index, palette= 'cool',order=poo.index)
+plt.xticks(rotation=90)
+plt.xlabel('Month')
+plt.ylabel('Count')
+plt.title('Distribution of terms');
+
+
+# * The 14 month of repayment interval is most popular choise followed by 8 month
+# 
+# ### Distribution of Lender count
+# Let's look at the lender count
+
+# In[24]:
+
+
+plt.figure(figsize=(16,6))
+poo = loan['lender_count'].value_counts().iloc[:20]
+sns.barplot(y = poo.values, x = poo.index, palette= 'Wistia',order=poo.index)
+plt.xticks(rotation=90)
+plt.xlabel('Lender Count')
+plt.title('Distribution of Lender count ');
+
+
+# In[25]:
+
+
+f,ax = plt.subplots(1,2,figsize=(16,6))
+sns.distplot(loan['lender_count'],ax=ax[0])
+ax[0].set_title('Distribution of lender_count')
+
+ulimit = np.percentile(loan['lender_count'],99)
+llimit= np.percentile(loan['lender_count'],1)
+value = loan[(llimit<loan['lender_count'])&(loan['lender_count']<ulimit)]['lender_count']
+sns.distplot(value,color='r',ax=ax[1])
+ax[1].set_title('Distribution of lender_count by removing outliers');
+
+
+# * The 8,7,9,1 are polular lender count
+# 
+# ### Loan amount usage
+# Let's use wordcloud to top amount usage
+
+# In[26]:
+
+
+#use
+wc = (WordCloud(height= 1000,width=1600, stopwords=STOPWORDS,max_words=1000,background_color='white')
+      .generate(" ".join(loan['use'].astype(str))) )
+plt.figure(figsize=(16,10))
+plt.imshow(wc)
+plt.axis('off')
+#plt.savefig('use_cloud.png')
+plt.title('Loan amount usage');
+
+
+# In[27]:
+
+
+plt.figure(figsize=(16,10))
+poo = loan['use'].value_counts()[:10]
+sns.barplot(poo.values,poo.index, palette='Wistia')
+plt.title('Distribution of listed Use of Loan amount')
+plt.xlabel('Average Loan amount')
+for i, v in enumerate(poo.values): 
+        plt.text(.6,i, round(v,2),fontsize=10,color='k')
+        plt.rc('ytick', labelsize=20);
+plt.rc('ytick', labelsize=10);
+
+
+# >It is intresting that loan amount used to buy drinking water, water filter,to build toilet. It is government resposiblity to provide clean water, and toilet. If we look at the usage discription they mentioned **her family, their family**. It may be for marraige gift.
+# 
+# ### Tags
+
+# In[28]:
+
+
+#tags
+wc = (WordCloud(height= 1000,width=1600, stopwords=STOPWORDS,max_words=1000,background_color='white')
+      .generate(" ".join(loan['tags'].astype(str))) )
+plt.figure(figsize=(16,10))
+plt.imshow(wc)
+plt.axis('off')
+plt.title('Loan amount Tags');
+
+
+# Women owned, Owned Biz are most popular tags
+
+# ### Distribution of Gender
+
+# In[29]:
+
+
+gender = ",".join(loan['borrower_genders'].astype(str).str.replace(' ',''))
+
+cnt = pd.DataFrame(gender.strip().split(','),columns=['Gender'])
+cnt = cnt['Gender'].value_counts()
+
+f,ax = plt.subplots(1,2,figsize=(16,8))
+ax[0].pie(cnt.values,labels=cnt.index,autopct='%0.1f%%')
+ax[0].set_title('Borrower Gender')
+
+poo = loan['borrower_genders'].value_counts()[:5]*100/loan.shape[0]
+#ax[1].pie(poo.values,labels=poo.index,autopct='%0.1f%%')
+sns.barplot(poo.values,poo.index, palette='summer')
+ax[1].set_title('Distribution of listed Use of Loan amount')
+ax[1].set_xlabel('Average Loan amount')
+for i,v in enumerate(poo.values):
+    ax[1].text(1,i,round(v,2),fontsize=12)
+    ax[1].text(7,i,'%',fontsize=12)
+plt.subplots_adjust(wspace=0.4)
+
+
+# > The 80% of loan borrower are female, 0.3% Nan value present in data set for gender. If we look at the second plot more than 60% individual female loan borrowers, where as 20% are male individual borrower
+
+# In[30]:
+
+
+poo = (loan
+       .groupby(['borrower_genders','repayment_interval'])
+       .agg(['count'])['id'].reset_index())
+poo.loc[:,'borrower_genders'][~((poo['borrower_genders'] == 'female') |(poo['borrower_genders'] == 'male'))] = 'Group'
+
+
+plt.figure(figsize=(16,4))
+cnt = poo.groupby(['borrower_genders','repayment_interval'])['count'].sum().reset_index()
+cnt['count'] = cnt['count']*100/cnt['count'].sum()
+sns.barplot(y= cnt['count'],x = cnt['repayment_interval'],hue=cnt['borrower_genders'],palette='rainbow')
+plt.title('Repayment interval by Gender %')
+plt.ylabel('%');
+
+
+# > More than 30% female individual repay loan in irregular interval where as 28 % monthly. The male prefer monthly repayment interval. About 14% male individual repay monthly and 3% by irregular. 
+# The bullet repayment when loan borrower count not repay with in loan term.
+
+# ### Date time feature
+
+# In[31]:
+
+
+loan['date'] = pd.to_datetime(loan['date'])
+loan['disbursed_time'] = pd.to_datetime(loan['disbursed_time'])
+loan['funded_time'] = pd.to_datetime(loan['funded_time'])
+loan['posted_time'] = pd.to_datetime(loan['posted_time'])
+loan_ts = loan.set_index('date')
+
+
+# In[32]:
+
+
+plt.figure(figsize=(16,6))
+date_feature = ['posted_time','funded_time']
+loan.set_index('posted_time')['loan_amount'].resample('M').sum().plot()
+loan.set_index('posted_time')['funded_amount'].resample('M').sum().plot()
+plt.legend()
+
+
+# ### Relation between Sector and activity
+# Let's look into few activity in different sectors 
+
+# In[33]:
+
+
+plt.figure(figsize=(16,10))
+gridspec.GridSpec(2,2)
+# Agriclure 
+plt.subplot2grid((2,2),(0,0))
+poo = loan[loan['sector'] =='Agriculture']['activity'].value_counts()[:10]
+sns.barplot(poo.values,poo.index,palette='Wistia')
+plt.ylabel('Activity')
+plt.xlabel('Count')
+plt.title('"Agriculture" Sector')
+for i, v in enumerate(poo.values): 
+        plt.text(.6,i, round(v,2),fontsize=10,color='k')
+
+plt.subplot2grid((2,2),(0,1))
+poo = loan[loan['sector'] =='Food']['activity'].value_counts()[:10]
+sns.barplot(poo.values,poo.index,palette='cool')
+plt.ylabel('Activity')
+plt.xlabel('Count')
+plt.title('"Food" Sector')
+for i, v in enumerate(poo.values): 
+        plt.text(.6,i, round(v,2),fontsize=10,color='k')
+
+plt.subplot2grid((2,2),(1,0))
+poo = loan[loan['sector'] =='Retail']['activity'].value_counts()[:10]
+sns.barplot(poo.values,poo.index,palette='cool')
+plt.ylabel('Activity')
+plt.xlabel('Count')
+plt.title('"Retail" Sector')
+for i, v in enumerate(poo.values): 
+        plt.text(.6,i, round(v,2),fontsize=10,color='k')
+
+plt.subplot2grid((2,2),(1,1))
+poo = loan[loan['sector'] =='Entertainment']['activity'].value_counts()[:10]
+sns.barplot(poo.values,poo.index,palette='magma')
+plt.ylabel('Activity')
+plt.xlabel('Count')
+plt.title('"Entertainment" Sector')
+for i, v in enumerate(poo.values): 
+        plt.text(.6,i, round(v,2),fontsize=10,color='k')
+
+plt.subplots_adjust(hspace=0.4,wspace=0.5);
+
+
+# >In the agriculture sector there are farming, agriculture,pigs, poultry,dairy activities. There broadly there are three types of activities such as Farming or growning crops, Animal husbanry, Trading of related products. 
+# 
+# >The farming involves cultivation,protection, processing of crops. The agriculture involves more family labore.
+# Livestock are domesticated animals raised in an agricultural setting to produce labor and commodities such as meat, eggs, milk, fur, leather, jewellery and wool.
+
+# ## MPI (Multidimensional Poverty Index)
+# MPI (*Multidimensional Poverty Index*) is measure of poverty of people living in diffirent parts of country.
+
+# In[34]:
+
+
+f,ax = plt.subplots(1,2,figsize=(16,6))
+poo = mpi['world_region'].value_counts()
+sns.barplot(poo.values, poo.index,palette=sns.color_palette('Wistia'),ax=ax[0])
+ax[0].set_title('Distribtution of MPI by world region')
+ax[0].set_xlabel('Count')
+for i, v in enumerate(poo.values):
+    ax[0].text(.6,i, round(v,2),fontsize=10,color='k')
+agg = mpi.groupby(['world_region']).mean()['MPI'].sort_values().dropna().sort_values( ascending=False)
+sns.barplot(agg.values, agg.index,palette=sns.color_palette('cool'),ax=ax[1])
+ax[1].set_xlabel('Average MPI')
+ax[1].set_title('Average MPI by world region')
+for i, v in enumerate(poo.values):
+    ax[1].text(0,i, round(v,2),fontsize=10,color='k')
+plt.subplots_adjust(wspace=0.6);
+
+
+# ###  Average MPI by region
+
+# In[35]:
+
+
+
+f,ax = plt.subplots(2,3,figsize=(16,12))
+axs = ax.ravel()
+for i,c in enumerate(mpi['world_region'].unique()):
+    k = mpi[mpi['world_region'] == c]
+    agg = k.groupby(['country']).mean()['MPI'].sort_values(ascending=False).dropna()[:10]
+    if i<6:
+        sns.barplot(x = agg.values,y = agg.index, ax= axs[i],palette=sns.color_palette('cool',n_colors=i+1))
+        axs[i].set_title('Region: \n {}'.format(c))
+        axs[i].set_xlabel('Average MPI')
+        axs[i].set_ylabel('')
+        for j, v in enumerate(agg.values):
+            axs[i].text(0,j,round(v,2),fontsize=10,color='k')
+
+plt.subplots_adjust(wspace=0.5,hspace=0.3);
+
+
+# In[36]:
+
+
+f,ax = plt.subplots(1,2,figsize=(16,6))
+agg = mpi.groupby(['country']).mean()['MPI'].sort_values().dropna().sort_values( ascending=False)[:10]
+sns.barplot(agg.values, agg.index,palette='Wistia',ax=ax[0])
+ax[0].set_title('Distribtution of MPI by country')
+ax[0].set_xlabel('Average MPI')
+for i, v in enumerate(agg.values):
+    ax[0].text(0,i, round(v,2),fontsize=10,color='k')
+
+agg = mpi.groupby(['LocationName']).mean()['MPI'].sort_values().dropna().sort_values( ascending=False)[:10]
+sns.barplot(agg.values, agg.index,palette='cool',ax=ax[1])
+for i, v in enumerate(agg.values):
+    ax[1].text(0,i, round(v,2),fontsize=10,color='k')
+
+ax[1].set_title('Average MPI by Location Name')
+ax[0].set_xlabel('Average MPI')
+plt.subplots_adjust(wspace=0.6);
+
+
+# ### MPI map veiw
+
+# In[37]:
+
+
+# MPI
+plt.figure(figsize=(16,10))
+m = Basemap(projection='cyl',resolution='c',)
+m.drawcoastlines(linewidth=0.1, color="white")
+m.fillcontinents(color='#f2f2f2',lake_color='#46bcec')
+m.drawmapboundary(fill_color='#A6CAE0', linewidth=0.1)
+#m.bluemarble(alpha=0.4)
+m.shadedrelief()
+
+values = mpi['MPI']
+mloc = m(mpi['lon'],mpi['lat'])
+m.scatter(mloc[0],mloc[1],c = values,zorder=20,cmap='hot_r')
+m.colorbar()
+plt.title('Distribution of MPI')
 plt.show()
+m
+gc.collect();
 
 
-# In[ ]:
+# In[38]:
 
 
-def get_unique_count(x):
-    return len(np.unique(x))
+# http://nbviewer.jupyter.org/github/python-visualization/folium/blob/master/examples/MarkerCluster.ipynb
+loc = mpi[['lon','lat','region','MPI']].dropna()
+m1 = folium.Map(location=[0,0],zoom_start=2)
 
-cnt_srs = orders_df.groupby("eval_set")["user_id"].aggregate(get_unique_count)
-cnt_srs
+locations = list(zip(loc['lat'],loc['lon']))
+popups = ['lat: {} lon: {} <br> MPI: {}'.format(round(lat,2),round(lon,2),m) for (lat,lon,m) in          zip(mpi['lat'],mpi['lon'],mpi['MPI'])]
+
+marker = plugins.MarkerCluster(locations, popups=popups)
+marker.add_to(m1)
+m1
 
 
-# So there are 206,209 customers in total. Out of which, the last purchase of 131,209 customers are given as train set and we need to predict for the rest 75,000 customers. 
+# ## HDI
+
+# In[39]:
+
+
+gc.collect()
+hdi.head()
+
+
+# In[40]:
+
+
+continent_hdi.head()
+
+
+# In[41]:
+
+
+basic_details(hdi).T
+
+
+# In[42]:
+
+
+kiva_country = loan['country'].unique()
+len(kiva_country)
+kiva_hdi = hdi[hdi['Country'].apply(lambda c: c in kiva_country)]
+kiva_hdi['Country'].apply(lambda c: c in kiva_country)
+
+
+# ### HDI:
+
+# In[43]:
+
+
+m = folium.Map(location=[0,0],zoom_start=2)
+
+m.choropleth(geo_data= geo_world_data,
+             data = hdi, columns=['Country','HDI'],key_on='feature.properties.name',name='HDI',
+             fill_opacity=1,fill_color='GnBu',highlight=True, 
+             #threshold_scale=[100,1000,2000,4000,6000,10000],
+            legend_name='HDI')
+folium.LayerControl().add_to(m)
+m
+
+
+# Human Development Index (HDI): 
+# A composite index measuring average achievement in three basic dimensions of human development 
+# 1. A long and healthy life: is assessed by life expectancy at birth
+# 2. Knowledge or Education: is mean year of schooling for adults  
+# 3. A decent standard of living: is Gross National Income per capita
 # 
-# Now let us validate the claim that 4 to 100 orders of a customer are given. 
-
-# In[ ]:
-
-
-cnt_srs = orders_df.groupby("user_id")["order_number"].aggregate(np.max).reset_index()
-cnt_srs = cnt_srs.order_number.value_counts()
-
-plt.figure(figsize=(12,8))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[2])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Maximum order number', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# So there are no orders less than 4 and is max capped at 100 as given in the data page. 
+# It does not reflect on inequalities, poverty, human security, empowerment, etc.
 # 
-# Now let us see how the ordering habit changes with day of week.
+# We find:
+# > The HDI in african countries is 0.4 to 0.7. The European, American countries are having very Hdi, Asian continent moderater hdi.
 
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-sns.countplot(x="order_dow", data=orders_df, color=color[0])
-plt.ylabel('Count', fontsize=12)
-plt.xlabel('Day of week', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.title("Frequency of order by week day", fontsize=15)
-plt.show()
+# In[44]:
 
 
-# Seems like 0 and 1 is Saturday and Sunday when the orders are high and low during Wednesday.
+f,ax = plt.subplots(1,2,figsize=(16,6))
+value = (hdi[['HDI','Country']]
+         .sort_values(by='HDI')[:10])
+sns.barplot(value['HDI'],value['Country'],palette='cool',ax=ax[0])
+ax[0].set_title('Bottom 10 country by HDI')
+for i, v in enumerate(value['HDI']):
+    ax[0].text(0,i, round(v,2),fontsize=10,color='k')
+
+value = (hdi[['HDI','Country']]
+         .sort_values(by='HDI',ascending=False)[:10])
+sns.barplot(value['HDI'],value['Country'],palette='Wistia',ax=ax[1])
+ax[1].set_title('Top 10 country by HDI');
+for i, v in enumerate(value['HDI']):
+    ax[1].text(0,i, round(v,2),fontsize=10,color='k')
+
+
+# >The No.1 Hdi is Norway followed Australia,Switzerland. The lowest hdi in Cetral African Republic,Niger,Chad, the basic health care, education, life expectancy in these countries are very low. 
 # 
-# Now we shall see how the distribution is with respect to time of the day.
+# HDI Male vs Female
 
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-sns.countplot(x="order_hour_of_day", data=orders_df, color=color[1])
-plt.ylabel('Count', fontsize=12)
-plt.xlabel('Hour of day', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.title("Frequency of order by hour of day", fontsize=15)
-plt.show()
+# In[45]:
 
 
-# So majority of the orders are made during day time. Now let us combine the day of week and hour of day to see the distribution.
+### col = hdi.columns[hdi.columns.str.contains('HDI')]
+col = ['HDI','Human Development Index (HDI) Female','Human Development Index (HDI) Male']
+f,ax = plt.subplots(figsize=(16,6))
+for i,C in enumerate(col):
+    hdi[C].plot(kind='kde',ax=ax,color='C{}'.format(i))
+    mean = hdi[C].mean()
+    ax.axvline(mean,c='C{}'.format(i))
+    print('Mean value of {}: {}'.format(C,mean,))
+    #ax.text(round(mean,0),0.1,round(mean,2))
+    ax.legend()
+plt.title('Human Development Index (HDI)')
+#plt.savefig('hdi.png');
 
-# In[ ]:
 
-
-grouped_df = orders_df.groupby(["order_dow", "order_hour_of_day"])["order_number"].aggregate("count").reset_index()
-grouped_df = grouped_df.pivot('order_dow', 'order_hour_of_day', 'order_number')
-
-plt.figure(figsize=(12,6))
-sns.heatmap(grouped_df)
-plt.title("Frequency of Day of week Vs Hour of day")
-plt.show()
-
-
-# Seems Satuday evenings and Sunday mornings are the prime time for orders.
+# > This realy beatiful kde  plot, we can find HDI for female, male and average HDI varies at diferent level. The Mean HDI of Male > than Female for all country put together.
+# * Female > Average HDI > Male range 0.0 to 0.43,
+# * No proper inference range 0.43 to 0.62
+# * Female ~= Average HDI ~= Male range 0.62 to 0.69 
+# * Female < Average HDI < Male range 0.69 to 1.0 
 # 
-# Now let us check the time interval between the orders.
 
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-sns.countplot(x="days_since_prior_order", data=orders_df, color=color[3])
-plt.ylabel('Count', fontsize=12)
-plt.xlabel('Days since prior order', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.title("Frequency distribution by days since prior order", fontsize=15)
-plt.show()
+# In[46]:
 
 
-# Looks like customers order once in every week (check the peak at 7 days) or once in a month (peak at 30 days). We could also see smaller peaks at 14, 21 and 28 days (weekly intervals).
+f,ax=plt.subplots(figsize=(16,6))
+continent_hdi[['Human development groups','Average annual HDI growth 1990-2000','Average annual HDI growth 2000-2010',
+       'Average annual HDI growth 2010-2015','Average annual HDI growth 1990-2015','HDI']].plot(ax=ax)
+plt.xticks(np.arange(14),continent_hdi['Human development groups'],rotation=90);
+
+
+# ### Life Expectancy
+
+# In[47]:
+
+
+col = hdi.columns[hdi.columns.str.startswith('Life expectancy')]
+f,ax = plt.subplots(figsize=(16,6))
+for i,C in enumerate(col):
+    hdi[C].plot(kind='kde',ax=ax,c='C{}'.format(i))
+    mean = hdi[C].mean()
+    ax.axvline(mean,c='C{}'.format(i))
+    print('Mean value of {}: {}'.format(C,mean,))
+    #ax.text(round(mean,0),0.1,round(mean,2))
+    ax.legend()
+plt.title('Life expectancy');
+
+
+# Life Expectacny Male < Mean < Female
+# > For life expectancy at 59 will add average 19 year, so life expecatancy will be 59+19= 78years. 
 # 
-# Since our objective is to figure out the re-orders, let us check out the re-order percentage in prior set and train set.
-
-# In[ ]:
-
-
-# percentage of re-orders in prior set #
-order_products_prior_df.reordered.sum() / order_products_prior_df.shape[0]
-
-
-# In[ ]:
-
-
-# percentage of re-orders in train set #
-order_products_train_df.reordered.sum() / order_products_train_df.shape[0]
-
-
-# On an average, about 59% of the products in an order are re-ordered products.
 # 
-# **No re-ordered products:**
-# 
-# Now that we have seen 59% of the products are re-ordered, there will also be situations when none of the products are re-ordered. Let us check that now.
 
-# In[ ]:
+# ### Mean years of schooling
 
+# In[48]:
 
-grouped_df = order_products_prior_df.groupby("order_id")["reordered"].aggregate("sum").reset_index()
-grouped_df["reordered"].ix[grouped_df["reordered"]>1] = 1
-grouped_df.reordered.value_counts() / grouped_df.shape[0]
 
+col = hdi.columns[hdi.columns.str.startswith('Mean years')]
+f,ax = plt.subplots(figsize=(16,6))
+for i,C in enumerate(col):
+    hdi[C].plot(kind='kde',ax=ax,c='C{}'.format(i))
+    mean = hdi[C].mean()
+    ax.axvline(mean,c='C{}'.format(i))
+    print('Mean value of {}: {}'.format(C,mean,))
+    #ax.text(round(mean,0),0.1,round(mean,2))
+    ax.legend()
+plt.title('Mean value of Schooling');
 
-# In[ ]:
 
+# In[49]:
 
-grouped_df = order_products_train_df.groupby("order_id")["reordered"].aggregate("sum").reset_index()
-grouped_df["reordered"].ix[grouped_df["reordered"]>1] = 1
-grouped_df.reordered.value_counts() / grouped_df.shape[0]
 
+f,ax=plt.subplots(figsize=(16,6))
+col = continent_hdi.columns[continent_hdi.columns.str.startswith('Mean years')]
 
-# About 12% of the orders in prior set has no re-ordered items while in the train set it is 6.5%.
-# 
-# Now let us see the number of products bought in each order.
+continent_hdi[col].plot(ax=ax,kind='bar')
+plt.xticks(np.arange(15),continent_hdi['Human development groups'],rotation=90);
 
-# In[ ]:
 
+# ### Share of seats in parliament (% held by women)
 
-grouped_df = order_products_train_df.groupby("order_id")["add_to_cart_order"].aggregate("max").reset_index()
-cnt_srs = grouped_df.add_to_cart_order.value_counts()
+# In[50]:
 
-plt.figure(figsize=(12,8))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8)
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Number of products in the given order', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
 
+f,ax=plt.subplots(figsize=(16,6))
 
-# A right tailed distribution with the maximum value at 5.!
-# 
-# Before we explore the product details, let us look at the other three files as well. 
+continent_hdi['Share of seats in parliament (% held by women)'].plot(kind='bar',ax=ax)
+plt.xticks(np.arange(15),continent_hdi['Human development groups'],rotation=90)
+for i,v in enumerate(continent_hdi['Share of seats in parliament (% held by women)']):
+    plt.text(i,2,round(v,2),fontsize=12,rotation=90);
 
-# In[ ]:
 
+# The latin America the Caribbean group of country having highest Women participation in parliament. The Arab States women participation in parliment is 15% which is less than  world average is 22%.
 
-products_df.head()
+# ### Population
 
+# In[51]:
 
-# In[ ]:
 
+f,ax=plt.subplots(3,1,figsize=(16,6),sharex=True)
+axs = ax.ravel()
+col = ['Population Ages 15–64 (millions) 2015','Population Under age 5 (millions) 2015',
+       'Population Ages 65 and older (millions) 2015','Human development groups']
+continent_hdi[col].plot(ax=axs[0],kind='line')
+axs[0].set_title('Population by Age')
+col = ['Total Population (millions) 2015', 'Total Population (millions) 2030',]
+continent_hdi[col].plot(ax=axs[1],kind='line')
+axs[1].set_title('Total Population')
 
-aisles_df.head()
+col = ['Population Average annual growth 2000/2005 (%) ','Population Average annual growth 2010/2015 (%) ']
+continent_hdi[col].plot(ax=axs[2],kind='line')
+axs[2].set_title('Population Growth %')
+plt.xticks(np.arange(15),continent_hdi['Human development groups'],rotation=90);
+#axs[2].set_xticklabels([x for x in continent_hdi['Human development groups']], rotation=90);
 
 
-# In[ ]:
+# ### Employment
 
+# In[52]:
 
-departments_df.head()
 
+f,ax = plt.subplots(1,2,figsize=(16,6))
+value = (hdi[['Employment in agriculture (% of total employment) 2010-2014','Country']]
+         .sort_values(by='Employment in agriculture (% of total employment) 2010-2014')[:10])
+sns.barplot(value['Employment in agriculture (% of total employment) 2010-2014'],value['Country'],palette='cool',ax=ax[0])
+ax[0].set_title('Bottom 10 country Employed in agriculture')
+for i, v in enumerate(value['Employment in agriculture (% of total employment) 2010-2014']):
+    ax[0].text(0,i, round(v,2),fontsize=10,color='k')
 
-# Now let us merge these product details with the order_prior details.
+value = (hdi[['Employment in agriculture (% of total employment) 2010-2014','Country']]
+         .sort_values(by='Employment in agriculture (% of total employment) 2010-2014',ascending=False)[:10])
+sns.barplot(value['Employment in agriculture (% of total employment) 2010-2014'],value['Country'],palette='Wistia',ax=ax[1])
+ax[1].set_title('Top 10 country Employed in agriculture');
+for i, v in enumerate(value['Employment in agriculture (% of total employment) 2010-2014']):
+    ax[1].text(0,i, round(v,2),fontsize=10,color='k')
 
-# In[ ]:
 
+# In[53]:
 
-order_products_prior_df = pd.merge(order_products_prior_df, products_df, on='product_id', how='left')
-order_products_prior_df = pd.merge(order_products_prior_df, aisles_df, on='aisle_id', how='left')
-order_products_prior_df = pd.merge(order_products_prior_df, departments_df, on='department_id', how='left')
-order_products_prior_df.head()
 
+f,ax = plt.subplots(1,2,figsize=(16,6))
+value = (hdi[['Total Unemployment (% of labour force) 2015','Country']]
+         .sort_values(by='Total Unemployment (% of labour force) 2015')[:10])
+sns.barplot(value['Total Unemployment (% of labour force) 2015'],value['Country'],palette='cool',ax=ax[0])
+ax[0].set_title('Bottom 10 country by Unemployment')
+for i, v in enumerate(value['Total Unemployment (% of labour force) 2015']):
+    ax[0].text(0,i, round(v,2),fontsize=10,color='k')
 
-# In[ ]:
+value = (hdi[['Total Unemployment (% of labour force) 2015','Country']]
+         .sort_values(by='Total Unemployment (% of labour force) 2015',ascending=False)[:10])
+sns.barplot(value['Total Unemployment (% of labour force) 2015'],value['Country'],palette='Wistia',ax=ax[1])
+ax[1].set_title('Top 10 country by Unemployed');
+for i, v in enumerate(value['Total Unemployment (% of labour force) 2015']):
+    ax[1].text(0,i, round(v,2),fontsize=10,color='k')
 
 
-cnt_srs = order_products_prior_df['product_name'].value_counts().reset_index().head(20)
-cnt_srs.columns = ['product_name', 'frequency_count']
-cnt_srs
+# ### Inequality in income (%)
 
+# In[54]:
 
-# Wow. Most of them are organic products.! Also majority of them are fruits. 
-# 
-# Now let us look at the important aisles.
 
-# In[ ]:
+m = folium.Map(location=[0,0],zoom_start=2)
 
+m.choropleth(geo_data= geo_world_data,data = hdi, columns=['Country','Inequality in income (%)'],
+             key_on='feature.properties.name',name='Inequality in income (%)',
+             fill_opacity=1,fill_color='GnBu',highlight=True, 
+             #threshold_scale=[100,1000,2000,4000,6000,10000],
+            legend_name='Inequality in income (%)')
+folium.LayerControl().add_to(m)
+m
 
-cnt_srs = order_products_prior_df['aisle'].value_counts().head(20)
-plt.figure(figsize=(12,8))
-sns.barplot(cnt_srs.index, cnt_srs.values, alpha=0.8, color=color[5])
-plt.ylabel('Number of Occurrences', fontsize=12)
-plt.xlabel('Aisle', fontsize=12)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# The top two aisles are fresh fruits and fresh vegetables.! 
-# 
-# **Department Distribution:**
-# 
-# Let us now check the department wise distribution.
-
-# In[ ]:
-
-
-plt.figure(figsize=(10,10))
-temp_series = order_products_prior_df['department'].value_counts()
-labels = (np.array(temp_series.index))
-sizes = (np.array((temp_series / temp_series.sum())*100))
-plt.pie(sizes, labels=labels, 
-        autopct='%1.1f%%', startangle=200)
-plt.title("Departments distribution", fontsize=15)
-plt.show()
-
-
-# Produce is the largest department. Now let us check the reordered percentage of each department. 
-# 
-# **Department wise reorder ratio:**
-
-# In[ ]:
-
-
-grouped_df = order_products_prior_df.groupby(["department"])["reordered"].aggregate("mean").reset_index()
-
-plt.figure(figsize=(12,8))
-sns.pointplot(grouped_df['department'].values, grouped_df['reordered'].values, alpha=0.8, color=color[2])
-plt.ylabel('Reorder ratio', fontsize=12)
-plt.xlabel('Department', fontsize=12)
-plt.title("Department wise reorder ratio", fontsize=15)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# Personal care has lowest reorder ratio and dairy eggs have highest reorder ratio.
-# 
-# **Aisle - Reorder ratio:**
-
-# In[ ]:
-
-
-grouped_df = order_products_prior_df.groupby(["department_id", "aisle"])["reordered"].aggregate("mean").reset_index()
-
-fig, ax = plt.subplots(figsize=(12,20))
-ax.scatter(grouped_df.reordered.values, grouped_df.department_id.values)
-for i, txt in enumerate(grouped_df.aisle.values):
-    ax.annotate(txt, (grouped_df.reordered.values[i], grouped_df.department_id.values[i]), rotation=45, ha='center', va='center', color='green')
-plt.xlabel('Reorder Ratio')
-plt.ylabel('department_id')
-plt.title("Reorder ratio of different aisles", fontsize=15)
-plt.show()
-
-
-# **Add to Cart - Reorder ratio:**
-# 
-# Let us now explore the relationship between how order of adding the product to the cart affects the reorder ratio.
-
-# In[ ]:
-
-
-order_products_prior_df["add_to_cart_order_mod"] = order_products_prior_df["add_to_cart_order"].copy()
-order_products_prior_df["add_to_cart_order_mod"].ix[order_products_prior_df["add_to_cart_order_mod"]>70] = 70
-grouped_df = order_products_prior_df.groupby(["add_to_cart_order_mod"])["reordered"].aggregate("mean").reset_index()
-
-plt.figure(figsize=(12,8))
-sns.pointplot(grouped_df['add_to_cart_order_mod'].values, grouped_df['reordered'].values, alpha=0.8, color=color[2])
-plt.ylabel('Reorder ratio', fontsize=12)
-plt.xlabel('Add to cart order', fontsize=12)
-plt.title("Add to cart order - Reorder ratio", fontsize=15)
-plt.xticks(rotation='vertical')
-plt.show()
-
-
-# **Looks like the products that are added to the cart initially are more likely to be reordered again compared to the ones added later.** This makes sense to me as well since we tend to first order all the products we used to buy frequently and then look out for the new products available. 
-# 
-# **Reorder ratio by Time based variables:**
-
-# In[ ]:
-
-
-order_products_train_df = pd.merge(order_products_train_df, orders_df, on='order_id', how='left')
-grouped_df = order_products_train_df.groupby(["order_dow"])["reordered"].aggregate("mean").reset_index()
-
-plt.figure(figsize=(12,8))
-sns.barplot(grouped_df['order_dow'].values, grouped_df['reordered'].values, alpha=0.8, color=color[3])
-plt.ylabel('Reorder ratio', fontsize=12)
-plt.xlabel('Day of week', fontsize=12)
-plt.title("Reorder ratio across day of week", fontsize=15)
-plt.xticks(rotation='vertical')
-plt.ylim(0.5, 0.7)
-plt.show()
-
-
-# In[ ]:
-
-
-grouped_df = order_products_train_df.groupby(["order_hour_of_day"])["reordered"].aggregate("mean").reset_index()
-
-plt.figure(figsize=(12,8))
-sns.barplot(grouped_df['order_hour_of_day'].values, grouped_df['reordered'].values, alpha=0.8, color=color[4])
-plt.ylabel('Reorder ratio', fontsize=12)
-plt.xlabel('Hour of day', fontsize=12)
-plt.title("Reorder ratio across hour of day", fontsize=15)
-plt.xticks(rotation='vertical')
-plt.ylim(0.5, 0.7)
-plt.show()
-
-
-# In[ ]:
-
-
-
-grouped_df = order_products_train_df.groupby(["order_dow", "order_hour_of_day"])["reordered"].aggregate("mean").reset_index()
-grouped_df = grouped_df.pivot('order_dow', 'order_hour_of_day', 'reordered')
-
-plt.figure(figsize=(12,6))
-sns.heatmap(grouped_df)
-plt.title("Reorder ratio of Day of week Vs Hour of day")
-plt.show()
-
-
-# Looks like reorder ratios are quite high during the early mornings compared to later half of the day.
-
-# **Hope it helped. Please leave your comments / suggestions.**

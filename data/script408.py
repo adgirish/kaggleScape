@@ -1,263 +1,369 @@
 
 # coding: utf-8
 
-# # Filtering and Auto-Correlation Tutorial with Temperature Data
-# In this scipt we will perform basic filtering operations using pandas (low pass and high pass filtering) and also examine the auto-correlation structure of temperature data (taken from the [Historical Hourly Weather Dataset](https://www.kaggle.com/selfishgene/historical-hourly-weather-data)) also using pandas.
-# 
-# The main goal of the script is to give some intuition about what low pass and high pass filtering operations are, and understand what is the auto-correlation function. We use hourly sampled temperature data since it contains periodic structrue both on a daily basis and on a yearly basis.
-
 # In[ ]:
 
 
 import numpy as np
 import pandas as pd
-from pandas.plotting import autocorrelation_plot, lag_plot
+import warnings
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
+from sklearn.utils import shuffle
+from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import train_test_split
 
+from sklearn.model_selection import KFold
+from sklearn.preprocessing import LabelEncoder
+from sklearn.model_selection import cross_val_score
 
-# # Load Data and Show available Cities in the dataset
+from xgboost import XGBClassifier
+from lightgbm import LGBMClassifier
+from sklearn.linear_model import LogisticRegression
+
+import time
+
+random_state = 6
+np.random.seed(random_state)
+warnings.filterwarnings('ignore')
+
 
 # In[ ]:
 
 
-#%% load data that will be used in the script
-cityTable     = pd.read_csv('../input/city_attributes.csv')
-temperatureDF = pd.read_csv('../input/temperature.csv', index_col=0)
-temperatureDF.index = pd.to_datetime(temperatureDF.index)
+get_ipython().run_line_magic('matplotlib', 'inline')
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-cityTable
+# latex parameter
+font = {
+    'family': 'serif', 
+    'serif': ['Computer Modern Roman'],
+    'weight' : 'regular',
+    'size'   : 18
+    }
 
+plt.rc('font', **font)
+plt.rc('text', usetex=False)
+# plt.style.use('classic')
 
-# We see that the cities have latitude and longitude information, and are ordered from west to east (according to longitude coordinate).
-# 
-# # Show Temperature as function of time for several selected Cities
+color_map = 'viridis'
+
 
 # In[ ]:
 
 
-#%% show several temperature plots to get a feel for the dataset
-#citiesToShow = ['San Francisco','Las Vegas','Chicago','Toronto','Houston','Jerusalem']
-citiesToShow  = ['Portland','Dallas','Miami','Montreal','Tel Aviv District']
-
-t0 = temperatureDF.index
-t1 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),pd.to_datetime('1/10/2016',dayfirst=True),freq='H')
-t2 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),pd.to_datetime('1/9/2015' ,dayfirst=True),freq='H')
-t3 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),pd.to_datetime('21/7/2015',dayfirst=True),freq='H')
-t = [t0, t1, t2, t3]
-
-fig, ax = plt.subplots(nrows=4,ncols=1,figsize=(15,14))
-for i, t in enumerate(t):
-    for k in range(len(citiesToShow)):
-        ax[i].plot(t,temperatureDF.loc[t,citiesToShow[k]])
-
-ax[0].legend(citiesToShow, fontsize=16,
-              loc='upper left',bbox_to_anchor=(0.02,1.3), ncol=len(citiesToShow))
-for i in range(len(ax)): ax[i].set_ylabel('Temperature [$^\circ$K]', fontsize=11)
-ax[3].set_xlabel('time', fontsize=14);
+df_train = pd.read_csv('train.csv')
+df_test = pd.read_csv('test.csv')
 
 
-# We clearly see yearly periodicity (top plot) as well as daily peridicity (bottom two plots) in all cities. We can also see that it's quite warm in Miami and Dallas, quite cool in Montreal and the amplitude between day and night in Portland is very large.
-# 
-# # Show the Auto-Correlation function of Los Angeles Temperature Signal
+# ### Check if both test and train have the same shape
 
 # In[ ]:
 
 
-#%% show autocorr and lag plots
-
-cityToShow = 'Los Angeles'
-selectedLagPoints = [1,3,6,9,12,24,36,48,60]
-maxLagDays = 7
-
-originalSignal = temperatureDF[cityToShow]
-
-# set grid spec of the subplots
-plt.figure(figsize=(12,6))
-gs = gridspec.GridSpec(2, len(selectedLagPoints))
-axTopRow = plt.subplot(gs[0, :])
-axBottomRow = []
-for i in range(len(selectedLagPoints)):
-    axBottomRow.append(plt.subplot(gs[1, i]))
-
-# plot autocorr
-allTimeLags = np.arange(1,maxLagDays*24)
-autoCorr = [originalSignal.autocorr(lag=dt) for dt in allTimeLags]
-axTopRow.plot(allTimeLags,autoCorr); 
-axTopRow.set_title('Autocorrelation Plot of Temperature Signal', fontsize=18);
-axTopRow.set_xlabel('time lag [hours]'); axTopRow.set_ylabel('correlation coefficient')
-selectedAutoCorr = [originalSignal.autocorr(lag=dt) for dt in selectedLagPoints]
-axTopRow.scatter(x=selectedLagPoints, y=selectedAutoCorr, s=50, c='r')
-
-# plot scatter plot of selected points
-for i in range(len(selectedLagPoints)):
-    lag_plot(originalSignal, lag=selectedLagPoints[i], s=0.5, alpha=0.7, ax=axBottomRow[i])    
-    if i >= 1:
-        axBottomRow[i].set_yticks([],[])
-plt.tight_layout()
+print('Training data shape: {}'.format(df_train.shape))
+print('Training data shape: {}'.format(df_test.shape))
 
 
-# The top row shows the auto-correlation plot.  
-# The bottom scatter plots correspond to the red points marked on the auto-correlation plot. 
-# 
-# The leftmost plot shows the Temperature at time t vs Temperature at time t + 1 hour scatter plot. We know that weather doesn't change that much in one hour and therefore we see extreemly high correlation between the temeratures there.  
-# This correlation gradually decreases up to 12 hour difference, that corresponds to the switch from day to night, and then contiues to oscillate with a slow decreasing trend as the days go by. 
-# 
-# # Show Auto-Correlation with various zoom ins (temporal scales)
+# ### Check if there are any missing values
 
 # In[ ]:
 
 
-#%% zoom in and out on the autocorr plot
-fig, ax = plt.subplots(nrows=4,ncols=1, figsize=(14,14))
-
-timeLags = np.arange(1,25*24*30)
-autoCorr = [originalSignal.autocorr(lag=dt) for dt in timeLags]
-ax[0].plot(1.0/(24*30)*timeLags, autoCorr); ax[0].set_title('Autocorrelation Plot', fontsize=20);
-ax[0].set_xlabel('time lag [months]'); ax[0].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24*7)
-autoCorr = [originalSignal.autocorr(lag=dt) for dt in timeLags]
-ax[1].plot(1.0/(24*7)*timeLags, autoCorr);
-ax[1].set_xlabel('time lag [weeks]'); ax[1].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24)
-autoCorr = [originalSignal.autocorr(lag=dt) for dt in timeLags]
-ax[2].plot(1.0/24*timeLags, autoCorr);
-ax[2].set_xlabel('time lag [days]'); ax[2].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,3*24)
-autoCorr = [originalSignal.autocorr(lag=dt) for dt in timeLags]
-ax[3].plot(timeLags, autoCorr);
-ax[3].set_xlabel('time lag [hours]'); ax[3].set_ylabel('correlation coeff', fontsize=12);
+print('Is null on train: {}'.format(df_train.isnull().any().any()))
+print('Is null on test: {}'.format(df_test.isnull().any().any()))
 
 
-# ### We clearly see the two periods here:
-# * The yearly period on the top plot (12 month period)
-# * The daily period on the two bottom plots (24 hour period)
-# 
-# When we looked at the data we also saw these two periods, but these autocorr plots are much smoother as they represent aggregate data across all time points of the signal. 
-
-# # Apply moving average and show the Low Pass Filtered Signal
-# The name low pass is because the resulting singal contains only low frequency changes. Applying the moving average operation (or different phrasing of the same this: filtering/convolving with a rectangular filter), is eqivalent to filtering out the high frequency changes and keeping only low frequency changes in the original signal. Hence the name "low pass".
+# ### Descriptive statistics
 
 # In[ ]:
 
 
-#%% apply rolling mean and plot the signal (low pass filter)
-windowSize = 5*24
-
-lowPassFilteredSignal = originalSignal.rolling(windowSize, center=True).mean()
-
-t0 = temperatureDF.index
-t1 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),
-                   pd.to_datetime('1/10/2016',dayfirst=True),freq='H')
-t2 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),
-                   pd.to_datetime('1/9/2015' ,dayfirst=True),freq='H')
-t3 = pd.date_range(pd.to_datetime('1/7/2015',dayfirst=True),
-                   pd.to_datetime('21/7/2015',dayfirst=True),freq='H')
-
-fig, ax = plt.subplots(nrows=4,ncols=1,figsize=(14,12))
-ax[0].plot(t0,originalSignal,c='y')
-ax[0].plot(t0,lowPassFilteredSignal,c='r')
-
-ax[1].plot(t1,originalSignal[t1],c='y')
-ax[1].plot(t1,lowPassFilteredSignal[t1],c='r')
-
-ax[2].plot(t2,originalSignal[t2],c='y')
-ax[2].plot(t2,lowPassFilteredSignal[t2],c='r')
-
-ax[3].plot(t3,originalSignal[t3],c='y')
-ax[3].plot(t3,lowPassFilteredSignal[t3],c='r')
-
-ax[0].legend(['original signal','low pass filtered'], fontsize=18,
-              loc='upper left',bbox_to_anchor=(0.02,1.4), ncol=len(citiesToShow))
-for i in range(len(ax)): ax[i].set_ylabel('Temperature [$^\circ$K]', fontsize=11)
-ax[3].set_xlabel('time', fontsize=14);
+df_train.describe()
 
 
-# # Subtract the Low-Pass-Filtered Signal from the Original Signal and show the resulting High-Pass-Filtered Signal
-# The deviation from the local average is what we call the high frequency contnent of the singal. The resulting singal doesn't contain any slow changes (or different phrasing of the same thing: doesn't contain any low frequencies), since we subtracted them. This sequence of opperations (low pass filtering and subtracting the original singal from the low passed signal) is equivalent to "high pass filtering". i.e. keeping only the high frequency contnent and subtracting/removing/filtering out the low frequency content.  
+# ### Heatmap 
 
 # In[ ]:
 
 
-#%% subtract the low pass filtered singal from the original to get high pass filtered signal
-highPassFilteredSignal = originalSignal - lowPassFilteredSignal
-
-fig, ax = plt.subplots(nrows=4,ncols=1,figsize=(14,12))
-ax[0].plot(t0,highPassFilteredSignal,c='k')
-ax[1].plot(t1,highPassFilteredSignal[t1],c='k')
-ax[2].plot(t2,highPassFilteredSignal[t2],c='k')
-ax[3].plot(t3,highPassFilteredSignal[t3],c='k')
-
-ax[0].set_title('Deflection of Temperature from local mean',fontsize=20)
-for i in range(len(ax)): ax[i].set_ylabel('$\Delta$ Temperature [$^\circ$K]', fontsize=11)
-ax[3].set_xlabel('time', fontsize=14);
+import seaborn as sns
+cor = df_train.corr()
+plt.figure(figsize=(16,10))
+sns.heatmap(cor)
 
 
-# We see that the resulting signal is now varying around zero and the bottom plot is much more periodic. We've essentially removed the slow changing signal that the fast changing signal was riding on top of, and extracted the fast changing signal only.
-# 
-# # Show the Auto-Correlation of the Low Pass Filtered Signal
+# #### Since 'ps_calc' features do not show any have zero relationship with other features
+# #### We can delete them.
 
 # In[ ]:
 
 
-#%% autocorr of low pass filtered singal
-fig, ax = plt.subplots(nrows=4,ncols=1,figsize=(14,14))
-
-timeLags = np.arange(1,25*24*30)
-autoCorr = [lowPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[0].plot(1.0/(24*30)*timeLags, autoCorr); 
-ax[0].set_title('Autocorrelation Plot of Low Pass Filtered Signal', fontsize=20);
-ax[0].set_xlabel('time lag [months]'); ax[0].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24*7)
-autoCorr = [lowPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[1].plot(1.0/(24*7)*timeLags, autoCorr);
-ax[1].set_xlabel('time lag [weeks]'); ax[1].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24)
-autoCorr = [lowPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[2].plot(1.0/24*timeLags, autoCorr);
-ax[2].set_xlabel('time lag [days]'); ax[2].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,3*24)
-autoCorr = [lowPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[3].plot(timeLags, autoCorr);
-ax[3].set_xlabel('time lag [hours]'); ax[3].set_ylabel('correlation coeff', fontsize=12);
+col_to_drop = list(df_train.columns[df_train.columns.str.startswith('ps_calc_')])
+df_train = df_train.drop(col_to_drop, axis=1)  
+df_test = df_test.drop(col_to_drop, axis=1)
 
 
-# We see that the low pass signal displays now only the yearly periodicity, because the yearly periodicity is related to slow changes in the signal and we've remove the high changing signals by applying the moving average operation
-# 
-# # Show the Auto-Correlation of the High Pass Filtered Signal
+# ## Work with missing values
 
 # In[ ]:
 
 
-#%% autocorr of high pass filtered signal
-fig, ax = plt.subplots(nrows=4,ncols=1, figsize=(14,14))
-
-timeLags = np.arange(1,25*24*30)
-autoCorr = [highPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[0].plot(1.0/(24*30)*timeLags, autoCorr); 
-ax[0].set_title('Autocorrelation Plot of High Pass Filtered Signal', fontsize=20);
-ax[0].set_xlabel('time lag [months]'); ax[0].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24*7)
-autoCorr = [highPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[1].plot(1.0/(24*7)*timeLags, autoCorr);
-ax[1].set_xlabel('time lag [weeks]'); ax[1].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,20*24)
-autoCorr = [highPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[2].plot(1.0/24*timeLags, autoCorr);
-ax[2].set_xlabel('time lag [days]'); ax[2].set_ylabel('correlation coeff', fontsize=12);
-
-timeLags = np.arange(1,3*24)
-autoCorr = [highPassFilteredSignal.autocorr(lag=dt) for dt in timeLags]
-ax[3].plot(timeLags, autoCorr);
-ax[3].set_xlabel('time lag [hours]'); ax[3].set_ylabel('correlation coeff', fontsize=12);
+def get_missing_features(df):
+    missings = pd.DataFrame([], columns=['feature', 'no_recoreds', 'percentage'])
+    total_rows = df.shape[0]
+    index = 0
+    for feature in list(df):
+        total_nulls = df[feature].isnull().sum()
+        if total_nulls > 0:
+            missings_perc = total_nulls / total_rows
+            missings.loc[index] = [feature, total_nulls, missings_perc]
+            index += 1
+    missings = missings.sort_values('no_recoreds', ascending=False)
+    return missings
 
 
-# We see that the high pass signal displays now only the daily periodicity, because the daily periodicity is related to fast changes in the signal and we've remove the low changing signals by subtracting the moving average.
+# In[ ]:
+
+
+df_missings = get_missing_features(df_train)
+print(df_missings)
+
+
+# ### Bar plot of missing features
+
+# In[ ]:
+
+
+df_missings.plot(x='feature', y='no_recoreds', kind='bar', )
+
+
+# ### Treat missing values by mean of the column
+
+# In[ ]:
+
+
+for i, feature in enumerate(list(df_train.drop(['id'], axis=1))):
+    if df_train[feature].isnull().sum() > 0:
+        df_train[feature].fillna(df_train[feature].mode()[0],inplace=True)
+
+for i, feature in enumerate(list(df_test.drop(['id'], axis=1))):
+    if df_test[feature].isnull().sum() > 0:
+        df_test[feature].fillna(df_test[feature].mode()[0],inplace=True)
+
+
+# ### Check if there are any missing values
+
+# In[ ]:
+
+
+get_missing_features(df_train)
+get_missing_features(df_test)
+
+
+# ## Check category features of the dataset
+
+# In[ ]:
+
+
+cat_cols = [col for col in df_train.columns if '_cat' in col]
+dummed_cols = []
+
+for cat_col in cat_cols:
+    unique_values = len(np.unique(df_train[cat_col]))
+    if unique_values < 50:
+        dummed_cols.append(cat_col)
+    print('{} has {} unique values'.format(cat_col, unique_values))
+
+
+# ## Transform category features to dummies
+
+# In[ ]:
+
+
+id_test = df_test['id'].values
+y = df_train['target'].values
+
+df_train = df_train.drop(['target','id'], axis = 1)
+df_test = df_test.drop(['id'], axis = 1)
+
+cat_features = [a for a in df_train.columns if a.endswith('cat')]
+
+for column in cat_features:
+    temp = pd.get_dummies(pd.Series(df_train[column]))
+    df_train = pd.concat([df_train,temp],axis=1)
+    df_train = df_train.drop([column],axis=1)
+    
+for column in cat_features:
+    temp = pd.get_dummies(pd.Series(df_test[column]))
+    df_test = pd.concat([df_test,temp],axis=1)
+    df_test = df_test.drop([column],axis=1)
+
+print(df_train.values.shape, df_test.values.shape)
+
+
+# ### Plot class ratio
+
+# In[ ]:
+
+
+# Distribution of target variable
+def plot_class_balace(train, val):
+    train_aa = dict(Counter(train))
+    val_aa = dict(Counter(val))
+    
+    plt.figure(figsize=(10, 4))
+    plt.subplot(121)
+    plt.bar([0, 1], height= [train_aa[0],train_aa[1]])
+    plt.xticks([0, 1]);
+    plt.xlabel('Class')
+    plt.ylabel('Number of data points')
+    plt.title('Train positive class {}%\n:'.format(round(train_aa[1]*100/train_aa[0], 2)))
+    
+    plt.subplot(122)
+    plt.bar([0, 1], height= [val_aa[0],val_aa[1]])
+    plt.xticks([0, 1]);
+    plt.xlabel('Class')
+    plt.title('Valid pos class {}%\n:'.format(round(val_aa[1]*100/val_aa[0], 2)))
+    plt.tight_layout()
+    plt.show()
+
+plot_class_balace(y_train_im, y_val_im)
+
+
+# ### Gini coeficient 
+
+# In[ ]:
+
+
+# from https://www.kaggle.com/mashavasilenko/
+# porto-seguro-xgb-modeling-and-parameters-tuning
+def eval_gini(y_true, y_prob):
+    y_true = np.asarray(y_true)
+    y_true = y_true[np.argsort(y_prob)]
+    ntrue = 0
+    gini = 0
+    delta = 0
+    n = len(y_true)
+    for i in range(n-1, -1, -1):
+        y_i = y_true[i]
+        ntrue += y_i
+        gini += y_i * delta
+        delta += 1 - y_i
+    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
+    return gini
+
+
+def gini_xgb(preds, dtrain):
+    labels = dtrain.get_label()
+    gini_score = -eval_gini(labels, preds)
+    return [('gini', gini_score)]
+
+def gini_normalized(a, p):
+    return gini(a, p) / gini(a, a)
+
+
+# ### Ensembling
+
+# In[ ]:
+
+
+from sklearn.model_selection import StratifiedKFold
+
+class Create_ensemble(object):
+    def __init__(self, n_splits, base_models):
+        self.n_splits = n_splits
+        self.base_models = base_models
+
+    def predict(self, X, y, T):
+        X = np.array(X)
+        y = np.array(y)
+        T = np.array(T)
+
+        folds = list(StratifiedKFold(n_splits=self.n_splits, shuffle=True, random_state=2016).split(X, y))
+
+        S_train = np.zeros((X.shape[0], len(self.base_models)))
+        S_test = np.zeros((T.shape[0], len(self.base_models)))
+        
+        for i, clf in enumerate(self.base_models):
+            S_test_i = np.zeros((T.shape[0], self.n_splits))
+
+            for j, (train_idx, valid_idx) in enumerate(folds):
+                X_train = X[train_idx]
+                y_train = y[train_idx]
+                X_valid = X[valid_idx]
+                y_valid = y[valid_idx]
+                
+                clf.fit(X_train, y_train)
+                valid_pred = clf.predict_proba(X_valid)[:,1]
+                S_train[valid_idx, i] = valid_pred
+                S_test_i[:, j] = clf.predict_proba(T)[:,1]
+            
+            print( "\nTraining Gini for model {} : {}".format(i, eval_gini(y, S_train[:,i])))
+            S_test[:, i] = S_test_i.mean(axis=1)
+            
+        return S_train, S_test
+
+
+# ## Lightbm model
+
+# In[ ]:
+
+
+# LightGBM params
+lgb_params = {}
+lgb_params['learning_rate'] = 0.02
+lgb_params['n_estimators'] = 700
+lgb_params['max_bin'] = 15
+lgb_params['subsample'] = 0.8
+lgb_params['subsample_freq'] = 10
+lgb_params['colsample_bytree'] = 0.8   
+lgb_params['min_child_samples'] = 800
+lgb_params['random_state'] = 99
+lgb_params['scale_pos_weight'] = 3
+
+lgb_params2 = {}
+lgb_params2['learning_rate'] = 0.02
+lgb_params2['n_estimators'] = 900
+lgb_params2['max_bin'] = 20
+lgb_params2['subsample'] = 0.8
+lgb_params2['subsample_freq'] = 10
+lgb_params2['colsample_bytree'] = 0.8   
+lgb_params2['min_child_samples'] = 600
+lgb_params2['random_state'] = 99
+lgb_params2['scale_pos_weight'] = 3
+
+lgb_model = LGBMClassifier(**lgb_params)
+lgb_model2 = LGBMClassifier(**lgb_params2)
+
+
+# In[ ]:
+
+
+lgb_stack = Create_ensemble(n_splits = 5, base_models = [lgb_model, lgb_model2])        
+X = df_train
+Y = y
+T = df_test
+lgb_train_pred, lgb_test_pred = lgb_stack.predict(X, Y, T)
+
+
+# In[ ]:
+
+
+# Create submission file
+sub = pd.DataFrame()
+sub['id'] = id_test
+sub['target'] = lgb_test_pred.mean(axis=1)
+sub.to_csv('lightgbm_submit_ensemble_features.csv', float_format='%.6f', index=False)
+
+
+# ## correlation among the models
+
+# In[ ]:
+
+
+import seaborn as sns
+test_pred_df = pd.DataFrame(data = lgb_test_pred)
+cor = test_pred_df.corr()
+plt.figure(figsize=(16,10))
+sns.heatmap(cor)
+

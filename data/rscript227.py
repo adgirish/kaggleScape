@@ -1,85 +1,115 @@
-#
-# This script is inspired by this discussion:
-# https://www.kaggle.com/c/zillow-prize-1/discussion/33710
-#
-# Ver 4. updated the dataset
-# LB: 0.06450
-#
-
-import numpy as np
-import pandas as pd
+import pandas as pd 
+import numpy as np 
 import xgboost as xgb
-from sklearn.preprocessing import LabelEncoder
+from scipy.optimize import fmin_powell
+from ml_metrics import quadratic_weighted_kappa
 
-properties = pd.read_csv('../input/properties_2017.csv')
-train_2016 = pd.read_csv("../input/train_2016_v2.csv")
-train_2017 = pd.read_csv("../input/train_2017.csv")
-train = pd.concat([train_2016, train_2017], ignore_index=True)
+def eval_wrapper(yhat, y):  
+    y = np.array(y)
+    y = y.astype(int)
+    yhat = np.array(yhat)
+    yhat = np.clip(np.round(yhat), np.min(y), np.max(y)).astype(int)   
+    return quadratic_weighted_kappa(yhat, y)
+    
+def get_params():
+    
+    params = {}
+    params["objective"] = "reg:linear"     
+    params["eta"] = 0.05
+    params["min_child_weight"] = 360
+    params["subsample"] = 0.85
+    params["colsample_bytree"] = 0.3
+    params["silent"] = 1
+    params["max_depth"] = 7
+    plst = list(params.items())
 
-for c in properties.columns:
-    properties[c]=properties[c].fillna(-1)
-    if properties[c].dtype == 'object':
-        lbl = LabelEncoder()
-        lbl.fit(list(properties[c].values))
-        properties[c] = lbl.transform(list(properties[c].values))
+    return plst
+    
+def score_offset(data, bin_offset, sv, scorer=eval_wrapper):
+    # data has the format of pred=0, offset_pred=1, labels=2 in the first dim
+    data[1, data[0].astype(int)==sv] = data[0, data[0].astype(int)==sv] + bin_offset
+    score = scorer(data[1], data[2])
+    return score
+    
+def apply_offsets(data, offsets):
+    for j in range(num_classes):
+        data[1, data[0].astype(int)==j] = data[0, data[0].astype(int)==j] + offsets[j]
+    return data
 
-train_df = train.merge(properties, how='left', on='parcelid')
-x_train = train_df.drop(['parcelid', 'logerror','transactiondate'], axis=1)
-x_test = properties.drop(['parcelid'], axis=1)
-# shape        
-print('Shape train: {}\nShape test: {}'.format(x_train.shape, x_test.shape))
-
-# drop out ouliers
-train_df=train_df[ train_df.logerror > -0.4 ]
-train_df=train_df[ train_df.logerror < 0.4 ]
-x_train=train_df.drop(['parcelid', 'logerror','transactiondate'], axis=1)
-y_train = train_df["logerror"].values.astype(np.float32)
-y_mean = np.mean(y_train)
-
-print('After removing outliers:')     
-print('Shape train: {}\nShape test: {}'.format(x_train.shape, x_test.shape))
+# global variables
+columns_to_drop = ['Id', 'Response'] #, 'Medical_History_10','Medical_History_24']
+xgb_num_rounds = 720
+num_classes = 8
+missing_indicator = -1000
 
 
-# xgboost params
-xgb_params = {
-    'eta': 0.06,
-    'max_depth': 5,
-    'subsample': 0.75,
-    'objective': 'reg:linear',
-    'eval_metric': 'mae',
-    'base_score': y_mean,
-    'silent': 1
-}
+print("Load the data using pandas")
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
 
-dtrain = xgb.DMatrix(x_train, y_train)
-dtest = xgb.DMatrix(x_test)
+# combine train and test
+all_data = train.append(test)
 
-# cross-validation
-cv_result = xgb.cv(xgb_params, 
-                   dtrain, 
-                   nfold=5,
-                   num_boost_round=200,
-                   early_stopping_rounds=50,
-                   verbose_eval=10, 
-                   show_stdv=False
-                  )
-num_boost_rounds = len(cv_result)
-print(num_boost_rounds)
+# Found at https://www.kaggle.com/marcellonegro/prudential-life-insurance-assessment/xgb-offset0501/run/137585/code
+# create any new variables    
+all_data['Product_Info_2_char'] = all_data.Product_Info_2.str[0]
+all_data['Product_Info_2_num'] = all_data.Product_Info_2.str[1]
+
+# factorize categorical variables
+all_data['Product_Info_2'] = pd.factorize(all_data['Product_Info_2'])[0]
+all_data['Product_Info_2_char'] = pd.factorize(all_data['Product_Info_2_char'])[0]
+all_data['Product_Info_2_num'] = pd.factorize(all_data['Product_Info_2_num'])[0]
+
+all_data['BMI_Age'] = all_data['BMI'] * all_data['Ins_Age']
+
+med_keyword_columns = all_data.columns[all_data.columns.str.startswith('Medical_Keyword_')]
+all_data['Med_Keywords_Count'] = all_data[med_keyword_columns].sum(axis=1)
+
+print('Eliminate missing values')    
+all_data.fillna(missing_indicator, inplace=True)
+
+# fix the dtype on the label column
+all_data['Response'] = all_data['Response'].astype(int)
+
+# split train and test
+train = all_data[all_data['Response']>0].copy()
+test = all_data[all_data['Response']<1].copy()
+
+# convert data to xgb data structure
+xgtrain = xgb.DMatrix(train.drop(columns_to_drop, axis=1), train['Response'].values, 
+                        missing=missing_indicator)
+xgtest = xgb.DMatrix(test.drop(columns_to_drop, axis=1), label=test['Response'].values, 
+                        missing=missing_indicator)    
+
+# get the parameters for xgboost
+plst = get_params()
+print(plst)      
+
 # train model
-model = xgb.train(dict(xgb_params, silent=1), dtrain, num_boost_round=num_boost_rounds)
-pred = model.predict(dtest)
-y_pred=[]
+model = xgb.train(plst, xgtrain, xgb_num_rounds) 
 
-for i,predict in enumerate(pred):
-    y_pred.append(str(round(predict,4)))
-y_pred=np.array(y_pred)
+# get preds
+train_preds = model.predict(xgtrain, ntree_limit=model.best_iteration)
+print('Train score is:', eval_wrapper(train_preds, train['Response'])) 
+test_preds = model.predict(xgtest, ntree_limit=model.best_iteration)
 
-output = pd.DataFrame({'ParcelId': properties['parcelid'].astype(np.int32),
-        '201610': y_pred, '201611': y_pred, '201612': y_pred,
-        '201710': y_pred, '201711': y_pred, '201712': y_pred})
-# set col 'ParceID' to first col
-cols = output.columns.tolist()
-cols = cols[-1:] + cols[:-1]
-output = output[cols]
-from datetime import datetime
-output.to_csv('sub{}.csv'.format(datetime.now().strftime('%Y%m%d_%H%M%S')), index=False)
+# train offsets 
+offsets = np.array([0.1, -1, -2, -1, -0.8, 0.02, 0.8, 1])
+offset_preds = np.vstack((train_preds, train_preds, train['Response'].values))
+offset_preds = apply_offsets(offset_preds, offsets)
+opt_order = [6,4,5,3]
+for j in opt_order:
+    train_offset = lambda x: -score_offset(offset_preds, x, j) * 100
+    offsets[j] = fmin_powell(train_offset, offsets[j], disp=False)
+
+print('Offset Train score is:', eval_wrapper(offset_preds[1], train['Response'])) 
+
+# apply offsets to test
+data = np.vstack((test_preds, test_preds, test['Response'].values))
+data = apply_offsets(data, offsets)
+
+final_test_preds = np.round(np.clip(data[1], 1, 8)).astype(int)
+
+preds_out = pd.DataFrame({"Id": test['Id'].values, "Response": final_test_preds})
+preds_out = preds_out.set_index('Id')
+preds_out.to_csv('xgb_offset_submission.csv')

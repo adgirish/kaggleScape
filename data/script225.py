@@ -1,106 +1,94 @@
 
 # coding: utf-8
 
-# ## Fast run length encoding, tested on the provided training mask data.
-
-# In[1]:
+# In[ ]:
 
 
-import time
+#Ignore the seaborn warnings.
+import warnings
+warnings.filterwarnings("ignore");
 
 import numpy as np
 import pandas as pd
-from scipy import ndimage
-
-from matplotlib import pyplot as plt
-
-PROJECT_PATH = '..'
-INPUT_PATH = PROJECT_PATH + '/input'
-
-TRAIN_MASKS_CSV_PATH = INPUT_PATH + '/train_masks.csv'
-TRAIN_MASKS_PATH = INPUT_PATH + '/train_masks'
+import matplotlib.pyplot as plt
+import seaborn as sns
+import scipy.stats
 
 
-# In[2]:
+# In[ ]:
 
 
-def read_train_masks():
-    global train_masks
-    train_masks = pd.read_csv(TRAIN_MASKS_CSV_PATH)
-    print(train_masks.head())
+#Import data and see what states it has values for so far.
+df = pd.read_csv('../input/primary_results.csv')
+df.state.unique()
 
 
-read_train_masks()
+# In[ ]:
 
 
-# In[3]:
+#Create a new dataframe that holds votes by state and the fraction of total votes(democrat + republican) that a candidate recieved and pare them down to only those that are still in the race as of 2 March.
+
+votesByState = [[candidate, state] for candidate in df.candidate.unique() for state in df.state.unique()]
+for i in votesByState:
+    i.append(df[df.candidate == i[0]].party.unique()[0])
+    i.append(df[(df.candidate == i[0]) & (df.state == i[1])].votes.sum())
+    i.append(i[3]/df[(df.party == i[2]) & (df.state == i[1])].votes.sum())
+    i.append(i[3]/df[df.state == i[1]].votes.sum())
+vbs = pd.DataFrame(votesByState, columns = ['candidate', 'state', 'party', 'votes', 'partyFrac', 'totalFrac'])
+vbs = vbs[vbs.candidate != ' Uncommitted']
+vbs['state'] = vbs['state'].astype('category')
+vbs = vbs[vbs.candidate.isin(['Hillary Clinton', 'Bernie Sanders', 'Donald Trump', 'Ben Carson', 'John Kasich', 'Ted Cruz', 'Marco Rubio'])]
+
+#Add in a column with the order the primaries took place to easier visualize data.
+count = 1
+vbs['stateOrder'] = 0
+for i in vbs.state.unique():
+    vbs['stateOrder'][vbs.state == i] = count 
+    count += 1
 
 
-def read_mask_image(car_code, angle_code):
-    mask_img_path = TRAIN_MASKS_PATH + '/' + car_code + '_' + angle_code + '_mask.gif';
-    mask_img = ndimage.imread(mask_img_path, mode = 'L')
-    mask_img[mask_img <= 127] = 0
-    mask_img[mask_img > 127] = 1
-    return mask_img
+# In[ ]:
 
 
-def show_mask_image(car_code, angle_code):
-    mask_img = read_mask_image(car_code, angle_code)
-    plt.imshow(mask_img, cmap = 'Greys_r')
-    plt.show()
+#Create a pair-wise list of candidates
+canPairs = []
+canPairsraw = [[i,j] for i in vbs.candidate.unique() for j in vbs.candidate.unique() if i != j]
+for i in canPairsraw:
+    if list(reversed(i)) in canPairs:
+        continue
+    canPairs.append(i)
 
 
-show_mask_image('00087a6bd4dc', '04')
+# In[ ]:
 
 
-# In[4]:
+#Calculate the Pearson correlation between each pair and finding the max and min.
+corrVals = []
+for i in canPairs:
+    corrVals.append(['{} vs. {}'.format(i[0], i[1]), (scipy.stats.pearsonr(vbs[vbs.candidate == i[0]].totalFrac, vbs[vbs.candidate == i[1]].totalFrac)[0])**2])
+
+max = ['',.5]
+min = ['',.5]
+for i in corrVals:
+    if max[1] < i[1]:
+        max = i
+    if min[1] > i[1]:
+        min = i
+
+print('Max correlation: {}\nMin correlation: {}'.format(max, min))
+#The higher the correlation, the less effect the candidate has on the other, the lower the correlation the more of an effect.  So, states that voted more for Trump, voted less for Carson.
+
+#I made a mistake and should have been looking at r^2.  The closer to 0 the lower the effect, so that's fixed now.
 
 
-def rle_encode(mask_image):
-    pixels = mask_image.flatten()
-    # We avoid issues with '1' at the start or end (at the corners of 
-    # the original image) by setting those pixels to '0' explicitly.
-    # We do not expect these to be non-zero for an accurate mask, 
-    # so this should not harm the score.
-    pixels[0] = 0
-    pixels[-1] = 0
-    runs = np.where(pixels[1:] != pixels[:-1])[0] + 2
-    runs[1::2] = runs[1::2] - runs[:-1:2]
-    return runs
+# In[ ]:
 
 
-def rle_to_string(runs):
-    return ' '.join(str(x) for x in runs)
+g = sns.regplot(x='stateOrder', y = 'totalFrac', data = vbs[(vbs.candidate == 'Ted Cruz') | (vbs.candidate == 'Marco Rubio')])
 
 
-def test_rle_encode():
-    test_mask = np.asarray([[0, 0, 0, 0], [0, 0, 1, 1], [0, 0, 1, 1], [0, 0, 0, 0]])
-    assert rle_to_string(rle_encode(test_mask)) == '7 2 11 2'
-    num_masks = len(train_masks['img'])
-    print('Verfiying RLE encoding on', num_masks, 'masks ...')
-    time_read = 0.0 # seconds
-    time_rle = 0.0 # seconds
-    time_stringify = 0.0 # seconds
-    for mask_idx in range(num_masks):
-        img_file_name = train_masks.loc[mask_idx, 'img']
-        car_code, angle_code = img_file_name.split('.')[0].split('_')
-        t0 = time.clock()
-        mask_image = read_mask_image(car_code, angle_code)
-        time_read += time.clock() - t0
-        t0 = time.clock()
-        rle_truth_str = train_masks.loc[mask_idx, 'rle_mask']
-        rle = rle_encode(mask_image)
-        time_rle += time.clock() - t0
-        t0 = time.clock()
-        rle_str = rle_to_string(rle)
-        time_stringify += time.clock() - t0
-        assert rle_str == rle_truth_str
-        if mask_idx and (mask_idx % 500) == 0:
-            print('  ..', mask_idx, 'tested ..')
-    print('Time spent reading mask images:', time_read, 's, =>',             1000*(time_read/num_masks), 'ms per mask.')
-    print('Time spent RLE encoding masks:', time_rle, 's, =>',             1000*(time_rle/num_masks), 'ms per mask.')
-    print('Time spent stringifying RLEs:', time_stringify, 's, =>',             1000*(time_stringify/num_masks), 'ms per mask.')
+# In[ ]:
 
 
-test_rle_encode()
+g = sns.regplot(x='stateOrder', y = 'totalFrac', data = vbs[(vbs.candidate == 'Donald Trump') | (vbs.candidate == 'Ben Carson')])
 

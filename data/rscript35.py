@@ -1,71 +1,51 @@
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import os
-import gc
+import pandas as pd
+import xgboost as xgb
+import operator
+from matplotlib import pylab as plt
 
-import keras as k
-from keras.models import Sequential
-from keras.layers import Dense, Dropout, Flatten
-from keras.layers import Conv2D, MaxPooling2D
+def ceate_feature_map(features):
+    outfile = open('xgb.fmap', 'w')
+    i = 0
+    for feat in features:
+        outfile.write('{0}\t{1}\tq\n'.format(i, feat))
+        i = i + 1
 
-import cv2
-from tqdm import tqdm
+    outfile.close()
 
-x_train = []
-x_test = []
-y_train = []
+def get_data():
+    train = pd.read_csv("../input/train.csv")
 
-df_train = pd.read_csv('../input/train.csv')
+    features = list(train.columns[2:])
 
-flatten = lambda l: [item for sublist in l for item in sublist]
-labels = list(set(flatten([l.split(' ') for l in df_train['tags'].values])))
+    y_train = train.Hazard
 
-label_map = {l: i for i, l in enumerate(labels)}
-inv_label_map = {i: l for l, i in label_map.items()}
+    for feat in train.select_dtypes(include=['object']).columns:
+        m = train.groupby([feat])['Hazard'].mean()
+        train[feat].replace(m,inplace=True)
 
-for f, tags in tqdm(df_train.values, miniters=1000):
-    img = cv2.imread('../input/train-jpg/{}.jpg'.format(f))
-    targets = np.zeros(17)
-    for t in tags.split(' '):
-        targets[label_map[t]] = 1 
-    x_train.append(cv2.resize(img, (32, 32)))
-    y_train.append(targets)
-    
-y_train = np.array(y_train, np.uint8)
-x_train = np.array(x_train, np.float16) / 255.
+    x_train = train[features]
 
-print(x_train.shape)
-print(y_train.shape)
+    return features, x_train, y_train
 
-split = 35000
-x_train, x_valid, y_train, y_valid = x_train[:split], x_train[split:], y_train[:split], y_train[split:]
 
-model = Sequential()
-model.add(Conv2D(32, kernel_size=(3, 3),
-                 activation='relu',
-                 input_shape=(32, 32, 3)))
+features, x_train, y_train = get_data()
+ceate_feature_map(features)
 
-model.add(Conv2D(64, (3, 3), activation='relu'))
-model.add(MaxPooling2D(pool_size=(2, 2)))
-model.add(Dropout(0.25))
-model.add(Flatten())
-model.add(Dense(128, activation='relu'))
-model.add(Dropout(0.5))
-model.add(Dense(17, activation='sigmoid'))
+xgb_params = {"objective": "reg:linear", "eta": 0.01, "max_depth": 8, "seed": 42, "silent": 1}
+num_rounds = 1000
 
-model.compile(loss='binary_crossentropy', # We NEED binary here, since categorical_crossentropy l1 norms the output before calculating loss.
-              optimizer='adam',
-              metrics=['accuracy'])
-              
-model.fit(x_train, y_train,
-          batch_size=128,
-          epochs=4,
-          verbose=1,
-          validation_data=(x_valid, y_valid))
-          
-from sklearn.metrics import fbeta_score
+dtrain = xgb.DMatrix(x_train, label=y_train)
+gbdt = xgb.train(xgb_params, dtrain, num_rounds)
 
-p_valid = model.predict(x_valid, batch_size=128)
-print(y_valid)
-print(p_valid)
-print(fbeta_score(y_valid, np.array(p_valid) > 0.2, beta=2, average='samples'))
+importance = gbdt.get_fscore(fmap='xgb.fmap')
+importance = sorted(importance.items(), key=operator.itemgetter(1))
+
+df = pd.DataFrame(importance, columns=['feature', 'fscore'])
+df['fscore'] = df['fscore'] / df['fscore'].sum()
+
+plt.figure()
+df.plot()
+df.plot(kind='barh', x='feature', y='fscore', legend=False, figsize=(6, 10))
+plt.title('XGBoost Feature Importance')
+plt.xlabel('relative importance')
+plt.gcf().savefig('feature_importance_xgb.png')

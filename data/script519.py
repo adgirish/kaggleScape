@@ -1,366 +1,460 @@
 
 # coding: utf-8
 
-# Hi all,
+# **Introduction**
+# This is actually my first public kernel, so i hope it will be useful for someone.
 # 
-# This is my first Kernel on Kaggle.
+# Before you read the notebook, it is immportant to know that this notebook is a compilation of already existing notebooks and some model modifications
+# Here is list of notebooks:
+# * Data analysis - https://www.kaggle.com/muonneutrino/exploration-transforming-images-in-python
+# * Image conversion, Network architecture - https://www.kaggle.com/tivigovidiu/keras-model-for-beginners-0-210-on-lb-eda-r-d
+# * Some ideas - https://www.kaggle.com/knowledgegrappler/a-keras-prototype-0-21174-on-pl
+# * Code for conversion to image provided by MadScientist but i don't know which kernel it is.
 # 
-# I will try to build a rough model using Gaussian Distribution to detect Anamolous transactions.
+# Before running the model it is good idea to run thgrough kernels mentioned here and upvote them.
 # 
-# **Reason behind using Gaussian Distribution:-**  <br>
-# If I can summarize what Andrew Ng has mentioned in his lecture on Anomaly detection is 
-# Supervised Classification technique is not the perfect candidate for highly imbalanced data. In this case it is 
-#  0.172% (near to 0)
+# **Comments**
+# I've executed this code on my machine with 1080 TI and it may be pretty slow if you have low-end GPU or CPU
 # 
-# If We think from the persepctive of building the model to find out the anomalous data which is not seen very frequently 
-# We should go for Anomaly detection technique using Gaussian Distribution.  
+# It is also important that i don't know how to execute code in the notebook with GPU, since keras is not freeing memory after model training, so train results here may be uncomplete.
 # 
+# I am also not sure about random seed initialization and haven't checked it, so maybe your results may differ from mine.
+# 
+# I am also sorry for a WinAPI style functions with 10+ arguments, but this solutin was made less than in a one day and basically my second solution. If someone is able to rewrite it in a normal style i will appreciate that, so feel free to fork and rewrite.
 
 # In[ ]:
 
 
-import matplotlib.pyplot as plt
-import seaborn as sns 
+# Random initialization
 import numpy as np
+np.random.seed(98643)
+import tensorflow as tf
+tf.set_random_seed(683)
+# Uncomment this to hide TF warnings about allocation
+#import os
+#os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+# An image clearing dependencies
+from skimage.restoration import (denoise_tv_chambolle, denoise_bilateral,
+                                 denoise_wavelet, estimate_sigma, denoise_tv_bregman, denoise_nl_means)
+from skimage.filters import gaussian
+from skimage.color import rgb2gray
+
+# Data reading and visualization
 import pandas as pd
-import numpy as np
-import random as rnd
-from sklearn.metrics import confusion_matrix
-import seaborn as sns
-import matplotlib.gridspec as gridspec
-from sklearn.preprocessing import StandardScaler
-from numpy import genfromtxt
-from scipy.stats import multivariate_normal
-from sklearn.metrics import f1_score
-from sklearn.metrics import recall_score , average_precision_score
-from sklearn.metrics import precision_score, precision_recall_curve
+import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-import plotly.graph_objs as go
-from plotly.offline import download_plotlyjs,init_notebook_mode,plot,iplot
-init_notebook_mode(connected=True)
+from sklearn.preprocessing import MinMaxScaler
+
+# Training part
+from keras.layers import Conv2D, MaxPooling2D, Dense, Dropout, Input, Flatten, GlobalAveragePooling2D, Lambda
+from keras.layers import GlobalMaxPooling2D
+from keras.layers.normalization import BatchNormalization
+from keras.layers.merge import Concatenate
+from keras.models import Model
+from keras.optimizers import Adam, SGD
+from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
+from sklearn.model_selection import train_test_split
+from sklearn.utils import shuffle
+
+# Any results you write to the current directory are saved as output.
 
 
-# I will be defining the below two functions which are required to calculate Gaussian Distribution of the normalized variables provided in the dataset (V1, V2 ....V28, Amount ).  <br>
-# note- These functions will be invoked for building the model
+# First of all, some data preprocessing is required.
 # 
-# 1) Find out mu and Sigma for the dataframe variables passed to this function. <br>
-#       ----
-# 2) Calculate Probability Distribution for the each row (I will explain why we need Probality for each row as we proceed) <br>
-#        ----
-#        
-# Formula:- 
-# if each example x has N dimensiona(features) then below formula is used to calculate the P value <br>
-# **P(x) = p(x1,u1,sigma1^2)p(x2,u2,sigma2^2)p(x3,u3,sigma3^2).....p(xn,un,sigma'N'^2)**
-#       ---
-
-# In[ ]:
-
-
-def estimateGaussian(dataset):
-    mu = np.mean(dataset, axis=0)
-    sigma = np.cov(dataset.T)
-    return mu, sigma
-
-def multivariateGaussian(dataset,mu,sigma):
-    p = multivariate_normal(mean=mu, cov=sigma)
-    return p.pdf(dataset)
-
-
-# Below is the most crucial function used to detect how well we are doing with our subset (Cross validation subset) .
-# I have decided values for Epsilon for detecting the fradulent transactions from the Subsets.  <br><br>
-# **(Tip :- Ideally you should provide range of epsilon values, due to time constraint on running this kernel i have provided few values here for demonstration purpose)**
+# The basic idea is that images, that provided in a dataset are very noisy and if we will get rid of granular noise, we will be able to predict better and construct noisy dataset by our own.
 # 
-#  **For now remember Epsilon value is the threshold value below which we will mark transaction as Anomalous.**
-#            ----
-# 
-# Rewriting above sentense again 
-# P(x) for X if less than the epsilon value then mark that transaction as anomalous transaction. 
-# 
-# We need to maintain healthy balance between the Recall and Precision . We may get Recall value above 0.80 and close to 0.90 here but at the expense of reducing our precision which is not advisable.
-# 
+# It is also interesting to train a denoising autoencoder on dataset in order to extract some global features that may be used further on model training.
 
 # In[ ]:
 
 
-def selectThresholdByCV(probs,gt):
-    best_epsilon = 0
-    best_f1 = 0
-    f = 0
-    farray = []
-    Recallarray = []
-    Precisionarray = []
-    epsilons = (0.0000e+00, 1.0527717316e-70, 1.0527717316e-50, 1.0527717316e-24)
-    #epsilons = np.asarray(epsilons)
-    for epsilon in epsilons:
-        predictions = (p_cv < epsilon)
-        f = f1_score(train_cv_y, predictions, average = "binary")
-        Recall = recall_score(train_cv_y, predictions, average = "binary")
-        Precision = precision_score(train_cv_y, predictions, average = "binary")
-        farray.append(f)
-        Recallarray.append(Recall)
-        Precisionarray.append(Precision)
-        print ('For below Epsilon')
-        print(epsilon)
-        print ('F1 score , Recall and Precision are as below')
-        print ('Best F1 Score %f' %f)
-        print ('Best Recall Score %f' %Recall)
-        print ('Best Precision Score %f' %Precision)
-        print ('-'*40)
-        if f > best_f1:
-            best_f1 = f
-            best_recall = Recall
-            best_precision = Precision
-            best_epsilon = epsilon    
-    fig = plt.figure()
-    ax = fig.add_axes([0.1, 0.5, 0.7, 0.3])
-    #plt.subplot(3,1,1)
-    plt.plot(farray ,"ro")
-    plt.plot(farray)
-    ax.set_xticks(range(5))
-    ax.set_xticklabels(epsilons,rotation = 60 ,fontsize = 'medium' )
-    ax.set_ylim((0,0.8))
-    ax.set_title('F1 score vs Epsilon value')
-    ax.annotate('Best F1 Score', xy=(best_epsilon,best_f1), xytext=(best_epsilon,best_f1))
-    plt.xlabel("Epsilon value") 
-    plt.ylabel("F1 Score") 
-    plt.show()
-    fig = plt.figure()
-    ax = fig.add_axes([0.1, 0.5, 0.9, 0.3])
-    #plt.subplot(3,1,2)
-    plt.plot(Recallarray ,"ro")
-    plt.plot(Recallarray)
-    ax.set_xticks(range(5))
-    ax.set_xticklabels(epsilons,rotation = 60 ,fontsize = 'medium' )
-    ax.set_ylim((0,1.0))
-    ax.set_title('Recall vs Epsilon value')
-    ax.annotate('Best Recall Score', xy=(best_epsilon,best_recall), xytext=(best_epsilon,best_recall))
-    plt.xlabel("Epsilon value") 
-    plt.ylabel("Recall Score") 
-    plt.show()
-    fig = plt.figure()
-    ax = fig.add_axes([0.1, 0.5, 0.9, 0.3])
-    #plt.subplot(3,1,3)
-    plt.plot(Precisionarray ,"ro")
-    plt.plot(Precisionarray)
-    ax.set_xticks(range(5))
-    ax.set_xticklabels(epsilons,rotation = 60 ,fontsize = 'medium' )
-    ax.set_ylim((0,0.8))
-    ax.set_title('Precision vs Epsilon value')
-    ax.annotate('Best Precision Score', xy=(best_epsilon,best_precision), xytext=(best_epsilon,best_precision))
-    plt.xlabel("Epsilon value") 
-    plt.ylabel("Precision Score") 
-    plt.show()
-    return best_f1, best_epsilon
+# Translate data to an image format
+def color_composite(data):
+    rgb_arrays = []
+    for i, row in data.iterrows():
+        band_1 = np.array(row['band_1']).reshape(75, 75)
+        band_2 = np.array(row['band_2']).reshape(75, 75)
+        band_3 = band_1 / band_2
 
+        r = (band_1 + abs(band_1.min())) / np.max((band_1 + abs(band_1.min())))
+        g = (band_2 + abs(band_2.min())) / np.max((band_2 + abs(band_2.min())))
+        b = (band_3 + abs(band_3.min())) / np.max((band_3 + abs(band_3.min())))
 
-# Lets Read the dataset 
-#         ---
+        rgb = np.dstack((r, g, b))
+        rgb_arrays.append(rgb)
+    return np.array(rgb_arrays)
 
-# In[ ]:
+def denoise(X, weight, multichannel):
+    return np.asarray([denoise_tv_chambolle(item, weight=weight, multichannel=multichannel) for item in X])
 
+def smooth(X, sigma):
+    return np.asarray([gaussian(item, sigma=sigma) for item in X])
 
-train_df = pd.read_csv("../input//creditcard.csv")
+def grayscale(X):
+    return np.asarray([rgb2gray(item) for item in X])
 
 
 # In[ ]:
 
 
-print(train_df.columns.values)
+train = pd.read_json("../input/train.json")
+train.inc_angle = train.inc_angle.replace('na', 0)
+train.inc_angle = train.inc_angle.astype(float).fillna(0.0)
+train_all = True
 
+# These are train flags that required to train model more efficiently and 
+# select proper model parameters
+train_b = True or train_all
+train_img = True or train_all
+train_total = True or train_all
+predict_submission = True and train_all
 
-# **Copied below piece of code for visualization from the kernel shared by the expert to identify which features are not much of help in the algorithm. **
+clean_all = True
+clean_b = True or clean_all
+clean_img = True or clean_all
+
+load_all = False
+load_b = False or load_all
+load_img = False or load_all
+
 
 # In[ ]:
 
 
-v_features = train_df.iloc[:,1:29].columns
+def create_dataset(frame, labeled, smooth_rgb=0.2, smooth_gray=0.5,
+                   weight_rgb=0.05, weight_gray=0.05):
+    band_1, band_2, images = frame['band_1'].values, frame['band_2'].values, color_composite(frame)
+    to_arr = lambda x: np.asarray([np.asarray(item) for item in x])
+    band_1 = to_arr(band_1)
+    band_2 = to_arr(band_2)
+    band_3 = (band_1 + band_2) / 2
+    gray_reshape = lambda x: np.asarray([item.reshape(75, 75) for item in x])
+    # Make a picture format from flat vector
+    band_1 = gray_reshape(band_1)
+    band_2 = gray_reshape(band_2)
+    band_3 = gray_reshape(band_3)
+    print('Denoising and reshaping')
+    if train_b and clean_b:
+        # Smooth and denoise data
+        band_1 = smooth(denoise(band_1, weight_gray, False), smooth_gray)
+        print('Gray 1 done')
+        band_2 = smooth(denoise(band_2, weight_gray, False), smooth_gray)
+        print('Gray 2 done')
+        band_3 = smooth(denoise(band_3, weight_gray, False), smooth_gray)
+        print('Gray 3 done')
+    if train_img and clean_img:
+        images = smooth(denoise(images, weight_rgb, True), smooth_rgb)
+    print('RGB done')
+    tf_reshape = lambda x: np.asarray([item.reshape(75, 75, 1) for item in x])
+    band_1 = tf_reshape(band_1)
+    band_2 = tf_reshape(band_2)
+    band_3 = tf_reshape(band_3)
+    #images = tf_reshape(images)
+    band = np.concatenate([band_1, band_2, band_3], axis=3)
+    X_angle = np.array(frame.inc_angle)
+    if labeled:
+        y = np.array(frame["is_iceberg"])
+    else:
+        y = None
+    return y, X_angle, band, images
 
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,8*4))
-gs = gridspec.GridSpec(7, 4)
-for i, cn in enumerate(train_df[v_features]):
-    ax = plt.subplot(gs[i])
-    sns.distplot(train_df[cn][train_df.Class == 1], bins=50)
-    sns.distplot(train_df[cn][train_df.Class == 0], bins=50)
-    ax.set_xlabel('')
-    ax.set_title('feature: ' + str(cn))
+y_train, X_angles, X_b, X_images = create_dataset(train, True)
+
+
+# Plotting some random images to check how cleaning works
+
+# In[ ]:
+
+
+fig = plt.figure(200, figsize=(15, 15))
+random_indicies = np.random.choice(range(len(X_images)), 9, False)
+subset = X_images[random_indicies]
+for i in range(9):
+    ax = fig.add_subplot(3, 3, i + 1)
+    ax.imshow(subset[i])
 plt.show()
 
 
-# We see normal distribution of anomalous transation is matching with normal distribution of Normal transaction for below Features 
-# 'V28','V27','V26','V25','V24','V23','V22','V20','V15','V13','V8'
-# Better we remove these features 
+# In[ ]:
+
+
+fig = plt.figure(202, figsize=(15, 15))
+band_1_x = train['band_1'].values
+subset = np.asarray(band_1_x)[random_indicies]
+subset = np.asarray([np.asarray(item).reshape(75, 75) for item in subset])
+for i in range(9):
+    ax = fig.add_subplot(3, 3, i + 1)
+    ax.imshow(subset[i])
+plt.show()
+
 
 # In[ ]:
 
 
-train_df.drop(['V28','V27','V26','V25','V24','V23','V22','V20','V15','V13','V8'], axis =1, inplace = True)
+fig = plt.figure(202, figsize=(15, 15))
+subset = np.asarray(band_1_x)[random_indicies]
+subset = denoise(np.asarray([np.asarray(item).reshape(75, 75) for item in subset]), 0.05, False)
+for i in range(9):
+    ax = fig.add_subplot(3, 3, i + 1)
+    ax.imshow(subset[i])
+plt.show()
 
-
-# I have removed Amount and Time feature since they wont add much value in calculating gaussian distribution.
 
 # In[ ]:
 
 
-train_df.drop(labels = ["Amount","Time"], axis = 1, inplace = True)
+fig = plt.figure(202, figsize=(15, 15))
+subset = np.asarray(band_1_x)[random_indicies]
+subset = smooth(denoise(np.asarray(
+    [np.asarray(item).reshape(75, 75) for item in subset]), 0.05, False), 0.5)
+for i in range(9):
+    ax = fig.add_subplot(3, 3, i + 1)
+    ax.imshow(subset[i])
+plt.show()
 
 
-# Split the dataset into 2 part one with Class 1 and other with class 0
-
-# In[ ]:
-
-
-train_strip_v1 = train_df[train_df["Class"] == 1]
-train_strip_v0 = train_df[train_df["Class"] == 0]
-
-
-# In the Anomalized technique  we distribute this large dataset into 3 parts .
+# **A few words about model**
 # 
-# 1) Normal Transactons: classified as 0 , no anomalized transaction should be present here since it is not a supervised method<br>  How to get this dataset :- 60% of normal transactions should be added here. <br> 
-# Find out Epsilon by using  min(Probability) command 
+# The model itself consists of 3 convolutional neural networks.
+# Two basic networks and one combined. The idea is to train two basic networks on different data representations and after that, using trained convolutional layers in combination to train common network.
 # 
-# 2) dataset for Cross validation : from the remaining normal transaction take 50 % (i.e. 20 % as a whole since we have already took the data in the first step)  and add 50% of the Anomalized data with this .
+# Architecture for these networks is taken from notebook mentioned in the vere beginning.
 # 
-# 3) dataset for testing the algorithm :- this step is similar to what we did for Cross validattion. <br>
-#  Test dataset = leftover normal transaction + leftover Anomalized data 
-# 
+# For training i'm using 3 datasets, 1 that network sees only once and default keras val split for model selection.
 
 # In[ ]:
 
 
-Normal_len = len (train_strip_v0)
-Anomolous_len = len (train_strip_v1)
+def get_model_notebook(angle, lr, decay, channels, relu_type='relu'):
+    # angle variable defines if we should use angle parameter or ignore it
+    input_1 = Input(shape=(75, 75, channels))
+    input_2 = Input(shape=[1])
 
-start_mid = Anomolous_len // 2
-start_midway = start_mid + 1
+    fcnn = Conv2D(32, kernel_size=(3, 3), activation=relu_type)(input_1)
+    fcnn = MaxPooling2D((3, 3))(fcnn)
+    fcnn = Dropout(0.2)(fcnn)
+    fcnn = Conv2D(64, kernel_size=(3, 3), activation=relu_type)(fcnn)
+    fcnn = MaxPooling2D((2, 2), strides=(2, 2))(fcnn)
+    fcnn = Dropout(0.2)(fcnn)
+    fcnn = Conv2D(128, kernel_size=(3, 3), activation=relu_type)(fcnn)
+    fcnn = MaxPooling2D((2, 2), strides=(2, 2))(fcnn)
+    fcnn = Dropout(0.2)(fcnn)
+    fcnn = Conv2D(128, kernel_size=(3, 3), activation=relu_type)(fcnn)
+    fcnn = MaxPooling2D((2, 2), strides=(2, 2))(fcnn)
+    fcnn = Dropout(0.2)(fcnn)
+    fcnn = Flatten()(fcnn)
+    if angle:
+        local_input = [input_1, input_2]
+    else:
+        local_input = input_1
+    dense = Dropout(0.2)(fcnn)
+    dense = Dense(256, activation=relu_type)(dense)
+    partial_model = Model(input_1, fcnn)
+    dense = Dropout(0.2)(dense)
+    dense = Dense(128, activation=relu_type)(dense)
+    dense = Dropout(0.2)(dense)
+    dense = Dense(64, activation=relu_type)(dense)
+    dense = Dropout(0.2)(dense)
+    # For some reason i've decided not to normalize angle data
+    if angle:
+        dense = Concatenate()([dense, input_2])
+    else:
+        dense = dense
+    output = Dense(1, activation="sigmoid")(dense)
+    model = Model(local_input, output)
+    optimizer = Adam(lr=lr, decay=decay)
+    model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
+    return model, partial_model
 
-train_cv_v1  = train_strip_v1 [: start_mid]
-train_test_v1 = train_strip_v1 [start_midway:Anomolous_len]
-
-start_mid = (Normal_len * 60) // 100
-start_midway = start_mid + 1
-
-cv_mid = (Normal_len * 80) // 100
-cv_midway = cv_mid + 1
-
-train_fraud = train_strip_v0 [:start_mid]
-train_cv    = train_strip_v0 [start_midway:cv_mid]
-train_test  = train_strip_v0 [cv_midway:Normal_len]
-
-train_cv = pd.concat([train_cv,train_cv_v1],axis=0)
-train_test = pd.concat([train_test,train_test_v1],axis=0)
-
-
-print(train_fraud.columns.values)
-print(train_cv.columns.values)
-print(train_test.columns.values)
-
-train_cv_y = train_cv["Class"]
-train_test_y = train_test["Class"]
-
-train_cv.drop(labels = ["Class"], axis = 1, inplace = True)
-train_fraud.drop(labels = ["Class"], axis = 1, inplace = True)
-train_test.drop(labels = ["Class"], axis = 1, inplace = True)
-
-
-# Choosing Epsilon Values <br>
-#     ---
-# I calculated P value for all the rows present in Normal Transaction and found the minimum P value 
-# by using below command
-#  **min(p)** 
-#       ---
-# similalrly I found the minimum P Value for rest of the datasets and found this value to be very close to 0 and then i found the max(p) value which is again somewhat far from 0. <br><br>
-# Instead of looping between the epsilon values (between min and max of P) , i chose set of epsilon values for demonstration purpose to see how well i can perform to find the fraudulent transactions.
 
 # In[ ]:
 
 
-mu, sigma = estimateGaussian(train_fraud)
-p = multivariateGaussian(train_fraud,mu,sigma)
-p_cv = multivariateGaussian(train_cv,mu,sigma)
-p_test = multivariateGaussian(train_test,mu,sigma)
+def combined_model(m_b, m_img, lr, decay):
+    input_b = Input(shape=(75, 75, 3))
+    input_img = Input(shape=(75, 75, 3))
+    input_angular = Input(shape=[1])
 
+    # I've never tested non-trainable source models tho
+    #for layer in m_b.layers:
+    #    layer.trainable = False
+    #for layer in m_img.layers:
+    #    layer.trainable = False
 
-# Performance wrt to Epsilon values
-#     ----
-# Check out how well we are performing with the given set of epsilon values from the function called here.
+    m1 = m_b(input_b)
+    m2 = m_img(input_img)
+
+    # So, combine models and train perceptron based on that
+    # The iteresting idea is to use XGB for this task, but i actually hate this method
+    common = Concatenate()([m1, m2])
+    common = BatchNormalization()(common)
+    common = Dropout(0.3)(common)
+    common = Dense(2048, activation='relu')(common)
+    common = Dropout(0.3)(common)
+    common = Dense(1024, activation='relu')(common)
+    common = Dropout(0.3)(common)
+    common = Dense(512, activation='relu')(common)
+    common = Dropout(0.3)(common)
+    common = Concatenate()([common, BatchNormalization()(input_angular)])
+    output = Dense(1, activation="sigmoid")(common)
+    model = Model([input_b, input_img, input_angular], output)
+   # optimizer = Adam(lr=lr, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=decay)
+    optimizer = SGD(lr=0.01, decay=1e-6, momentum=0.9, nesterov=True)
+    model.compile(loss="binary_crossentropy", optimizer=optimizer, metrics=["accuracy"])
+    return model
+
 
 # In[ ]:
 
 
-fscore, ep= selectThresholdByCV(p_cv,train_cv_y)
+def train_model(model, batch_size, epochs, checkpoint_name, X_train, y_train, verbose=2, val_data=None, val_split=0.15):
+    callbacks = [ModelCheckpoint(checkpoint_name, save_best_only=True, monitor='val_loss')]
+    try:
+        if val_data is None:
+            model.fit(X_train, y_train, epochs=epochs, validation_split=val_split,
+                      batch_size=batch_size, callbacks=callbacks, verbose=verbose, shuffle=True)
+        else:
+            x_val, y_val = val_data
+            model.fit(X_train, y_train, epochs=epochs, validation_data=[x_val, y_val],
+                      batch_size=batch_size, callbacks=callbacks, verbose=verbose, shuffle=True)
+    except KeyboardInterrupt:
+        if verbose > 0:
+            print('Interrupted')
+    if verbose > 0:
+        print('Loading model')
+    model.load_weights(filepath=checkpoint_name)
+    return model
 
 
-# Epsilon value = 1.0527717316e-70 is selected as threshold to identify Anomalous transactions 
+# In[ ]:
+
+
+def get_angular_status(angle, x, x_a):
+    if angle:
+        result = [x, x_a]
+    else:
+        result = x
+    return result
+
+
+# In[ ]:
+
+
+#Train a particular model
+def gen_model_weights(angle, lr, decay, channels, relu, batch_size, epochs, path_name, data, only_load=False, verbose=2):
+    X_train, X_angle_train, y_train, X_val, X_angles_val, y_val = data
+    X_train, X_angle_train, y_train = shuffle(X_train, X_angle_train, y_train, random_state=np.random.randint(1, 123))
+    model, partial_model = get_model_notebook(angle, lr, decay, channels, relu)
+    if only_load:
+        model.load_weights(path_name)
+        return model, partial_model
+    model = train_model(model, batch_size, epochs, path_name,
+                           get_angular_status(angle, X_train, X_angle_train), y_train, verbose=verbose)
+
+    if verbose > 0:
+        loss_val, acc_val = model.evaluate(get_angular_status(angle, X_val, X_angles_val), y_val,
+                               verbose=0, batch_size=batch_size)
+
+        loss_train, acc_train = model.evaluate(get_angular_status(angle, X_train, X_angle_train), y_train,
+                                       verbose=0, batch_size=batch_size)
+
+        print('Val/Train Loss:', str(loss_val) + '/' + str(loss_train),             'Val/Train Acc:', str(acc_val) + '/' + str(acc_train))
+    return model, partial_model
+
+
+# In[ ]:
+
+
+# Train all 3 models
+def train_models(dataset, lr, batch_size, max_epoch, verbose=2, return_model=False):
+    X_angles, y_train, X_b, X_images = dataset
+    angle_b = True
+    angle_images = True
+    X_angles, X_angles_val,    y_train, y_val,    X_b, X_b_val,    X_images, X_images_val = train_test_split(X_angles, y_train, X_b, X_images, random_state=687, train_size=0.9)
+
+    if train_b:
+        if verbose > 0:
+            print('Training bandwidth network')
+        data_b1 = (X_b, X_angles, y_train, X_b_val, X_angles_val, y_val)
+        model_b, model_b_cut = gen_model_weights(angle_b, lr, 0, 3, 'relu', batch_size, max_epoch, 'model_b',
+                                             data_b1, only_load=load_b, verbose=verbose)
+
+    if train_img:
+        if verbose > 0:
+            print('Training image network')
+        data_images = (X_images, X_angles, y_train, X_b_val, X_angles_val, y_val)
+        model_images, model_images_cut = gen_model_weights(angle_images, lr, 0, 3, 'relu', batch_size, max_epoch, 'model_img',
+                                                       data_images, only_load=load_img, verbose=verbose)
+
+    if train_total:
+        common_model = combined_model(model_b_cut, model_images_cut, lr, 0)
+        common_x_train = [X_b, X_images, X_angles]
+        common_y_train = y_train
+        common_x_val = [X_b_val, X_images_val, X_angles_val]
+        common_y_val = y_val
+        if verbose > 0:
+            print('Training common network')
+        common_model = train_model(common_model, batch_size, max_epoch, 'common_check', common_x_train,
+                           common_y_train, verbose=verbose, val_split=0.2)
+
+        loss_val, acc_val = common_model.evaluate(common_x_val, common_y_val,
+                                           verbose=0, batch_size=batch_size)
+        loss_train, acc_train = common_model.evaluate(common_x_train, common_y_train,
+                                                  verbose=0, batch_size=batch_size)
+        if verbose > 0:
+            print('Loss:', loss_val, 'Acc:', acc_val)
+    if return_model:
+        return common_model
+    else:
+        return (loss_train, acc_train), (loss_val, acc_val)
+
+
+# Model parameters that are used in training assumes that you have enough computational power to process all the data.
 # 
-# now time to Predict and calculate  F1 , Recall and Precision score for our Test Dataset
+# (Don't know if it is obvious or not) The important moment here is to save 3 sets, since if you are selecting model based on a validation set it affects final performance since it causes inderect observations of validation set and affect final evaluation score.
 
 # In[ ]:
 
 
-predictions = (p_test < ep)
-Recall = recall_score(train_test_y, predictions, average = "binary")    
-Precision = precision_score(train_test_y, predictions, average = "binary")
-F1score = f1_score(train_test_y, predictions, average = "binary")    
-print ('F1 score , Recall and Precision for Test dataset')
-print ('Best F1 Score %f' %F1score)
-print ('Best Recall Score %f' %Recall)
-print ('Best Precision Score %f' %Precision)
+# Best parameters i got are
+# epochs : 250
+# learning rate : 8e-5
+# batch size : 32
+# CARE: The image model is overfits with parameters used here
+common_model = train_models((X_angles, y_train, X_b, X_images), 5e-04, 32, 50, 1, return_model=True)
 
 
-# Lets Visualize our predictions in below scatter plot 
-#          -------
+# *The filtration step for RGB images may take a lot of time.*
 
 # In[ ]:
 
 
-fig, ax = plt.subplots(figsize=(10, 10))
-ax.scatter(train_test['V14'],train_test['V11'],marker="o", color="lightBlue")
-ax.set_title('Anomalies(in red) vs Predicted Anomalies(in Green)')
-for i, txt in enumerate(train_test['V14'].index):
-       if train_test_y.loc[txt] == 1 :
-            ax.annotate('*', (train_test['V14'].loc[txt],train_test['V11'].loc[txt]),fontsize=13,color='Red')
-       if predictions[i] == True :
-            ax.annotate('o', (train_test['V14'].loc[txt],train_test['V11'].loc[txt]),fontsize=15,color='Green')
+if predict_submission:
+    print('Reading test dataset')
+    test = pd.read_json("../input/test.json")
+    test.inc_angle = test.inc_angle.replace('na', 0)
+    test.inc_angle = test.inc_angle.astype(float).fillna(0.0)
+    y_fin, X_angle_fin, X_fin_b, X_fin_img = create_dataset(test, False)
+    print('X shape:', X_fin_img.shape)
+    print('X angle shape:', X_angle_fin.shape)
+    print('Predicting')
+    prediction = common_model.predict([X_fin_b, X_fin_img, X_angle_fin], verbose=1, batch_size=32)
+    print('Submitting')
+    submission = pd.DataFrame({'id': test["id"], 'is_iceberg': prediction.reshape((prediction.shape[0]))})
+
+    submission.to_csv("./submission.csv", index=False)
+    print('Done')
 
 
-# From the above result we can see that we are able to maintain the balance between Recall and Precision. 
-# 
-# Precision of around 60% with Recall of 74% is not bad at all when we have such highly unbalanced data. 
-# These numbers are not fixed and can vary . 
-#  
-#  These numbers were different for Cross validation dataset and we shortlisted our Epsilon value by comparing the results of F1 Score.
-# 
-# I will show you the result we achieved on Cross validation dataset again.
-
-# In[ ]:
-
-
-predictions = (p_cv < ep)
-Recall = recall_score(train_cv_y, predictions, average = "binary")    
-Precision = precision_score(train_cv_y, predictions, average = "binary")
-F1score = f1_score(train_cv_y, predictions, average = "binary")    
-print ('F1 score , Recall and Precision for Cross Validation dataset')
-print ('Best F1 Score %f' %F1score)
-print ('Best Recall Score %f' %Recall)
-print ('Best Precision Score %f' %Precision)
-
-
-# 
-#  Summary of above Algorithm: 
-#  
-#  1) Find Epsilon value by considering only Normal Transaction.
-#  
-#  2) Use this Epsilon value on CV dataset (Normal transaction + Anomalous transaction)
-#  
-#  3) Come up with set of Epsilon values to see how your algorithm performs and note down the Best F1 score along with
-#       Recall and Precision percentage 
-#       
-#  4) Choose the Epsilon value with highest F1 score 
-#  
-#  5) Use this Epsilon value to predict the Anomalous transaction on Test Dataset   
-#  
-# Please comment and let me know to help improve this kernel.
+# **TODO:**
+# * Add features from https://www.kaggle.com/muonneutrino/exploration-transforming-images-in-python
+# * Modify base model and train different models for pictures and bandwidth
+# * Select denoising algorithm more meaningfully
+# * Use XBG on output features of convolutional nets
+# * Train denoising autoencoder on train and test data ot extract additional features and clean data
+# * Data preprocessing parallelization

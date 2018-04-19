@@ -1,305 +1,716 @@
 
 # coding: utf-8
 
-# Make sure to install the superb [__Bayesian Optimization__](https://github.com/fmfn/BayesianOptimization) library.
+# ----
+# ### 0. Links and Code Library
+# 
+# - Guide to the Sequential model https://keras.io/getting-started/sequential-model-guide/
+# - Model evaluation: quantifying the quality of predictions http://scikit-learn.org/stable/modules/model_evaluation.html
+# - Extended version of this project https://olgabelitskaya.github.io/MLE_ND_P6_V0.html
 
 # In[ ]:
 
 
-# This line is needed for python 2.7 ; probably not for python 3
-from __future__ import print_function
+import numpy as np 
+import pandas as pd 
+import scipy
 
-import numpy as np
-import pandas as pd
-import gc
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+
+# In[ ]:
+
+
+import seaborn as sns
+import matplotlib.pylab as plt
+
+get_ipython().run_line_magic('matplotlib', 'inline')
+
+
+# In[ ]:
+
+
 import warnings
-
-from bayes_opt import BayesianOptimization
-
-from sklearn.cross_validation import cross_val_score, StratifiedKFold, StratifiedShuffleSplit
-from sklearn.metrics import log_loss, matthews_corrcoef, roc_auc_score
-from sklearn.preprocessing import MinMaxScaler
-import xgboost as xgb
-import contextlib
+warnings.filterwarnings('ignore')
 
 
-# This will be used to capture stderr and stdout without having anything print on screen.
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split, ShuffleSplit
+from sklearn.model_selection import KFold, ParameterGrid, cross_val_score
+from sklearn.metrics import mean_squared_error, median_absolute_error, mean_absolute_error
+from sklearn.metrics import r2_score, explained_variance_score
+from sklearn.ensemble import GradientBoostingRegressor, RandomForestRegressor
+from sklearn.ensemble import BaggingRegressor, AdaBoostRegressor, ExtraTreesRegressor
+from sklearn.tree import DecisionTreeRegressor
+from sklearn.preprocessing import OneHotEncoder, RobustScaler
+from sklearn.pipeline import Pipeline
+from sklearn.neural_network import MLPRegressor
+
+
+# In[ ]:
+
+
+import keras as ks
+from keras.models import Sequential, load_model, Model
+from keras.preprocessing import sequence
+from keras.optimizers import SGD, RMSprop
+from keras.layers import Dense, Dropout, LSTM
+from keras.layers import Activation, Flatten, Input, BatchNormalization
+from keras.layers import Conv1D, MaxPooling1D, Conv2D, MaxPooling2D
+from keras.layers.embeddings import Embedding
+from keras.wrappers.scikit_learn import KerasRegressor
+
+
+# ----
+# ### 1. Problem Statement
+
+# Sberbank is challenging programmers to develop algorithms which use a broad spectrum of features to predict real prices. Competitors will rely on a rich dataset that includes housing data and macroeconomic patterns. An accurate forecasting model will allow Sberbank to provide more certainty to their customers in an uncertain economy.
+
+# ----
+# ### 2. Datasets and Inputs
+
+# #### 2.1 Description by files
+
+# ##### train.csv and test.csv
 # 
-# **It turns out that Kaggle does not have "cStringIO", so I will comment out this portion.**
-
-# In[ ]:
-
-
-#@contextlib.contextmanager
-#def capture():
-#    import sys
-#    from cStringIO import StringIO
-#    olderr, oldout = sys.stderr, sys.stdout
-#    try:
-#        out=[StringIO(), StringIO()]
-#        sys.stderr,sys.stdout = out
-#        yield out
-#    finally:
-#        sys.stderr,sys.stdout = olderr,oldout
-#        out[0] = out[0].getvalue().splitlines()
-#        out[1] = out[1].getvalue().splitlines()
-
-
-# Scaling is really not needed for XGBoost, but I leave it here in case if you do the optimization using ML approaches that need it.
-
-# In[ ]:
-
-
-def scale_data(X, scaler=None):
-    if not scaler:
-        scaler = MinMaxScaler(feature_range=(-1, 1))
-        scaler.fit(X)
-    X = scaler.transform(X)
-    return X, scaler
-
-
-# Loading files.
-
-# In[ ]:
-
-
-DATA_TRAIN_PATH = '../input/train.csv'
-DATA_TEST_PATH = '../input/test.csv'
-
-def load_data(path_train=DATA_TRAIN_PATH, path_test=DATA_TEST_PATH):
-    train_loader = pd.read_csv(path_train, dtype={'target': np.int8, 'id': np.int32})
-    train = train_loader.drop(['target', 'id'], axis=1)
-    train_labels = train_loader['target'].values
-    train_ids = train_loader['id'].values
-    print('\n Shape of raw train data:', train.shape)
-
-    test_loader = pd.read_csv(path_test, dtype={'id': np.int32})
-    test = test_loader.drop(['id'], axis=1)
-    test_ids = test_loader['id'].values
-    print(' Shape of raw test data:', test.shape)
-
-    return train, train_labels, test, train_ids, test_ids
-
-
-# Define cross-validation variables that are used for parameter search. Each parameter has its own line, so it is easy to comment something out if you wish. Keep in mind that in such a case you must comment out the matching lines in optimization and explore sections below.
+# - price_doc: sale price (this is the target variable)
+# - id:transaction id
+# - timestamp: date of the transaction
+# - full_sq: total area in square meters, including loggias, balconies and other non-residential areas
+# - life_sq: living area in square meters, excluding loggias, balconies and other non-residential areas
+# - floor: for apartments, the floor of the building
+# - max_floor: number of floors in the building
+# - wall material
+# - year built
+# - number of living rooms
+# - kitch_sq: kitchen area
+# - state: apartment condition
+# - product_type: owner-occupier purchase or investment
+# - sub_area: name of the district
 # 
-# *Note that the learning rate ("eta") is set to 0.1 below. That is certainly not optimal, but it will make the search go faster. You will probably want to experiment with values in 0.01-0.05 range, but beware that it will significantly slow down the process because more iterations will be required to get to early stopping. Doing 10-fold instead of 5-fold cross-validation will also result in a small gain, but will double the search time.*
+# The dataset also includes a collection of features about each property's surrounding neighborhood and some features that are constant across each sub-area (known as a Raion). Most of the feature names are self-explanatory, with the following notes. See below for a complete list.
 # 
-# XGBoost outputs lots of interesting info, but it is not very helpful and clutters the screen when doing grid search. So we will run XGboost CV with verbose turned on, but will capture stderr in result[0] and stdout in result[1]. We will extract the relevant info from these variables later, and will print the record of each CV run into a log file.
+# - full_all: subarea population
+# - male_f, female_f: subarea population by gender
+# - young_: population younger than working age
+# - work_: working-age population
+# - ekder_ : retirement-age population
+# - nm{all|male|female}: population between n and m years old
+# - buildcount: buildings in the subarea by construction type or year
+# - x_count_500: the number of x within 500m of the property
+# - x_part_500: the share of x within 500m of the property
+# - sqm: square meters
+# - cafe_count_d_price_p: number of cafes within d meters of the property that have an average bill under p RUB
+# - trc_: shopping malls
+# - prom_: industrial zones
+# - green_: green zones
+# - metro_: subway
+# - avto: distances by car
+# - mkad_: Moscow Circle Auto Road
+# - ttk_: Third Transport Ring
+# - sadovoe_: Garden Ring
+# - bulvarring: Boulevard Ring
+# - kremlin_: City Center
+# - zdvokzaly: Train station
+# - oilchemistry: Dirty industry
+# - ts_: Power plant
 # 
-# AUC will be optimized here. We can go with separately defined gini scorer and use **feval=gini** below but I don't think it makes any difference because AUC and gini are directly correlated.
+# ##### macro.csv
 # 
-# **Commenting out the capture so there will be no record of xgb.cv in log file.**
-
-# In[ ]:
-
-
-# Comment out any parameter you don't want to test
-def XGB_CV(
-          max_depth,
-          gamma,
-          min_child_weight,
-          max_delta_step,
-          subsample,
-          colsample_bytree
-         ):
-
-    global AUCbest
-    global ITERbest
-
-#
-# Define all XGboost parameters
-#
-
-    paramt = {
-              'booster' : 'gbtree',
-              'max_depth' : int(max_depth),
-              'gamma' : gamma,
-              'eta' : 0.1,
-              'objective' : 'binary:logistic',
-              'nthread' : 4,
-              'silent' : True,
-              'eval_metric': 'auc',
-              'subsample' : max(min(subsample, 1), 0),
-              'colsample_bytree' : max(min(colsample_bytree, 1), 0),
-              'min_child_weight' : min_child_weight,
-              'max_delta_step' : int(max_delta_step),
-              'seed' : 1001
-              }
-
-    folds = 5
-    cv_score = 0
-
-    print("\n Search parameters (%d-fold validation):\n %s" % (folds, paramt), file=log_file )
-    log_file.flush()
-
-    xgbc = xgb.cv(
-                    paramt,
-                    dtrain,
-                    num_boost_round = 20000,
-                    stratified = True,
-                    nfold = folds,
-#                    verbose_eval = 10,
-                    early_stopping_rounds = 100,
-                    metrics = 'auc',
-                    show_stdv = True
-               )
-
-# This line would have been on top of this section
-#    with capture() as result:
-
-# After xgb.cv is done, this section puts its output into log file. Train and validation scores 
-# are also extracted in this section. Note the "diff" part in the printout below, which is the 
-# difference between the two scores. Large diff values may indicate that a particular set of 
-# parameters is overfitting, especially if you check the CV portion of it in the log file and find 
-# out that train scores were improving much faster than validation scores.
-
-#    print('', file=log_file)
-#    for line in result[1]:
-#        print(line, file=log_file)
-#    log_file.flush()
-
-    val_score = xgbc['test-auc-mean'].iloc[-1]
-    train_score = xgbc['train-auc-mean'].iloc[-1]
-    print(' Stopped after %d iterations with train-auc = %f val-auc = %f ( diff = %f ) train-gini = %f val-gini = %f' % ( len(xgbc), train_score, val_score, (train_score - val_score), (train_score*2-1),
-(val_score*2-1)) )
-    if ( val_score > AUCbest ):
-        AUCbest = val_score
-        ITERbest = len(xgbc)
-
-    return (val_score*2) - 1
-
-
-# The "real" code starts here.
-
-# In[ ]:
-
-
-# Define the log file. If you repeat this run, new output will be added to it
-log_file = open('Porto-AUC-5fold-XGB-run-01-v1-full.log', 'a')
-AUCbest = -1.
-ITERbest = 0
-
-# Load data set and target values
-train, target, test, tr_ids, te_ids = load_data()
-n_train = train.shape[0]
-train_test = pd.concat((train, test)).reset_index(drop=True)
-col_to_drop = train.columns[train.columns.str.endswith('_cat')]
-col_to_dummify = train.columns[train.columns.str.endswith('_cat')].astype(str).tolist()
-
-for col in col_to_dummify:
-    dummy = pd.get_dummies(train_test[col].astype('category'))
-    columns = dummy.columns.astype(str).tolist()
-    columns = [col + '_' + w for w in columns]
-    dummy.columns = columns
-    train_test = pd.concat((train_test, dummy), axis=1)
-
-train_test.drop(col_to_dummify, axis=1, inplace=True)
-train_test_scaled, scaler = scale_data(train_test)
-train = train_test_scaled[:n_train, :]
-test = train_test_scaled[n_train:, :]
-print('\n Shape of processed train data:', train.shape)
-print(' Shape of processed test data:', test.shape)
-
-# We really didn't need to load the test data in the first place unless you are planning to make
-# a prediction at the end of this run.
-# del test
-# gc.collect()
-
-
-# I am doing a stratified split and using only 25% of the data. Obviously, this is done to make sure that this notebook can run to completion on Kaggle. In a production version, you should uncomment the first line in the section below, and comment out or delete everything else.
-
-# In[ ]:
-
-
-# dtrain = xgb.DMatrix(train, label = target)
-
-sss = StratifiedShuffleSplit(target, random_state=1001, test_size=0.75)
-for train_index, test_index in sss:
-    break
-X_train, y_train = train[train_index], target[train_index]
-del train, target
-gc.collect()
-dtrain = xgb.DMatrix(X_train, label = y_train)
-
-
-# These are the parameters and their ranges that will be used during optimization. They must match the parameters that are passed above to the XGB_CV function. If you commented out any of them above, you should do the same here. Note that these are pretty wide ranges for most parameters.
-
-# In[ ]:
-
-
-XGB_BO = BayesianOptimization(XGB_CV, {
-                                     'max_depth': (2, 12),
-                                     'gamma': (0.001, 10.0),
-                                     'min_child_weight': (0, 20),
-                                     'max_delta_step': (0, 10),
-                                     'subsample': (0.4, 1.0),
-                                     'colsample_bytree' :(0.4, 1.0)
-                                    })
-
-
-# This portion of the code is not necessary. You can simply specify that 10-20 random parameter combinations (**init_points** below) be used. However, I like to try couple of high- and low-end values for each parameter as a starting point, and after that fewer random points are needed. Note that a number of options must be the same for each parameter, and they are applied vertically.
-
-# In[ ]:
-
-
-XGB_BO.explore({
-              'max_depth':            [3, 8, 3, 8, 8, 3, 8, 3],
-              'gamma':                [0.5, 8, 0.2, 9, 0.5, 8, 0.2, 9],
-              'min_child_weight':     [0.2, 0.2, 0.2, 0.2, 12, 12, 12, 12],
-              'max_delta_step':       [1, 2, 2, 1, 2, 1, 1, 2],
-              'subsample':            [0.6, 0.8, 0.6, 0.8, 0.6, 0.8, 0.6, 0.8],
-              'colsample_bytree':     [0.6, 0.8, 0.6, 0.8, 0.6, 0.8, 0.6, 0.8],
-              })
-
-
-# In my version of sklearn there are many warning thrown out by the GP portion of this code. This is set to prevent them from showing on screen.
+# A set of macroeconomic indicators, one for each date.
 # 
-# If you have a special relationship with your computer and want to know everything it is saying back, you'd probably want to remove the two "warnings" lines and slide the XGB_BO line all the way left.
-# 
-# I am doing only 2 initial points, which along with 8 exploratory points above makes it 10 "random" parameter combinations. I'd say that 15-20 is usually adequate. For n_iter 25-50 is usually enough.
-# 
-# There are several commented out maximize lines that could be worth exploring. The exact combination of parameters determines **[exploitation vs. exploration](https://github.com/fmfn/BayesianOptimization/blob/master/examples/exploitation%20vs%20exploration.ipynb)**. It is tough to know which would work better without actually trying, though in my hands exploitation with "expected improvement" usually works the best. That's what the XGB_BO.maximize line below is specifying.
+# - timestamp: Transaction timestamp
+# - oil_urals: Crude Oil Urals (usd/bbl)
+# - gdp_quart: GDP
+# - gdp_quart_growth: Real GDP growth
+# - cpi: Inflation - Consumer Price Index Growth
+# - ppi: Inflation - Producer Price index Growth
+# - gdp_deflator: Inflation - GDP deflator
+# - balance_trade: Trade surplus
+# - balance_trade_growth: Trade balance (as a percentage of previous year)
+# - usdrub: Ruble/USD exchange rate
+# - eurrub: Ruble/EUR exchange rate
+# - brent: London Brent (usd/bbl)
+# - net_capital_export: Net import / export of capital
+# - gdp_annual: GDP at current prices
+# - gdp_annual_growth: GDP growth (in real terms)
+# - average_provision_of_build_contract: Provision by orders in Russia (for the developer)
+# - average_provision_of_build_contract_moscow: Provision by orders in Moscow (for the developer)
+# - rts: Index RTS / return
+# - micex: MICEX index / return
+# - micex_rgbi_tr: MICEX index for government bonds (MICEX RGBI TR) / yield
+# - micex_cbi_tr: MICEX Index corporate bonds (MICEX CBI TR) / yield
+# - deposits_value: Volume of household deposits
+# - deposits_growth: Volume growth of population's deposits
+# - deposits_rate: Average interest rate on deposits
+# - mortgage_value: Volume of mortgage loans
+# - mortgage_growth: Growth of mortgage lending
+# - mortgage_rate: Weighted average rate of mortgage loans
+# - grp: GRP of the subject of Russian Federation where Apartment is located
+# - grp_growth: Growth of gross regional product of the subject of the Russian Federation where Apartment is located
+# - income_per_cap: Average income per capita
+# - real_dispos_income_per_cap_growth: Growth in real disposable income of Population
+# - salary: Average monthly salary
+# - salary_growth: Growth of nominal wages
+# - fixed_basket: Cost of a fixed basket of consumer goods and services for inter-regional comparisons of purchasing power
+# - retail_trade_turnover: Retail trade turnover
+# - retail_trade_turnover_per_cap: Retail trade turnover per capita
+# - retail_trade_turnover_growth: Retail turnover (in comparable prices in% to corresponding period of previous year)
+# - labor_force: Size of labor force
+# - unemployment: Unemployment rate
+# - employment: Employment rate
+# - invest_fixed_capital_per_cap: Investments in fixed capital per capita
+# - invest_fixed_assets: Absolute volume of investments in fixed assets
+# - profitable_enterpr_share: Share of profitable enterprises
+# - unprofitable_enterpr_share: The share of unprofitable enterprises
+# - share_own_revenues: The share of own revenues in the total consolidated budget revenues
+# - overdue_wages_per_cap: Overdue wages per person
+# - fin_res_per_cap: The financial results of companies per capita
+# - marriages_per_1000_cap: Number of marriages per 1,000 people
+# - divorce_rate: The divorce rate / growth rate
+# - construction_value: Volume of construction work performed (million rubles)
+# - invest_fixed_assets_phys: The index of physical volume of investment in fixed assets (in comparable prices in% to -
+# - the corresponding month of Previous year)
+# - pop_natural_increase: Rate of natural increase / decrease in Population (1,000 persons)
+# - pop_migration: Migration increase (decrease) of population
+# - pop_total_inc: Total population growth
+# - childbirth: Childbirth
+# - mortality: Mortality
+# - housing_fund_sqm: Housing Fund (sqm)
+# - lodging_sqm_per_cap: Lodging (sqm / pax)
+# - water_pipes_share: Plumbing availability (pax)
+# - baths_share: Bath availability (pax)
+# - sewerage_share: Canalization availability
+# - gas_share:Gas (mains, liquefied) availability
+# - hot_water_share: Hot water availability
+# - electric_stove_share: Electric heating for the floor
+# - heating_share: Heating availability
+# - old_house_share: Proportion of old and dilapidated housing, percent
+# - average_life_exp: Average life expectancy
+# - infant_mortarity_per_1000_cap: Infant mortality rate (per 1,000 children aged up to one year)
+# - perinatal_mort_per_1000_cap: Perinatal mortality rate (per 1,000 live births)
+# - incidence_population: Overall incidence of the total population
+# - rent_price_4+room_bus: rent price for 4-room apartment, business class
+# - rent_price_3room_bus: rent price for 3-room apartment, business class
+# - rent_price_2room_bus: rent price for 2-room apartment, business class
+# - rent_price_1room_bus: rent price for 1-room apartment, business class
+# - rent_price_3room_eco: rent price for 3-room apartment, econom class
+# - rent_price_2room_eco: rent price for 2-room apartment, econom class
+# - rent_price_1room_eco: rent price for 1-room apartment, econom class
+# - load_of_teachers_preschool_per_teacher: Load of teachers of preschool educational institutions (number of children per 100 teachers)
+# - child_on_acc_pre_school: Number of children waiting for the determination to pre-school educational institutions, for capacity of 100
+# - load_of_teachers_school_per_teacher: Load on teachers in high school (number of pupils in hugh school for 100 teachers)
+# - students_state_oneshift: Proportion of pupils in high schools with one shift, of the total number of pupils in high schools
+# - modern_education_share: Share of state (municipal) educational organizations, corresponding to modern requirements of education in the total number of high schools
+# - old_education_build_share: The share of state (municipal) educational organizations, buildings are in disrepair and in need of major repairs of the total number
+# - provision_doctors: Provision (relative number) of medical doctors in area
+# - provision_nurse: Provision of nursing staff
+# - load_on_doctors: The load on doctors (number of visits per physician)
+# - power_clinics: Capacity of outpatient clinics
+# - hospital_beds_available_per_cap: Availability of hospital beds per 100 000 persons
+# - hospital_bed_occupancy_per_year: Average occupancy rate of the hospital beds during a year
+# - provision_retail_space_sqm: Retail space
+# - provision_retail_space_modern_sqm: Provision of population with retail space of modern formats, square meter
+# - retail_trade_turnover_per_cap: Retail trade turnover per capita
+# - turnover_catering_per_cap: Turnover of catering industry per person
+# - theaters_viewers_per_1000_cap: Number of theaters viewers per 1000 population
+# - seats_theather_rfmin_per_100000_cap: Total number of seats in Auditorium of the Ministry of Culture Russian theaters per 100,000 population
+# - museum_visitis_per_100_cap: Number of visits to museums per 1000 of population
+# - bandwidth_sports: Capacity of sports facilities
+# - population_reg_sports_share: Proportion of population regularly doing sports
+# - students_reg_sports_share: Proportion of pupils and students regularly doing sports in the total number
+# - apartment_build: City residential apartment construction
+# - apartment_fund_sqm: City residential apartment fund
+
+# #### 2.2 Data Loading and Displaying
 
 # In[ ]:
 
 
-print('-'*130)
-print('-'*130, file=log_file)
-log_file.flush()
+macro = pd.read_csv('../input/macro.csv')
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
 
-with warnings.catch_warnings():
-    warnings.filterwarnings('ignore')
-    XGB_BO.maximize(init_points=2, n_iter=5, acq='ei', xi=0.0)
-
-# XGB_BO.maximize(init_points=10, n_iter=50, acq='ei', xi=0.0)
-# XGB_BO.maximize(init_points=10, n_iter=50, acq='ei', xi=0.01)
-# XGB_BO.maximize(init_points=10, n_iter=50, acq='ucb', kappa=10)
-# XGB_BO.maximize(init_points=10, n_iter=50, acq='ucb', kappa=1)
-
-
-# This portions gives the summary and creates a CSV file with results.
 
 # In[ ]:
 
 
-print('-'*130)
-print('Final Results')
-print('Maximum XGBOOST value: %f' % XGB_BO.res['max']['max_val'])
-print('Best XGBOOST parameters: ', XGB_BO.res['max']['max_params'])
-print('-'*130, file=log_file)
-print('Final Result:', file=log_file)
-print('Maximum XGBOOST value: %f' % XGB_BO.res['max']['max_val'], file=log_file)
-print('Best XGBOOST parameters: ', XGB_BO.res['max']['max_params'], file=log_file)
-log_file.flush()
-log_file.close()
-
-history_df = pd.DataFrame(XGB_BO.res['all']['params'])
-history_df2 = pd.DataFrame(XGB_BO.res['all']['values'])
-history_df = pd.concat((history_df, history_df2), axis=1)
-history_df.rename(columns = { 0 : 'gini'}, inplace=True)
-history_df['AUC'] = ( history_df['gini'] + 1 ) / 2
-history_df.to_csv('Porto-AUC-5fold-XGB-run-01-v1-grid.csv')
+macro[100:103].T[1:10]
 
 
-# Good luck! Let me know how it works.
+# In[ ]:
+
+
+train[200:203].T[1:10]
+
+
+# ----
+# ### 3. Solution Statement
+
+# #### 3.1 Selection of features
+
+# In[ ]:
+
+
+X_list_num = ['full_sq', 'num_room', 'floor', 'area_m', 
+              'timestamp',
+              'preschool_education_centers_raion', 'school_education_centers_raion', 
+              'children_preschool', 'children_school',
+              'shopping_centers_raion', 'healthcare_centers_raion', 
+              'office_raion', 'sport_objects_raion',
+              'public_transport_station_min_walk', 
+              'railroad_station_walk_min', 'railroad_station_avto_km',
+              'cafe_count_500',
+              'kremlin_km', 'workplaces_km', 
+              'ID_metro', 'metro_km_avto', 'metro_min_walk', 
+              'public_healthcare_km', 'shopping_centers_km', 'big_market_km',
+              'fitness_km', 'swim_pool_km', 'stadium_km', 'park_km',
+              'kindergarten_km', 'school_km', 'preschool_km', 
+              'university_km', 'additional_education_km',
+              'theater_km', 'exhibition_km', 'museum_km', 
+              'big_road1_km', 'big_road2_km',
+              'detention_facility_km', 'cemetery_km', 'oil_chemistry_km', 'radiation_km',
+              'raion_popul', 'work_all', 'young_all', 'ekder_all']
+X_list_cat = ['sub_area', 'ecology', 'big_market_raion']
+
+features_train = train[X_list_num]
+features_test = test[X_list_num]
+target_train = train['price_doc']
+
+
+# In[ ]:
+
+
+plt.style.use('seaborn-whitegrid')
+plt.figure(figsize=(14, 6))
+
+plt.hist(np.log(target_train), bins=200, normed=True, alpha=0.7)
+
+plt.xlabel("Prices")
+plt.title('Sberbank Russian Housing Data');
+
+
+# In[ ]:
+
+
+print ("Sberbank Russian Housing Dataset Statistics: \n")
+print ("Number of houses = ", len(target_train))
+print ("Number of features = ", len(list(features_train.keys())))
+print ("Minimum house price = ", np.min(target_train))
+print ("Maximum house price = ", np.max(target_train))
+print ("Mean house price = ", "%.2f" % np.mean(target_train))
+print ("Median house price = ", "%.2f" % np.median(target_train))
+print ("Standard deviation of house prices =", "%.2f" % np.std(target_train))
+
+
+# #### 3.2 Fill in missing values
+
+# In[ ]:
+
+
+features_train.isnull().sum()
+
+
+# In[ ]:
+
+
+features_test.isnull().sum()
+
+
+# In[ ]:
+
+
+df = pd.DataFrame(features_train, columns=X_list_num)
+df['prices'] = target_train
+
+df = df.dropna(subset=['num_room'])
+
+df['metro_min_walk'] = df['metro_min_walk'].interpolate(method='linear')
+features_test['metro_min_walk'] = features_test['metro_min_walk'].interpolate(method='linear')
+
+df['railroad_station_walk_min'] = df['railroad_station_walk_min'].interpolate(method='linear')
+features_test['railroad_station_walk_min'] = features_test['railroad_station_walk_min'].interpolate(method='linear')
+
+df['floor'] = df['floor'].fillna(df['floor'].median())
+len(df)
+
+
+# #### 3.3 Categorical and macro features
+
+# In[ ]:
+
+
+ID_metro_cat = pd.factorize(df['ID_metro'])
+df['ID_metro'] = ID_metro_cat[0]
+
+
+# In[ ]:
+
+
+ID_metro_pairs = dict(zip(list(ID_metro_cat[1]), list(set(ID_metro_cat[0]))))
+ID_metro_pairs[224] = 219
+features_test['ID_metro'].replace(ID_metro_pairs,inplace=True)
+
+
+# In[ ]:
+
+
+usdrub_pairs = dict(zip(list(macro['timestamp']), list(macro['usdrub'])))
+
+
+# In[ ]:
+
+
+df['timestamp'].replace(usdrub_pairs,inplace=True)
+features_test['timestamp'].replace(usdrub_pairs,inplace=True)
+
+
+# In[ ]:
+
+
+df.rename(columns={'timestamp' : 'usdrub'}, inplace=True)
+features_test.rename(columns={'timestamp' : 'usdrub'}, inplace=True)
+
+
+# #### 3.4 Displaying correlation
+
+# In[ ]:
+
+
+pearson = df.corr(method='pearson')
+corr_with_prices = pearson.ix[-1][:-1]
+corr_with_prices[abs(corr_with_prices).argsort()[::-1]]
+
+
+# #### 3.5 Scale, Shuffle and Split the Data
+
+# In[ ]:
+
+
+target_train = df['prices'].as_matrix()
+features_train = df.drop('prices', 1).as_matrix()
+features_test = features_test.as_matrix()
+
+
+# In[ ]:
+
+
+X_train, X_test, y_train, y_test = train_test_split(features_train, target_train, 
+                                                    test_size = 0.2, random_state = 1)
+X_train.shape, X_test.shape
+
+
+# In[ ]:
+
+
+scale = RobustScaler()
+X_train = scale.fit_transform(X_train)
+X_test = scale.transform(X_test)
+
+
+# ### 4. Benchmark Models
+
+# #### 4.1 Regressors
+
+# In[ ]:
+
+
+def regression(regressor, x_train, x_test, y_train):
+    reg = regressor
+    reg.fit(x_train, y_train)
+    
+    y_train_reg = reg.predict(x_train)
+    y_test_reg = reg.predict(x_test)
+    
+    return y_train_reg, y_test_reg
+
+
+# In[ ]:
+
+
+param_grid_gbr = {'max_depth': [4, 5, 6], 
+                  'n_estimators': range(47, 471, 47)}
+# gridsearch_gbr = GridSearchCV(GradientBoostingRegressor(), 
+#                               param_grid_gbr, n_jobs=5).fit(X_train, y_train)
+# gridsearch_gbr.best_params_
+
+
+# In[ ]:
+
+
+y_train_gbr, y_test_gbr = regression(GradientBoostingRegressor(max_depth=4, n_estimators=141), 
+                                     X_train, X_test, y_train)
+
+y_train_br, y_test_br = regression(BaggingRegressor(n_estimators=94), 
+                                   X_train, X_test, y_train)
+
+
+# In[ ]:
+
+
+plt.figure(figsize = (12,6))
+
+plt.plot(y_test[1:50], color = 'black', label='Real Data')
+
+plt.plot(y_test_gbr[1:50], label='Gradient Boosting')
+plt.plot(y_test_br[1:50], label='Bagging')
+
+plt.legend()
+plt.title("Regressors' Predictions vs Real Data"); 
+
+
+# #### 4.2 Neural Networks
+
+# In[ ]:
+
+
+def loss_plot(fit_history):
+    plt.figure(figsize=(14, 6))
+
+    plt.plot(fit_history.history['loss'], label = 'train')
+    plt.plot(fit_history.history['val_loss'], label = 'test')
+
+    plt.legend()
+    plt.title('Loss Function');  
+    
+def mae_plot(fit_history):
+    plt.figure(figsize=(14, 6))
+
+    plt.plot(fit_history.history['mean_absolute_error'], label = 'train')
+    plt.plot(fit_history.history['val_mean_absolute_error'], label = 'test')
+
+    plt.legend()
+    plt.title('Mean Absolute Error'); 
+
+
+# In[ ]:
+
+
+def mlp_model():
+    model = Sequential()
+    
+    model.add(Dense(94, input_dim=47, kernel_initializer='normal', activation='relu'))
+    model.add(Dense(94, kernel_initializer='normal', activation='relu'))
+    
+    model.add(Dropout(0.5))
+    
+    model.add(Dense(47, kernel_initializer='normal', activation='relu'))
+    model.add(Dense(47, kernel_initializer='normal', activation='relu'))
+    
+    model.add(Dropout(0.5))
+    
+    model.add(Dense(1, kernel_initializer='normal'))
+    
+    model.compile(loss='mse', optimizer='rmsprop', metrics=['mae'])
+    return model
+
+
+# In[ ]:
+
+
+mlp_model = mlp_model()
+
+mlp_history = mlp_model.fit(X_train, y_train, validation_data=(X_test, y_test),
+                            nb_epoch=80, batch_size=16, verbose=0)
+
+
+# In[ ]:
+
+
+loss_plot(mlp_history)
+mae_plot(mlp_history)
+
+
+# In[ ]:
+
+
+def mlp_model2():
+    model = Sequential()
+    
+    model.add(Dense(188, input_dim=47, kernel_initializer='normal', activation='relu'))   
+    model.add(Dense(188, kernel_initializer='normal', activation='relu'))
+    
+    model.add(Dropout(0.2))
+    
+    model.add(Dense(94, kernel_initializer='normal', activation='relu'))  
+    model.add(Dense(94, kernel_initializer='normal', activation='relu'))
+    
+    model.add(Dropout(0.2))
+    
+    model.add(Dense(47, kernel_initializer='normal', activation='relu'))
+    
+    model.add(Dense(1, kernel_initializer='normal'))
+    
+    model.compile(loss='mse', optimizer='rmsprop', metrics=['mae'])
+    return model
+
+
+# In[ ]:
+
+
+mlp_model2 = mlp_model2()
+
+mlp_history2 = mlp_model2.fit(X_train, y_train, validation_data=(X_test, y_test),
+                            nb_epoch=80, batch_size=16, verbose=0)
+
+
+# In[ ]:
+
+
+loss_plot(mlp_history2)
+mae_plot(mlp_history2)
+
+
+# In[ ]:
+
+
+y_train_mlp = mlp_model.predict(X_train)
+y_test_mlp = mlp_model.predict(X_test)
+
+y_train_mlp2 = mlp_model2.predict(X_train)
+y_test_mlp2 = mlp_model2.predict(X_test)
+
+
+# In[ ]:
+
+
+plt.figure(figsize = (12,6))
+
+plt.plot(y_test[1:50], color = 'black', label='Real Data')
+
+plt.plot(y_test_mlp[1:50], label='MLP #1')
+plt.plot(y_test_mlp2[1:50], label='MLP #2')
+
+plt.legend()
+plt.title("Neural Networks' Predictions vs Real Data"); 
+
+
+# #### 4.3 MLP Regressor
+
+# In[ ]:
+
+
+mlpr = MLPRegressor(hidden_layer_sizes=(188,), max_iter=200, solver='lbfgs', 
+                    alpha=0.01, verbose=10)
+mlpr.fit(X_train, y_train);
+
+
+# In[ ]:
+
+
+y_train_mlpr = mlpr.predict(X_train)
+y_test_mlpr = mlpr.predict(X_test)
+
+
+# ----
+# ### 5. Evaluation Metrics
+# - explained variance regression score
+# - coefficient of determination
+# - mean squared error
+# - mean absolute error
+# - median absolute error
+
+# In[ ]:
+
+
+def scores(regressor, y_train, y_test, y_train_reg, y_test_reg):
+    print("_______________________________________")
+    print(regressor)
+    print("_______________________________________")
+    print("EV score. Train: ", explained_variance_score(y_train, y_train_reg))
+    print("EV score. Test: ", explained_variance_score(y_test, y_test_reg))
+    print("---------")
+    print("R2 score. Train: ", r2_score(y_train, y_train_reg))
+    print("R2 score. Test: ", r2_score(y_test, y_test_reg))
+    print("---------")
+    print("MSE score. Train: ", mean_squared_error(y_train, y_train_reg))
+    print("MSE score. Test: ", mean_squared_error(y_test, y_test_reg))
+    print("---------")
+    print("MAE score. Train: ", mean_absolute_error(y_train, y_train_reg))
+    print("MAE score. Test: ", mean_absolute_error(y_test, y_test_reg))
+    print("---------")
+    print("MdAE score. Train: ", median_absolute_error(y_train, y_train_reg))
+    print("MdAE score. Test: ", median_absolute_error(y_test, y_test_reg))
+
+
+# #### 5.1 Regressors
+
+# In[ ]:
+
+
+scores('Gradient Boosting Regressor', y_train, y_test, y_train_gbr, y_test_gbr)
+scores('Bagging Regressor', y_train, y_test, y_train_br, y_test_br)
+
+
+# #### 5.2 Neural Networks
+
+# In[ ]:
+
+
+scores('MLP Model #1', y_train, y_test, y_train_mlp, y_test_mlp)
+scores('MLP Model #2', y_train, y_test, y_train_mlp2, y_test_mlp2)
+
+
+# #### 5.3 MLP Regressor
+
+# In[ ]:
+
+
+scores('MLP Regressor', y_train, y_test, y_train_mlpr, y_test_mlpr)
+
+
+# ----
+# ### 6. Predictions
+
+# In[ ]:
+
+
+scale = RobustScaler()
+features_train = scale.fit_transform(features_train)
+features_test = scale.transform(features_test)
+
+
+# In[ ]:
+
+
+reg = GradientBoostingRegressor(n_estimators=141, max_depth=4)
+reg.fit(features_train, target_train)
+
+target_train_predict = reg.predict(features_train)
+target_test_predict = reg.predict(features_test)
+
+
+# In[ ]:
+
+
+print("_______________________________________")
+print("Gradient Boosting  Regressor")
+print("_______________________________________")
+print("EV score. Train: ", explained_variance_score(target_train, target_train_predict))
+print("---------")
+print("R2 score. Train: ", r2_score(target_train, target_train_predict))
+print("---------")
+print("MSE score. Train: ", mean_squared_error(target_train, target_train_predict))
+print("---------")
+print("MAE score. Train: ", mean_absolute_error(target_train, target_train_predict))
+print("---------")
+print("MdAE score. Train: ", median_absolute_error(target_train, target_train_predict))
+
+
+# ----
+# ### 7. Submission
+
+# In[ ]:
+
+
+pd.set_option('display.float_format', lambda x: '%.2f' % x)
+target_predict = ["{0:.2f}".format(x) for x in target_test_predict]
+
+submission = pd.DataFrame({"id": test['id'], "price_doc": target_predict})
+print(submission[0:5])
+
+# submission.to_csv('kaggle_sberbank_housing.csv', index=False)
+

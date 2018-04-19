@@ -1,192 +1,383 @@
 
 # coding: utf-8
 
-# ## Temporal corelations
+# **This Ipython notebook is focused on analyzing missing values detection and multicollinearity in dataset**
 # 
-# The idea of this notebook is to see how corelation between various features and target variable change over time.
-# 
-# As has been observed in other EDA notebooks, there is very little corelation between given features and y variable.
-# 
-# As pointed by Raddar here, distribution of features seem to vary quite a bit for many features with time.
+#  - Visualizing Datatype Of Variable 
+#  - Missing Value Analysis
+#  - Basic Feature Engineering From Timestamp
+#  - Outlier Analysis  
+#  - Univariate Analysis
+#  - Top Contributing Features Using XGB
+#  - Correlation Analysis
+#  - Multicollinearity Analysis
+#  - Bivariate Analysis (Price Doc vs Top    Contributing features)
+#  - Simple Submission (0.313)
+
+# **Library Imports**
 
 # In[ ]:
 
 
-import kagglegym
+import pylab
+import calendar
 import numpy as np
 import pandas as pd
-from sklearn.preprocessing import StandardScaler
-import math
+import seaborn as sn
+from scipy import stats
+import missingno as msno
+from datetime import datetime
 import matplotlib.pyplot as plt
-import seaborn as sns
+import warnings
+pd.options.mode.chained_assignment = None
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-from matplotlib import rcParams
-rcParams['figure.figsize'] = 8, 6
+
+# **Lets Read In Data**
+
+# In[ ]:
+
+
+train = pd.read_csv("../input/train.csv")
+test = pd.read_csv("../input/test.csv")
+
+
+# **Shape Of Dataset**
+
+# In[ ]:
+
+
+train.shape
+
+
+# **First Few Rows Of Dataset**
+
+# In[ ]:
+
+
+train.head(3).transpose()
+
+
+# ##  Visualizing Datatypes of Variable
+
+# In[ ]:
+
+
+dataTypeDf = pd.DataFrame(train.dtypes.value_counts()).reset_index().rename(columns={"index":"variableType",0:"count"})
+fig,ax = plt.subplots()
+fig.set_size_inches(20,5)
+sn.barplot(data=dataTypeDf,x="variableType",y="count",ax=ax)
+ax.set(xlabel='Variable Type', ylabel='Count',title="Variables Count Across Datatype")
+
+
+# # Missing Value Analysis
+
+# In[ ]:
+
+
+missingValueColumns = train.columns[train.isnull().any()].tolist()
+msno.bar(train[missingValueColumns],            figsize=(20,8),color=(0.5, 0.5, 1),fontsize=12,labels=True,)
 
 
 # In[ ]:
 
 
-train_all = pd.read_hdf('../input/train.h5')
-
-#Skipping alternate timestamps to be able to run this kernel
-
-#odd_timestamps = [t for t in  train_all.timestamp.unique() if t%2 !=0]
-#print(len(odd_timestamps))
-
-#train_all = train_all.loc[train_all.timestamp.isin(odd_timestamps)]
+msno.matrix(train[missingValueColumns],width_ratios=(10,1),            figsize=(20,8),color=(0.5, 0.5, 1),fontsize=12,sparkline=True,labels=True)
 
 
 # In[ ]:
 
 
-#Lets get all features and devide into derived, fundamental and technical categories
-feats = [col for col in train_all.columns if col not in ['id', 'timestamp', 'y']]
+msno.heatmap(train[missingValueColumns],figsize=(20,20))
 
 
-# It would be good idea to do a box plot of all variables after clip them appropriately (as there are lot of very high values).
-
-# In[ ]:
-
-
-train_all[feats] = train_all[feats].clip(upper=5, lower=-5)
-
+# # Simple Feature Engineering From Timestamp
 
 # In[ ]:
 
 
-train_all[feats].plot(kind='box')
-plt.ylim([-2,2])
+train['yearmonth'] = train['timestamp'].apply(lambda x: x[:4] + "-" + x[5:7])
+train['year'] = train['timestamp'].apply(lambda x: x[:4])
+train['month'] = train['timestamp'].apply(lambda x: x[5:7])
+
+test['yearmonth'] = test['timestamp'].apply(lambda x: x[:4] + "-" + x[5:7])
+test['year'] = test['timestamp'].apply(lambda x: x[:4])
+test['month'] = test['timestamp'].apply(lambda x: x[5:7])
 
 
-# All the features lie mostly within -2 to 2. So, clipping features at -2 and 2 could be a good idea for modeling purposes
-
-# In[ ]:
-
-
-#Group by mean, median and 2 sigma. (Note! Many of the features are not normal, 
-#hence 2 sigma  does not give complete picture but good for starters) 
-#(No pun intended for sponsor of competition ;)
-
-train_all_mean = train_all.groupby('timestamp').apply(lambda x: x.mean())
-
-train_all_2stdp = train_all.groupby('timestamp').apply(lambda x: x.mean() + 2*x.std())
-
-train_all_2stdm = train_all.groupby('timestamp').apply(lambda x: x.mean() - 2*x.std())
-
+# # Outlier Analysis
 
 # In[ ]:
 
 
-tmp1 = pd.melt(train_all_mean, value_vars=feats, var_name='features1', value_name='mean')
-tmp2 = pd.melt(train_all_2stdp, value_vars=feats, var_name='features2', value_name='2_sigma_plus')
-tmp3 = pd.melt(train_all_2stdm, value_vars=feats, var_name='features3', value_name='2_sigma_minus')
+fig,(ax1,ax2) = plt.subplots(ncols=2)
+fig.set_size_inches(20,5)
+train['yearmonth'] = train['timestamp'].apply(lambda x: x[:4] + "-" + x[5:7])
+train['year'] = train['timestamp'].apply(lambda x: x[:4])
+train['month'] = train['timestamp'].apply(lambda x: x[5:7])
+sn.boxplot(data=train,y="price_doc",orient="v",ax=ax1)
+sn.boxplot(data=train,x="price_doc",y="year",orient="h",ax=ax2)
 
-tmp = pd.concat([tmp1, tmp2, tmp3], axis=1)
-
-fg = sns.FacetGrid(data=tmp, col='features1', col_wrap=3, size=2.7)
-fg.map(plt.plot, 'mean', color='blue')
-fg.map(plt.plot, '2_sigma_plus', color='black')
-fg.map(plt.plot, '2_sigma_minus', color='black')
-#fg.map(plt.fill_between, 'mean', '2_sigma_minus', '2_sigma_plus', color='Purple', alpha=0.3)
-
-#plt.ylim([-4.5, 4.5])
-
-del tmp1, tmp2, tmp
+fig1,ax3 = plt.subplots()
+fig1.set_size_inches(20,5)
+sn.boxplot(data=train,x="month",y="price_doc",orient="v",ax=ax3)
+ax1.set(ylabel='Price Doc',title="Box Plot On Price Doc")
+ax2.set(xlabel='Price Doc', ylabel='Year',title="Box Plot On Price Doc Across Year")
+ax3.set(xlabel='Month', ylabel='Count',title="Box Plot On Price Doc Across Month")
 
 
-# * As has been already been pointed out by raddar, variables that are stable (flat mean and variance) over time are more suitable for modeling.**
+# # Univariate Analysis #
 # 
-# * Removing(or modeling separately) two periods of high variance in y, can provide additional paramters for modeling 
-# 
-# 
-# Now, lets see how corelation with y changes for different variables
+#  - Price Doc
+#  - Build Year
+
+# ## Price Doc Distribution##
 
 # In[ ]:
 
 
-#I had to impute missing data otherwise either it takes very long time or we get lot of NaN 
-import time
-def get_corr(x):
-    s= time.time()
-    #for f in feats:
-    #    corr.append(np.corrcoef(x[f],x['y'],rowvar=0)[0,1])
-    corr = np.corrcoef(x.values.T)[-1,2:-1]
-    #print(time.time()- s)
-    return corr
-    
-train_all_imputed = train_all.fillna(0)
-train_all_corr = train_all_imputed.groupby('timestamp').apply(get_corr) #This will take some time
-train_all_corr = pd.DataFrame(np.vstack(train_all_corr), columns=feats)
-train_all_corr.head()
+fig,axes = plt.subplots(ncols=2)
+fig.set_size_inches(20, 10)
+stats.probplot(train["price_doc"], dist='norm', fit=True, plot=axes[0])
+stats.probplot(np.log1p(train["price_doc"]), dist='norm', fit=True, plot=axes[1])
+
+
+# ## Build Year ##
+
+# In[ ]:
+
+
+fig,ax= plt.subplots()
+fig.set_size_inches(20,8)
+trainBuild = train.dropna()
+trainBuild["yearbuilt"] = trainBuild["build_year"].map(lambda x:str(x).split(".")[0])
+sn.countplot(data=trainBuild,x="yearbuilt",ax=ax)
+ax.set(xlabel='Build Year', ylabel='Count',title="No of Buildings Across Year",label='big')
+plt.xticks(rotation=90)
+
+
+# # Finding Top Contributing features 
+
+# In[ ]:
+
+
+from sklearn import model_selection, preprocessing
+import xgboost as xgb
+
+y_train = train["price_doc"]
+x_train = train.drop(["id", "timestamp", "price_doc"], axis=1)
+x_test = test.drop(["id", "timestamp"], axis=1)
+
+for c in x_train.columns:
+    if x_train[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_train[c].values)) 
+        x_train[c] = lbl.transform(list(x_train[c].values))
+        
+for c in x_test.columns:
+    if x_test[c].dtype == 'object':
+        lbl = preprocessing.LabelEncoder()
+        lbl.fit(list(x_test[c].values)) 
+        x_test[c] = lbl.transform(list(x_test[c].values))
+
+xgb_params = {
+    'eta': 0.05,
+    'max_depth': 5,
+    'subsample': 0.7,
+    'colsample_bytree': 0.7,
+    'objective': 'reg:linear',
+    'eval_metric': 'rmse',
+    'silent': 1
+}
+
+dtrain = xgb.DMatrix(x_train, y_train)
+dtest = xgb.DMatrix(x_test)
+
+cv_output = xgb.cv(xgb_params, dtrain, num_boost_round=100, early_stopping_rounds=20,
+    verbose_eval=50, show_stdv=False)
+cv_output[['train-rmse-mean', 'test-rmse-mean']].plot()
 
 
 # In[ ]:
 
 
-tmp3 = pd.melt(train_all_corr, value_vars=feats, var_name='features3', value_name='corr')
-
-fg = sns.FacetGrid(data=tmp3, col='features3', col_wrap=3, size=2.8)
-fg.map(plt.plot, 'corr', color='blue').add_legend()
-del tmp3
-
-
-# All the corelation coefficients are oscillating quite a lot. Almost all features show positive and negative corelations with high frequency, most likely because of high volatility of y.
-
-# In[ ]:
-
-
-def get_corr2(x):
-    corr = np.corrcoef(x.values.T)[-1,2:-2]
-    return corr
-    
-    
-train_all_imputed['abs_y'] = abs(train_all_imputed['y'])
-train_all_corr2 = train_all_imputed.groupby('timestamp').apply(get_corr2) #This will take some time
-train_all_corr2 = pd.DataFrame(np.vstack(train_all_corr2), columns=feats)
-train_all_corr2.head()
+num_boost_rounds = len(cv_output)
+model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round= num_boost_rounds)
 
 
 # In[ ]:
 
 
-tmp4 = pd.melt(train_all_corr2, value_vars=feats, var_name='features3', value_name='corr')
+featureImportance = model.get_fscore()
+features = pd.DataFrame()
+features['features'] = featureImportance.keys()
+features['importance'] = featureImportance.values()
+features.sort_values(by=['importance'],ascending=False,inplace=True)
+fig,ax= plt.subplots()
+fig.set_size_inches(20,10)
+plt.xticks(rotation=60)
+sn.barplot(data=features.head(30),x="features",y="importance",ax=ax,orient="v")
 
-fg = sns.FacetGrid(data=tmp4, col='features3', col_wrap=3, size=2.7)
-fg.map(plt.plot, 'corr', color='blue').add_legend()
 
-del tmp4
+# # Correlation Analysis
+
+# In[ ]:
 
 
-# ** Many features are showing strong corelations with absolute values of y. **
+topFeatures = features["features"].tolist()[:15]
+topFeatures.append("price_doc")
+corrMatt = train[topFeatures].corr()
+mask = np.array(corrMatt)
+mask[np.tril_indices_from(mask)] = False
+fig,ax= plt.subplots()
+fig.set_size_inches(20,10)
+sn.heatmap(corrMatt, mask=mask,vmax=.8, square=True,annot=True)
+
+
+# ## Multicollinearity Analysis
+# Most of the variables are highly collinear in nature. It is highly possbile to have multicollinearity problem in the dataset. For example variable such 0_13_all, 0_13_male, 0_13_female exhibit very collinearity. It is advisable to retain any one of them during model building. Since the following takes more than stipulated time. I have commented it out.
+
+# Following code may take more time to run depends on the configuation of the system. So I have included the final image output of the analysis for reference
+
+# ["Image For Multicollinearity Analysis"](https://github.com/viveksrinivasanss/sources/blob/master/multicollinearity.png)
+
+# In[ ]:
+
+
+#from statsmodels.stats.outliers_influence import variance_inflation_factor  
+
+#def calculate_vif_(X):
+#    variables = list(X.columns)
+#    vif = {variable:variance_inflation_factor(exog=X.values, exog_idx=ix) for ix,variable in enumerate(list(X.columns))}
+#    return vif
+
+#numericalCol = []
+#for f in train.columns:
+#    if train[f].dtype!='object':
+#        numericalCol.append(f)
+#trainNA = train[numericalCol].dropna() 
+#vifDict = calculate_vif_(trainNA)
+
+
+# In[ ]:
+
+
+# vifDf = pd.DataFrame()
+# vifDf['variables'] = vifDict.keys()
+# vifDf['vifScore'] = vifDict.values()
+# vifDf.sort_values(by=['vifScore'],ascending=True,inplace=True)
+# validVariables = vifDf[vifDf["vifScore"]<=5]
+# variablesWithMC  = vifDf[vifDf["vifScore"]>5]
+
+# fig,(ax1,ax2) = plt.subplots(ncols=2)
+# fig.set_size_inches(20,15)
+# sn.barplot(data=validVariables,x="vifScore",y="variables",ax=ax1,orient="h")
+# sn.barplot(data=variablesWithMC.head(100),x="vifScore",y="variables",ax=ax2,orient="h")
+# ax2.set(xlabel='Features', ylabel='VIF Score',title="Valid Variables Without Multicollinearity")
+# ax2.set(xlabel='Features', ylabel='VIF Score',title="Variables Which Exhibit Multicollinearity")
+
+
+# # Bivariate Analysis
+
+# **Lets Us Understand Relationship Between Top Contributing Features And Price Doc**
 # 
-# ** Building separate models for absolute values of y and direction of y can be a good approach **
-# 
-# Also, they seem to be varying over time.**
-# 
-# Normalize everything and plot together
+#  - full_sq
+#  - life_sq
+#  - floor
+#  - max_floor
+#  - build_year
 
 # In[ ]:
 
 
-tmp1 = pd.melt(train_all_mean, value_vars=feats, var_name='features1', value_name='mean')
-tmp2 = pd.melt(train_all_2stdp, value_vars=feats, var_name='features2', value_name='2std')
-tmp3 = pd.melt(train_all_corr, value_vars=feats, var_name='features3', value_name='corr')
-tmp4 = pd.melt(train_all_corr2, value_vars=feats, var_name='features3', value_name='yabs_corr')
-
-tmp = pd.concat([tmp1, tmp2, tmp3, tmp4], axis=1)
-cols = ['mean', '2std', 'corr', 'yabs_corr']
-tmp[cols] = tmp[cols].apply(lambda x: (x - x.mean())/x.std())
-fg = sns.FacetGrid(data=tmp, col='features1', col_wrap=3, size=2.7)
-fg = fg.map(plt.plot, 'mean', color='red')
-fg = fg.map(plt.plot, 'corr', color='green', alpha=0.4)
-fg = fg.map(plt.plot, '2std', color='black')
-fg = fg.map(plt.plot, 'yabs_corr', color='purple', alpha=0.4)
-fg.add_legend()
+for col in ["price_doc","full_sq","life_sq"]:
+    ulimit = np.percentile(train[col].values, 99.5)
+    llimit = np.percentile(train[col].values, 0.5)
+    train[col].ix[train[col]>ulimit] = ulimit
+    train[col].ix[train[col]<llimit] = llimit
 
 
-del tmp1, tmp2, tmp3, tmp4, tmp
+# ## Full Square Vs Price Doc ##
+
+# In[ ]:
 
 
-# **Many features have same trend as their correlation with absolute values of y. Some sort of temporal correction for features can improve lineal models **
+plt.figure(figsize=(12,12))
+sn.jointplot(x=np.log1p(train.full_sq.values), y=np.log1p(train.price_doc.values), size=10,kind="hex")
+plt.ylabel('Log of Price', fontsize=12)
+plt.xlabel('Log of Total area in square metre', fontsize=12)
+plt.show()
+
+
+# ## Life Square Vs Price Doc ##
+
+# In[ ]:
+
+
+plt.figure(figsize=(12,12))
+sn.jointplot(x=np.log1p(train.life_sq.values), y=np.log1p(train.price_doc.values), size=10,kind="hex")
+plt.ylabel('Log of Price', fontsize=12)
+plt.xlabel('Log of living area in square metre', fontsize=12)
+plt.show()
+
+
+# ## Floor Vs Price Doc ##
+
+# In[ ]:
+
+
+fig,ax= plt.subplots()
+fig.set_size_inches(20,8)
+sn.boxplot(x="floor", y="price_doc", data=train,ax=ax)
+ax.set(ylabel='Price Doc',xlabel="Floor",title="Floor Vs Price Doc")
+
+
+# ## Max Floor Vs Price Doc ##
+
+# In[ ]:
+
+
+fig,ax= plt.subplots()
+fig.set_size_inches(20,8)
+sn.boxplot(x="max_floor", y="price_doc", data=train,ax=ax)
+ax.set(ylabel='Price Doc',xlabel="Max Floor",title="Max Floor Vs Price Doc")
+plt.xticks(rotation=90) 
+
+
+# ## Build Year Vs Price Doc ##
+
+# In[ ]:
+
+
+fig,ax= plt.subplots()
+fig.set_size_inches(20,8)
+trainBuild = train.dropna()
+trainBuild["yearbuilt"] = trainBuild["build_year"].map(lambda x:str(x).split(".")[0])
+trainBuildGrouped = trainBuild.groupby(["yearbuilt"])["price_doc"].mean().to_frame().reset_index()
+sn.pointplot(x=trainBuildGrouped["yearbuilt"], y=trainBuildGrouped["price_doc"], data=trainBuildGrouped, join=True,ax=ax,color="#34495e")
+ax.set(xlabel='Build Year', ylabel='Price Doc',title="Average Price Doc Across Year",label='big')
+plt.xticks(rotation=90)
+plt.ylim([0,70000000])
+
+
+# **Lets Do A Simple Submission**
+
+# In[ ]:
+
+
+y_predict = model.predict(dtest)
+id_test = test.id
+output = pd.DataFrame({'id': id_test, 'price_doc': y_predict})
+output.head()
+
+
+# In[ ]:
+
+
+output.to_csv('./naive_xgb_without_fe.csv', index=False)
+
+
+# **More Analysis To Come. Kindly Refer Back**
+
+# **KIndly Upvote If You Find It Useful**

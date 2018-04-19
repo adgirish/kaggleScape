@@ -1,88 +1,78 @@
-"""
-Ridge Regression on TfIDF of text features and One-Hot-Encoded Categoricals
-"""
-
+import sqlite3
 import pandas as pd
-import numpy as np
-import scipy
+import matplotlib.pyplot as plt
 
-from sklearn.linear_model import Ridge, LogisticRegression
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
-from sklearn.preprocessing import LabelBinarizer
+# This script identifies which communication styles receive highest ranks
+# For illustration purposes I defined 3 styles such as Passive, Assertive and Aggressive
+# The list of key words must of course be extended
 
-import gc
+sql_conn = sqlite3.connect('../input/database.sqlite')
 
-NUM_BRANDS = 2500
-NAME_MIN_DF = 10
-MAX_FEAT_DESCP = 50000
+df = pd.read_sql("SELECT score, body FROM May2015 WHERE LENGTH(body) > 5 AND LENGTH(body) < 100 LIMIT 10000", sql_conn)
+    
+keywords = pd.DataFrame({'Passive': pd.Series(['if you have the time','hmm','well','that was my fault','not sure']),
+                         'Assertive': pd.Series(['good idea','great idea','thanks for','good to know','really like', 'too','sorry for']),
+                         'Aggressive': pd.Series(['I shot','fuck','fucking','ass','idiot'])})
 
-print("Reading in Data")
+content_summary = pd.DataFrame()
+for col in keywords:
+    content = df[df.body.apply(lambda x: any(keyword in x.split() for keyword in keywords[col]))]
+    content_summary[col] = content.describe().score
 
-df_train = pd.read_csv('../input/train.tsv', sep='\t')
-df_test = pd.read_csv('../input/test.tsv', sep='\t')
+keys = content_summary.keys()
 
-df = pd.concat([df_train, df_test], 0)
-nrow_train = df_train.shape[0]
-y_train = np.log1p(df_train["price"])
+content_summary = content_summary.transpose()
 
-del df_train
-gc.collect()
+# Setting the positions and width for the bars
+pos = list(range(len(content_summary['count'])))
+width = 0.25
 
-print(df.memory_usage(deep = True))
+# Plotting the bars
+fig, ax = plt.subplots(figsize=(10,5))
 
-df["category_name"] = df["category_name"].fillna("Other").astype("category")
-df["brand_name"] = df["brand_name"].fillna("unknown")
+clrs = []
+for v in content_summary['mean'].values:
+    if v < 2:
+        clrs.append('#FFC1C1')
+    elif v < 5:
+        clrs.append('#F08080')
+    elif v < 10:
+        clrs.append('#EE6363')
+    else:
+        clrs.append('r')
 
-pop_brands = df["brand_name"].value_counts().index[:NUM_BRANDS]
-df.loc[~df["brand_name"].isin(pop_brands), "brand_name"] = "Other"
+plt.bar(pos,
+        content_summary['count'],
+        width,
+        alpha=0.5,
+        # with color
+        color=clrs,
+        label=keys)
 
-df["item_description"] = df["item_description"].fillna("None")
-df["item_condition_id"] = df["item_condition_id"].astype("category")
-df["brand_name"] = df["brand_name"].astype("category")
+# Set the y axis label
+ax.set_ylabel('Number of comments')
 
-print(df.memory_usage(deep = True))
+# Set the chart's title
+ax.set_title('Which communication style receives highest ranks?')
 
-print("Encodings")
-count = CountVectorizer(min_df=NAME_MIN_DF)
-X_name = count.fit_transform(df["name"])
+# Set the position of the x ticks
+ax.set_xticks([p + 0.5 * width for p in pos])
 
-print("Category Encoders")
-unique_categories = pd.Series("/".join(df["category_name"].unique().astype("str")).split("/")).unique()
-count_category = CountVectorizer()
-X_category = count_category.fit_transform(df["category_name"])
+# Set the labels for the x ticks
+ax.set_xticklabels(keys)
 
-print("Descp encoders")
-count_descp = TfidfVectorizer(max_features = MAX_FEAT_DESCP, 
-                              ngram_range = (1,3),
-                              stop_words = "english")
-X_descp = count_descp.fit_transform(df["item_description"])
+# Setting the x-axis and y-axis limits
+plt.xlim(min(pos)-width, max(pos)+width*4)
+plt.ylim([0, max(content_summary['count'])+20])
 
-print("Brand encoders")
-vect_brand = LabelBinarizer(sparse_output=True)
-X_brand = vect_brand.fit_transform(df["brand_name"])
+rects = ax.patches
 
-print("Dummy Encoders")
-X_dummies = scipy.sparse.csr_matrix(pd.get_dummies(df[[
-    "item_condition_id", "shipping"]], sparse = True).values)
+# Now make some labels
+for ii,rect in enumerate(rects):
+        height = rect.get_height()
+        plt.text(rect.get_x()+rect.get_width()/2., 1.02*height, '%s'% ("Score {0:.2f}".format(content_summary['mean'][ii])),
+                 ha='center', va='bottom')
 
-X = scipy.sparse.hstack((X_dummies, 
-                         X_descp,
-                         X_brand,
-                         X_category,
-                         X_name)).tocsr()
+plt.grid()
 
-print([X_dummies.shape, X_category.shape, 
-       X_name.shape, X_descp.shape, X_brand.shape])
-
-X_train = X[:nrow_train]
-model = Ridge(solver = "lsqr", fit_intercept=False)
-
-print("Fitting Model")
-model.fit(X_train, y_train)
-
-X_test = X[nrow_train:]
-preds = model.predict(X_test)
-
-df_test["price"] = np.expm1(preds)
-df_test[["test_id", "price"]].to_csv("submission_ridge.csv", index = False)
+plt.savefig("CommunicationStyles.png")

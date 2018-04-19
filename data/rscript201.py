@@ -1,216 +1,312 @@
-from keras.regularizers import l2, activity_l2
-import numpy as np
+"""
+This is an upgraded version of Ceshine's and Linzhi and Andy Harless starter script, simply adding more
+average features and weekly average features on it.
+"""
+from datetime import date, timedelta
 import pandas as pd
+import numpy as np
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import StandardScaler
 from keras.models import Sequential
 from keras.layers.core import Dense, Dropout, Activation
-from keras.layers.normalization import BatchNormalization
 from keras.layers.advanced_activations import PReLU
-from keras.utils import np_utils, generic_utils
-from sklearn.cross_validation import train_test_split
-from sklearn.metrics import log_loss, auc, roc_auc_score
-from sklearn.preprocessing import LabelEncoder
-from sklearn.preprocessing import StandardScaler
-import matplotlib.pyplot as plt
-from keras.optimizers import Adagrad,SGD,Adadelta
-from keras.callbacks import EarlyStopping
-from keras.layers import containers
-from keras.layers.core import Dense, AutoEncoder
-from keras.constraints import maxnorm
+from keras.layers.normalization import BatchNormalization
+from keras.layers import LSTM
+from keras import callbacks
+from keras import optimizers
+from keras.callbacks import ModelCheckpoint, EarlyStopping, ReduceLROnPlateau
+import gc
 
-np.random.seed(1778)  # for reproducibility
-need_normalise=True
-need_validataion=True
-need_categorical=False
-save_categorical_file=False
-nb_epoch=1#400
-golden_feature=[("CoverageField1B","PropertyField21B"),
-                ("GeographicField6A","GeographicField8A"),
-                ("GeographicField6A","GeographicField13A"),
-                ("GeographicField8A","GeographicField13A"),
-                ("GeographicField11A","GeographicField13A"),
-                ("GeographicField8A","GeographicField11A")]
+df_train = pd.read_csv(
+    '../input/train.csv', usecols=[1, 2, 3, 4, 5],
+    dtype={'onpromotion': bool},
+    converters={'unit_sales': lambda u: np.log1p(
+        float(u)) if float(u) > 0 else 0},
+    parse_dates=["date"],
+    skiprows=range(1, 66458909)  # 2016-01-01
+)
 
-def save2model(submission,file_name,y_pre):
-    assert len(y_pre)==len(submission)
-    submission['QuoteConversion_Flag']=y_pre
-    submission.to_csv(file_name,index=False)
-    print ("saved files %s" % file_name)
+df_test = pd.read_csv(
+    "../input/test.csv", usecols=[0, 1, 2, 3, 4],
+    dtype={'onpromotion': bool},
+    parse_dates=["date"]  # , date_parser=parser
+).set_index(
+    ['store_nbr', 'item_nbr', 'date']
+)
 
-def getDummy(df,col):
-    category_values=df[col].unique()
-    data=[[0 for i in range(len(category_values))] for i in range(len(df))]
-    dic_category=dict()
-    for i,val in enumerate(list(category_values)):
-        dic_category[str(val)]=i
-   # print dic_category
-    for i in range(len(df)):
-        data[i][dic_category[str(df[col][i])]]=1
+items = pd.read_csv(
+    "../input/items.csv",
+).set_index("item_nbr")
 
-    data=np.array(data)
-    for i,val in enumerate(list(category_values)):
-        df.loc[:,"_".join([col,str(val)])]=data[:,i]
+stores = pd.read_csv(
+    "../input/stores.csv",
+).set_index("store_nbr")
 
-    return df
+le = LabelEncoder()
+items['family'] = le.fit_transform(items['family'].values)
+
+stores['city'] = le.fit_transform(stores['city'].values)
+stores['state'] = le.fit_transform(stores['state'].values)
+stores['type'] = le.fit_transform(stores['type'].values)
+
+df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
+del df_train
+
+promo_2017_train = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["onpromotion"]].unstack(
+        level=-1).fillna(False)
+promo_2017_train.columns = promo_2017_train.columns.get_level_values(1)
+promo_2017_test = df_test[["onpromotion"]].unstack(level=-1).fillna(False)
+promo_2017_test.columns = promo_2017_test.columns.get_level_values(1)
+promo_2017_test = promo_2017_test.reindex(promo_2017_train.index).fillna(False)
+promo_2017 = pd.concat([promo_2017_train, promo_2017_test], axis=1)
+del promo_2017_test, promo_2017_train
+
+df_2017 = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
+        level=-1).fillna(0)
+df_2017.columns = df_2017.columns.get_level_values(1)
+
+items = items.reindex(df_2017.index.get_level_values(1))
+stores = stores.reindex(df_2017.index.get_level_values(0))
 
 
-def generateFileName(model,params):
-     file_name="_".join([(key+"_"+ str(val))for key,val in params.items()])
-     return model+"_"+file_name+".csv"
+df_2017_item = df_2017.groupby('item_nbr')[df_2017.columns].sum()
+promo_2017_item = promo_2017.groupby('item_nbr')[promo_2017.columns].sum()
 
-def load_data():
-    train=pd.read_csv('../input/train.csv')
-    test=pd.read_csv('../input/test.csv')
-    train = train.drop(['QuoteNumber','PropertyField6', 'GeographicField10A'], axis=1)
-    
-    submission=pd.DataFrame()
-    submission["QuoteNumber"]= test["QuoteNumber"]
+df_2017_store_class = df_2017.reset_index()
+df_2017_store_class['class'] = items['class'].values
+df_2017_store_class_index = df_2017_store_class[['class', 'store_nbr']]
+df_2017_store_class = df_2017_store_class.groupby(['class', 'store_nbr'])[df_2017.columns].sum()
 
-    train_y=train['QuoteConversion_Flag'].values
-    train=train.drop('QuoteConversion_Flag',axis=1)
-    
-    test = test.drop(['QuoteNumber','PropertyField6', 'GeographicField10A'],axis=1)
-    train['Date'] = pd.to_datetime(pd.Series(train['Original_Quote_Date']))
-    train = train.drop('Original_Quote_Date', axis=1)
-    train['Year'] = train['Date'].apply(lambda x: int(str(x)[:4]))
-    train['Month'] = train['Date'].apply(lambda x: int(str(x)[5:7]))
-    train['weekday'] = [train['Date'][i].dayofweek for i in range(len(train['Date']))]
-    
-    test['Date'] = pd.to_datetime(pd.Series(test['Original_Quote_Date']))
-    test = test.drop('Original_Quote_Date', axis=1)
-    test['Year'] = test['Date'].apply(lambda x: int(str(x)[:4]))
-    test['Month'] = test['Date'].apply(lambda x: int(str(x)[5:7]))
-    test['weekday'] = [test['Date'][i].dayofweek for i in range(len(test['Date']))]
-    
-    train = train.drop('Date', axis=1)
-    test = test.drop('Date', axis=1)
-    
-    #fill na, have no effect on need_categorical method
-    train = train.fillna(-1)
-    test = test.fillna(-1)
-    
-    for f in test.columns:#
-        if train[f].dtype=='object':
-            lbl = LabelEncoder()
-            lbl.fit(list(train[f])+list(test[f]))
-            train[f] = lbl.transform(list(train[f].values))
-            test[f] = lbl.transform(list(test[f].values))
+df_2017_promo_store_class = promo_2017.reset_index()
+df_2017_promo_store_class['class'] = items['class'].values
+df_2017_promo_store_class_index = df_2017_promo_store_class[['class', 'store_nbr']]
+df_2017_promo_store_class = df_2017_promo_store_class.groupby(['class', 'store_nbr'])[promo_2017.columns].sum()
 
-    #try to encode all params less than 100 to be category
-    if need_categorical:
-        #row bind train and test
-        x=train.append(test,ignore_index=True)
-        del train
-        del test
-        for f in x.columns:#
-            category_values= set(list(x[f].unique()))
-            if len(category_values)<4:
-                print (f)
-                x=getDummy(x,f)
-                #x.drop(f,axis=1)
-                #all_data.drop(f,axis=1)
-        test = x.iloc[260753:,]
-        train = x.iloc[:260753:,]
+def get_timespan(df, dt, minus, periods, freq='D'):
+    return df[pd.date_range(dt - timedelta(days=minus), periods=periods, freq=freq)]
 
-    #save need_categorical:
-#    if save_categorical_file and need_categorical:
-#        train["QuoteConversion_Flag"]=train_y
-#        train["QuoteNumber"]=1
-#        test["QuoteNumber"]=submission["QuoteNumber"]
-#        train.to_csv("./data/train_category.csv",index=False)
-#        test.to_csv("./data/test_category.csv",index=False)
+def prepare_dataset(df, promo_df, t2017, is_train=True, name_prefix=None):
+    X = {
+        "promo_14_2017": get_timespan(promo_df, t2017, 14, 14).sum(axis=1).values,
+        "promo_60_2017": get_timespan(promo_df, t2017, 60, 60).sum(axis=1).values,
+        "promo_140_2017": get_timespan(promo_df, t2017, 140, 140).sum(axis=1).values,
+        "promo_3_2017_aft": get_timespan(promo_df, t2017 + timedelta(days=16), 15, 3).sum(axis=1).values,
+        "promo_7_2017_aft": get_timespan(promo_df, t2017 + timedelta(days=16), 15, 7).sum(axis=1).values,
+        "promo_14_2017_aft": get_timespan(promo_df, t2017 + timedelta(days=16), 15, 14).sum(axis=1).values,
+    }
 
-    #add golden feature:
+    for i in [3, 7, 14, 30, 60, 140]:
+        tmp = get_timespan(df, t2017, i, i)
+        X['diff_%s_mean' % i] = tmp.diff(axis=1).mean(axis=1).values
+        X['mean_%s_decay' % i] = (tmp * np.power(0.9, np.arange(i)[::-1])).sum(axis=1).values
+        X['mean_%s' % i] = tmp.mean(axis=1).values
+        X['median_%s' % i] = tmp.median(axis=1).values
+        X['min_%s' % i] = tmp.min(axis=1).values
+        X['max_%s' % i] = tmp.max(axis=1).values
+        X['std_%s' % i] = tmp.std(axis=1).values
 
-    encoder = LabelEncoder()
-    train_y = encoder.fit_transform(train_y).astype(np.int32)
-    train_y = np_utils.to_categorical(train_y)
-    #for featureA,featureB in golden_feature:
-    #    train.loc[:,"_".join([featureA,featureB,"diff"])]=train[featureA]-train[featureB]
-    #    test.loc[:,"_".join([featureA,featureB,"diff"])]=test[featureA]-test[featureB]        
+    for i in [3, 7, 14, 30, 60, 140]:
+        tmp = get_timespan(df, t2017 + timedelta(days=-7), i, i)
+        X['diff_%s_mean_2' % i] = tmp.diff(axis=1).mean(axis=1).values
+        X['mean_%s_decay_2' % i] = (tmp * np.power(0.9, np.arange(i)[::-1])).sum(axis=1).values
+        X['mean_%s_2' % i] = tmp.mean(axis=1).values
+        X['median_%s_2' % i] = tmp.median(axis=1).values
+        X['min_%s_2' % i] = tmp.min(axis=1).values
+        X['max_%s_2' % i] = tmp.max(axis=1).values
+        X['std_%s_2' % i] = tmp.std(axis=1).values
 
-    print ("processsing finished")
-    valid=None
-    valid_y=None
-    train = np.array(train)
-    train = train.astype(np.float32)
-    test=np.array(test)
-    test=test.astype(np.float32)
-    if need_normalise:
-        scaler = StandardScaler().fit(train)
-        train = scaler.transform(train)
-        test = scaler.transform(test)
-    
-    if need_validataion:
-        train,valid,train_y,valid_y=train_test_split(train,train_y,test_size=20000,random_state=218)
-    return [(train,train_y),(test,submission),(valid,valid_y)]
+    for i in [7, 14, 30, 60, 140]:
+        tmp = get_timespan(df, t2017, i, i)
+        X['has_sales_days_in_last_%s' % i] = (tmp > 0).sum(axis=1).values
+        X['last_has_sales_day_in_last_%s' % i] = i - ((tmp > 0) * np.arange(i)).max(axis=1).values
+        X['first_has_sales_day_in_last_%s' % i] = ((tmp > 0) * np.arange(i, 0, -1)).max(axis=1).values
 
-print('Loading data...')
+        tmp = get_timespan(promo_df, t2017, i, i)
+        X['has_promo_days_in_last_%s' % i] = (tmp > 0).sum(axis=1).values
+        X['last_has_promo_day_in_last_%s' % i] = i - ((tmp > 0) * np.arange(i)).max(axis=1).values
+        X['first_has_promo_day_in_last_%s' % i] = ((tmp > 0) * np.arange(i, 0, -1)).max(axis=1).values
 
-#datasets=load_data()
+    tmp = get_timespan(promo_df, t2017 + timedelta(days=16), 15, 15)
+    X['has_promo_days_in_after_15_days'] = (tmp > 0).sum(axis=1).values
+    X['last_has_promo_day_in_after_15_days'] = i - ((tmp > 0) * np.arange(15)).max(axis=1).values
+    X['first_has_promo_day_in_after_15_days'] = ((tmp > 0) * np.arange(15, 0, -1)).max(axis=1).values
 
-datasets=load_data()
+    for i in range(1, 16):
+        X['day_%s_2017' % i] = get_timespan(df, t2017, i, 1).values.ravel()
 
-X_train, y_train = datasets[0]
-X_test, submission = datasets[1]
-X_valid, y_valid = datasets[2]
+    for i in range(7):
+        X['mean_4_dow{}_2017'.format(i)] = get_timespan(df, t2017, 28-i, 4, freq='7D').mean(axis=1).values
+        X['mean_20_dow{}_2017'.format(i)] = get_timespan(df, t2017, 140-i, 20, freq='7D').mean(axis=1).values
 
-nb_classes = y_train.shape[1]
-print(nb_classes, 'classes')
+    for i in range(-16, 16):
+        X["promo_{}".format(i)] = promo_df[t2017 + timedelta(days=i)].values.astype(np.uint8)
 
-dims = X_train.shape[1]
-print(dims, 'dims')
+    X = pd.DataFrame(X)
 
-model = Sequential()
+    if is_train:
+        y = df[
+            pd.date_range(t2017, periods=16)
+        ].values
+        return X, y
+    if name_prefix is not None:
+        X.columns = ['%s_%s' % (name_prefix, c) for c in X.columns]
+    return X
 
-model.add(Dense(1024, input_shape=(dims,)))
-model.add(Dropout(0.1))#    input dropout
-model.add(PReLU())
-model.add(BatchNormalization())
-model.add(Dropout(0.5))
+print("Preparing dataset...")
+num_days = 8
+t2017 = date(2017, 5, 31)
+X_l, y_l = [], []
+for i in range(num_days):
+    delta = timedelta(days=7 * i)
+    X_tmp, y_tmp = prepare_dataset(df_2017, promo_2017, t2017 + delta)
 
-model.add(Dense(360))
-model.add(PReLU())
-model.add(BatchNormalization())
-model.add(Dropout(0.5))
+    X_tmp2 = prepare_dataset(df_2017_item, promo_2017_item, t2017 + delta, is_train=False, name_prefix='item')
+    X_tmp2.index = df_2017_item.index
+    X_tmp2 = X_tmp2.reindex(df_2017.index.get_level_values(1)).reset_index(drop=True)
 
-model.add(Dense(420))
-model.add(PReLU())
-model.add(BatchNormalization())
-model.add(Dropout(0.5))
+    X_tmp3 = prepare_dataset(df_2017_store_class, df_2017_promo_store_class, t2017 + delta, is_train=False, name_prefix='store_class')
+    X_tmp3.index = df_2017_store_class.index
+    X_tmp3 = X_tmp3.reindex(df_2017_store_class_index).reset_index(drop=True)
 
-model.add(Dense(nb_classes))
-model.add(Activation('softmax'))
-#opt=SGD(momentum=0.9)
-model.compile(loss='binary_crossentropy', optimizer="sgd")
-auc_scores=[]                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           
-best_score=-1
-best_model=None
-threshold=0.9638
-print('Training model...')
-if need_validataion:
-    for i in range(nb_epoch):
-    #early_stopping=EarlyStopping(monitor='val_loss', patience=0, verbose=1)
-    #model.fit(X_train, y_train, nb_epoch=nb_epoch,batch_size=256,validation_split=0.01,callbacks=[early_stopping])
-        print ("best_score is:",best_score)
-        model.fit(X_train, y_train, nb_epoch=1,batch_size=256)
-        y_pre = model.predict_proba(X_valid)
-        scores = roc_auc_score(y_valid,y_pre)
-        auc_scores.append(scores)
-        print (i,scores)
-        if scores>best_score:
-            best_score=scores
-            best_model=model
-            if best_score>threshold:
-                y_pre = model.predict_proba(X_test)[:,1]
-                save2model(submission,'keras_nn_test_'+str(best_score)+".csv", y_pre)
-    plt.plot(auc_scores)
-    plt.show()
-else:
-    model.fit(X_train, y_train, nb_epoch=nb_epoch, batch_size=256)
+    X_tmp = pd.concat([X_tmp, X_tmp2, X_tmp3, items.reset_index(), stores.reset_index()], axis=1)
 
-if need_validataion:
-    model=best_model
-#print('Generating submission...')
-y_pre = model.predict_proba(X_test)[:,1]
-#print roc_auc_score(y_test,y_pre)
-save2model(submission, 'keras_nn_test.csv',y_pre)
+    X_l.append(X_tmp)
+    y_l.append(y_tmp)
+
+X_train = pd.concat(X_l, axis=0)
+y_train = np.concatenate(y_l, axis=0)
+
+del X_l, y_l
+X_val, y_val = prepare_dataset(df_2017, promo_2017, date(2017, 7, 26))
+X_val2 = prepare_dataset(df_2017_item, promo_2017_item, date(2017, 7, 26), is_train=False, name_prefix='item')
+X_val2.index = df_2017_item.index
+X_val2 = X_val2.reindex(df_2017.index.get_level_values(1)).reset_index(drop=True)
+
+X_val3 = prepare_dataset(df_2017_store_class, df_2017_promo_store_class, date(2017, 7, 26), is_train=False, name_prefix='store_class')
+X_val3.index = df_2017_store_class.index
+X_val3 = X_val3.reindex(df_2017_store_class_index).reset_index(drop=True)
+
+X_val = pd.concat([X_val, X_val2, X_val3, items.reset_index(), stores.reset_index()], axis=1)
+
+X_test = prepare_dataset(df_2017, promo_2017, date(2017, 8, 16), is_train=False)
+X_test2 = prepare_dataset(df_2017_item, promo_2017_item, date(2017, 8, 16), is_train=False, name_prefix='item')
+X_test2.index = df_2017_item.index
+X_test2 = X_test2.reindex(df_2017.index.get_level_values(1)).reset_index(drop=True)
+
+X_test3 = prepare_dataset(df_2017_store_class, df_2017_promo_store_class, date(2017, 8, 16), is_train=False, name_prefix='store_class')
+X_test3.index = df_2017_store_class.index
+X_test3 = X_test3.reindex(df_2017_store_class_index).reset_index(drop=True)
+
+X_test = pd.concat([X_test, X_test2, X_test3, items.reset_index(), stores.reset_index()], axis=1)
+del df_2017_item, promo_2017_item, df_2017_store_class, df_2017_promo_store_class, df_2017_store_class_index
+gc.collect()
+
+scaler = StandardScaler()
+scaler.fit(pd.concat([X_train, X_val, X_test]))
+X_train[:] = scaler.transform(X_train)
+X_val[:] = scaler.transform(X_val)
+X_test[:] = scaler.transform(X_test)
+
+X_train = X_train.as_matrix()
+X_test = X_test.as_matrix()
+X_val = X_val.as_matrix()
+X_train = X_train.reshape((X_train.shape[0], 1, X_train.shape[1]))
+X_test = X_test.reshape((X_test.shape[0], 1, X_test.shape[1]))
+X_val = X_val.reshape((X_val.shape[0], 1, X_val.shape[1]))
+
+def build_model():
+    model = Sequential()
+    model.add(LSTM(512, input_shape=(X_train.shape[1],X_train.shape[2])))
+    model.add(BatchNormalization())
+    model.add(Dropout(.2))
+
+    model.add(Dense(256))
+    model.add(PReLU())
+    model.add(BatchNormalization())
+    model.add(Dropout(.1))
+
+    model.add(Dense(256))
+    model.add(PReLU())
+    model.add(BatchNormalization())
+    model.add(Dropout(.1))
+
+    model.add(Dense(128))
+    model.add(PReLU())
+    model.add(BatchNormalization())
+    model.add(Dropout(.05))
+
+    model.add(Dense(64))
+    model.add(PReLU())
+    model.add(BatchNormalization())
+    model.add(Dropout(.05))
+
+    model.add(Dense(32))
+    model.add(PReLU())
+    model.add(BatchNormalization())
+    model.add(Dropout(.05))
+
+    model.add(Dense(16))
+    model.add(PReLU())
+    model.add(BatchNormalization())
+    model.add(Dropout(.05))
+
+    model.add(Dense(1))
+
+    return model
+
+N_EPOCHS = 2000
+
+val_pred = []
+test_pred = []
+# wtpath = 'weights.hdf5'  # To save best epoch. But need Keras bug to be fixed first.
+sample_weights=np.array( pd.concat([items["perishable"]] * num_days) * 0.25 + 1 )
+for i in range(16):
+    print("=" * 50)
+    print("Step %d" % (i+1))
+    print("=" * 50)
+    y = y_train[:, i]
+    y_mean = y.mean()
+    xv = X_val
+    yv = y_val[:, i]
+    model = build_model()
+    opt = optimizers.Adam(lr=0.001)
+    model.compile(loss='mse', optimizer=opt, metrics=['mse'])
+
+    callbacks = [
+        EarlyStopping(monitor='val_loss', patience=10, verbose=0),
+        ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='min')
+        ]
+    model.fit(X_train, y - y_mean, batch_size = 65536, epochs = N_EPOCHS, verbose=2,
+               sample_weight=sample_weights, validation_data=(xv,yv-y_mean), callbacks=callbacks )
+    val_pred.append(model.predict(X_val)+y_mean)
+    test_pred.append(model.predict(X_test)+y_mean)
+
+weight = items["perishable"] * 0.25 + 1
+err = (y_val - np.array(val_pred).squeeze(axis=2).transpose())**2
+err = err.sum(axis=1) * weight
+err = np.sqrt(err.sum() / weight.sum() / 16)
+print('nwrmsle = {}'.format(err))
+
+y_val = np.array(val_pred).squeeze(axis=2).transpose()
+df_preds = pd.DataFrame(
+    y_val, index=df_2017.index,
+    columns=pd.date_range("2017-07-26", periods=16)
+).stack().to_frame("unit_sales")
+df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
+df_preds["unit_sales"] = np.clip(np.expm1(df_preds["unit_sales"]), 0, 1000)
+df_preds.reset_index().to_csv('nn_cv.csv', index=False)
+
+print("Making submission...")
+y_test = np.array(test_pred).squeeze(axis=2).transpose()
+df_preds = pd.DataFrame(
+    y_test, index=df_2017.index,
+    columns=pd.date_range("2017-08-16", periods=16)
+).stack().to_frame("unit_sales")
+df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
+
+submission = df_test[["id"]].join(df_preds, how="left").fillna(0)
+submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 1000)
+submission.to_csv('nn_sub.csv', float_format='%.4f', index=None)

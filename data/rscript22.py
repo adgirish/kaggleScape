@@ -1,106 +1,55 @@
-import numpy as np
-import pandas as pd
-from sklearn import *
-import xgboost as xgb
-import lightgbm as lgb
-from multiprocessing import *
+# -*- coding: utf-8 -*-
 
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-col = [c for c in train.columns if c not in ['id','target']]
-print(len(col))
-col = [c for c in col if not c.startswith('ps_calc_')]
-print(len(col))
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import warnings
+warnings.filterwarnings('ignore')
 
-train = train.replace(-1, np.NaN)
-d_median = train.median(axis=0)
-d_mean = train.mean(axis=0)
-train = train.fillna(-1)
-one_hot = {c: list(train[c].unique()) for c in train.columns if c not in ['id','target']}
+from sklearn.metrics import fbeta_score
 
-def transform_df(df):
-    df = pd.DataFrame(df)
-    dcol = [c for c in df.columns if c not in ['id','target']]
-    df['ps_car_13_x_ps_reg_03'] = df['ps_car_13'] * df['ps_reg_03']
-    df['negative_one_vals'] = np.sum((df[dcol]==-1).values, axis=1)
-    for c in dcol:
-        if '_bin' not in c:
-            df[c+str('_median_range')] = (df[c].values > d_median[c]).astype(np.int)
-            df[c+str('_mean_range')] = (df[c].values > d_mean[c]).astype(np.int)
-    for c in one_hot:
-        if len(one_hot[c])>2 and len(one_hot[c]) < 7:
-            for val in one_hot[c]:
-                df[c+'_oh_' + str(val)] = (df[c].values == val).astype(np.int)
-    return df
+labels = ['agriculture', 'artisinal_mine', 'bare_ground', 'blooming',
+          'blow_down', 'clear', 'cloudy', 'conventional_mine', 'cultivation',
+          'habitation', 'haze', 'partly_cloudy', 'primary', 'road', 
+          'selective_logging', 'slash_burn', 'water']
 
-def multi_transform(df):
-    print('Init Shape: ', df.shape)
-    p = Pool(cpu_count())
-    df = p.map(transform_df, np.array_split(df, cpu_count()))
-    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
-    p.close(); p.join()
-    print('After Shape: ', df.shape)
-    return df
+def f2_score(y_true, y_pred):
+    y_true, y_pred, = np.array(y_true), np.array(y_pred)
+    return fbeta_score(y_true, y_pred, beta=2, average='samples')
 
-def gini(y, pred):
-    fpr, tpr, thr = metrics.roc_curve(y, pred, pos_label=1)
-    g = 2 * metrics.auc(fpr, tpr) -1
-    return g
 
-def gini_xgb(pred, y):
-    y = y.get_label()
-    return 'gini', gini(y, pred)
+def find_f2score_threshold(p_valid, y_valid, try_all=False, verbose=False):
+    best = 0
+    best_score = -1
+    totry = np.arange(0,1,0.005) if try_all is False else np.unique(p_valid)
+    for t in totry:
+        score = f2_score(y_valid, p_valid > t)
+        if score > best_score:
+            best_score = score
+            best = t
+    if verbose is True: 
+        print('Best score: ', round(best_score, 5), ' @ threshold =', best)
+    return best
 
-params = {'eta': 0.08, 'max_depth': 4, 'objective': 'binary:logistic', 'subsample': 0.8, 'colsample_bytree': 0.8, 'min_child_weight': 0.77, 'scale_pos_weight': 1.6, 'gamma': 10, 'reg_alpha': 8, 'reg_lambda': 1.3, 'eval_metric': 'auc', 'seed': 99, 'silent': True}
-x1, x2, y1, y2 = model_selection.train_test_split(train, train['target'], test_size=0.25, random_state=99)
 
-x1 = multi_transform(x1)
-x2 = multi_transform(x2)
-test = multi_transform(test)
+# Testing ------------------------------------------------------------------
 
-col = [c for c in x1.columns if c not in ['id','target']]
-col = [c for c in col if not c.startswith('ps_calc_')]
-print(x1.values.shape, x2.values.shape)
+df = pd.read_csv('../input/train.csv')
 
-#remove duplicates
-tdups = multi_transform(train)
-dups = tdups[tdups.duplicated(subset=col, keep=False)]
+label_map = {l: i for i, l in enumerate(labels)}
+inv_label_map = {i: l for l, i in label_map.items()}
 
-x1 = x1[~(x1['id'].isin(dups['id'].values))]
-x2 = x2[~(x2['id'].isin(dups['id'].values))]
-print(x1.values.shape, x2.values.shape)
+y_true = []
+y_pred = []
 
-y1 = x1['target']
-y2 = x2['target']
-x1 = x1[col]
-x2 = x2[col]
+p = [0.1,0,0,0,0,0.32,0,0,0,0.1,0,0.1,0.28,0,0,0,0.1]
 
-#XGBoost
-watchlist = [(xgb.DMatrix(x1, y1), 'train'), (xgb.DMatrix(x2, y2), 'valid')]
-model = xgb.train(params, xgb.DMatrix(x1, y1), 1000,  watchlist, feval=gini_xgb, maximize=True, verbose_eval=20, early_stopping_rounds=20)
-test['target'] = model.predict(xgb.DMatrix(test[col]), ntree_limit=model.best_ntree_limit+10)
-test['target'] = (np.exp(test['target'].values) - 1.0).clip(0,1)
-test[['id','target']].to_csv('xgb_submission.csv', index=False, float_format='%.5f')
+for tags in df.tags[:2000]:
+    targets = np.zeros(17)
+    for t in tags.split(' '):
+        targets[label_map[t]] = 1 
+    y_true.append(targets)
+    p += np.random.uniform(low=0.1, high=0.8, size=(17,))
+    p /= np.sum(p)
+    y_pred.append(p)
 
-#LightGBM
-def gini_lgb(preds, dtrain):
-    y = list(dtrain.get_label())
-    score = gini(y, preds) / gini(y, y)
-    return 'gini', score, True
-
-params = {'learning_rate': 0.02, 'max_depth': 4, 'boosting': 'gbdt', 'objective': 'binary', 'max_bin': 10, 'subsample': 0.8, 'subsample_freq': 10, 'colsample_bytree': 0.8, 'min_child_samples': 500, 'metric': 'auc', 'is_training_metric': False, 'seed': 99}
-model2 = lgb.train(params, lgb.Dataset(x1, label=y1), 1000, lgb.Dataset(x2, label=y2), verbose_eval=50, feval=gini_lgb, early_stopping_rounds=200)
-test['target'] = model2.predict(test[col], num_iteration=model2.best_iteration)
-test['target'] = (np.exp(test['target'].values) - 1.0).clip(0,1)
-test[['id','target']].to_csv('lgb_submission.csv', index=False, float_format='%.5f')
-
-df1 = pd.read_csv('xgb_submission.csv')
-df2 = pd.read_csv('lgb_submission.csv')
-df2.columns = [x+'_' if x not in ['id'] else x for x in df2.columns]
-blend = pd.merge(df1, df2, how='left', on='id')
-for c in df1.columns:
-    if c != 'id':
-        blend[c] = (blend[c] * 0.4)  + (blend[c+'_'] * 0.6)
-blend = blend[df1.columns]
-blend['target'] = (np.exp(blend['target'].values) - 1.0).clip(0,1)
-blend.to_csv('blend1.csv', index=False, float_format='%.5f')
+best_threshold = find_f2score_threshold(y_pred, y_true, verbose=True)

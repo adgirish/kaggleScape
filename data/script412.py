@@ -1,245 +1,285 @@
 
 # coding: utf-8
 
-# # Bivariate plotting with pandas
 # 
-# <table>
-# <tr>
-# <td><img src="https://i.imgur.com/bBj1G1v.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/ChK9zR3.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/KBloVHe.png" width="350px"/></td>
-# <td><img src="https://i.imgur.com/C7kEWq7.png" width="350px"/></td>
-# </tr>
-# <tr>
-# <td style="font-weight:bold; font-size:16px;">Scatter Plot</td>
-# <td style="font-weight:bold; font-size:16px;">Hex Plot</td>
-# <td style="font-weight:bold; font-size:16px;">Stacked Bar Chart</td>
-# <td style="font-weight:bold; font-size:16px;">Bivariate Line Chart</td>
-# </tr>
-# <tr>
-# <td>df.plot.scatter()</td>
-# <td>df.plot.hex()</td>
-# <td>df.plot.bar(stacked=True)</td>
-# <td>df.plot.line()</td>
-# </tr>
-# <tr>
-# <td>Good for interval and some nominal categorical data.</td>
-# <td>Good for interval and some nominal categorical data.</td>
-# <td>Good for nominal and ordinal categorical data.</td>
-# <td>Good for ordinal categorical and interval data.</td>
-# </tr>
-# </table>
+# # Audio Data Conversion to Images + EDA
 # 
-# In the previous notebook, we explored using `pandas` to plot and understand relationships within a single column. In this notebook, we'll expand this view by looking at plots that consider two variables at a time.
+# **The dataset**: To help with this, TensorFlow recently released the Speech Commands Datasets. It includes 65,000 one-second long utterances of 30 short words, by thousands of different people.
 # 
-# Data without relationships between variables is the data science equivalent of a blank canvas. To paint the picture in, we need to understand how variables interact with one another. Does an increase in one variable correlate with an increase in another? Does it relate to a decrease somewhere else? The best way to paint the picture in is by using plots that enable these possibilities.
+# | dataset | file count | zipped space | expanded space | 
+# |-------|-------|-------|--------|
+# |train|64,727 files| 1.1 GB | 2.1 GB |
+# |test|158,538 files | 2.6 GB | 5.2 GB |
+# 
+# **The Goal**: In this competition, you're challenged to use the Speech Commands Dataset to build an algorithm that understands simple spoken commands. 
+# 
+# ### About this Kernel
+# Hi all,  if you are considering doing image recognition on these images, I've put together a starter kit that is designed to convert all the wav files into pictures with the goal of running image recognition on the source files. Hope the below is helpful!
+# 
+# **Version improvement 11-17-17**: swapped libraries to `scipy` instead of using `soundfile`. It will run on kaggle kernel, but handicapped the actual file processing. Credit to https://www.kaggle.com/davids1992/data-visualization-and-investigation for the log_spectogram transformation.
+# 
+# **initial Version improvement 11-16-17**: first submission, requires `soundfile` library
+# 
+# ![](http://www1.icsi.berkeley.edu/Speech/mr/images/PZM_spectrogram.gif)
+# 
+
+# 
+# 
+
+# ## 1. Load libraries
 
 # In[ ]:
 
 
-import pandas as pd
-reviews = pd.read_csv("../input/wine-reviews/winemag-data_first150k.csv", index_col=0)
-reviews.head()
+import matplotlib.pyplot as plt
+from matplotlib.backend_bases import RendererBase
+from scipy import signal
+from scipy.io import wavfile
+#import soundfile as sf
+import os
+import numpy as np
+from PIL import Image
+from scipy.fftpack import fft
+
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# ## Scatter plot
-# 
-# The simplest bivariate plot is the lowly **scatter plot**. A simple scatter plot simply maps each variable of interest to a point in two-dimensional space. This is the result:
-
-# In[ ]:
-
-
-reviews[reviews['price'] < 100].sample(100).plot.scatter(x='price', y='points')
-
-
-# Note that in order to make effective use of this plot, we had to **downsample** our data, taking just 100 points from the full set. This is because naive scatter plots do not effectively treat points which map to the same place.
-# 
-# For example, if two wines, both costing 100 dollars, get a rating of 90, then the second one is overplotted onto the first one, and we add just one point to the plot.
-# 
-# This isn't a problem if it happens just a few times. But with enough points the distribution starts to look like a shapeless blob, and you lose the forest for the trees:
+# ## 2. Set your file path
 
 # In[ ]:
 
 
-reviews[reviews['price'] < 100].plot.scatter(x='price', y='points')
+audio_path = '../input/train/audio/'
+pict_Path = '../input/picts/train/'
+test_pict_Path = '../input/picts/test/'
+test_audio_path = '../input/test/audio/'
+samples = []
 
 
-# There are a few ways to treat this problem. We've already demonstrated one way: sampling the points. Another interesting way to do this that's built right into `pandas` is to use our next plot type, a hexplot.
-
-# ## Hexplot
-# 
-# A  hexplot aggregates points in space into hexagons, and then colorize those hexagons:
-
-# In[ ]:
-
-
-reviews[reviews['price'] < 100].plot.hexbin(x='price', y='points', gridsize=15)
-
-
-# The data in this plot is directly comprable to the scatter plot from earlier, but the story it tells us is very different. The hexplot provides us with a much more useful view on the dataset, showing that the bottles of wine reviewed by Wine Magazine cluster around 87.5 points and around $20.
-# 
-# Hexplots and scatter plots can by applied to combinations of interval variables or ordinal categorical variables. To help aleviate overplotting, scatter plots (and, to a lesser extent, hexplots) benefit from variables which can take on a wide range of unique values.
-
-# ## Stacked plots
-# 
-# Scatter plots and hex plots are new. But we can also use the simpler plots we saw in the last notebook.
-# 
-# The easiest way to modify them to support another visual variable is by using stacking. A stacked chart is one which plots the variables one on top of the other.
-# 
-# We'll use a supplemental selection of the five most common wines for this next section.
+# #### Kaggle Version: Identify all the subdirectories in the training directory****
 
 # In[ ]:
 
 
-wine_counts = pd.read_csv("../input/most-common-wine-scores/top-five-wine-score-counts.csv",
-                          index_col=0)
+subFolderList = []
+for x in os.listdir(audio_path):
+    if os.path.isdir(audio_path + '/' + x):
+        subFolderList.append(x)
 
 
-# `wine_counts` counts the number of times each of the possible review scores was received by the five most commonly reviewed types of wines:
+# #### Local Version: create local directories and identify subdirectories
+# 
+# ```python
+# if not os.path.exists(pict_Path):
+#     os.makedirs(pict_Path)
+# 
+# if not os.path.exists(test_pict_Path):
+#     os.makedirs(test_pict_Path)
+# 
+#     
+# subFolderList = []
+# for x in os.listdir(audio_path):
+#     if os.path.isdir(audio_path + '/' + x):
+#         subFolderList.append(x)
+#         if not os.path.exists(pict_Path + '/' + x):
+#             os.makedirs(pict_Path +'/'+ x)
+# ```
+
+# ## 3. Pull an audio sample from each word¶
+# 
 
 # In[ ]:
 
 
-wine_counts.head()
+sample_audio = []
+total = 0
+for x in subFolderList:
+    
+    # get all the wave files
+    all_files = [y for y in os.listdir(audio_path + x) if '.wav' in y]
+    total += len(all_files)
+    # collect the first file from each dir
+    sample_audio.append(audio_path  + x + '/'+ all_files[0])
+    
+    # show file counts
+    print('count: %d : %s' % (len(all_files), x ))
+print(total)
 
 
-# Many `pandas` multivariate plots expect input data to be in this format, with one categorical variable in the columns, one categorical variable in the rows, and counts of their intersections in the entries. 
+# > ## 4. Spectrograms
+# Sample File Path
 # 
-# Let's now look at some stacked plots. We'll start with the stacked bar chart.
 
 # In[ ]:
 
 
-wine_counts.plot.bar(stacked=True)
+sample_audio[0]
 
 
-# Stacked bar plots share the strengths and weaknesses of univariate bar charts. They work best for nominal categorical or small ordinal categorical variables.
+# ### 4.1 Preview of Spectograms across different words
 # 
-# Another simple example is the area plot, which lends itself very naturally to this form of manipulation:
+# Borrowing log spec function from
+# 
+# https://www.kaggle.com/davids1992/data-visualization-and-investigation
 
 # In[ ]:
 
 
-wine_counts.plot.area()
+def log_specgram(audio, sample_rate, window_size=20,
+                 step_size=10, eps=1e-10):
+    nperseg = int(round(window_size * sample_rate / 1e3))
+    noverlap = int(round(step_size * sample_rate / 1e3))
+    freqs, _, spec = signal.spectrogram(audio,
+                                    fs=sample_rate,
+                                    window='hann',
+                                    nperseg=nperseg,
+                                    noverlap=noverlap,
+                                    detrend=False)
+    return freqs, np.log(spec.T.astype(np.float32) + eps)
 
 
-# Like single-variable area charts, multivariate area charts are meant for nominal categorical or interval variables.
-# 
-# Stacked plots are visually very pretty. However, they suffer from two major problems.
-# 
-# The first limitation is that the second variable in a stacked plot must be a variable with a very limited number of possible values (probably an ordinal categorical, as here). Five different types of wine is a good number because it keeps the result interpretable; eight is sometimes mentioned as a suggested upper bound. Many dataset fields will not fit this critereon naturally, so you will have to "make do", as here, by selecting a group of interest.
-# 
-# The second limitation is one of interpretability. As easy as they are to make, and as pretty as they look, stacked plots are really hard to distinguish values within. For example, looking at the plot above, can you tell which wine is the most common one to have gotten a score of approximately 87: the purple, the red, or the green? It's actually really hard to tell!
-
-# ## Bivariate line chart
-# 
-# One plot type we've seen already that remains highly effective when made bivariate is the line chart. Because the line in this chart takes up so little visual space, it's really easy and effective to overplot multiple lines on the same chart.
-
-# In[ ]:
-
-
-wine_counts.plot.line()
-
-
-# Using a line chart this way makes inroads against the second limitation of stacked plotting. Bivariate line charts are much more interpretable: we can see in this chart fairly easily that the green wine (the Chardonnay) very slightly edges out the Pinot Noir around the 87-point scoreline.
-
-# ## Exercises
-# 
-# In this section we introduced and explored some common bivariate plot types:
-# 
-# * Scatter plots
-# * Hex plots
-# * Stacked bar charts and area charts
-# * Bivariate line charts
-# 
-# Let's now put what we've learned to the test!
-# 
-# Try answering the following questions:
-# 
-# 1. A scatter plot or hex plot is good for what two types of data?
-# 2. What type of data makes sense to show in a stacked bar chart, but not in a bivariate line chart?
-# 3. What type of data makes sense to show in a bivariate line chart, but not in a stacked bar chart?
-# 4. Suppose we create a scatter plot but find that due to the large number of points it's hard to interpret. What are two things we can do to fix this issue?
-# 
-# To see the answers, click the "Output" button on the cell below.
+# #### Looking at the top 9 different words in Spectrogram format
 
 # In[ ]:
 
 
-from IPython.display import HTML
-HTML("""
-<ol>
-<li>Scatter plots and hex plots work best with a mixture of ordinal categorical and interval data.</li>
-<br/>
-<li>Nominal categorical data makes sense in a (stacked) bar chart, but not in a (bivariate) line chart.</li>
-<br/>
-<li>Interval data makes sense in a bivariate line chart, but not in a stacked bar chart.</li>
-<br/>
-<li>One way to fix this issue would be to sample the points. Another way to fix it would be to use a hex plot.</li>
-</ol>
-""")
+fig = plt.figure(figsize=(10,10))
+
+# for each of the samples
+for i, filepath in enumerate(sample_audio[:9]):
+    # Make subplots
+    plt.subplot(3,3,i+1)
+    
+    # pull the labels
+    label = filepath.split('/')[-2]
+    plt.title(label)
+    
+    # create spectogram
+    samplerate, test_sound  = wavfile.read(filepath)
+    _, spectrogram = log_specgram(test_sound, samplerate)
+    
+    plt.imshow(spectrogram.T, aspect='auto', origin='lower')
+    plt.axis('off')
 
 
-# Next, let's replicate some plots. Recall the Pokemon dataset from earlier:
-
-# In[ ]:
-
-
-pokemon = pd.read_csv("../input/pokemon/Pokemon.csv", index_col=0)
-pokemon.head()
-
-
-# For the exercises that follow, try forking this notebook and replicating the plots that follow. To see the answers, hit the "Input" button below to un-hide the code.
-
-# In[ ]:
-
-
-pokemon.plot.scatter(x='Attack', y='Defense')
-
-
-# In[ ]:
-
-
-pokemon.plot.hexbin(x='Attack', y='Defense', gridsize=20)
-
-
-# For thee next plot, use the following data:
-
-# In[ ]:
-
-
-pokemon_stats_legendary = pokemon.groupby(['Legendary', 'Generation']).mean()[['Attack', 'Defense']]
-
-
-# In[ ]:
-
-
-pokemon_stats_legendary.plot.bar(stacked=True)
-
-
-# For the next plot, use the following data:
-
-# In[ ]:
-
-
-pokemon_stats_by_generation = pokemon.groupby('Generation').mean()[['HP', 'Attack', 'Defense', 'Sp. Atk', 'Sp. Def', 'Speed']]
-
-
-# In[ ]:
-
-
-pokemon_stats_by_generation.plot.line()
-
-
-# ## Conclusion
+# ### 4.2 Spectograms within the same category, look at "five"
 # 
-# In this section we introduced and explored some common bivariate plot types:
+
+# In[ ]:
+
+
+five_samples = [audio_path + 'five/' + y for y in os.listdir(audio_path + 'five/')[:6]]
+
+fig = plt.figure(figsize=(10,10))
+
+for i, filepath in enumerate(five_samples):
+    # Make subplots
+    plt.subplot(3,3,i+1)
+    
+    # pull the labels
+    label = filepath.split('/')[-1]
+    plt.title('"five": '+label)
+    
+    # create spectogram
+    # create spectogram
+    samplerate, test_sound  = wavfile.read(filepath)
+    _, spectrogram = log_specgram(test_sound, samplerate)
+    
+    plt.imshow(spectrogram.T, aspect='auto', origin='lower')
+    plt.axis('off')
+
+
+# ## 5 Waveforms
+# ### 5.1 Waveforms across different Words 
+
+# In[ ]:
+
+
+fig = plt.figure(figsize=(8,20))
+for i, filepath in enumerate(sample_audio[:6]):
+    plt.subplot(9,1,i+1)
+    samplerate, test_sound  = wavfile.read(filepath)
+    plt.title(filepath.split('/')[-2])
+    plt.axis('off')
+    plt.plot(test_sound)
+
+
+# ### 5.2 Waveforms within the Same Word 
+
+# In[ ]:
+
+
+fig = plt.figure(figsize=(8,20))
+for i, filepath in enumerate(five_samples):
+    plt.subplot(9,1,i+1)
+    samplerate, test_sound = wavfile.read(filepath)
+    plt.title(filepath.split('/')[-2])
+    plt.axis('off')
+    plt.plot(test_sound)
+
+
+# ## 6. Save Figures as images
+# #### Function: convert audio to spectogram images
+
+# In[ ]:
+
+
+def wav2img(wav_path, targetdir='', figsize=(4,4)):
+    """
+    takes in wave file path
+    and the fig size. Default 4,4 will make images 288 x 288
+    """
+
+    fig = plt.figure(figsize=figsize)    
+    # use soundfile library to read in the wave files
+    samplerate, test_sound  = wavfile.read(filepath)
+    _, spectrogram = log_specgram(test_sound, samplerate)
+    
+    ## create output path
+    output_file = wav_path.split('/')[-1].split('.wav')[0]
+    output_file = targetdir +'/'+ output_file
+    #plt.imshow(spectrogram.T, aspect='auto', origin='lower')
+    plt.imsave('%s.png' % output_file, spectrogram)
+    plt.close()
+
+
+# #### Function: convert audio to waveform images
+
+# In[ ]:
+
+
+def wav2img_waveform(wav_path, targetdir='', figsize=(4,4)):
+    samplerate,test_sound  = wavfile.read(sample_audio[0])
+    fig = plt.figure(figsize=figsize)
+    plt.plot(test_sound)
+    plt.axis('off')
+    output_file = wav_path.split('/')[-1].split('.wav')[0]
+    output_file = targetdir +'/'+ output_file
+    plt.savefig('%s.png' % output_file)
+    plt.close()
+
+
+# ## 6.1 Loops to iterate through directories and save
 # 
-# * Scatter plots
-# * Hex plots
-# * Stacked bar charts and area charts
-# * Bivariate line charts
+# #### These are 100% markdown to avoid running on the kaggle site. 
 # 
-# In the next section we will move on to exploring another plotting library, `seaborn`, which compliments `pandas` with many more advanced data visualization tools for you to use.
+# Copy and run locally in your instance. I've capped the number of folders and images to 3 and 5 respectively. Remove the list indexing to run through all directories and all images. Becareful, there's 64k training images!
 # 
-# [Click here to move on to the next section, "Plotting with seaborn"](https://www.kaggle.com/residentmario/plotting-with-seaborn/).
+# ### Convert Training Audio
+# 
+# ```python
+# for i, x in enumerate(subFolderList[:3]):
+#     print(i, ':', x)
+#     # get all the wave files
+#     all_files = [y for y in os.listdir(audio_path + x) if '.wav' in y]
+#     for file in all_files[:10]:
+#         wav2img(audio_path + x + '/' + file, pict_Path + x)
+# ```
+# 
+# ### Convert Testing Audio
+# ```python
+# # get all the wave files
+# all_files = [y for y in os.listdir(test_audio_path + x) if '.wav' in y]
+# for file in all_files:
+#     wav2img(test_audio_path + x + '/' + file, test_pict_Path + x)
+# ```

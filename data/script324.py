@@ -1,185 +1,357 @@
 
 # coding: utf-8
 
-# First things first: I have some data analysis background from my research career in particle physics, but I am far from being an machine learning expert. So please bear with me and I am happy to receive any kind of feedback.
+# This is inspired by [Ceshine Lee](https://www.kaggle.com/ceshine/lgbm-starter?scriptVersionId=1852107) and [LingZhi's](https://www.kaggle.com/vrtjso/lgbm-one-step-ahead?scriptVersionId=1965435) LGBM kernel. 
 # 
-# Since the training data set (and possibly the test data as well) contain missing data, I wanted to have a closer look at this issue. I have seen that other participants propose to fill those NaNs with the mean or median for the respective column. Here I am not (yet) that much interested in filling the blanks but I rather want to know whether we can learn something more about the data when looking missing values.
+# This kernel tackles the problem using a 2-layer dense neural network that looks something like this:
+# ![](https://www.pyimagesearch.com/wp-content/uploads/2016/08/simple_neural_network_header.jpg)
+# 
+# Technically, Tensorflow is used to build this neural network. Before feeding the data into the second layer, batch normalization is used for faster learning(quicker convergent in gradient descent) and Dropout layer is used for regularisation to prevent overfitting.  Instead of a constant learning rate, I have used AdamOptimizer that decays the learning rate over time so that the whole training of network takes much lesser time in my experiment.
+# 
+# I'm sorry that the naming conventions is a little confusing but feel free to ask questions!
 
 # In[ ]:
 
 
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-
-# In[ ]:
-
-
-with pd.HDFStore('../input/train.h5') as train:
-    df = train.get('train')
-
-
-# Let's see how much data we've got:
-
-# In[ ]:
-
-
-print(df.shape)
-
-
-# That's quite a few column. So let's see which columns have missing values and how much data is actually missing.
-
-# In[ ]:
-
-
-null_counts = df.isnull().sum()/len(df)
-plt.figure(figsize=(16,8))
-plt.xticks(np.arange(len(null_counts))+0.5,null_counts.index,rotation='vertical')
-plt.ylabel('fraction of rows with missing data')
-plt.bar(np.arange(len(null_counts)),null_counts)
-
-
-# Uh, that is quite a lot of missing data. Almost all feature columns contain missing values and the fraction of rows with missing data can be substantial.
-# Ok, let's try to become a bit more quantitative. We can calculate for every ID (= financial asset) and feature column the following information:
-# * number of missing values
-# * relative fraction of missing values (= number missing values / timespan for which this ID is present)
-# * number of continuous time spans with missing values (to see whether data is only missing for a certain period of time or whether missing values occur irregularly over the total time span an asset is held)
-
-# In[ ]:
-
-
-# drop non-feature columns
-feature_columns = df.columns.drop(['id','timestamp','y'])
-# create multi-index with (count, fraction, number of NaN sequences) per feature column
-iterables = [feature_columns,['count','fraction','seq']]
-index = pd.MultiIndex.from_product(iterables,names=['feature','stat'])
-# use list of IDs as index (only sorted for easier navigation)
-ids = df.id.unique()
-ids.sort()
-# create empty data frame
-nan_df = pd.DataFrame(data=None,index=ids,columns=index)
-
-
-# The calculation should be straightforward except maybe for the number of connected time ranges with missing data. Here the idea is the following:
-# * get the row indices for NaNs in a feature column
-# * enumerate those indices
-# * for a continuous time period of NaNs `enumeration index - row index` should be constant
-# * use [groupby from itertools](https://docs.python.org/3/library/itertools.html#itertools.groupby) to get the list of continous time spans of NaNs
-
-# In[ ]:
-
-
-from itertools import groupby
-# iterate over all asset ID
-for name,group in df.groupby('id'):
-    # for every feature column
-    for c in feature_columns:
-        # total number of rows with missing data
-        nan_count = group[c].isnull().sum()
-        # time span this ID was present
-        timespan = len(group[c])
-        # row indices for missing data
-        nan_indices = pd.isnull(group[c]).nonzero()[0]
-        # get number of joint time spans of missing values
-        nseq = len(list(groupby(enumerate(nan_indices),lambda x:x[0]-x[1])))
-        nan_df.loc[name][c,'count'] = nan_count
-        nan_df.loc[name][c,'fraction'] = nan_count * 1.0/timespan
-        nan_df.loc[name][c,'seq'] = nseq
-
-
-# Let's have a quick look at the resulting data frame.
-
-# In[ ]:
-
-
-nan_df.head(20)
-
-
-# Ok, this looks reasonable at the first glance. In order to get a better feeling, let's have a look at the mean fraction of missing data per feature column and its standard deviation (where mean and std are calculated over the sample of all IDs in the training data).
-
-# In[ ]:
-
-
-fractions = nan_df.xs('fraction',level='stat',axis=1)
-fraction_mean = fractions.mean()
-fraction_std = fractions.std()
-plt.figure(figsize=(16,8))
-plt.xticks(np.arange(len(fraction_mean)),fraction_mean.index,rotation='vertical')
-plt.errorbar(np.arange(len(fraction_mean)),fraction_mean,yerr=fraction_std,fmt='o')
-plt.ylabel('mean fraction of rows with missing data per ID');
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from sklearn.metrics import mean_squared_error
+import gc
+import tensorflow as tf
 
 
 # In[ ]:
 
 
-plt.hist(fractions.values.flatten(),bins=50)
-plt.xlabel('fraction of rows with missing data per ID');
-
-
-# This looks interesting. For a given ID and feature column either <30% of the data is missing or all of it. The large gap in between renders the mean values a bit misleading. But what it is interesting to me is the fact that the standard deviation varies quite a bit. For fundamental and derived data the variations among different IDs seem to be (in general) larger than for the technical feature columns. One reason could be that fundamental data could be missing for fixed number of time stamps (e.g. the first N occurences) which would lead to large variations since time spans for which different IDs are present vary quite a bit as other participants already revealed. In order to test this, we can make the same plot for the absolute number of missing values per feature column.
-
-# In[ ]:
-
-
-counts = nan_df.xs('count',level='stat',axis=1)
-count_mean = counts.mean()
-count_std = counts.std()
-plt.figure(figsize=(16,8))
-plt.xticks(np.arange(len(count_mean)),count_mean.index,rotation='vertical')
-plt.errorbar(np.arange(len(count_mean)),count_mean,yerr=count_std,fmt='o')
-plt.ylabel('mean for number of missing data')
+df_train_X = pd.read_csv('../input/fork-of-lgbm-one-step-ahead-xgb/x_train.csv')
+df_train_Y = pd.read_csv('../input/fork-of-lgbm-one-step-ahead-xgb/y_train.csv')
+df_test_X = pd.read_csv('../input/fork-of-lgbm-one-step-ahead-xgb/x_test.csv')
+df_test_Y = pd.read_csv('../input/fork-of-lgbm-one-step-ahead-xgb/y_test.csv')
 
 
 # In[ ]:
 
 
-plt.hist(counts.values.flatten(),bins=50)
-plt.xlabel('counts of rows with missing data per ID');
-
-
-# Nope, the picture remains the same. My conclusion from this is that there are different classes of IDs which have a different availability of fundamental and derived data. Before pursuing this route further, let's also look at the number of connected time spans for missing data.
-
-# In[ ]:
-
-
-nseq = nan_df.xs('seq',level='stat',axis=1)
-nseq_mean = nseq.mean()
-nseq_std = nseq.std()
-plt.figure(figsize=(16,8))
-plt.xticks(np.arange(len(nseq_mean)),nseq_mean.index,rotation='vertical')
-plt.errorbar(np.arange(len(nseq_mean)),nseq_mean,yerr=nseq_std,fmt='o')
-plt.ylabel('mean number of connected NaN ranges')
+itemsDF = pd.read_csv('../input/fork-of-lgbm-one-step-ahead-xgb/items_reindex.csv')
 
 
 # In[ ]:
 
 
-plt.hist(nseq.values.flatten(),bins=50)
-plt.xlabel('number of connected time ranges with missing data per ID');
+def NWRMSLE(y, pred, w):
+    return mean_squared_error(y, pred, sample_weight=w)**0.5
 
-
-# This is very interesting. This means that rows with missing data for a given ID and feature are always continuous in time. It is **not** the case that data for an asset is unavailable, becomes available and then becomes unavailable again. I bet that if data is unavailable, it is at the beginning of the time interval in which the corresponding asset is traded. Let's try to visualize this.
 
 # In[ ]:
 
 
-# iterate over IDs
-grouped = df.groupby('id');
-for i,(n,g) in enumerate(grouped):
-    # get missing data flag for feature columns
-    d = g.isnull().drop(['timestamp','id','y'],axis=1)
-    # normalise time stamp to start with 0 when ID appears for the first time in portfolio
-    d.index = g.timestamp - g.timestamp.min()
-    d.index.name = 'relative timestamp'
-    plt.figure(figsize=(16,12))
-    plt.title("ID = %d" % n)
-    sns.heatmap(d.T,xticklabels=100,cbar=False)
-    # only plot first 10 IDs
-    if i > 10:
-        break
+df_train_X.drop(['Unnamed: 0'], inplace=True,axis=1)
+df_test_X.drop(['Unnamed: 0'], inplace=True,axis=1)
+df_train_Y.drop(['Unnamed: 0'], inplace=True,axis=1)
+df_test_Y.drop(['Unnamed: 0'], inplace=True,axis=1)
 
 
-# Bingo! Black bars denote columns and time stamps with missing data. All bars start at the very left which is the time an ID appears for the first time in the portfolio. It also looks like there are different *kinds* of these _barcode plots_. Maybe one can try to categorise IDs based on their missing value patterns... I will post an update on this.
+# This is the start of building the computation graph of TensorFlow NN model.
+# 
+# Let's declare some constant values for our TF NN model.
+
+# In[ ]:
+
+
+numFeatures = df_train_X.shape[1]
+numLabels = 1
+hiddenUnit = 20
+learningRate = 0.01
+numEpochs = 1000
+
+
+# Declare the placeholders for the input(x) and output(y_) layer.
+
+# In[ ]:
+
+
+x = tf.placeholder(tf.float64, [None, numFeatures],name="X_placeholder")
+y_ = tf.placeholder(tf.float64, [None, numLabels],name="Y_placeholder")
+
+
+# Declare the first and second hidden layer by initializing the weights to a range of random normally distributed values.
+
+# In[ ]:
+
+
+weights = tf.Variable(tf.random_normal([numFeatures,hiddenUnit],stddev=0.1,name="weights", dtype=tf.float64))
+weights2 = tf.Variable(tf.random_normal([hiddenUnit,1],name="weights2", dtype=tf.float64))
+
+
+# Declare the bias that will be multiplied together with the weights later. Similarly,  we'll initializing the bias to a range of random normally distributed values.
+
+# In[ ]:
+
+
+bias = tf.Variable(tf.random_normal([1,hiddenUnit],stddev=0.1,name="bias", dtype=tf.float64))
+bias2 = tf.Variable(tf.random_normal([1,1],stddev=0.1,name="bias2", dtype=tf.float64))
+
+
+# We'll define a placeholder for inputting the "perishable" feature which is used to compute the weighted loss
+
+# In[ ]:
+
+
+weightsNWR = tf.placeholder(tf.float32, [None, 1],name="weightsNWR")
+
+
+# Take this chance to populate the weight variables which will be used to pass to the placeholder during the training phase.
+
+# In[ ]:
+
+
+itemWeightsTrain = pd.concat([itemsDF["perishable"]] * 6) * 0.25 + 1
+itemWeightsTrain = np.reshape(itemWeightsTrain,(itemWeightsTrain.shape[0], 1))
+
+
+# In[ ]:
+
+
+itemWeightsTest = itemsDF["perishable"]* 0.25 + 1
+itemWeightsTest = np.reshape(itemWeightsTest,(itemWeightsTest.shape[0], 1))
+
+
+# First hidden layer is composed of multiplication of input, weights and the bias we have declared above
+
+# In[ ]:
+
+
+y = tf.matmul(x,weights) + bias
+
+
+# We'll pass the results of the first layer to a relu activation function to convert the linear values into a non-linear one.
+
+# In[ ]:
+
+
+y = tf.nn.relu(y)
+
+
+# Next, we'll set up a batch normalization function that normalize the values that comes from out the relu function.
+
+# Normalization can improve learning speed because the path to the global minimum is reduced:
+# ![](http://cs231n.github.io/assets/nn2/prepro1.jpeg)
+
+# Although many literatures say that batch norm is applied **before** activation function, I believe that it would be more beneficial if batch normalization is applied **after** the activation function so that the range of linear values will not be restricted to a down-sized range.
+
+# In[ ]:
+
+
+epsilon = 1e-3
+batch_mean2, batch_var2 = tf.nn.moments(y,[0])
+scale2 = tf.Variable(tf.ones([hiddenUnit],dtype=tf.float64),dtype=tf.float64)
+beta2 = tf.Variable(tf.zeros([hiddenUnit],dtype=tf.float64),dtype=tf.float64)
+y = tf.nn.batch_normalization(y,batch_mean2,batch_var2,beta2,scale2,epsilon)
+
+
+# We set up a dropout layer to intentionally deactivate certain units. This will improve generalization and reduce overfitting(better validation set score) because it force your layer to learn with different neurons the same "concept".
+# 
+# ![](http://leonardoaraujosantos.gitbooks.io/artificial-inteligence/content/image_folder_5/dropout.jpeg)
+# 
+# Note that during the prediction phase, the dropout is deactivated.
+
+# In[ ]:
+
+
+dropout_placeholder = tf.placeholder(tf.float64,name="dropout_placeholder")
+y=tf.nn.dropout(y,dropout_placeholder)
+
+
+# Next we'll build the second hidden layer. As usual, it's the multiplication of input, weights and the bias we have declared above
+
+# In[ ]:
+
+
+#create 1 more hidden layer
+y = tf.matmul(y,weights2)+bias2
+
+
+# Pass the results to another relu activation function
+
+# In[ ]:
+
+
+y = tf.nn.relu(y)
+
+
+# The loss function that are trying to optimize, or the goal of training, is to minimize the weighted mean squared error. 
+# 
+# Perishable items are given a weight of 1.25 where all other items are given a weight of 1.00, as described in the competition details. 
+# 
+
+# In[ ]:
+
+
+loss = tf.losses.mean_squared_error(predictions=y,labels=y_,weights=weightsNWR)
+cost = tf.reduce_mean(loss)
+
+
+# As stated above, I have found AdamOptimizer, which decays the learning rate over time to be better than the GradientOptimizer option in terms of training speed. Beside that, AdamOptimizer also dampens the oscillations in the direction that do not point to the minimal so that the back-and-forth between these walls will be reduced and at the same time, we'll build up momentum in the direction of the minimum.
+
+# In[ ]:
+
+
+optimizer = tf.train.AdamOptimizer(learning_rate=learningRate).minimize(cost)
+
+
+# Finally, we'll create a TF session for training our model.
+
+# In[ ]:
+
+
+sess = tf.Session()
+
+
+# Initilize the variables that we have been setting up
+
+# In[ ]:
+
+
+sess.run(tf.global_variables_initializer())
+
+
+# Finally, it's time to train our NN model! We are actually training 16 NN model (1 for each column of y values). There are 16 columns in Y train and Y test, which represents prediction for 16 days.
+# 
+# We are training for 1000 epoch. At every 100 epoch, we do an output in terms of weighted mse to see if it overfits for test set. After 1000 epoch is done, we'll use the trained model for prediction by feeding the X submission data.
+# 
+# Note that Dropout rate is set at 0.6(deactivate 40% of units) during training and back at 1.0(no deactivation) during prediction. Check these values when you are building your own drop out layers to ensure that you are not throwing away results during prediction.
+# 
+# Also, training will be longer than Kaggle's allowable timeout limit so run this at your own local machine.
+
+# In[ ]:
+
+
+val_pred_nn = []
+test_pred_nn = []
+cate_vars_nn = []
+submit_pred_nn=[]
+
+trainingLoss=[]
+validationLoss=[]
+
+
+#step through all the dates(16)
+for i in range(16):
+    print("Step %d" % (i+1))
+    
+    trainY_NN = np.reshape(df_train_Y.iloc[:,i],(df_train_Y.shape[0], 1))
+    testY_NN = np.reshape(df_test_Y.iloc[:,i],(df_test_Y.shape[0], 1))
+    
+    for epoch in range(numEpochs):
+        _,loss = sess.run([optimizer,cost], feed_dict={x: df_train_X, y_: trainY_NN,weightsNWR:itemWeightsTrain,dropout_placeholder:0.6})
+
+        if epoch%100 == 0:
+            print('Epoch', epoch, 'completed out of',numEpochs,'loss:',loss)
+            #trainingLoss.append(loss)
+            #check against test dataset
+            test_pred = sess.run(cost, feed_dict={x:df_test_X,y_: testY_NN,weightsNWR:itemWeightsTest,dropout_placeholder:1.0})
+            print('Acc for test dataset ',test_pred)
+            #validationLoss.append(test_pred)
+    
+    tf_pred = sess.run(y,feed_dict={x:df_test_X,weightsNWR:itemWeightsTest,dropout_placeholder:1.0})
+    tf_predY = np.reshape(tf_pred,(tf_pred.shape[0],))
+    test_pred_nn.append(tf_predY)
+    print('score for step',(i+1))
+    print("Validation mse:", mean_squared_error(df_test_Y.iloc[:,i], tf_predY))
+    print('NWRMSLE:',NWRMSLE(df_test_Y.iloc[:,i], tf_predY,itemsDF["perishable"]*0.25+1))
+
+    #predict for submission set
+    nn_submit_predY = sess.run(y,feed_dict={x:df_Submission_X,dropout_placeholder:1.0})
+    nn_submit_predY = np.reshape(nn_submit_predY,(nn_submit_predY.shape[0],))
+    submit_pred_nn.append(nn_submit_predY)
+    
+    gc.collect()
+    sess.run(tf.global_variables_initializer())
+
+
+# In[ ]:
+
+
+nnTrainY= np.array(test_pred_nn).transpose()
+pd.DataFrame(nnTrainY).to_csv('nnTrainY.csv')
+nnSubmitY= np.array(submit_pred_nn).transpose()
+pd.DataFrame(nnSubmitY).to_csv('nnSubmitY.csv')
+
+
+# You can use the below NWRMSLE to compare test set score with other benchmarks, or finding out the optimal weights for your ensemble.
+
+# In[ ]:
+
+
+print('NWRMSLE:',NWRMSLE(df_test_Y,nnTrainY,itemsDF["perishable"]* 0.25 + 1))
+
+
+# With the prediction values from the NN model, prepare for submission. The following cells are pretty self-explantory.
+
+# In[ ]:
+
+
+#to reproduce the testing IDs
+df_train = pd.read_csv(
+    '../input/favorita-grocery-sales-forecasting/train.csv', usecols=[1, 2, 3, 4, 5],
+    dtype={'onpromotion': bool},
+    converters={'unit_sales': lambda u: np.log1p(
+        float(u)) if float(u) > 0 else 0},
+    parse_dates=["date"],
+    skiprows=range(1, 66458909)  # 2016-01-01
+)
+
+df_2017 = df_train.loc[df_train.date>=pd.datetime(2017,1,1)]
+del df_train
+
+df_2017 = df_2017.set_index(
+    ["store_nbr", "item_nbr", "date"])[["unit_sales"]].unstack(
+        level=-1).fillna(0)
+df_2017.columns = df_2017.columns.get_level_values(1)
+
+
+# In[ ]:
+
+
+#submitDF = pd.read_csv('../input/testforsubmit/testForSubmit.csv',index_col=False)
+df_test = pd.read_csv(
+    "../input/favorita-grocery-sales-forecasting/test.csv", usecols=[0, 1, 2, 3, 4],
+    dtype={'onpromotion': bool},
+    parse_dates=["date"]  # , date_parser=parser
+).set_index(
+    ['store_nbr', 'item_nbr', 'date']
+)
+
+
+# In[ ]:
+
+
+print("Making submission...")
+df_preds = pd.DataFrame(
+    combinedSubmitPredY, index=df_2017.index,
+    columns=pd.date_range("2017-08-16", periods=16)
+).stack().to_frame("unit_sales")
+df_preds.index.set_names(["store_nbr", "item_nbr", "date"], inplace=True)
+
+
+# In[ ]:
+
+
+submission = df_test[["id"]].join(df_preds, how="left").fillna(0)
+
+
+# In[ ]:
+
+
+submission["unit_sales"] = np.clip(np.expm1(submission["unit_sales"]), 0, 1000)
+
+
+# In[ ]:
+
+
+submission[['id','unit_sales']].to_csv('submit_nn.csv',index=None)
+
+
+# **TODO/Areas to improve/To be Updated:**
+# * Normalize X data before inputting into input layer.
+# * Use Tensorboard to graphically visualize the model to see if there's any bottlenecks or areas that could improve the robustness of the model.

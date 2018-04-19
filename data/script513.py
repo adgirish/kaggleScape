@@ -1,496 +1,375 @@
 
 # coding: utf-8
 
-# # Introduction
+# ## Introduction
 
-# I have deided to work with the Titanic dataset again. this kernel is focusing on comparing the performance of several machine learning algorithms. I use several clasification model to create a model predicting survival on the Titanic. 
-# I am hoping to learn a lot from this site, so feedback is very welcome! This kernel is always improving because of your feedback!!!
+# In this competition, we are asked  to use reservation and visitation data to predict the total number of visitors to a restaurant for future dates. This information is supposed to help restaurants be much more efficient and allow them to focus on creating an enjoyable dining experience for their customers. 
 # 
-# There are three parts to my script as follows:
-# 
-# 1. Load the library and data
-# 2. Data cleaning
-# 3. Data spliting
-# 4. Training,testing, and Peformance comparison
-# 5. Tuning the algorithm
-# 
-# If you like this work and want to see my other works, you can check it here:
-# 
-# https://www.kaggle.com/aldemuro
-# 
+# This is a nice opportunity to learn more about Japan!!!
 
-# # 1. Load the library and data
+# The data comes from two separate sites:
 # 
-# In this section the library and the data used are loaded into the sytem
-# 
-# ## 1.1 Load the library
+# * Hot Pepper Gourmet (hpg): similar to Yelp, here users can search restaurants and also make a reservation online
+# * AirREGI / Restaurant Board (air): similar to Square, a reservation control and cash register system
 
 # In[ ]:
 
 
-#sklearn
-from sklearn.cross_validation import train_test_split, cross_val_score
-from sklearn.metrics import mean_squared_error,confusion_matrix, precision_score, recall_score, auc,roc_curve
-from sklearn import ensemble, linear_model, neighbors, svm, tree, neural_network
-from sklearn.pipeline import make_pipeline
-from sklearn.linear_model import Ridge
-from sklearn.preprocessing import PolynomialFeatures
-from sklearn import svm,model_selection, tree, linear_model, neighbors, naive_bayes, ensemble, discriminant_analysis, gaussian_process
-
-#load package
-import pandas as pd
-import numpy as np
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from subprocess import check_output
 import matplotlib.pyplot as plt
-#from math import sqrt
 import seaborn as sns
-
-import warnings
-warnings.filterwarnings('ignore')
+print(check_output(["ls", "../input"]).decode("utf8"))
 
 
-# ## 1.2 Load the data
+# ## Data Wrangling
+
+# The training data covers the dates from 2016 until April 2017. The test set covers the last week of April and May of 2017. The test set is split based on time (the public fold coming first, the private fold following the public) and covers a chosen subset of the air restaurants. Note that the test set intentionally spans a holiday week in Japan called the "Golden Week."
 
 # In[ ]:
 
 
-## Read in file
-train_original = pd.read_csv('../input/train.csv')
-test_original = pd.read_csv('../input/test.csv')
-train_original.sample(10)
-total = [train_original,test_original]
+airres = pd.read_csv('../input/recruit-restaurant-visitor-forecasting/air_reserve.csv')
+airstore = pd.read_csv('../input/recruit-restaurant-visitor-forecasting/air_store_info.csv')
+hpgres = pd.read_csv('../input/recruit-restaurant-visitor-forecasting/hpg_reserve.csv')
+hpgstore = pd.read_csv('../input/recruit-restaurant-visitor-forecasting/hpg_store_info.csv')
+airvisit = pd.read_csv('../input/recruit-restaurant-visitor-forecasting/air_visit_data.csv')
 
 
-# # 2. Data Cleaning
-# ## 2.1 Retrive the salutation and Eliminating unused variable
+# In[ ]:
+
+
+airvisit.tail()
+
+
+# In[ ]:
+
+
+airres.head()
+
+
+# In[ ]:
+
+
+air = pd.merge(airres,airstore,on='air_store_id')
+hpg = pd.merge(hpgres,hpgstore,on='hpg_store_id')
+rel = pd.read_csv('../input/recruit-restaurant-visitor-forecasting/store_id_relation.csv')
+airrel = pd.merge(air,rel,how='left',on='air_store_id')
+hpgrel = pd.merge(hpg,rel,how='left',on='hpg_store_id')
+full = pd.merge(airrel,hpgrel,how='outer')
+print("there are ",len(air)," restaurants with AIR and ",len(hpg)," with HPG.",len(rel),' have both.')
+
+
+# ## A Bit of Geography and Clustering
+
+# Apparently Japan's terittory is divided in 8 regions which are not official administrative units, but have been traditionally used as the regional division of Japan in a number of contexts [https://en.wikipedia.org/wiki/List_of_regions_of_Japan ]
 # 
-# 'Salutation' variable can be retrieved from 'Name' column by taking the string between space string and '.' string.
+# From north to south, the traditional regions are:
+# * **Hokkaidō** (the island of Hokkaidō and nearby islands, population: 5,507,456, largest city: Sapporo)
+# * **Tōhoku** region (northern Honshū, population: 9,335,088, largest city: Sendai)
+# * **Kantō** region (eastern Honshū, population: 42,607,376, largest city: Tokyo)
+# * **Chūbu region** (central Honshū, including Mt. Fuji, population: 21,714,995, largest city: Nagoya), sometimes divided into:
+#    * Hokuriku region (northwestern Chūbu, largest city: Kanazawa)
+#    * Kōshin'etsu region (northeastern Chūbu, largest city: Niigata)
+#   * Tōkai region (southern Chūbu, largest city: Nagoya)
+# * **Kansai or Kinki** region (west-central Honshū, including the old capital, Kyoto, population: 22,755,030, largest city: Osaka)
+# * **Chūgoku** region (western Honshū, population: 7,561,899, largest city: Hiroshima)
+# * **Shikoku** (island, population: 3,977,205, largest city: Matsuyama)
+# * **Kyūshū** (island, population: 14,596,977, largest city: Fukuoka) which includes:
+#   * Northern Kyushu: Fukuoka, Saga, Nagasaki and Ōita (largest city: Fukuoka)
+#   * Southern Kyushu: Kumamoto, Miyazaki and Kagoshima (largest city: Kagoshima)
+#   * Okinawa (largest city: Naha)
+
+# ![](http://goinjapanesque.com/wpos/wp-content/uploads/2015/07/Japan-map-en.png)
+
+# I am now going to identify 10 clusters with KMeans according to the restaurants' coordinates. Markers of different clusters will be depicted with different colors. I will place a black dot representing the cluster centroid with a label identifying it as an integer. I will also place a label close to the cluster with the name of the Japan region in which that cluster relies.
 
 # In[ ]:
 
 
-#Retrive the salutation from 'Name' column
-for dataset in total:
-    dataset['Salutation'] = dataset.Name.str.extract(' ([A-Za-z]+)\.', expand=False)    
-
-
-# In[ ]:
-
-
-pd.crosstab(train_original['Salutation'], train_original['Sex'])
-
-
-# In[ ]:
-
-
-pd.crosstab(test_original['Salutation'], test_original['Sex'])
-
-
-#  afterward, 'Salutation' column should be factorized to be fit in our future model
-
-# In[ ]:
-
-
-for dataset in total:
-    dataset['Salutation'] = dataset['Salutation'].replace(['Lady', 'Countess','Capt', 'Col','Don', 'Dr', 'Major', 'Rev', 'Sir', 'Jonkheer', 'Dona'], 'Rare')
-    dataset['Salutation'] = dataset['Salutation'].replace('Mlle', 'Miss')
-    dataset['Salutation'] = dataset['Salutation'].replace('Ms', 'Miss')
-    dataset['Salutation'] = dataset['Salutation'].replace('Mme', 'Mrs')
-    dataset['Salutation'] = pd.factorize(dataset['Salutation'])[0]
-    
-
-
-#total.Salutation = pd.factorize(total.Salutation)[0]   
+from sklearn.cluster import KMeans
+kmeans = KMeans(n_clusters=10, random_state=0).fit(full[['longitude','latitude']])
+full['cluster'] = kmeans.predict(full[['longitude','latitude']])
 
 
 # In[ ]:
 
 
-pd.crosstab(train_original['Salutation'], train_original['Sex'])
+from mpl_toolkits.basemap import Basemap
+import matplotlib.pyplot as plt
+m = Basemap(projection='aeqd',width=2000000,height=2000000, lat_0=37.5, lon_0=138.2)
+
+cx = [c[0] for c in kmeans.cluster_centers_]
+cy = [c[1] for c in kmeans.cluster_centers_]
+cm = plt.get_cmap('gist_rainbow')
+colors = [cm(2.*i/10) for i in range(10)]
+colored = [colors[k] for k in full['cluster']]
+f,axa = plt.subplots(1,1,figsize=(15,16))
+m.drawcoastlines()
+m.fillcontinents(color='lightgray',lake_color='aqua',zorder=1)
+m.scatter(full.longitude.values,full.latitude.values,color=colored,s=20,alpha=1,zorder=999,latlon=True)
+m.scatter(cx,cy,color='Black',s=50,alpha=1,latlon=True,zorder=9999)
+plt.setp(axa.get_yticklabels(), visible=True)
+plt.annotate('Fukuoka', xy=(0.04, 0.32), xycoords='axes fraction',fontsize=20)
+plt.annotate('Shikoku', xy=(0.25, 0.25), xycoords='axes fraction',fontsize=20)
+plt.annotate('Hiroshima', xy=(0.2, 0.36), xycoords='axes fraction',fontsize=20)
+plt.annotate('Osaka', xy=(0.40, 0.30), xycoords='axes fraction',fontsize=20)
+
+plt.annotate('Tokyo', xy=(0.60, 0.4), xycoords='axes fraction',fontsize=20)
+plt.annotate('Shizuoka', xy=(0.50, 0.32), xycoords='axes fraction',fontsize=20)
+plt.annotate('Niigata', xy=(0.48, 0.54), xycoords='axes fraction',fontsize=20)
+plt.annotate('Fukushima', xy=(0.62, 0.54), xycoords='axes fraction',fontsize=20)
+plt.annotate('Hokkaido', xy=(0.7, 0.74), xycoords='axes fraction',fontsize=20)
+
+
+for i in range(len(cx)):
+    xpt,ypt = m(cx[i],cy[i])
+    plt.annotate(i, (xpt+500,ypt+500),zorder=99999,fontsize=16)
+plt.show()
+
+
+
+# Let's try to relate the identified groups with the biggest cities:
+# 
+# * Cluster 0 refers to Tokyo.
+# * Cluster 1 refers  to Osaka
+# * Cluster 2 refers to Sapporo
+# * Cluster 3 refers to Fukuoka
+# * Cluster 4 refers to Niigata
+# * Cluster 5 referst to Hiroshima
+# * Cluster 6 refers to Shizouku
+# * Cluster 7 refers to Sendai
+# * Cluster 9 refers to Kobe
+
+# In[ ]:
+
+
+f,axa = plt.subplots(1,2,figsize=(15,6))
+hist_clust = full.groupby(['cluster'],as_index=False).count()
+sns.barplot(x=hist_clust.cluster,y=hist_clust.air_store_id,ax=axa[0])
+sns.barplot(x=hist_clust.cluster,y=hist_clust.hpg_store_id,ax=axa[1])
+plt.show()
+
+
+# let's see now how data is distributed
+
+# In[ ]:
+
+
+f,ax = plt.subplots(1,1,figsize=(15,6))
+airhist = air.groupby(['air_store_id'],as_index=False).count()
+sns.distplot(airhist.visit_datetime)
+hpghist = hpg.groupby(['hpg_store_id'],as_index=False).count()
+sns.distplot(hpghist.visit_datetime)
+plt.show()
+#sns.barplot(x= airhist.air_store_id,y = airhist.visit_datetime)
+
+
+# ## Cousine Genres
+
+# Now let's check out wht are the genres appreciated in Japan. I have prepared two heatmaps: the former with thenumber of restaurants for each genre (columns) in each region (row) for thos with AIR reservation  system; the latter with the HPG.
+# 
+# For  the AIR restaurants, It looks like Izakayas, which I learned is a casual place for after-work drinking (like a pub?) https://en.wikipedia.org/wiki/Izakaya,  are the places with the wider appreciation, among regions. 
+# 
+# Italian and French Restaurants are instead the most appreciated in Tokyo, among the restaurants with the AIR system, which makes me happy since I am Italian :).
+# 
+
+# In[ ]:
+
+
+air_genre = full.loc[full.air_genre_name.isnull()==False].groupby(['cluster','air_genre_name'],as_index=False).count()
+hpg_genre = full.loc[full.hpg_genre_name.isnull()==False].groupby(['cluster','hpg_genre_name'],as_index=False).count()
+
+genres = air.air_genre_name.unique()
+
+#i = 0
+f,axa= plt.subplots(2,1,figsize=(15,36))
+hm = []
+for i in range(10):
+    genres_count = [ air_genre.loc[air_genre.cluster==i].loc[air_genre.air_genre_name==name]['air_store_id'].values[0] if name in air_genre.loc[air_genre.cluster==i].air_genre_name.values else 0 for name in genres] 
+    hm.append(genres_count)
+hm = pd.DataFrame(hm,columns=genres,)
+sns.heatmap(hm.transpose(),cmap="YlGnBu",ax=axa[0])
+
+genres = hpg.hpg_genre_name.unique()
+hm = []
+for i in range(10):
+    genres_count = [ hpg_genre.loc[hpg_genre.cluster==i].loc[hpg_genre.hpg_genre_name==name]['hpg_store_id'].values[0] if name in hpg_genre.loc[hpg_genre.cluster==i].hpg_genre_name.values else 0 for name in genres] 
+    hm.append(genres_count)
+hm = pd.DataFrame(hm,columns=genres,)
+sns.heatmap(hm.transpose(),cmap="YlGnBu",ax=axa[1])
+
+
+plt.show()
+
+
+# ## Japanese Holidays
+
+# Let's check what are the Japanese holidays excluding Saturday and Sundays
+
+# In[ ]:
+
+
+dates = pd.read_csv('../input/recruit-restaurant-visitor-forecasting/date_info.csv')
+dates.loc[dates.holiday_flg==1].loc[(dates.day_of_week !='Saturday')].loc[dates.day_of_week !='Sunday']
+
+
+# I want to learn more about that so I will rely on this list https://www.officeholidays.com/countries/japan/index.php
+# 
+# * Jan 1st - **New Years day **;
+# * 2nd Monday of January - **Coming of Age day **: The day honors young Japanese who will reach the age of 20 at any point during the year. Twenty is the age of majority in Japan, and people who have reached this age gain the right to vote in elections as well as to drink;
+# * Feb 11th - **National Foundation day**:  a national holiday for Japanese people to remind themselves of the nation's founding and foster their love for the nation;
+# * March 20th or 21st- **Vernal Equinox day**: The day is intended to celebrate the love of nature and living things.In modern Japan, the day still maintains its older traditions as visiting family graves and holding family reunions is a common way of celebrating the equinox;
+# * April 29th - ** Showa day**: Showa Day honours the birthday of Emperor Hirohito, the reigning Emperor before, during, and after World War II (from 1926 - 1989);
+# 
+# continue...
+# 
+
+# Now I am going to create two features telling me whther the reservation or the visit occurred in a holiday (reservation_holiday and visit_holiday are the new columns).
+
+# In[ ]:
+
+
+vdt = pd.to_datetime(full.visit_datetime)
+rdt = pd.to_datetime(full.reserve_datetime)
+full['vd']=vdt.dt.date
+full['vt']=vdt.dt.time
+full['rd']=rdt.dt.date
+full['rt']=rdt.dt.time
+
+dts = pd.to_datetime(dates.calendar_date)
+days = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday']
+dates['calendar_date'] = pd.to_datetime(dates['calendar_date']).dt.date
+dates['dy'] = dts.dt.dayofyear
+dates['dw'] = [days.index(dw) for dw in dates.day_of_week]
+dates.head()
+
+nf = pd.merge(full,dates[['calendar_date','holiday_flg']],how='left',left_on='vd',right_on='calendar_date')
+nf = nf.rename(index = str, columns = {'holiday_flg':'visit_holiday'})
+nf = nf.drop(['calendar_date'],axis=1)
+
+nf = pd.merge(nf,dates[['calendar_date','holiday_flg']],how = 'left', left_on='rd',right_on='calendar_date')
+nf = nf.rename(index = str, columns = {'holiday_flg':'reservation_holiday'})
+nf = nf.drop(['calendar_date'],axis=1)
+
+nf['vd'] = pd.to_datetime(nf['vd']).dt.dayofyear
+nf['rd'] = pd.to_datetime(nf['rd']).dt.dayofyear
+nf.head()
+
+
+# We can check how many days before the visit japenese people make the reservation.
+
+# In[ ]:
+
+
+deltatime = vdt - rdt
+days = deltatime.dt.days
+
+days.describe()
 
 
 # In[ ]:
 
 
-pd.crosstab(test_original['Salutation'], test_original['Sex'])
-
-
-# The next step is deletin column that will not be used in our models.
-
-# In[ ]:
-
-
-#clean unused variable
-train=train_original.drop(['PassengerId','Name','Ticket','Cabin'], axis=1)
-test=test_original.drop(['PassengerId','Name','Ticket','Cabin'], axis=1)
-total = [train,test]
-
-train.shape, test.shape
-
-
-# ## 2.2 Detect and fill the missing data
-
-# In[ ]:
-
-
-#Detect the missing data in 'train' dataset
-train.isnull().sum()
-
-
-# As it is shown above, there are 2 columns which have missing data. the way I'm handling missing 'Age' column is by filling them by the median of age in every passenger class. there are only two data missing in 'Embarked' column. Considering Sex=female and Fare=80, Ports of Embarkation (Embarked) for two missing cases can be assumed to be Cherbourg (C).
-
-# In[ ]:
-
-
-## Create function to replace missing data with the median value
-def fill_missing_age(dataset):
-    for i in range(1,4):
-        median_age=dataset[dataset["Salutation"]==i]["Age"].median()
-        dataset["Age"]=dataset["Age"].fillna(median_age)
-        return dataset
-
-train = fill_missing_age(train)
-
-
-# In[ ]:
-
-
-## Embarked missing cases 
-train[train['Embarked'].isnull()]
-
-
-# In[ ]:
-
-
-train["Embarked"] = train["Embarked"].fillna('C')
-
-
-# Detecting the missing data in 'test' dataset is done to get the insight which column consist missing data. as it is shown below, there are 2 column which have missing value. they are 'Age' and 'Fare' column. The same function is used in order to filled the missing 'Age' value. missing 'Fare' value is filled by finding the median of 'Fare' value in the 'Pclass' = 3 and 'Embarked' = S.
-
-# In[ ]:
-
-
-test.isnull().sum()
-
-
-# In[ ]:
-
-
-test[test['Age'].isnull()].head()
-
-
-# In[ ]:
-
-
-#apply the missing age method to test dataset
-test = fill_missing_age(test)
-
-
-# In[ ]:
-
-
-test[test['Fare'].isnull()]
-
-
-# In[ ]:
-
-
-#filling the missing 'Fare' data with the  median
-def fill_missing_fare(dataset):
-    median_fare=dataset[(dataset["Pclass"]==3) & (dataset["Embarked"]=="S")]["Fare"].median()
-    dataset["Fare"]=dataset["Fare"].fillna(median_fare)
-    return dataset
-
-test = fill_missing_fare(test)
-
-
-# ## 2.3 Re-Check for missing data
-
-# In[ ]:
-
-
-## Re-Check for missing data
-train.isnull().any()
-
-
-# In[ ]:
-
-
-## Re-Check for missing data
-test.isnull().any()
-
-
-# discretize Age feature
-
-# In[ ]:
-
-
-
-for dataset in total:
-    dataset.loc[dataset["Age"] <= 9, "Age"] = 0
-    dataset.loc[(dataset["Age"] > 9) & (dataset["Age"] <= 19), "Age"] = 1
-    dataset.loc[(dataset["Age"] > 19) & (dataset["Age"] <= 29), "Age"] = 2
-    dataset.loc[(dataset["Age"] > 29) & (dataset["Age"] <= 39), "Age"] = 3
-    dataset.loc[(dataset["Age"] > 29) & (dataset["Age"] <= 39), "Age"] = 3
-    dataset.loc[dataset["Age"] > 39, "Age"] = 4
-
-
-# Discretize Fare
-
-# In[ ]:
-
-
-pd.qcut(train["Fare"], 8).value_counts()
-
-
-# In[ ]:
-
-
-for dataset in total:
-    dataset.loc[dataset["Fare"] <= 7.75, "Fare"] = 0
-    dataset.loc[(dataset["Fare"] > 7.75) & (dataset["Fare"] <= 7.91), "Fare"] = 1
-    dataset.loc[(dataset["Fare"] > 7.91) & (dataset["Fare"] <= 9.841), "Fare"] = 2
-    dataset.loc[(dataset["Fare"] > 9.841) & (dataset["Fare"] <= 14.454), "Fare"] = 3   
-    dataset.loc[(dataset["Fare"] > 14.454) & (dataset["Fare"] <= 24.479), "Fare"] = 4
-    dataset.loc[(dataset["Fare"] >24.479) & (dataset["Fare"] <= 31), "Fare"] = 5   
-    dataset.loc[(dataset["Fare"] > 31) & (dataset["Fare"] <= 69.487), "Fare"] = 6
-    dataset.loc[dataset["Fare"] > 69.487, "Fare"] = 7
-
-
-# Factorized 2 of the column whic are 'Sex' and 'Embarked'
-
-# In[ ]:
-
-
-for dataset in total:
-    dataset['Sex'] = pd.factorize(dataset['Sex'])[0]
-    dataset['Embarked']= pd.factorize(dataset['Embarked'])[0]
-train.head()
-
-
-# Checking the correlation between features
-
-# In[ ]:
-
-
-#correlation map
-f,ax = plt.subplots(figsize=(18, 18))
-sns.heatmap(train.corr(), annot=True, linewidths=.5, fmt= '.1f',ax=ax)
-
-
-# # 3. Spliting the data
-
-# Seperate input features from target feature
-
-# In[ ]:
-
-
-x = train.drop("Survived", axis=1)
-y = train["Survived"]
-
-
-# Split the data into training and validation sets
-
-# In[ ]:
-
-
-x_train, x_test, y_train, y_test = train_test_split(x,y,test_size=.25,random_state=1)
-
-
-# # 4. Performance Comparison
-
-# List of Machine Learning Algorithm (MLA) used
-
-# In[ ]:
-
-
-
-MLA = [
-    #Ensemble Methods
-    ensemble.AdaBoostClassifier(),
-    ensemble.BaggingClassifier(),
-    ensemble.ExtraTreesClassifier(),
-    ensemble.GradientBoostingClassifier(),
-    ensemble.RandomForestClassifier(),
-
-    #Gaussian Processes
-    gaussian_process.GaussianProcessClassifier(),
-    
-    #GLM
-    linear_model.LogisticRegressionCV(),
-    linear_model.PassiveAggressiveClassifier(),
-    linear_model. RidgeClassifierCV(),
-    linear_model.SGDClassifier(),
-    linear_model.Perceptron(),
-    
-    #Navies Bayes
-    naive_bayes.BernoulliNB(),
-    naive_bayes.GaussianNB(),
-    
-    #Nearest Neighbor
-    neighbors.KNeighborsClassifier(),
-    
-    #SVM
-    svm.SVC(probability=True),
-    svm.NuSVC(probability=True),
-    svm.LinearSVC(),
-    
-    #Trees    
-    tree.DecisionTreeClassifier(),
-   #tree.ExtraTreeClassifier(),
-    
-    ]
-
-
-# Train the data into the model and calculate the performance
-
-# In[ ]:
-
-
-MLA_columns = []
-MLA_compare = pd.DataFrame(columns = MLA_columns)
-
-
-row_index = 0
-for alg in MLA:
-    
-    
-    predicted = alg.fit(x_train, y_train).predict(x_test)
-    fp, tp, th = roc_curve(y_test, predicted)
-    MLA_name = alg.__class__.__name__
-    MLA_compare.loc[row_index,'MLA Name'] = MLA_name
-    MLA_compare.loc[row_index, 'MLA Train Accuracy'] = round(alg.score(x_train, y_train), 4)
-    MLA_compare.loc[row_index, 'MLA Test Accuracy'] = round(alg.score(x_test, y_test), 4)
-    MLA_compare.loc[row_index, 'MLA Precission'] = precision_score(y_test, predicted)
-    MLA_compare.loc[row_index, 'MLA Recall'] = recall_score(y_test, predicted)
-    MLA_compare.loc[row_index, 'MLA AUC'] = auc(fp, tp)
-
-
-
-
-
-    row_index+=1
-    
-MLA_compare.sort_values(by = ['MLA Test Accuracy'], ascending = False, inplace = True)    
-MLA_compare
-
-
-# In[ ]:
-
-
-plt.subplots(figsize=(15,6))
-sns.barplot(x="MLA Name", y="MLA Train Accuracy",data=MLA_compare,palette='hot',edgecolor=sns.color_palette('dark',7))
-plt.xticks(rotation=90)
-plt.title('MLA Train Accuracy Comparison')
+f,axa = plt.subplots(1,1,figsize=(15,6))
+sns.distplot(days)
+plt.xlim(0,40)
+axa.set_title('Days between Reservation and Visit')
 plt.show()
 
 
 # In[ ]:
 
 
-plt.subplots(figsize=(15,6))
-sns.barplot(x="MLA Name", y="MLA Test Accuracy",data=MLA_compare,palette='hot',edgecolor=sns.color_palette('dark',7))
-plt.xticks(rotation=90)
-plt.title('MLA Test Accuracy Comparison')
+f,ax = plt.subplots(1,1, figsize=(15,6))
+vholidayhist= nf[nf['visit_holiday']==1].groupby(['vd'],as_index=False).count()
+sns.barplot(x = vholidayhist.vd,y=vholidayhist.visit_datetime)
+ax.set_title('Visits in Japanese Holidays')
 plt.show()
 
 
 # In[ ]:
 
 
-plt.subplots(figsize=(15,6))
-sns.barplot(x="MLA Name", y="MLA Precission",data=MLA_compare,palette='hot',edgecolor=sns.color_palette('dark',7))
-plt.xticks(rotation=90)
-plt.title('MLA Precission Comparison')
+f,ax = plt.subplots(1,1, figsize=(15,6))
+vholidayhist= nf[nf['visit_holiday']==0].groupby(['vd'],as_index=False).count()
+sns.barplot(x = vholidayhist.vd[0:50],y=vholidayhist.visit_datetime)
+ax.set_title('Visits in Other Days')
 plt.show()
 
 
-# In[ ]:
-
-
-plt.subplots(figsize=(15,6))
-sns.barplot(x="MLA Name", y="MLA Recall",data=MLA_compare,palette='hot',edgecolor=sns.color_palette('dark',7))
-plt.xticks(rotation=90)
-plt.title('MLA Recall Comparison')
-plt.show()
-
+# ## Weather Data
 
 # In[ ]:
 
 
-plt.subplots(figsize=(15,6))
-sns.barplot(x="MLA Name", y="MLA AUC",data=MLA_compare,palette='hot',edgecolor=sns.color_palette('dark',7))
-plt.xticks(rotation=90)
-plt.title('MLA AUC Comparison')
-plt.show()
+wd = pd.read_csv('../input/recruit-restaurant-visitor-forecasting-data/WeatherData.csv')
+wd.head()
 
 
 # In[ ]:
 
 
-index = 1
-for alg in MLA:
-    
-    
-    predicted = alg.fit(x_train, y_train).predict(x_test)
-    fp, tp, th = roc_curve(y_test, predicted)
-    roc_auc_mla = auc(fp, tp)
-    MLA_name = alg.__class__.__name__
-    plt.plot(fp, tp, lw=2, alpha=0.3, label='ROC %s (AUC = %0.2f)'  % (MLA_name, roc_auc_mla))
-   
-    index+=1
+import re
+def area2group(area):
+    if re.match(r'tokyo.*',area) !=None:
+        return 0
+    if re.match(r'osaka.*',area) !=None:
+        return 1
+    if re.match(r'hokkaido.*',area) !=None:
+        return 2    
+    if re.match(r'fukuoka.*',area) !=None:
+        return 3
+    if re.match(r'niigata.*',area) !=None:
+        return 4
+    if re.match(r'hiroshima.*',area) !=None:
+        return 5
+    if re.match(r'shizuoka.*',area) !=None:
+        return 6
+    if re.match(r'miyagi.*',area) !=None:
+        return 7
+    else:
+        return -1
 
-plt.title('ROC Curve comparison')
-plt.legend(bbox_to_anchor=(1.05, 1), loc=2, borderaxespad=0.)
-plt.plot([0,1],[0,1],'r--')
-plt.xlim([0,1])
-plt.ylim([0,1])
-plt.ylabel('True Positive Rate')
-plt.xlabel('False Positive Rate')    
-plt.show()
-
-
-# # 4. Tuning the algorithm
-
-# In[ ]:
-
-
-tunealg = ensemble.ExtraTreesClassifier() #Select the algorithm to be tuned
-tunealg.fit(x_train, y_train)
-
-print('BEFORE tuning Parameters: ', tunealg.get_params())
-print("BEFORE tuning Training w/bin set score: {:.2f}". format(tunealg.score(x_train, y_train))) 
-print("BEFORE tuning Test w/bin set score: {:.2f}". format(tunealg.score(x_test, y_test)))
-print('-'*10)
-
+warea = [area2group(area) for area in wd.area_name]
+wd['cluster'] = warea
+#re.match(r'fukuoka.*',wd.area_name[0])
+#wd.area_name
 
 
 # In[ ]:
 
 
-#tune parameters
-param_grid = {#'bootstrap': [True, False],
-              'class_weight': ['balanced' , None],
-              #'max_depth': [1, 2,3,4, None],
-              #'max_features': ['log2', 'auto'],
-              #'max_leaf_nodes': [0,1,2,3,4, None],
-              #'min_impurity_decrease': [True, False, None],
-              #'min_impurity_split': [True, False],
-              #'min_samples_leaf': [1, 2,3,4,5],
-              #'min_samples_split': [1,2,3,4,5],
-              #'min_weight_fraction_leaf': [0.0,1.0,2.0,3.0,4.0,5.0], 
-              #'n_estimators': [10,15,25,35,45], 
-              'n_jobs':  [1,2,3,4,5], 
-              #'oob_score': [True, False], 
-              'random_state': [0,1, 2,3,4, None], 
-              #'verbose': [0,1, 2,3,4, 5], 
-              'warm_start': [True, False]
-             }
-# So, what this GridSearchCV function do is finding the best combination of parameters value that is set above.
-tune_model = model_selection.GridSearchCV(linear_model.PassiveAggressiveClassifier(), param_grid=param_grid, scoring = 'roc_auc')
-tune_model.fit (x_train, y_train)
+wd['calendar_date'] = pd.to_datetime(wd.calendar_date).dt.date
 
-print('AFTER tuning Parameters: ', tune_model.best_params_)
-print("AFTER tuning Training w/bin set score: {:.2f}". format(tune_model.score(x_train, y_train))) 
-print("AFTER tuning Test w/bin set score: {:.2f}". format(tune_model.score(x_test, y_test)))
-print('-'*10)
 
+# In[ ]:
+
+
+vdates = pd.to_datetime(nf.visit_datetime).dt.date
+nf['visit_date']=vdates
+
+
+# In[ ]:
+
+
+wdg = wd.groupby(['cluster','calendar_date'],as_index=False).mean()
+wnf = pd.merge(wdg,nf,left_on=['cluster','calendar_date'],right_on=['cluster','visit_date'])
+
+
+# In[ ]:
+
+
+airvisit['visit_date'] = pd.to_datetime(airvisit['visit_date']).dt.date
+wnf = pd.merge(wnf,airvisit,on=['air_store_id','visit_date'])
+
+
+# In[ ]:
+
+
+f,axa = plt.subplots(1,1,figsize=(15,10))
+sns.heatmap(wnf.corr()[['visitors']])
+
+
+# Apparently there number of visitors is not correlated with the weather conditions

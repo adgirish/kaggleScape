@@ -1,344 +1,170 @@
 
 # coding: utf-8
 
-# ## Trying out a linear model: 
+# In this tutorial we're going to get started with some basic natural language processing (NLP) tasks. We're going to:
 # 
-# Author: Alexandru Papiu ([@apapiu](https://twitter.com/apapiu), [GitHub](https://github.com/apapiu))
-#  
-# If you use parts of this notebook in your own scripts, please give some sort of credit (for example link back to this). Thanks!
+# * Read in some helpful NLP libraries & our dataset
+# * Find out how often each author uses each word
+# * Use that to guess which author wrote a sentence
 # 
+# Ready? Let's get started! :D
+
+# ## General intuition 
 # 
-# There have been a few [great](https://www.kaggle.com/comartel/house-prices-advanced-regression-techniques/house-price-xgboost-starter/run/348739)  [scripts](https://www.kaggle.com/zoupet/house-prices-advanced-regression-techniques/xgboost-10-kfolds-with-scikit-learn/run/357561) on [xgboost](https://www.kaggle.com/tadepalli/house-prices-advanced-regression-techniques/xgboost-with-n-trees-autostop-0-12638/run/353049) already so I'd figured I'd try something simpler: a regularized linear regression model. Surprisingly it does really well with very little feature engineering. The key point is to to log_transform the numeric variables since most of them are skewed.
-
-# In[ ]:
-
-
-import pandas as pd
-import numpy as np
-import seaborn as sns
-import matplotlib
-
-import matplotlib.pyplot as plt
-from scipy.stats import skew
-from scipy.stats.stats import pearsonr
-
-
-get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina' #set 'png' here when working on notebook")
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-
-# In[ ]:
-
-
-train = pd.read_csv("../input/train.csv")
-test = pd.read_csv("../input/test.csv")
-
-
-# In[ ]:
-
-
-train.head()
-
-
-# In[ ]:
-
-
-all_data = pd.concat((train.loc[:,'MSSubClass':'SaleCondition'],
-                      test.loc[:,'MSSubClass':'SaleCondition']))
-
-
-# ###Data preprocessing: 
-# We're not going to do anything fancy here: 
-#  
-# - First I'll transform the skewed numeric features by taking log(feature + 1) - this will make the features more normal    
-# - Create Dummy variables for the categorical features    
-# - Replace the numeric missing values (NaN's) with the mean of their respective columns
-
-# In[ ]:
-
-
-matplotlib.rcParams['figure.figsize'] = (12.0, 6.0)
-prices = pd.DataFrame({"price":train["SalePrice"], "log(price + 1)":np.log1p(train["SalePrice"])})
-prices.hist()
-
-
-# In[ ]:
-
-
-#log transform the target:
-train["SalePrice"] = np.log1p(train["SalePrice"])
-
-#log transform skewed numeric features:
-numeric_feats = all_data.dtypes[all_data.dtypes != "object"].index
-
-skewed_feats = train[numeric_feats].apply(lambda x: skew(x.dropna())) #compute skewness
-skewed_feats = skewed_feats[skewed_feats > 0.75]
-skewed_feats = skewed_feats.index
-
-all_data[skewed_feats] = np.log1p(all_data[skewed_feats])
-
-
-# In[ ]:
-
-
-all_data = pd.get_dummies(all_data)
-
-
-# In[ ]:
-
-
-#filling NA's with the mean of the column:
-all_data = all_data.fillna(all_data.mean())
-
-
-# In[ ]:
-
-
-#creating matrices for sklearn:
-X_train = all_data[:train.shape[0]]
-X_test = all_data[train.shape[0]:]
-y = train.SalePrice
-
-
-# ###Models
+# For this tutorial, we're going to be guessing which author wrote a string of text based on the normalized unigram frequency. That's just a fancy way of saying that we're going to count how often each author uses every word in our training data and then divide by the number of total words they wrote. Then, if our test sentence has words that we've seen one author use a lot more than the others, we will guess that that person is probably the author.
 # 
-# Now we are going to use regularized linear regression models from the scikit learn module. I'm going to try both l_1(Lasso) and l_2(Ridge) regularization. I'll also define a function that returns the cross-validation rmse error so we can evaluate our models and pick the best tuning par
-
-# In[ ]:
-
-
-from sklearn.linear_model import Ridge, RidgeCV, ElasticNet, LassoCV, LassoLarsCV
-from sklearn.model_selection import cross_val_score
-
-def rmse_cv(model):
-    rmse= np.sqrt(-cross_val_score(model, X_train, y, scoring="neg_mean_squared_error", cv = 5))
-    return(rmse)
-
-
-# In[ ]:
-
-
-model_ridge = Ridge()
-
-
-# The main tuning parameter for the Ridge model is alpha - a regularization parameter that measures how flexible our model is. The higher the regularization the less prone our model will be to overfit. However it will also lose flexibility and might not capture all of the signal in the data.
-
-# In[ ]:
-
-
-alphas = [0.05, 0.1, 0.3, 1, 3, 5, 10, 15, 30, 50, 75]
-cv_ridge = [rmse_cv(Ridge(alpha = alpha)).mean() 
-            for alpha in alphas]
-
-
-# In[ ]:
-
-
-cv_ridge = pd.Series(cv_ridge, index = alphas)
-cv_ridge.plot(title = "Validation - Just Do It")
-plt.xlabel("alpha")
-plt.ylabel("rmse")
-
-
-# Note the U-ish shaped curve above. When alpha is too large the regularization is too strong and the model cannot capture all the complexities in the data. If however we let the model be too flexible (alpha small) the model begins to overfit. A value of alpha = 10 is about right based on the plot above.
-
-# In[ ]:
-
-
-cv_ridge.min()
-
-
-# So for the Ridge regression we get a rmsle of about 0.127
+# Let's imagine that this is our training corpus:
 # 
-# Let' try out the Lasso model. We will do a slightly different approach here and use the built in Lasso CV to figure out the best alpha for us. For some reason the alphas in Lasso CV are really the inverse or the alphas in Ridge.
-
-# In[ ]:
-
-
-model_lasso = LassoCV(alphas = [1, 0.1, 0.001, 0.0005]).fit(X_train, y)
-
-
-# In[ ]:
-
-
-rmse_cv(model_lasso).mean()
-
-
-# Nice! The lasso performs even better so we'll just use this one to predict on the test set. Another neat thing about the Lasso is that it does feature selection for you - setting coefficients of features it deems unimportant to zero. Let's take a look at the coefficients:
-
-# In[ ]:
-
-
-coef = pd.Series(model_lasso.coef_, index = X_train.columns)
-
-
-# In[ ]:
-
-
-print("Lasso picked " + str(sum(coef != 0)) + " variables and eliminated the other " +  str(sum(coef == 0)) + " variables")
-
-
-# Good job Lasso.  One thing to note here however is that the features selected are not necessarily the "correct" ones - especially since there are a lot of collinear features in this dataset. One idea to try here is run Lasso a few times on boostrapped samples and see how stable the feature selection is.
-
-# We can also take a look directly at what the most important coefficients are:
-
-# In[ ]:
-
-
-imp_coef = pd.concat([coef.sort_values().head(10),
-                     coef.sort_values().tail(10)])
-
-
-# In[ ]:
-
-
-matplotlib.rcParams['figure.figsize'] = (8.0, 10.0)
-imp_coef.plot(kind = "barh")
-plt.title("Coefficients in the Lasso Model")
-
-
-# The most important positive feature is `GrLivArea` -  the above ground area by area square feet. This definitely sense. Then a few other  location and quality features contributed positively. Some of the negative features make less sense and would be worth looking into more - it seems like they might come from unbalanced categorical variables.
+# * Author one: "A very spooky thing happened. The thing was so spooky I screamed."
+# * Author two: "I ate a tasty candy apple. It was delicious"
 # 
-#  Also note that unlike the feature importance you'd get from a random forest these are _actual_ coefficients in your model - so you can say precisely why the predicted price is what it is. The only issue here is that we log_transformed both the target and the numeric features so the actual magnitudes are a bit hard to interpret. 
-
-# In[ ]:
-
-
-#let's look at the residuals as well:
-matplotlib.rcParams['figure.figsize'] = (6.0, 6.0)
-
-preds = pd.DataFrame({"preds":model_lasso.predict(X_train), "true":y})
-preds["residuals"] = preds["true"] - preds["preds"]
-preds.plot(x = "preds", y = "residuals",kind = "scatter")
-
-
-# The residual plot looks pretty good.To wrap it up let's predict on the test set and submit on the leaderboard:
-
-# ### Adding an xgboost model:
-
-# Let's add an xgboost model to our linear model to see if we can improve our score:
-
-# In[ ]:
-
-
-import xgboost as xgb
-
-
-# In[ ]:
-
-
-
-dtrain = xgb.DMatrix(X_train, label = y)
-dtest = xgb.DMatrix(X_test)
-
-params = {"max_depth":2, "eta":0.1}
-model = xgb.cv(params, dtrain,  num_boost_round=500, early_stopping_rounds=100)
-
-
-# In[ ]:
-
-
-model.loc[30:,["test-rmse-mean", "train-rmse-mean"]].plot()
-
-
-# In[ ]:
-
-
-model_xgb = xgb.XGBRegressor(n_estimators=360, max_depth=2, learning_rate=0.1) #the params were tuned using xgb.cv
-model_xgb.fit(X_train, y)
-
-
-# In[ ]:
-
-
-xgb_preds = np.expm1(model_xgb.predict(X_test))
-lasso_preds = np.expm1(model_lasso.predict(X_test))
-
-
-# In[ ]:
-
-
-predictions = pd.DataFrame({"xgb":xgb_preds, "lasso":lasso_preds})
-predictions.plot(x = "xgb", y = "lasso", kind = "scatter")
-
-
-# Many times it makes sense to take a weighted average of uncorrelated results - this usually imporoves the score although in this case it doesn't help that much.
-
-# In[ ]:
-
-
-preds = 0.7*lasso_preds + 0.3*xgb_preds
-
-
-# In[ ]:
-
-
-solution = pd.DataFrame({"id":test.Id, "SalePrice":preds})
-solution.to_csv("ridge_sol.csv", index = False)
-
-
-# ### Trying out keras?
+# And that this is our test sentence that we want to figure out who wrote:
 # 
-# Feedforward Neural Nets doesn't seem to work well at all...I wonder why.
+# * Author ???: "What a spooky thing!"
+# 
+# Just looking at it, it seems more likely that author one wrote this sentence. Author ones says both "spooky" and "thing" a lot, while author two does not (at least, based on our training data). Since we see both "spooky" and "thing" in our test sentence, it seems more likely that it was written by author one than author two--even though the test sentence does have the word "a" in it, which we have seen author two use too.
+# 
+# In the rest of this tutorial we're going to figure out how to translate this intution into code.
+
+# ## Read in some helpful NLP libraries & our dataset
+# 
+# For this tutorial, I'm going to be using the Natural Language Toolkit, also called the "NLTK". It's an open-source Python library for analyzing language data. The really nice thing about the NLTK is that it has a really helpful book that goes step-by-step through a lot of the common NLP tasks. Even better: you can get the book for free [here](http://www.nltk.org/book/).
 
 # In[ ]:
 
 
-from keras.layers import Dense
-from keras.models import Sequential
-from keras.regularizers import l1
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
+# read in some helpful libraries
+import nltk # the natural langauage toolkit, open-source NLP
+import pandas as pd # dataframes
+
+### Read in the data
+
+# read our data into a dataframe
+texts = pd.read_csv("../input/train.csv")
+
+# look at the first few rows
+texts.head()
 
 
-# In[ ]:
-
-
-X_train = StandardScaler().fit_transform(X_train)
-
-
-# In[ ]:
-
-
-X_tr, X_val, y_tr, y_val = train_test_split(X_train, y, random_state = 3)
-
+# ## Find out how often each author uses each word
+# 
+# A lot of NLP applications rely on counting how often certain words are used. (The fancy term for this is "word frequency".) Let's look at the word frequency for each of the authors in our dataset. The NLTK has lots of nice built-in functions and data structures for this that we can make use of.
 
 # In[ ]:
 
 
-X_tr.shape
+### Split data
 
+# split the data by author
+byAuthor = texts.groupby("author")
+
+### Tokenize (split into individual words) our text
+
+# word frequency by author
+wordFreqByAuthor = nltk.probability.ConditionalFreqDist()
+
+# for each author...
+for name, group in byAuthor:
+    # get all of the sentences they wrote and collapse them into a
+    # single long string
+    sentences = group['text'].str.cat(sep = ' ')
+    
+    # convert everything to lower case (so "The" and "the" get counted as 
+    # the same word rather than two different words)
+    sentences = sentences.lower()
+    
+    # split the text into individual tokens    
+    tokens = nltk.tokenize.word_tokenize(sentences)
+    
+    # calculate the frequency of each token
+    frequency = nltk.FreqDist(tokens)
+
+    # add the frequencies for each author to our dictionary
+    wordFreqByAuthor[name] = (frequency)
+    
+# now we have an dictionary where each entry is the frequency distrobution
+# of words for a specific author.     
+
+
+# Now we can look at how often each writer uses specific words. Since this is a Halloween competition, how about "blood", "scream" and "fear"? 👻😨🧛‍♀️
 
 # In[ ]:
 
 
-X_tr
+# see how often each author says "blood"
+for i in wordFreqByAuthor.keys():
+    print("blood: " + i)
+    print(wordFreqByAuthor[i].freq('blood'))
 
+# print a blank line
+print()
+
+# see how often each author says "scream"
+for i in wordFreqByAuthor.keys():
+    print("scream: " + i)
+    print(wordFreqByAuthor[i].freq('scream'))
+    
+# print a blank line
+print()
+
+# see how often each author says "fear"
+for i in wordFreqByAuthor.keys():
+    print("fear: " + i)
+    print(wordFreqByAuthor[i].freq('fear'))
+
+
+# ## Use word frequency to guess which author wrote a sentence
+# 
+# The general idea is is that different people tend to use different words more or less often. (I had a beloved college professor that was especially fond of "gestalt".) If you're not sure who said something but it has a lot of words one person uses a lot in it, then you might guess that they were the one who wrote it. 
+# 
+# Let's use this general principle to guess who might have been more likely to write the sentence "It was a dark and stormy night."
 
 # In[ ]:
 
 
-model = Sequential()
-#model.add(Dense(256, activation="relu", input_dim = X_train.shape[1]))
-model.add(Dense(1, input_dim = X_train.shape[1], W_regularizer=l1(0.001)))
+# One way to guess authorship is to use the joint probabilty that each 
+# author used each word in a given sentence.
 
-model.compile(loss = "mse", optimizer = "adam")
+# first, let's start with a test sentence
+testSentence = "It was a dark and stormy night."
+
+# and then lowercase & tokenize our test sentence
+preProcessedTestSentence = nltk.tokenize.word_tokenize(testSentence.lower())
+
+# create an empy dataframe to put our output in
+testProbailities = pd.DataFrame(columns = ['author','word','probability'])
+
+# For each author...
+for i in wordFreqByAuthor.keys():
+    # for each word in our test sentence...
+    for j  in preProcessedTestSentence:
+        # find out how frequently the author used that word
+        wordFreq = wordFreqByAuthor[i].freq(j)
+        # and add a very small amount to every prob. so none of them are 0
+        smoothedWordFreq = wordFreq + 0.000001
+        # add the author, word and smoothed freq. to our dataframe
+        output = pd.DataFrame([[i, j, smoothedWordFreq]], columns = ['author','word','probability'])
+        testProbailities = testProbailities.append(output, ignore_index = True)
+
+# empty dataframe for the probability that each author wrote the sentence
+testProbailitiesByAuthor = pd.DataFrame(columns = ['author','jointProbability'])
+
+# now let's group the dataframe with our frequency by author
+for i in wordFreqByAuthor.keys():
+    # get the joint probability that each author wrote each word
+    oneAuthor = testProbailities.query('author == "' + i + '"')
+    jointProbability = oneAuthor.product(numeric_only = True)[0]
+    
+    # and add that to our dataframe
+    output = pd.DataFrame([[i, jointProbability]], columns = ['author','jointProbability'])
+    testProbailitiesByAuthor = testProbailitiesByAuthor.append(output, ignore_index = True)
+
+# and our winner is...
+testProbailitiesByAuthor.loc[testProbailitiesByAuthor['jointProbability'].idxmax(),'author']
 
 
-# In[ ]:
+# So based on what we've seen in our training data, it looks like of our three authors, H.P. Lovecraft was the most likely to write the sentence "It was a dark and stormy night".
 
-
-model.summary()
-
-
-# In[ ]:
-
-
-hist = model.fit(X_tr, y_tr, validation_data = (X_val, y_val))
-
-
-# In[ ]:
-
-
-pd.Series(model.predict(X_val)[:,0]).hist()
-
+# ## Ready for more?
+# 
+# Now that you've got your feet wet, why not head over to [Sohier's intermediate tutorial](https://www.kaggle.com/sohier/intermediate-tutorial-python/), which includes lots of tips on optimizing your code and getting ready to submit to the competition. 

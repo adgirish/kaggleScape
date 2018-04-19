@@ -1,103 +1,130 @@
-import pandas as pd
+########################################
+## import packages
+########################################
+
+import datetime
 import numpy as np
-import re
-import lightgbm as lgb
-import warnings
-warnings.filterwarnings(action='ignore', category=DeprecationWarning, module='sklearn')
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import cross_val_score
+import pandas as pd
 
+from sklearn.preprocessing import LabelEncoder
+from sklearn.metrics import roc_auc_score
 
-#######################
-# FEATURE ENGINEERING #
-#######################
-"""
-Main function
-Input: pandas Series and a feature engineering function
-Output: pandas Series
-"""
-def engineer_feature(series, func, normalize=True):
-    feature = series.apply(func)
-       
-    if normalize:
-        feature = pd.Series(z_normalize(feature.values.reshape(-1,1)).reshape(-1,))
-    feature.name = func.__name__ 
-    return feature
+from keras.models import Model
+from keras.layers import Dense, Input, Embedding, Dropout, Activation, Reshape
+from keras.layers.merge import concatenate, dot
+from keras.layers.normalization import BatchNormalization
+from keras.callbacks import EarlyStopping, ModelCheckpoint
+from keras.regularizers import l2
+from keras.initializers import RandomUniform
+from keras.optimizers import RMSprop, Adam, SGD
 
-"""
-Engineer features
-Input: pandas Series and a list of feature engineering functions
-Output: pandas DataFrame
-"""
-def engineer_features(series, funclist, normalize=True):
-    features = pd.DataFrame()
-    for func in funclist:
-        feature = engineer_feature(series, func, normalize)
-        features[feature.name] = feature
-    return features
+########################################
+## load the data
+########################################
 
-"""
-Normalizer
-Input: NumPy array
-Output: NumPy array
-"""
-scaler = StandardScaler()
-def z_normalize(data):
-    scaler.fit(data)
-    return scaler.transform(data)
-    
-"""
-Feature functions
-"""
-def asterix_freq(x):
-    return x.count('!')/len(x)
+train = pd.read_csv('./data/train.csv')
+uid = train.msno
+sid = train.song_id
+target = train.target
 
-def uppercase_freq(x):
-    return len(re.findall(r'[A-Z]',x))/len(x)
-    
-"""
-Import submission and OOF files
-"""
-def get_subs(nums):
-    subs = np.hstack([np.array(pd.read_csv("../input/trained-models/sub" + str(num) + ".csv")[LABELS]) for num in subnums])
-    oofs = np.hstack([np.array(pd.read_csv("../input/trained-models/oof" + str(num) + ".csv")[LABELS]) for num in subnums])
-    return subs, oofs
+test = pd.read_csv('./data/test.csv')
+id_test = test.id
+uid_test = test.msno
+sid_test = test.song_id
 
-if __name__ == "__main__":
-    
-    train = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/train.csv').fillna(' ')
-    test = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/test.csv').fillna(' ')
-    sub = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
-    INPUT_COLUMN = "comment_text"
-    LABELS = train.columns[2:]
-    
-    # Import submissions and OOF files
-    # 29: LightGBM trained on Fasttext (CV: 0.9765, LB: 0.9620)
-    # 51: Logistic regression with word and char n-grams (CV: 0.9858, LB: ?)
-    # 52: LSTM trained on Fasttext (CV: ?, LB: 0.9851)
-    subnums = [29,51,52]
-    subs, oofs = get_subs(subnums)
-    
-    # Engineer features
-    feature_functions = [len, asterix_freq, uppercase_freq]
-    features = [f.__name__ for f in feature_functions]
-    F_train = engineer_features(train[INPUT_COLUMN], feature_functions)
-    F_test = engineer_features(test[INPUT_COLUMN], feature_functions)
-    
-    X_train = np.hstack([F_train[features].as_matrix(), oofs])
-    X_test = np.hstack([F_test[features].as_matrix(), subs])    
+########################################
+## encoding
+########################################
 
-    stacker = lgb.LGBMClassifier(max_depth=3, metric="auc", n_estimators=125, num_leaves=10, boosting_type="gbdt", learning_rate=0.1, feature_fraction=0.45, colsample_bytree=0.45, bagging_fraction=0.8, bagging_freq=5, reg_lambda=0.2)
+usr_encoder = LabelEncoder()
+usr_encoder.fit(uid.append(uid_test))
+uid = usr_encoder.transform(uid)
+uid_test = usr_encoder.transform(uid_test)
+
+sid_encoder = LabelEncoder()
+sid_encoder.fit(sid.append(sid_test))
+sid = sid_encoder.transform(sid)
+sid_test = sid_encoder.transform(sid_test)
+
+u_cnt = int(max(uid.max(), uid_test.max()) + 1)
+s_cnt = int(max(sid.max(), sid_test.max()) + 1)
+
+########################################
+## train-validation split
+########################################
+
+perm = np.random.permutation(len(train))
+trn_cnt = int(len(train) * 0.85)
+uid_trn = uid[perm[:trn_cnt]]
+uid_val = uid[perm[trn_cnt:]]
+sid_trn = sid[perm[:trn_cnt]]
+sid_val = sid[perm[trn_cnt:]]
+target_trn = target[perm[:trn_cnt]]
+target_val = target[perm[trn_cnt:]]
+
+########################################
+## define the model
+########################################
+
+def get_model():
+    user_embeddings = Embedding(u_cnt,
+            64,
+            embeddings_initializer=RandomUniform(minval=-0.1, maxval=0.1),
+            embeddings_regularizer=l2(1e-4),
+            input_length=1,
+            trainable=True)
+    song_embeddings = Embedding(s_cnt,
+            64,
+            embeddings_initializer=RandomUniform(minval=-0.1, maxval=0.1),
+            embeddings_regularizer=l2(1e-4),
+            input_length=1,
+            trainable=True)
+
+    uid_input = Input(shape=(1,), dtype='int32')
+    embedded_usr = user_embeddings(uid_input)
+    embedded_usr = Reshape((64,))(embedded_usr)
+
+    sid_input = Input(shape=(1,), dtype='int32')
+    embedded_song = song_embeddings(sid_input)
+    embedded_song = Reshape((64,))(embedded_song)
+
+    preds = dot([embedded_usr, embedded_song], axes=1)
+    preds = concatenate([embedded_usr, embedded_song, preds])
     
-    # Fit and submit
-    scores = []
-    for label in LABELS:
-        print(label)
-        score = cross_val_score(stacker, X_train, train[label], cv=5, scoring='roc_auc')
-        print("AUC:", score)
-        scores.append(np.mean(score))
-        stacker.fit(X_train, train[label])
-        sub[label] = stacker.predict_proba(X_test)[:,1]
-    print("CV score:", np.mean(scores))
+    preds = Dense(128, activation='relu')(preds)
+    preds = Dropout(0.5)(preds)
     
-    sub.to_csv("submission.csv", index=False)
+    preds = Dense(1, activation='sigmoid')(preds)
+
+    model = Model(inputs=[uid_input, sid_input], outputs=preds)
+    
+    opt = RMSprop(lr=1e-3)
+    model.compile(loss='binary_crossentropy', optimizer=opt, metrics=['acc'])
+
+    return model
+
+########################################
+## train the model
+########################################
+   
+model = get_model()
+early_stopping =EarlyStopping(monitor='val_acc', patience=5)
+model_path = 'bst_model.h5'
+model_checkpoint = ModelCheckpoint(model_path, save_best_only=True, \
+        save_weights_only=True)
+
+hist = model.fit([uid_trn, sid_trn], target_trn, validation_data=([uid_val, sid_val], \
+        target_val), epochs=100, batch_size=32768, shuffle=True, \
+        callbacks=[early_stopping, model_checkpoint])
+model.load_weights(model_path)
+
+preds_val = model.predict([uid_val, sid_val], batch_size=32768)
+val_auc = roc_auc_score(target_val, preds_val)
+
+########################################
+## make the submission
+########################################
+
+preds_test = model.predict([uid_test, sid_test], batch_size=32768, verbose=1)
+sub = pd.DataFrame({'id': id_test, 'target': preds_test.ravel()})
+sub.to_csv('./sub_%.5f.csv'%(val_auc), index=False)

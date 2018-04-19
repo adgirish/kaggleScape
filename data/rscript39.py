@@ -1,336 +1,162 @@
 import numpy as np
 import pandas as pd
-from contextlib import contextmanager
-from sklearn.feature_extraction.text import TfidfVectorizer
-from scipy.sparse import hstack
-import time
-import re
-import string
-from scipy.sparse import csr_matrix
-from sklearn.preprocessing import MinMaxScaler
-import lightgbm as lgb
-from sklearn.model_selection import KFold
-from sklearn.metrics import roc_auc_score
-import gc
-from collections import defaultdict
-import os
-import psutil
+import xgboost as xgb
 
+from datetime import datetime
+from sklearn.metrics import mean_absolute_error
+from sklearn.cross_validation import KFold
+from scipy.stats import skew, boxcox
+from sklearn.preprocessing import StandardScaler
+import itertools
 
-# Contraction replacement patterns
-cont_patterns = [
-    (b'(W|w)on\'t', b'will not'),
-    (b'(C|c)an\'t', b'can not'),
-    (b'(I|i)\'m', b'i am'),
-    (b'(A|a)in\'t', b'is not'),
-    (b'(\w+)\'ll', b'\g<1> will'),
-    (b'(\w+)n\'t', b'\g<1> not'),
-    (b'(\w+)\'ve', b'\g<1> have'),
-    (b'(\w+)\'s', b'\g<1> is'),
-    (b'(\w+)\'re', b'\g<1> are'),
-    (b'(\w+)\'d', b'\g<1> would'),
-]
-patterns = [(re.compile(regex), repl) for (regex, repl) in cont_patterns]
+shift = 200
+COMB_FEATURE = 'cat80,cat87,cat57,cat12,cat79,cat10,cat7,cat89,cat2,cat72,' \
+               'cat81,cat11,cat1,cat13,cat9,cat3,cat16,cat90,cat23,cat36,' \
+               'cat73,cat103,cat40,cat28,cat111,cat6,cat76,cat50,cat5,' \
+               'cat4,cat14,cat38,cat24,cat82,cat25'.split(',')
 
+def encode(charcode):
+    r = 0
+    ln = len(str(charcode))
+    for i in range(ln):
+        r += (ord(str(charcode)[i]) - ord('A') + 1) * 26 ** (ln - i - 1)
+    return r
 
-@contextmanager
-def timer(name):
-    """
-    Taken from Konstantin Lopuhin https://www.kaggle.com/lopuhin
-    in script named : Mercari Golf: 0.3875 CV in 75 LOC, 1900 s
-    https://www.kaggle.com/lopuhin/mercari-golf-0-3875-cv-in-75-loc-1900-s
-    """
-    t0 = time.time()
-    yield
-    print(f'[{name}] done in {time.time() - t0:.0f} s')
+fair_constant = 2
+def fair_obj(preds, dtrain):
+    labels = dtrain.get_label()
+    x = (preds - labels)
+    den = abs(x) + fair_constant
+    grad = fair_constant * x / (den)
+    hess = fair_constant * fair_constant / (den * den)
+    return grad, hess
 
+def xg_eval_mae(yhat, dtrain):
+    y = dtrain.get_label()
+    return 'mae', mean_absolute_error(np.exp(y)-shift,
+                                      np.exp(yhat)-shift)
+def mungeskewed(train, test, numeric_feats):
+    ntrain = train.shape[0]
+    test['loss'] = 0
+    train_test = pd.concat((train, test)).reset_index(drop=True)
+    skewed_feats = train[numeric_feats].apply(lambda x: skew(x.dropna()))
+    skewed_feats = skewed_feats[skewed_feats > 0.25]
+    skewed_feats = skewed_feats.index
 
-def prepare_for_char_n_gram(text):
-    """ Simple text clean up process"""
-    # 1. Go to lower case (only good for english)
-    # Go to bytes_strings as I had issues removing all \n in r""
-    clean = bytes(text.lower(), encoding="utf-8")
-    # 2. Drop \n and  \t
-    clean = clean.replace(b"\n", b" ")
-    clean = clean.replace(b"\t", b" ")
-    clean = clean.replace(b"\b", b" ")
-    clean = clean.replace(b"\r", b" ")
-    # 3. Replace english contractions
-    for (pattern, repl) in patterns:
-        clean = re.sub(pattern, repl, clean)
-    # 4. Drop puntuation
-    # I could have used regex package with regex.sub(b"\p{P}", " ")
-    exclude = re.compile(b'[%s]' % re.escape(bytes(string.punctuation, encoding='utf-8')))
-    clean = b" ".join([exclude.sub(b'', token) for token in clean.split()])
-    # 5. Drop numbers - as a scientist I don't think numbers are toxic ;-)
-    clean = re.sub(b"\d+", b" ", clean)
-    # 6. Remove extra spaces - At the end of previous operations we multiplied space accurences
-    clean = re.sub(b'\s+', b' ', clean)
-    # Remove ending space if any
-    clean = re.sub(b'\s+$', b'', clean)
-    # 7. Now replace words by words surrounded by # signs
-    # e.g. my name is bond would become #my# #name# #is# #bond#
-    # clean = re.sub(b"([a-z]+)", b"#\g<1>#", clean)
-    clean = re.sub(b" ", b"# #", clean)  # Replace space
-    clean = b"#" + clean + b"#"  # add leading and trailing #
+    for feats in skewed_feats:
+        train_test[feats] = train_test[feats] + 1
+        train_test[feats], lam = boxcox(train_test[feats])
+    return train_test, ntrain
 
-    return str(clean, 'utf-8')
+if __name__ == "__main__":
 
+    print('\nStarted')
+    directory = '../input/'
+    train = pd.read_csv(directory + 'train.csv')
+    test = pd.read_csv(directory + 'test.csv')
 
-def count_regexp_occ(regexp="", text=None):
-    """ Simple way to get the number of occurence of a regex"""
-    return len(re.findall(regexp, text))
+    numeric_feats = [x for x in train.columns[1:-1] if 'cont' in x]
+    categorical_feats = [x for x in train.columns[1:-1] if 'cat' in x]
+    train_test, ntrain = mungeskewed(train, test, numeric_feats)
 
+    print('')
+    for comb in itertools.combinations(COMB_FEATURE, 2):
+        feat = comb[0] + "_" + comb[1]
+        train_test[feat] = train_test[comb[0]] + train_test[comb[1]]
+        train_test[feat] = train_test[feat].apply(encode)
+        print('Analyzing Columns:', feat)
 
-def get_indicators_and_clean_comments(df):
-    """
-    Check all sorts of content as it may help find toxic comment
-    Though I'm not sure all of them improve scores
-    """
-    # Count number of \n
-    df["ant_slash_n"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\n", x))
-    # Get length in words and characters
-    df["raw_word_len"] = df["comment_text"].apply(lambda x: len(x.split()))
-    df["raw_char_len"] = df["comment_text"].apply(lambda x: len(x))
-    # Check number of upper case, if you're angry you may write in upper case
-    df["nb_upper"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[A-Z]", x))
-    # Number of F words - f..k contains folk, fork,
-    df["nb_fk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[Ff]\S{2}[Kk]", x))
-    # Number of S word
-    df["nb_sk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[Ss]\S{2}[Kk]", x))
-    # Number of D words
-    df["nb_dk"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"[dD]ick", x))
-    # Number of occurence of You, insulting someone usually needs someone called : you
-    df["nb_you"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\W[Yy]ou\W", x))
-    # Just to check you really refered to my mother ;-)
-    df["nb_mother"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\Wmother\W", x))
-    # Just checking for toxic 19th century vocabulary
-    df["nb_ng"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\Wnigger\W", x))
-    # Some Sentences start with a <:> so it may help
-    df["start_with_columns"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"^\:+", x))
-    # Check for time stamp
-    df["has_timestamp"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\d{2}|:\d{2}", x))
-    # Check for dates 18:44, 8 December 2010
-    df["has_date_long"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\D\d{2}:\d{2}, \d{1,2} \w+ \d{4}", x))
-    # Check for date short 8 December 2010
-    df["has_date_short"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\D\d{1,2} \w+ \d{4}", x))
-    # Check for http links
-    df["has_http"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"http[s]{0,1}://\S+", x))
-    # check for mail
-    df["has_mail"] = df["comment_text"].apply(
-        lambda x: count_regexp_occ(r'[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+', x)
-    )
-    # Looking for words surrounded by == word == or """" word """"
-    df["has_emphasize_equal"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\={2}.+\={2}", x))
-    df["has_emphasize_quotes"] = df["comment_text"].apply(lambda x: count_regexp_occ(r"\"{4}\S+\"{4}", x))
+    categorical_feats = [x for x in train_test.columns[1:] if 'cat' in x]
 
-    # Now clean comments
-    df["clean_comment"] = df["comment_text"].apply(lambda x: prepare_for_char_n_gram(x))
+    print('')
+    for col in categorical_feats:
+        print('Analyzing Column:', col)
+        train_test[col] = train_test[col].apply(encode)
 
-    # Get the new length in words and characters
-    df["clean_word_len"] = df["clean_comment"].apply(lambda x: len(x.split()))
-    df["clean_char_len"] = df["clean_comment"].apply(lambda x: len(x))
-    # Number of different characters used in a comment
-    # Using the f word only will reduce the number of letters required in the comment
-    df["clean_chars"] = df["clean_comment"].apply(lambda x: len(set(x)))
-    df["clean_chars_ratio"] = df["clean_comment"].apply(lambda x: len(set(x))) / df["clean_comment"].apply(
-        lambda x: 1 + min(99, len(x)))
+    print(train_test[categorical_feats])
 
+    ss = StandardScaler()
+    train_test[numeric_feats] = \
+        ss.fit_transform(train_test[numeric_feats].values)
 
+    train = train_test.iloc[:ntrain, :].copy()
+    test = train_test.iloc[ntrain:, :].copy()
 
-def char_analyzer(text):
-    """
-    This is used to split strings in small lots
-    I saw this in an article (I can't find the link anymore)
-    so <talk> and <talking> would have <Tal> <alk> in common
-    """
-    tokens = text.split()
-    return [token[i: i + 3] for token in tokens for i in range(len(token) - 2)]
+    print('\nMedian Loss:', train.loss.median())
+    print('Mean Loss:', train.loss.mean())
 
+    ids = pd.read_csv('input/test.csv')['id']
+    train_y = np.log(train['loss'] + shift)
+    train_x = train.drop(['loss','id'], axis=1)
+    test_x = test.drop(['loss','id'], axis=1)
 
-if __name__ == '__main__':
-    gc.enable()
-    class_names = ['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']
+    n_folds = 10
+    cv_sum = 0
+    early_stopping = 100
+    fpred = []
+    xgb_rounds = []
 
-    with timer("Reading input files"):
-        train = pd.read_csv('../input/train.csv').fillna(' ')
-        test = pd.read_csv('../input/test.csv').fillna(' ')
+    d_train_full = xgb.DMatrix(train_x, label=train_y)
+    d_test = xgb.DMatrix(test_x)
 
-    with timer("Performing basic NLP"):
-        get_indicators_and_clean_comments(train)
-        get_indicators_and_clean_comments(test)
+    kf = KFold(train.shape[0], n_folds=n_folds)
+    for i, (train_index, test_index) in enumerate(kf):
+        print('\n Fold %d' % (i+1))
+        X_train, X_val = train_x.iloc[train_index], train_x.iloc[test_index]
+        y_train, y_val = train_y.iloc[train_index], train_y.iloc[test_index]
 
+        rand_state = 2016
 
-    # Scaling numerical features with MinMaxScaler though tree boosters don't need that
-    with timer("Creating numerical features"):
-        num_features = [f_ for f_ in train.columns
-                        if f_ not in ["comment_text", "clean_comment", "id", "remaining_chars",
-                                      'has_ip_address'] + class_names]
+        params = {
+            'seed': 0,
+            'colsample_bytree': 0.7,
+            'silent': 1,
+            'subsample': 0.7,
+            'learning_rate': 0.03,
+            'objective': 'reg:linear',
+            'max_depth': 12,
+            'min_child_weight': 100,
+            'booster': 'gbtree'}
 
-        skl = MinMaxScaler()
-        train_num_features = csr_matrix(skl.fit_transform(train[num_features]))
-        test_num_features = csr_matrix(skl.fit_transform(test[num_features]))
+        d_train = xgb.DMatrix(X_train, label=y_train)
+        d_valid = xgb.DMatrix(X_val, label=y_val)
+        watchlist = [(d_train, 'train'), (d_valid, 'eval')]
 
-    # Get TF-IDF features
-    train_text = train['clean_comment']
-    test_text = test['clean_comment']
-    all_text = pd.concat([train_text, test_text])
+        clf = xgb.train(params,
+                        d_train,
+                        100000,
+                        watchlist,
+                        early_stopping_rounds=50,
+                        obj=fair_obj,
+                        feval=xg_eval_mae)
 
-    # First on real words
-    with timer("Tfidf on word"):
-        word_vectorizer = TfidfVectorizer(
-            sublinear_tf=True,
-            strip_accents='unicode',
-            analyzer='word',
-            token_pattern=r'\w{1,}',
-            stop_words='english',
-            ngram_range=(1, 2),
-            max_features=20000)
-        word_vectorizer.fit(all_text)
-        train_word_features = word_vectorizer.transform(train_text)
-        test_word_features = word_vectorizer.transform(test_text)
+        xgb_rounds.append(clf.best_iteration)
+        scores_val = clf.predict(d_valid, ntree_limit=clf.best_ntree_limit)
+        cv_score = mean_absolute_error(np.exp(y_val), np.exp(scores_val))
+        print('eval-MAE: %.6f' % cv_score)
+        y_pred = np.exp(clf.predict(d_test, ntree_limit=clf.best_ntree_limit)) - shift
 
-    del word_vectorizer
-    gc.collect()
+        if i > 0:
+            fpred = pred + y_pred
+        else:
+            fpred = y_pred
+        pred = fpred
+        cv_sum = cv_sum + cv_score
 
-    # Now use the char_analyzer to get another TFIDF
-    # Char level TFIDF would go through words when char analyzer only considers
-    # characters inside a word
-    with timer("Tfidf on char n_gram"):
-        char_vectorizer = TfidfVectorizer(
-            sublinear_tf=True,
-            strip_accents='unicode',
-            tokenizer=char_analyzer,
-            analyzer='word',
-            ngram_range=(1, 1),
-            max_features=50000)
-        char_vectorizer.fit(all_text)
-        train_char_features = char_vectorizer.transform(train_text)
-        test_char_features = char_vectorizer.transform(test_text)
+    mpred = pred / n_folds
+    score = cv_sum / n_folds
+    print('Average eval-MAE: %.6f' % score)
+    n_rounds = int(np.mean(xgb_rounds))
 
-    del char_vectorizer
-    gc.collect()
+    print("Writing results")
+    result = pd.DataFrame(mpred, columns=['loss'])
+    result["id"] = ids
+    result = result.set_index("id")
+    print("%d-fold average prediction:" % n_folds)
 
-    print((train_char_features > 0).sum(axis=1).max())
-
-    del train_text
-    del test_text
-    gc.collect()
-
-    # Now stack TF IDF matrices
-    with timer("Staking matrices"):
-        csr_trn = hstack(
-            [
-                train_char_features,
-                train_word_features,
-                train_num_features
-            ]
-        ).tocsr()
-        # del train_word_features
-        del train_num_features
-        del train_char_features
-        gc.collect()
-
-        csr_sub = hstack(
-            [
-                test_char_features,
-                test_word_features,
-                test_num_features
-            ]
-        ).tocsr()
-        # del test_word_features
-        del test_num_features
-        del test_char_features
-        gc.collect()
-    submission = pd.DataFrame.from_dict({'id': test['id']})
-    del test
-    gc.collect()
-
-    # Drop now useless columns in train and test
-    drop_f = [f_ for f_ in train if f_ not in ["id"] + class_names]
-    train.drop(drop_f, axis=1, inplace=True)
-    gc.collect()
-
-    # Set LGBM parameters
-    params = {
-        "objective": "binary",
-        'metric': {'auc'},
-        "boosting_type": "gbdt",
-        "verbosity": -1,
-        "num_threads": 4,
-        "bagging_fraction": 0.8,
-        "feature_fraction": 0.8,
-        "learning_rate": 0.1,
-        "num_leaves": 31,
-        "verbose": -1,
-        "min_split_gain": .1,
-        "reg_alpha": .1
-    }
-
-    # Now go through folds
-    # I use K-Fold for reasons described here : 
-    # https://www.kaggle.com/c/jigsaw-toxic-comment-classification-challenge/discussion/49964
-    with timer("Scoring Light GBM"):
-        scores = []
-        folds = KFold(n_splits=4, shuffle=True, random_state=1)
-        lgb_round_dict = defaultdict(int)
-        trn_lgbset = lgb.Dataset(csr_trn, free_raw_data=False)
-        del csr_trn
-        gc.collect()
-        
-        for class_name in class_names:
-            print("Class %s scores : " % class_name)
-            class_pred = np.zeros(len(train))
-            train_target = train[class_name]
-            trn_lgbset.set_label(train_target.values)
-            
-            lgb_rounds = 500
-
-            for n_fold, (trn_idx, val_idx) in enumerate(folds.split(train, train_target)):
-                watchlist = [
-                    trn_lgbset.subset(trn_idx),
-                    trn_lgbset.subset(val_idx)
-                ]
-                # Train lgb l1
-                model = lgb.train(
-                    params=params,
-                    train_set=watchlist[0],
-                    num_boost_round=lgb_rounds,
-                    valid_sets=watchlist,
-                    early_stopping_rounds=50,
-                    verbose_eval=0
-                )
-                class_pred[val_idx] = model.predict(trn_lgbset.data[val_idx], num_iteration=model.best_iteration)
-                score = roc_auc_score(train_target.values[val_idx], class_pred[val_idx])
-                
-                # Compute mean rounds over folds for each class
-                # So that it can be re-used for test predictions
-                lgb_round_dict[class_name] += model.best_iteration
-                print("\t Fold %d : %.6f in %3d rounds" % (n_fold + 1, score, model.best_iteration))
-            
-            print("full score : %.6f" % roc_auc_score(train_target, class_pred))
-            scores.append(roc_auc_score(train_target, class_pred))
-            train[class_name + "_oof"] = class_pred
-
-        # Save OOF predictions - may be interesting for stacking...
-        train[["id"] + class_names + [f + "_oof" for f in class_names]].to_csv("lvl0_lgbm_clean_oof.csv",
-                                                                               index=False,
-                                                                               float_format="%.8f")
-
-        print('Total CV score is {}'.format(np.mean(scores)))
-
-    with timer("Predicting probabilities"):
-        # Go through all classes and reuse computed number of rounds for each class
-        for class_name in class_names:
-            with timer("Predicting probabilities for %s" % class_name):
-                train_target = train[class_name]
-                trn_lgbset.set_label(train_target.values)
-                # Train lgb
-                model = lgb.train(
-                    params=params,
-                    train_set=trn_lgbset,
-                    num_boost_round=int(lgb_round_dict[class_name] / folds.n_splits)
-                )
-                submission[class_name] = model.predict(csr_sub, num_iteration=model.best_iteration)
-
-submission.to_csv("lvl0_lgbm_clean_sub.csv", index=False, float_format="%.8f")
+    now = datetime.now()
+    score = str(round((cv_sum / n_folds), 6))
+    sub_file = 'output/submission_5fold-average-xgb_fairobj_' + str(score) + '_' + str(
+        now.strftime("%Y-%m-%d-%H-%M")) + '.csv'
+    print("Writing submission: %s" % sub_file)
+    result.to_csv(sub_file, index=True, index_label='id')

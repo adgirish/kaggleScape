@@ -1,574 +1,183 @@
 
 # coding: utf-8
 
-# <h1>Kickstarter: Exploratory Data Analysis with Python</h1>
-
-#  <i>Leonado Ferreira, 2018-02-12 </i> 
+# ## Overview ##
 # 
-
-# Look for another interesting Kernels on https://www.kaggle.com/kabure/kernels
-
-# <h2>The goal is try to understand : </h2>
-# - The difference values in  categorys.<br>
-# - The most frequency status of project<br>
-# - Distribuitions<br>
-# - Patterns <br>
-# - And some another informations that the data can show us<br>
-
-# <i>English is not my native language, so sorry for any mistake</i>
-
-# If you like me Kernel, give me some feedback and also <b>votes up </b> my kernel =)
+# This is a starter notebook inspired by last year's [Logistic Regression on Tournament Seeds by Kasper P. Lauritzen](https://www.kaggle.com/kplauritzen/notebookde27b18258?scriptVersionId=804590) starter kernel. It creates a basic logistic regression model based on the seed differences between teams. 
 # 
-
-# <h1>Understanding Kickstarter: </h1>
-
-# <b>Kickstarter</b>
-# Is an American public-benefit corporation based in Brooklyn, New York, that maintains a global crowdfunding platform focused on creativity The company's stated mission is to "help bring creative projects to life". Kickstarter has reportedly received more than $1.9 billion in pledges from 9.4 million backers to fund 257,000 creative projects, such as films, music, stage shows, comics, journalism, video games, technology and food-related projects.
-# 
-# People who back Kickstarter projects are offered tangible rewards or experiences in exchange for their pledges. This model traces its roots to subscription model of arts patronage, where artists would go directly to their audiences to fund their work.
-# 
+# Note that the predictions for Stage 1's sample submissions file are already based on known outcomes, and the Tourney data this model is trained on includes that data. For Stage 2, you will be predicting future outcomes based on the teams selected for the tournament on March 11.
 
 # In[ ]:
 
 
-#Load the Librarys
-import pandas as pd
-import numpy as np
-import seaborn as sns
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+from sklearn.linear_model import LogisticRegression
 import matplotlib.pyplot as plt
+from sklearn.utils import shuffle
+from sklearn.model_selection import GridSearchCV
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# ## Load the training data ##
+# We're keeping it simple & using only 2 files for this model: the Tourney seeds & Compact results.
+
+# In[ ]:
+
+
+data_dir = '../input/'
+df_seeds = pd.read_csv(data_dir + 'NCAATourneySeeds.csv')
+df_tour = pd.read_csv(data_dir + 'NCAATourneyCompactResults.csv')
 
 
 # In[ ]:
 
 
-#loading the data with encode 
-df_kick = pd.read_csv("../input/ks-projects-201801.csv")
+df_seeds.head()
 
 
 # In[ ]:
 
 
-#knowning the main informations of our data
-print(df_kick.shape)
-print(df_kick.info())
+df_tour.head()
+
+
+# First, we'll simplify the datasets to remove the columns we won't be using and convert the seedings to the needed format (stripping the regional abbreviation in front of the seed).
+
+# In[ ]:
+
+
+def seed_to_int(seed):
+    #Get just the digits from the seeding. Return as int
+    s_int = int(seed[1:3])
+    return s_int
+df_seeds['seed_int'] = df_seeds.Seed.apply(seed_to_int)
+df_seeds.drop(labels=['Seed'], inplace=True, axis=1) # This is the string label
+df_seeds.head()
 
 
 # In[ ]:
 
 
-print(df_kick.nunique())
+df_tour.drop(labels=['DayNum', 'WScore', 'LScore', 'WLoc', 'NumOT'], inplace=True, axis=1)
+df_tour.head()
 
 
-# <h2> Knowing our data</h2>
-
-# In[ ]:
-
-
-#Looking the data
-df_kick.head(n=3)
-
-
-# <h2>I will start, looking the state column distribuition that might will be our key to understand this dataset</h2>
+# ## Merge seed for each team ##
+# Merge the Seeds with their corresponding TeamIDs in the compact results dataframe.
 
 # In[ ]:
 
 
-percentual_sucess = round(df_kick["state"].value_counts() / len(df_kick["state"]) * 100,2)
-
-print("State Percentual in %: ")
-print(percentual_sucess)
-
-plt.figure(figsize = (8,6))
-
-ax1 = sns.countplot(x="state", data=df_kick)
-ax1.set_xticklabels(ax1.get_xticklabels(),rotation=45)
-ax1.set_title("Status Project Distribuition", fontsize=15)
-ax1.set_xlabel("State Description", fontsize=12)
-ax1.set_ylabel("Count", fontsize=12)
-
-plt.show()
+df_winseeds = df_seeds.rename(columns={'TeamID':'WTeamID', 'seed_int':'WSeed'})
+df_lossseeds = df_seeds.rename(columns={'TeamID':'LTeamID', 'seed_int':'LSeed'})
+df_dummy = pd.merge(left=df_tour, right=df_winseeds, how='left', on=['Season', 'WTeamID'])
+df_concat = pd.merge(left=df_dummy, right=df_lossseeds, on=['Season', 'LTeamID'])
+df_concat['SeedDiff'] = df_concat.WSeed - df_concat.LSeed
+df_concat.head()
 
 
-# Very interesting percentual ! <br>
-# just 35,38% of all projects got sucess.<br>
-# More than half have failed or 10% was canceled
-
-# <h1>Let's start looking our Project values</h1> <br>
-# 
-# - I will start exploring the distribuition logarithmn of these values
+# Now we'll create a dataframe that summarizes wins & losses along with their corresponding seed differences. This is the meat of what we'll be creating our model on.
 
 # In[ ]:
 
 
-#Normalization to understand the distribuition of the pledge
-df_kick["pledge_log"] = np.log(df_kick["pledged"]+ 1)
-df_kick["goal_log"] = np.log(df_kick["goal"]+ 1)
+df_wins = pd.DataFrame()
+df_wins['SeedDiff'] = df_concat['SeedDiff']
+df_wins['Result'] = 1
 
-df_failed = df_kick[df_kick["state"] == "failed"]
-df_sucess = df_kick[df_kick["state"] == "successful"]
-df_suspended = df_kick[df_kick["state"] == "suspended"]
+df_losses = pd.DataFrame()
+df_losses['SeedDiff'] = -df_concat['SeedDiff']
+df_losses['Result'] = 0
 
-plt.figure(figsize = (14,6))
-plt.subplot(221)
-g = sns.distplot(df_kick["pledge_log"])
-g.set_title("Pledged Log", fontsize=18)
-
-plt.subplot(222)
-g1 = sns.distplot(df_kick["goal_log"])
-g1.set_title("Pledged Log", fontsize=18)
-
-plt.subplot(212)
-g2 = sns.distplot(df_failed['goal_log'], color='r')
-g2 = sns.distplot(df_sucess['goal_log'], color='b')
-g2.set_title("Pledged x Goal cross distribuition", fontsize=18)
-
-plt.subplots_adjust(wspace = 0.1, hspace = 0.4,top = 0.9)
-
-plt.show()
-
-
-# Interesting difference between Pledged and Goal distribuition!  But we cannot see significantly differences beween failed and successful state
-# 
-
-# <h2>Description of the continous variables</h2>
-
-# In[ ]:
-
-
-print("Min Goal and Pledged values")
-print(df_kick[["goal", "pledged"]].min())
-print("")
-print("Mean Goal and Pledged values")
-print(round(df_kick[["goal", "pledged"]].mean(),2))
-print("")
-print("Median Goal and Pledged values")
-print(df_kick[["goal", "pledged"]].median())
-print("")
-print("Max Goal and Pledged values")
-print("goal       100000000.0") #If i put the both together give me back log values, 
-print("pledged     20338986.27") # so i decide to just show this values
-print("dtype: float64")
-print("")
-print("Std Goal and Pledged values")
-print(round(df_kick[["goal", "pledged"]].std(),2))
-
-
-# <h2>Looking the State variable</h2>
-# - pledge log by state
-# - goal log by state
-# - goal log x pledged log
-
-# In[ ]:
-
-
-plt.figure(figsize = (12,8))
-plt.subplots_adjust(hspace = 0.75, top = 0.75)
-
-ax1 = plt.subplot(221)
-ax1 = sns.violinplot(x="state", y="pledge_log", 
-                     data=df_kick, palette="hls")
-ax1.set_xticklabels(ax1.get_xticklabels(),rotation=45)
-ax1.set_title("Understanding the Pledged values by state", fontsize=15)
-ax1.set_xlabel("State Description", fontsize=12)
-ax1.set_ylabel("Pledged Values(log)", fontsize=12)
-
-ax2 = plt.subplot(222)
-ax2 = sns.violinplot(x="state", y="goal_log", data=df_kick)
-ax2.set_xticklabels(ax2.get_xticklabels(),rotation=45)
-ax2.set_title("Understanding the Goal values by state", fontsize=15)
-ax2.set_xlabel("State Description", fontsize=12)
-ax2.set_ylabel("Goal Values(log)", fontsize=12)
-
-ax0 = plt.subplot(212)
-ax0 = sns.regplot(x="goal_log", y="pledge_log", 
-                    data=df_kick, x_jitter=False)
-ax0.set_title("Better view of Goal x Pledged values", fontsize=15)
-ax0.set_xlabel("Goal Values(log)")
-ax0.set_ylabel("Pledged Values(log)")
-ax0.set_xticklabels(ax0.get_xticklabels(),rotation=90)
-plt.show()
-
-
-# <h2>Analysing further the CAaegorys: </h2>
-# - Sucessful category's frequency
-# - failed category's frequency
-# - General Goal Distribuition by Category
-
-# In[ ]:
-
-
-main_cats = df_kick["main_category"].value_counts()
-main_cats_failed = df_kick[df_kick["state"] == "failed"]["main_category"].value_counts()
-main_cats_sucess = df_kick[df_kick["state"] == "successful"]["main_category"].value_counts()
-
-plt.figure(figsize = (12,8))
-plt.subplots_adjust(hspace = 0.9, top = 0.75)
-
-ax0 = plt.subplot(221)
-ax0 = sns.barplot(x=main_cats_failed.index, y= main_cats_failed.values, orient='v')
-ax0.set_xticklabels(ax0.get_xticklabels(),rotation=90)
-ax0.set_title("Frequency Failed by Main Category", fontsize=15)
-ax0.set_xlabel("Main Category Failed", fontsize=12)
-ax0.set_ylabel("Count", fontsize=12)
-
-ax1 = plt.subplot(222)
-ax1 = sns.barplot(x=main_cats_sucess.index, y = main_cats_sucess.values, orient='v')
-ax1.set_xticklabels(ax1.get_xticklabels(),rotation=90)
-ax1.set_title("Frequency Successful by Main Category", fontsize=15)
-ax1.set_xlabel("Main Category Sucessful", fontsize=12)
-ax1.set_ylabel("Count", fontsize=12)
-
-ax2 = plt.subplot(212)
-ax2 = sns.violinplot(x="main_category", y="goal_log", data=df_kick)
-ax2.set_xticklabels(ax1.get_xticklabels(),rotation=90)
-ax2.set_title("Distribuition goal(log) by General Main Category", fontsize=15)
-ax2.set_xlabel("Main Category", fontsize=12)
-ax2.set_ylabel("Goal(log)", fontsize=8)
-plt.show()
-
-
-# <h2>Looking the Goal and Pledged Means by State</h2>
-
-# In[ ]:
-
-
-print("Looking Goal and Pledged Mean by state ")
-print(round(df_kick.groupby(["state"])["goal", "pledged"].mean(),2))
-
-
-# We have a high mean and standard deviation... Interesting values. <br>
-# Let's known better the distribuition of this values using log scale
-
-# <h2>We have a very interesting distribuition in goal values.</h2>
-
-# In[ ]:
-
-
-categorys_failed = df_kick[df_kick["state"] == "failed"]["category"].value_counts()[:25]
-categorys_sucessful = df_kick[df_kick["state"] == "successful"]["category"].value_counts()[:25]
-
-fig, ax = plt.subplots(ncols=2, figsize=(15,20))
-plt.subplots_adjust(wspace = 0.35, top = 0.5)
-
-g1 = plt.subplot(222)
-g1 = sns.barplot(x= categorys_failed.values, y=categorys_failed.index, orient='h')
-g1.set_title("Failed Category's", fontsize=15)
-g1.set_xlabel("Count Category", fontsize=12)
-g1.set_ylabel("Category's Failed", fontsize=12)
-
-g2 = plt.subplot(221)
-g2 = sns.barplot(x= categorys_sucessful.values, y=categorys_sucessful.index, orient='h')
-g2.set_title("Sucessful Category's", fontsize=15)
-g2.set_xlabel("Count Category", fontsize=12)
-g2.set_ylabel("Category's Successful", fontsize=12)
-
-ax2 = plt.subplot(212)
-ax2 = sns.countplot(x="main_category", data=df_kick)
-ax2.set_xticklabels(ax1.get_xticklabels(),rotation=90)
-ax2.set_title("General Main Category's", fontsize=15)
-ax2.set_xlabel("Main Category", fontsize=12)
-ax2.set_ylabel("Count", fontsize=12)
-
-plt.show()
-
-
-# <h2>Now I will start to Investigating the 3 top sucess and fail projects</h2>
-# 
-
-# In[ ]:
-
-
-sucess_music = df_kick[(df_kick['main_category'] == 'Music') & 
-                      (df_kick['state'] == 'successful')]
-sucess_filme_video = df_kick[(df_kick['main_category'] == 'Film & Video') & 
-                      (df_kick['state'] == 'successful')]
-sucess_games = df_kick[(df_kick['main_category'] == 'Games') & 
-                      (df_kick['state'] == 'successful')]
-
-plt.figure(figsize=(12,12))
-
-plt.subplot(3,1,1)
-ax0 = sns.countplot(x='category', data=sucess_music)
-ax0.set_xticklabels(ax0.get_xticklabels(),rotation=45)
-ax0.set_title("Categorys of Music with Sucess", fontsize=15)
-ax0.set_xlabel("Music categories", fontsize=12)
-ax0.set_ylabel("Counts", fontsize=12)
-
-plt.subplot(3,1,2)
-ax1 = sns.countplot(x='category', data=sucess_filme_video)
-ax1.set_xticklabels(ax1.get_xticklabels(),rotation=45)
-ax1.set_title("Categorys of Film & Video with Sucess", fontsize=15)
-ax1.set_xlabel("Film and Video Categorys", fontsize=12)
-ax1.set_ylabel("Counts", fontsize=12)
-
-plt.subplot(3,1,3)
-ax2 = sns.countplot(x='category', data=sucess_games)
-ax2.set_xticklabels(ax2.get_xticklabels(),rotation=45)
-ax2.set_title("Categorys of Film & Video with Sucess", fontsize=15)
-ax2.set_xlabel("Categorys of Games with Sucess", fontsize=12)
-ax2.set_ylabel("Counts", fontsize=12)
-
-plt.subplots_adjust(wspace = 0.3, hspace = 0.9,top = 0.9)
-
-plt.show()
+df_predictions = pd.concat((df_wins, df_losses))
+df_predictions.head()
 
 
 # In[ ]:
 
 
-<h2>
+X_train = df_predictions.SeedDiff.values.reshape(-1,1)
+y_train = df_predictions.Result.values
+X_train, y_train = shuffle(X_train, y_train)
+
+
+# ## Train the model ##
+# Use a basic logistic regression to train the model. You can set different C values to see how performance changes.
+
+# In[ ]:
+
+
+logreg = LogisticRegression()
+params = {'C': np.logspace(start=-5, stop=3, num=9)}
+clf = GridSearchCV(logreg, params, scoring='neg_log_loss', refit=True)
+clf.fit(X_train, y_train)
+print('Best log_loss: {:.4}, with best C: {}'.format(clf.best_score_, clf.best_params_['C']))
 
 
 # In[ ]:
 
 
-failed_film = df_kick[(df_kick['main_category'] == 'Film & Video') & 
-                      (df_kick['state'] == 'failed')]
-failed_publishing = df_kick[(df_kick['main_category'] == 'Publishing') & 
-                      (df_kick['state'] == 'failed')]
-failed_music = df_kick[(df_kick['main_category'] == 'Music') & 
-                      (df_kick['state'] == 'failed')]
+X = np.arange(-10, 10).reshape(-1, 1)
+preds = clf.predict_proba(X)[:,1]
 
-plt.figure(figsize=(12,12))
-
-plt.subplot(3,1,1)
-ax0 = sns.countplot(x='category', data=failed_film)
-ax0.set_xticklabels(ax0.get_xticklabels(),rotation=45)
-ax0.set_title("Film & Video Most Fail Category's ", fontsize=15)
-ax0.set_xlabel("", fontsize=12)
-ax0.set_ylabel("Counts", fontsize=12)
-
-plt.subplot(3,1,2)
-ax1 = sns.countplot(x='category', data=failed_publishing)
-ax1.set_xticklabels(ax1.get_xticklabels(),rotation=45)
-ax1.set_title("Publishing Most Fail Category's", fontsize=15)
-ax1.set_xlabel("", fontsize=12)
-ax1.set_ylabel("Counts", fontsize=12)
-
-plt.subplot(3,1,3)
-ax2 = sns.countplot(x='category', data=failed_music)
-ax2.set_xticklabels(ax2.get_xticklabels(),rotation=45)
-ax2.set_title("Music Most Fail Category's", fontsize=15)
-ax2.set_xlabel("", fontsize=12)
-ax2.set_ylabel("Counts", fontsize=12)
-
-plt.subplots_adjust(wspace = 0.5, hspace = 0.9,top = 0.9)
-plt.show()
+plt.plot(X, preds)
+plt.xlabel('Team1 seed - Team2 seed')
+plt.ylabel('P(Team1 will win)')
 
 
-# In the musics with sucess the most frequent is Indie, and fails is Rock and Hip Hop! 
-# 
-# Another interesting thing, is that Documentary is a significant value in both states... 
-
-# <h1> Looking the time and another features  </h1>
-# 
+# Plotting validates our intuition, that the probability a team will win decreases as the seed differential to its opponent decreases.
 
 # In[ ]:
 
 
-df_kick['launched'] = pd.to_datetime(df_kick['launched'])
-df_kick['laun_month_year'] = df_kick['launched'].dt.to_period("M")
-df_kick['laun_year'] = df_kick['launched'].dt.to_period("A")
+df_sample_sub = pd.read_csv(data_dir + 'SampleSubmissionStage1.csv')
+n_test_games = len(df_sample_sub)
 
-df_kick['deadline'] = pd.to_datetime(df_kick['deadline'])
-df_kick['dead_month_year'] = df_kick['deadline'].dt.to_period("M")
-df_kick['dead_year'] = df_kick['launched'].dt.to_period("A")
+def get_year_t1_t2(ID):
+    """Return a tuple with ints `year`, `team1` and `team2`."""
+    return (int(x) for x in ID.split('_'))
 
 
 # In[ ]:
 
 
-#Creating a new columns with Campaign total months
-df_kick['time_campaign'] = df_kick['dead_month_year'] - df_kick['laun_month_year']
-df_kick['time_campaign'] = df_kick['time_campaign'].astype(int)
+X_test = np.zeros(shape=(n_test_games, 1))
+for ii, row in df_sample_sub.iterrows():
+    year, t1, t2 = get_year_t1_t2(row.ID)
+    t1_seed = df_seeds[(df_seeds.TeamID == t1) & (df_seeds.Season == year)].seed_int.values[0]
+    t2_seed = df_seeds[(df_seeds.TeamID == t2) & (df_seeds.Season == year)].seed_int.values[0]
+    diff_seed = t1_seed - t2_seed
+    X_test[ii, 0] = diff_seed
 
 
-# In[ ]:
-
-
-plt.figure(figsize = (10,6))
-
-ax = sns.countplot(x='time_campaign', hue='state', 
-                   data=df_kick[df_kick['time_campaign'] < 10])
-ax.set_title("Distribuition of Campaign Time by State", fontsize=30)
-ax.set_xlabel("Campaign Total Months", fontsize=20)
-ax.set_ylabel("Count", fontsize=20)
-plt.show()
-
-print("Descriptions of Campaign Time x State")
-print(pd.crosstab(df_kick[df_kick['time_campaign'] < 5]['time_campaign'], df_kick.state))
-
+# ## Make Predictions ##
+# Create predictions using the logistic regression model we trained.
 
 # In[ ]:
 
 
-df_kick.laun_month_year = df_kick.laun_month_year.dt.strftime('%Y-%m')
-df_kick.laun_year = df_kick.laun_year.dt.strftime('%Y')
+preds = clf.predict_proba(X_test)[:,1]
+
+clipped_preds = np.clip(preds, 0.05, 0.95)
+df_sample_sub.Pred = clipped_preds
+df_sample_sub.head()
 
 
-# In[ ]:
-
-
-year = df_kick['laun_year'].value_counts()
-month = df_kick['laun_month_year'].value_counts()
-
-fig, ax = plt.subplots(2,1, figsize=(12,10))
-
-ax1 = sns.boxplot(x="laun_year", y='pledge_log', data=df_kick, ax=ax[0])
-ax1.set_title("Project Pledged by Year", fontsize=15)
-ax1.set_xlabel("Years", fontsize=12)
-ax1.set_ylabel("Pledged(log)", fontsize=12)
-
-ax2 = sns.countplot(x="laun_year", hue='state', data=df_kick, ax=ax[1])
-ax2.set_title("Projects count by Year", fontsize=18)
-ax2.set_xlabel("State columns by Year", fontsize=15)
-ax2.set_ylabel("Count", fontsize=15)
-
-#order=['1970','2009','2010','2011','2012',
-#'2013','2014','2015', '2016', '2017','2018']
-# Why the order are not working? 
-plt.show()
-
-print("Descriptive status count by year")
-print(pd.crosstab(df_kick.laun_year, df_kick.state))
-
-
-# <h2>Creating a new feature to calc the % of pledged x goal</h2>
+# Lastly, create your submission file!
 
 # In[ ]:
 
 
-df_kick['diff_pleded_goal'] = round(df_kick['pledge_log'] / df_kick['goal_log'] * 100,2)
-df_kick['diff_pleded_goal'] = df_kick['diff_pleded_goal'].astype(float)
+df_sample_sub.to_csv('logreg_seed_starter.csv', index=False)
 
-
-# In[ ]:
-
-
-plt.figure(figsize = (12,6))
-sns.distplot(df_kick[(df_kick['diff_pleded_goal'] < 200) & 
-                     (df_kick['state'] == 'failed')]['diff_pleded_goal'], color='r')
-sns.distplot(df_kick[(df_kick['diff_pleded_goal'] < 200) & 
-                     (df_kick['state'] == 'successful')]['diff_pleded_goal'],color='g')
-plt.show()
-
-
-# In[ ]:
-
-
-plt.figure(figsize = (18,15))
-
-plt.subplots_adjust(hspace = 0.35, top = 0.8)
-
-g1 = plt.subplot(211)
-g1 = sns.countplot(x="laun_month_year", data=df_kick[df_kick['laun_month_year'] >= '2010-01'])
-g1.set_xticklabels(g1.get_xticklabels(),rotation=90)
-g1.set_title("Value Distribuition by Date Distribuition", fontsize=30)
-g1.set_xlabel("Date Distribuition", fontsize=20)
-g1.set_ylabel("Count", fontsize=20)
-
-g2 = plt.subplot(212)
-g2 = sns.boxplot(x="laun_year", y="diff_pleded_goal",
-                 data=df_kick[df_kick['diff_pleded_goal'] < 150], 
-                 hue="state")
-g2.set_xticklabels(g2.get_xticklabels(),rotation=90)
-g2.set_title("Value Distribuition by Date Distribuition", fontsize=20)
-g2.set_xlabel("Date Distribuition", fontsize=20)
-g2.set_ylabel("Goal x Pledged (%)", fontsize=20)
-plt.show()
-
-
-# Looking the difference pledged x goal between failed and sucessful 
-
-# In[ ]:
-
-
-plt.figure(figsize = (14,10))
-
-plt.subplots_adjust(hspace = 0.50, top = 0.8)
-
-plt.subplot(311)
-g =sns.boxplot(x='state', y='goal_log', 
-            data=df_kick[df_kick['time_campaign'] < 10], 
-            hue='time_campaign')
-g.set_title("State Goal's by Campaign Time", fontsize=30)
-g.set_xlabel("", fontsize=20)
-g.set_ylabel("Goal(log)", fontsize=20)
-
-plt.subplot(312, sharex=g)
-g1 = sns.boxplot(x='state', y='pledge_log', 
-            data=df_kick[df_kick['time_campaign'] < 10], 
-            hue='time_campaign')
-g1.set_title("State Pledged's by Campaign Time", fontsize=30)
-g1.set_xlabel("", fontsize=20)
-g1.set_ylabel("Pledged(log)", fontsize=20)
-
-plt.subplot(313)
-g2 = sns.boxplot(x='state', y='diff_pleded_goal', 
-            data=df_kick[(df_kick['time_campaign'] < 10) & (df_kick['diff_pleded_goal'] < 200)], 
-            hue='time_campaign')
-g2.set_title("State % of Goal reached by Campaign Time", fontsize=30)
-g2.set_xlabel("State", fontsize=20)
-g2.set_ylabel("Percentual Goal", fontsize=20)
-plt.show()
-
-
-# In[ ]:
-
-
-df_kick['backers_log'] = np.log(df_kick['backers'] + 1 ) 
-#The + 1 is to normalize the zero or negative values
-
-plt.figure(figsize = (8,6))
-sns.distplot(df_kick['backers_log'])
-
-plt.show()
-
-
-# In[ ]:
-
-
-plt.figure(figsize = (12,8))
-
-plt.subplot(211)
-g = sns.violinplot(x='state',y='backers_log', 
-               data=df_kick)
-g.set_title("Backers by STATE", fontsize=18)
-
-plt.subplot(212)
-g = sns.violinplot(x='main_category',y='backers_log', 
-                   data=df_kick)
-g.set_xticklabels(g.get_xticklabels(),rotation=45)
-
-plt.show()
-
-
-# In[ ]:
-
-
-plt.figure(figsize = (12,8))
-
-plt.subplot(211)
-g = sns.boxplot(x='laun_year',y='backers_log', 
-               data=df_kick)
-g.set_title("Backers by STATE", fontsize=18)
-
-plt.show()
-
-
-# In[ ]:
-
-
-#Looking the relation of Backers and % of goal reached
-sns.lmplot(x='diff_pleded_goal', y ='backers_log', 
-           data=df_kick[df_kick['diff_pleded_goal'] < 150], size = 5, aspect = 2,
-           hue='state')
-plt.show()
-
-
-# <h1>Conclusions: </h1>
-# 
-# <i>I will continue</i>
-# 
-# 
-#     

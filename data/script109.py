@@ -1,764 +1,557 @@
 
 # coding: utf-8
 
-# # Introduction
+# # TensorFlow deep NN
+# #### A high-level tutorial into Deep Learning using MNIST data and TensorFlow library.
+# by [@kakauandme](https://twitter.com/KaKaUandME) and [@thekoshkina](https://twitter.com/thekoshkina)
 # 
-# This competition is hosted by a large grocery company in Ecuador called "Corporacion Favorita" where the aim of the game is to accurately predict and forecast the unit sales for items sold at various Favorita supermarket chains across Ecuador. Apart from the usual training and test data files provided, there are also quite a handful of other supplementary data files (5 extra files to be exact) provided to us. 
+# Accuracy: 0.99
 # 
-# This notebook aims to take a deep-dive analysis into each of the files provided in this competition and to investigate what types of insights or observations can be derived from each. The structure of this analysis is as follows:
+# **Prerequisites:** fundamental coding skills, a bit of linear algebra, especially matrix operations and perhaps understanding how images are stored in computer memory. To start with machine learning, we suggest [coursera course](https://www.coursera.org/learn/machine-learning) by Andrew Ng.
 # 
-# **1. Data loading and inspection** - Loading the data as Python dataframes and conducting data quality checks
 # 
-# **2. Supplementary Data exploration** - Exploration of all 5 supplementary files with a mix of D3.js visualizations and stacked barplots
+# Note: 
 # 
-# **3. Training data exploration **
+# *Feel free to fork and adjust* CONSTANTS *to tweak network behaviour and explore how it changes algorithm performance and accuracy. Besides **TensorFlow graph** section can also be modified for learning purposes.*
 # 
-# **4. Feature ranking with learning models** - Training a 
+# *It is highly recommended printing every variable that isn’t 100% clear for you. Also, [tensorboard](https://www.tensorflow.org/versions/master/how_tos/summaries_and_tensorboard/index.html) can be used on a local environment for visualisation and debugging.*
+# ## Libraries and settings
 
 # In[ ]:
 
 
-# Importing the relevant libraries
-import IPython.display
-import json
-import pandas as pd
-import seaborn as sns
-import squarify
-get_ipython().run_line_magic('matplotlib', 'inline')
-import missingno as msno
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
 import numpy as np
-from matplotlib import pyplot as plt
+import pandas as pd
 
-# D3 modules
-from IPython.core.display import display, HTML, Javascript
-from string import Template
+get_ipython().run_line_magic('matplotlib', 'inline')
+import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
+import tensorflow as tf
 
-# # 1. Data loading and inspection checks
-# 
-# To start off with, let us load in the various supplementary comma-separated value files with the Pandas package via the the read_csv function as follows. Borrowing from Inversion's very helpful kernel in creating a dataframe with all [Date-Store_Item combinations](https://www.kaggle.com/inversion/dataframe-with-all-date-store-item-combinations) (please do check it out ), I will load in the training data using some of his methods as well. 
+# settings
+LEARNING_RATE = 1e-4
+# set to 20000 on local environment to get 0.99 accuracy
+TRAINING_ITERATIONS = 2500        
+    
+DROPOUT = 0.5
+BATCH_SIZE = 50
 
-# In[ ]:
+# set to 0 to train on all available data
+VALIDATION_SIZE = 2000
 
-
-items = pd.read_csv("../input/items.csv")
-holiday_events = pd.read_csv("../input/holidays_events.csv")
-stores = pd.read_csv("../input/stores.csv")
-oil = pd.read_csv("../input/oil.csv")
-transactions = pd.read_csv("../input/transactions.csv",parse_dates=['date'])
-# Read in the full training data just to get prior information and here is the output:
-# Output: "125,497,040 rows | 6 columns"
-train = pd.read_csv("../input/train.csv", nrows=6000000, parse_dates=['date'])
-
-
-# With regards to the training data, it contains a whooping 125,497,040 rows (and 6 columns). Therefore I will only load in 6 million rows of the training data (approx 5% of the data) just to get a rough idea of what is in store for us. 
-
-# In[ ]:
+# image number to output
+IMAGE_TO_DISPLAY = 10
 
 
-train.head()
-
-
-# Taking a peek, we note that the training data only consists of 6 rather measly columns and coupled with the fact that we have approx 125 million rows, there does seem to be a discrepancy in the number of features that we are going to provide our learning model to train on. However that's where the other supplementary files comes in to play as we will most definitely have to join the fields "store_nbr" (store number) and "item_nbr" as well as dates ( bring in daily oil prices). So there is actually quite a lot of potential and avenues for feature enhancement and engineering.
-
-# ### NULL or missing values check
-# 
-# One standard check I like to carry out is to simply inspect all our data for any Null or missing values. If there are any, then we might have to think of strategies to handle them (eg. Imputation, removal of nulls etc). A good library to conveniently visualise missing values is via the "missingno" package as an aside. 
+# ## Data preparation
+# To start, we read provided data. The *train.csv* file contains 42000 rows and 785 columns. Each row represents an image of a handwritten digit and a label with the value of this digit.
 
 # In[ ]:
 
 
-print("Nulls in Oil columns: {0} => {1}".format(oil.columns.values,oil.isnull().any().values))
-print("="*70)
-print("Nulls in holiday_events columns: {0} => {1}".format(holiday_events.columns.values,holiday_events.isnull().any().values))
-print("="*70)
-print("Nulls in stores columns: {0} => {1}".format(stores.columns.values,stores.isnull().any().values))
-print("="*70)
-print("Nulls in transactions columns: {0} => {1}".format(transactions.columns.values,transactions.isnull().any().values))
+# read training data from CSV file 
+data = pd.read_csv('../input/train.csv')
+
+print('data({0[0]},{0[1]})'.format(data.shape))
+print (data.head())
 
 
-# As we can see,  the only missing data occurs in the oil data file, which provides the historical daily price for oil. 
-
-# # 2. Supplementary Data Exploration
-
-# ## 2a. Oil data
-# 
-# First up we can take a look at the "oil.csv" provided to us. As alluded to in section 1, this file contains daily oil prices within a time range that covers both the train and test data timeframe so this is something to note should one's learning model take into account the trend in these oil prices. This supplementary oil data seems to be a very simple two column table with one column being the date and the other the daily oil price "dcoilwtico" which seems to be the abbreviation for [Crude oil prices: West Texas Intermediate - Cushing, Oklahoma](https://fred.stlouisfed.org/series/DCOILWTICO). 
-# 
-# 
+# Every image is a "stretched" array of pixel values.
 
 # In[ ]:
 
 
-oil.head(3)
+images = data.iloc[:,1:].values
+images = images.astype(np.float)
+
+# convert from [0:255] => [0.0:1.0]
+images = np.multiply(images, 1.0 / 255.0)
+
+print('images({0[0]},{0[1]})'.format(images.shape))
 
 
-# **Interactive Visualisations with Plotly**
+# In this case it's 784 pixels => 28 * 28px
+
+# In[ ]:
+
+
+image_size = images.shape[1]
+print ('image_size => {0}'.format(image_size))
+
+# in this case all images are square
+image_width = image_height = np.ceil(np.sqrt(image_size)).astype(np.uint8)
+
+print ('image_width => {0}\nimage_height => {1}'.format(image_width,image_height))
+
+
+# To output one of the images, we reshape this long string of pixels into a 2-dimensional array, which is basically a grayscale image.
+
+# In[ ]:
+
+
+# display image
+def display(img):
+    
+    # (784) => (28,28)
+    one_image = img.reshape(image_width,image_height)
+    
+    plt.axis('off')
+    plt.imshow(one_image, cmap=cm.binary)
+
+# output image     
+display(images[IMAGE_TO_DISPLAY])
+
+
+# The corresponding labels are numbers between 0 and 9, describing which digit a given image is of.
+
+# In[ ]:
+
+
+labels_flat = data[[0]].values.ravel()
+
+print('labels_flat({0})'.format(len(labels_flat)))
+print ('labels_flat[{0}] => {1}'.format(IMAGE_TO_DISPLAY,labels_flat[IMAGE_TO_DISPLAY]))
+
+
+# In this case, there are ten different digits/labels/classes.
+
+# In[ ]:
+
+
+labels_count = np.unique(labels_flat).shape[0]
+
+print('labels_count => {0}'.format(labels_count))
+
+
+# For most classification problems "one-hot vectors" are used. A one-hot vector is a vector that contains a single element equal to 1 and the rest of the elements equal to 0. In this case, the *nth* digit is represented as a zero vector with 1 in the *nth* position.
+
+# In[ ]:
+
+
+# convert class labels from scalars to one-hot vectors
+# 0 => [1 0 0 0 0 0 0 0 0 0]
+# 1 => [0 1 0 0 0 0 0 0 0 0]
+# ...
+# 9 => [0 0 0 0 0 0 0 0 0 1]
+def dense_to_one_hot(labels_dense, num_classes):
+    num_labels = labels_dense.shape[0]
+    index_offset = np.arange(num_labels) * num_classes
+    labels_one_hot = np.zeros((num_labels, num_classes))
+    labels_one_hot.flat[index_offset + labels_dense.ravel()] = 1
+    return labels_one_hot
+
+labels = dense_to_one_hot(labels_flat, labels_count)
+labels = labels.astype(np.uint8)
+
+print('labels({0[0]},{0[1]})'.format(labels.shape))
+print ('labels[{0}] => {1}'.format(IMAGE_TO_DISPLAY,labels[IMAGE_TO_DISPLAY]))
+
+
+# Lastly we set aside data for validation. It's essential in machine learning to have a separate dataset which doesn't take part in the training and is used to make sure that what we've learned can actually be generalised.
+
+# In[ ]:
+
+
+# split data into training & validation
+validation_images = images[:VALIDATION_SIZE]
+validation_labels = labels[:VALIDATION_SIZE]
+
+train_images = images[VALIDATION_SIZE:]
+train_labels = labels[VALIDATION_SIZE:]
+
+
+print('train_images({0[0]},{0[1]})'.format(train_images.shape))
+print('validation_images({0[0]},{0[1]})'.format(validation_images.shape))
+
+
+# *Data is ready. The neural network structure is next.*
+# ## TensorFlow graph
+# TensorFlow does its heavy lifting outside Python. Therefore, instead of running every single operation independently, TensorFlow allows users to build a whole graph of interacting operations and then runs the workflow in a separate process at once.
+# #### Helper functions
+# For this NN model, a lot of weights and biases are created. Generally, weights should be initialised with a small amount of noise for symmetry breaking, and to prevent 0 gradients. 
 # 
-# Let us take a look at the underlying data by plotting the daily oil prices in a time series plot via the interactive Python visualisation library Plot.ly as follows. Here we invoke the Plot.ly scatter plot function by calling "Scatter" and it is a simple matter of providing the date range in the x-axis and the corresponding daily oil prices in the y-axis ( as an aside I have also simultaneously dropped nulls by calling dropna( ) in the oil dataframe). I've hidden the Plot.ly code as it can get quite long so unhide it if you want to see the syntax.
+# Since we are using [ReLU](https://en.wikipedia.org/wiki/Rectifier_(neural_networks) neurones (ones that contain rectifier function *f(x)=max(0,x)*), it is also good practice to initialise them with a slightly positive initial bias to avoid "dead neurones".
 
 # In[ ]:
 
 
-# trace = go.Scatter(
-#     name='Oil prices',
-#     x=oil['date'],
-#     y=oil['dcoilwtico'].dropna(),
-#     mode='lines',
-#     line=dict(color='rgb(20, 15, 200, 0.8)'),
-#     #fillcolor='rgba(68, 68, 68, 0.3)',
-#     fillcolor='rgba(0, 0, 216, 0.3)',
-#     fill='tonexty' )
+# weight initialization
+def weight_variable(shape):
+    initial = tf.truncated_normal(shape, stddev=0.1)
+    return tf.Variable(initial)
 
-# data = [trace]
-
-# layout = go.Layout(
-#     yaxis=dict(title='Daily Oil price'),
-#     title='Daily oil prices from Jan 2013 till July 2017',
-#     showlegend = False)
-# fig = go.Figure(data=data, layout=layout)
-# py.iplot(fig, filename='pandas-time-series-error-bars')
+def bias_variable(shape):
+    initial = tf.constant(0.1, shape=shape)
+    return tf.Variable(initial)
 
 
-# #### *[THE ABOVE PLOT IS INTERACTIVE SO YOU CAN DRAG AND ZOOM ON IT. DOUBLE-CLICK TO GET BACK TO THE ORIGINAL SIZE]*
-
-# **Takeaway from the plots**
+# For this problem we use zero padded [convolutions](https://en.wikipedia.org/wiki/Convolutional_neural_network#Convolutional_layer) so that the output is the same size as the input. Stride/step in this case is equal to 1.
 # 
-# This plot shows that the daily oil price is on a general downward trend from Jan 2013 till July 2017. Where the price of oil started out 2013 by increasing and even busting the 100 dollar mark for a good few months in 2013 and 2014, it reached the middle of 2014 where there was a drastic drop in the price of oil. Via some quick open-source research (i.e Googling), this trend checks out as it seems oil prices were kept fairly stable from 2010 till mid-2014 after which it drastically fell ( due to a confluence of reasons such as weak demand due to poor economic growth and surging alternative sources of crude oil from shale/tar sands).
+# In general, convolution layer is used to get the features of the data.  In the case of digit recognition - a shape of each digit.  It uses learnable kernels/filters each of which corresponds to one particular shape pattern. The number of the filter can differ for other problems.
+
+# In[ ]:
+
+
+# convolution
+def conv2d(x, W):
+    return tf.nn.conv2d(x, W, strides=[1, 1, 1, 1], padding='SAME')
+
+
+# [Pooling](https://en.wikipedia.org/wiki/Convolutional_neural_network#Pooling_layer) is plain max pooling over 2x2 blocks.
 # 
+# Pooling is used for downsampling of the data. 2x2 max-pooling splits the image into square 2-pixel blocks and only keeps maximum value for each of those blocks. 
 
-# ## 2b. Stores data
+# In[ ]:
+
+
+# pooling
+# [[0,3],
+#  [4,2]] => 4
+
+# [[0,1],
+#  [1,1]] => 1
+
+def max_pool_2x2(x):
+    return tf.nn.max_pool(x, ksize=[1, 2, 2, 1], strides=[1, 2, 2, 1], padding='SAME')
+
+
+# *We'll get back to convolutions and pooling in more detail below.*
 # 
-# With regards to the "stores.csv" file, the data dictionary on the Kaggle competition simply states that it contains metadata on the city, state, the store type and a column termed "cluster". Now this cluster column is a grouping to stores that are similar to each other and as we can see from the latter analysis, there are a total of 17 distinct clusters. With regards to the number of stores, there are a total of 54 stores (based off a unique list of store_nbr) and therefore I presume that all the unit sales and transactions are generated off the data collected from these 54 stores.
-
-# In[ ]:
-
-
-stores.head(3)
-
-
-# **Treemap plots of store attributes**
+# The good thing about neural networks that any NN can be used as a layer in a large multilayer NN meaning that output of one can be used as input for another. This sequential approach can create very sophisticated NN with multiple layers. They are also called Deep Neural Networks.
 # 
-# Treemap plots inspired from I, Coder's kernel: [Novice to Grandmaster](https://www.kaggle.com/ash316/novice-to-grandmaster)
+# In this case, we use two convolution layers with pooling in between them, then densely connected layer followed by dropout and lastly readout layer.
+
+# In[ ]:
+
+
+# input & output of NN
+
+# images
+x = tf.placeholder('float', shape=[None, image_size])
+# labels
+y_ = tf.placeholder('float', shape=[None, labels_count])
+
+
+# The first layer is a convolution, followed by max pooling. The convolution computes 32 features for each 5x5 patch. Its weight tensor has a shape of [5, 5, 1, 32]. The first two dimensions are the patch size, the next is the number of input channels (1 means that images are grayscale), and the last is the number of output channels. There is also a bias vector with a component for each output channel.
 # 
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(25, 21))
-marrimeko=stores.city.value_counts().to_frame()
-ax = fig.add_subplot(111, aspect="equal")
-ax = squarify.plot(sizes=marrimeko['city'].values,label=marrimeko.index,
-              color=sns.color_palette('cubehelix_r', 28), alpha=1)
-ax.set_xticks([])
-ax.set_yticks([])
-fig=plt.gcf()
-fig.set_size_inches(40,25)
-plt.title("Treemap of store counts across different cities", fontsize=18)
-plt.show();
-
-
-# In[ ]:
-
-
-fig = plt.figure(figsize=(25, 21))
-marrimeko=stores.state.value_counts().to_frame()
-ax = fig.add_subplot(111, aspect="equal")
-ax = squarify.plot(sizes=marrimeko['state'].values,label=marrimeko.index,
-              color=sns.color_palette('viridis_r', 28), alpha=1)
-ax.set_xticks([])
-ax.set_yticks([])
-fig=plt.gcf()
-fig.set_size_inches(40,25)
-plt.title("Treemap of store counts across different States", fontsize=18)
-plt.show()
-
-
-# In[ ]:
-
-
-stores.state.unique()
-
-
-# **Inspecting the allocation of clusters to store numbers**
+# To apply the layer, we reshape the input data to a 4d tensor, with the first dimension corresponding to the number of images, second and third - to image width and height, and the final dimension - to the number of colour channels.
 # 
-# We can now generate will be that of our store numbers ordered against their respective store clusters so that we can observe if there are any apparent trends or relationships in the data. To do so, I will take our stores Python dataframe and group it based on the columns "store_nbr" and "cluster" via the **groupby** and pivot statement. After which, I will unstack the grouping which means that I will pivot on the level of store_nbr index labels, returning a DataFrame having a new level of columns which are the store clusters whose inner-most level relate to the pivoted store_nbr index labels. This technique is commonly used for producing stacked barplots in Python but since we only have unique store_nbr numbers, therefore we will simply get barplots of store numbers ordered by their relevant clusters.
+# After the convolution, pooling reduces the size of the output from 28x28 to 14x14.
 
 # In[ ]:
 
 
-# Unhide to see the sorted zip order
-neworder = [23, 24, 26, 36, 41, 15, 29, 31, 32, 34, 39, 
-            53, 4, 37, 40, 43, 8, 10, 19, 20, 33, 38, 13, 
-            21, 2, 6, 7, 3, 22, 25, 27, 28, 30, 35, 42, 44, 
-            48, 51, 16, 0, 1, 5, 52, 45, 46, 47, 49, 9, 11, 12, 14, 18, 17, 50]
+# first convolutional layer
+W_conv1 = weight_variable([5, 5, 1, 32])
+b_conv1 = bias_variable([32])
+
+# (40000,784) => (40000,28,28,1)
+image = tf.reshape(x, [-1,image_width , image_height,1])
+#print (image.get_shape()) # =>(40000,28,28,1)
 
 
-# In[ ]:
+h_conv1 = tf.nn.relu(conv2d(image, W_conv1) + b_conv1)
+#print (h_conv1.get_shape()) # => (40000, 28, 28, 32)
+h_pool1 = max_pool_2x2(h_conv1)
+#print (h_pool1.get_shape()) # => (40000, 14, 14, 32)
 
 
-# Finally plot the seaborn heatmap
-plt.style.use('dark_background')
-plt.figure(figsize=(15,12))
-store_pivot = stores.dropna().pivot("store_nbr","cluster", "store_nbr")
-ax = sns.heatmap(store_pivot, cmap='jet', annot=True, linewidths=0, linecolor='white')
-plt.title('Store numbers and the clusters they are assigned to')
+# Prepare for visualization
+# display 32 fetures in 4 by 8 grid
+layer1 = tf.reshape(h_conv1, (-1, image_height, image_width, 4 ,8))  
+
+# reorder so the channels are in the first dimension, x and y follow.
+layer1 = tf.transpose(layer1, (0, 3, 1, 4,2))
+
+layer1 = tf.reshape(layer1, (-1, image_height*4, image_width*8)) 
 
 
-# In[ ]:
-
-
-# plt.style.use('dark_background')
-# nbr_cluster = stores.groupby(['store_nbr','cluster']).size()
-# nbr_cluster.unstack().iloc[neworder].plot(kind='bar',stacked=True, colormap= 'tab20', figsize=(13,11),  grid=False)
-# plt.title('Store numbers and the clusters they are assigned to', fontsize=14)
-# plt.ylabel('')
-# plt.xlabel('Store number')
-# plt.show()
-
-
-# **Takeaways from thse plot**
+# The second layer has 64 features for each 5x5 patch. Its weight tensor has a shape of [5, 5, 32, 64]. The first two dimensions are the patch size, the next is the number of input channels (32 channels correspond to 32 featured that we got from previous convolutional layer), and the last is the number of output channels. There is also a bias vector with a component for each output channel.
 # 
-# From visualising the store numbers side-by-side based on the clustering, we can identify certain patterns. For example clusters 3, 6, 10 and 15 are the most common store clusters based off the fact that there are more store_nbrs attributed to them then the others while on the other end of the spectrum, we have clusters 5 and 17 which are only related to the stores 44 and 51 respectively.
+# Because the image is down-sampled by pooling to 14x14 size second convolutional layer picks up more general characteristics of the images. Filters cover more space of the picture. Therefore, it is adjusted for more generic features while the first layer finds smaller details.
 
-# **Stacked Barplots of Types against clusters**
+# In[ ]:
+
+
+# second convolutional layer
+W_conv2 = weight_variable([5, 5, 32, 64])
+b_conv2 = bias_variable([64])
+
+h_conv2 = tf.nn.relu(conv2d(h_pool1, W_conv2) + b_conv2)
+#print (h_conv2.get_shape()) # => (40000, 14,14, 64)
+h_pool2 = max_pool_2x2(h_conv2)
+#print (h_pool2.get_shape()) # => (40000, 7, 7, 64)
+
+# Prepare for visualization
+# display 64 fetures in 4 by 16 grid
+layer2 = tf.reshape(h_conv2, (-1, 14, 14, 4 ,16))  
+
+# reorder so the channels are in the first dimension, x and y follow.
+layer2 = tf.transpose(layer2, (0, 3, 1, 4,2))
+
+layer2 = tf.reshape(layer2, (-1, 14*4, 14*16)) 
+
+
+# Now that the image size is reduced to 7x7, we add a [fully-connected layer](https://en.wikipedia.org/wiki/Convolutional_neural_network#Fully_Connected_layer) with 1024 neurones to allow processing on the entire image (each of the neurons of the fully connected layer is connected to all the activations/outpus of the previous layer)
+
+# In[ ]:
+
+
+# densely connected layer
+W_fc1 = weight_variable([7 * 7 * 64, 1024])
+b_fc1 = bias_variable([1024])
+
+# (40000, 7, 7, 64) => (40000, 3136)
+h_pool2_flat = tf.reshape(h_pool2, [-1, 7*7*64])
+
+h_fc1 = tf.nn.relu(tf.matmul(h_pool2_flat, W_fc1) + b_fc1)
+#print (h_fc1.get_shape()) # => (40000, 1024)
+
+
+# To prevent overfitting, we  apply [dropout](https://en.wikipedia.org/wiki/Convolutional_neural_network#Dropout) before the readout layer.
 # 
-# Here it might be informative to look at the distribution of clusters based on the store type to see if we can identify any apparent relationship between types and the way the company has decided to cluster the particular store. Again we apply the groupby operation but this time on type and on cluster. This time when we pivot based off this grouped operation, we are able to get counts of each distinct cluster distributed and stacked on top of other clusters per store type as follows:
+# Dropout removes some nodes from the network at each training stage. Each of the nodes is either kept in the network with probability *keep_prob* or dropped with probability *1 - keep_prob*. After the training stage is over the nodes are returned to the NN with their original weights.
 
 # In[ ]:
 
 
-plt.style.use('seaborn-white')
-#plt.style.use('dark_background')
-type_cluster = stores.groupby(['type','cluster']).size()
-type_cluster.unstack().plot(kind='bar',stacked=True, colormap= 'PuBu', figsize=(13,11),  grid=False)
-plt.title('Stacked Barplot of Store types and their cluster distribution', fontsize=18)
-plt.ylabel('Count of clusters in a particular store type', fontsize=16)
-plt.xlabel('Store type', fontsize=16)
-plt.show()
+# dropout
+keep_prob = tf.placeholder('float')
+h_fc1_drop = tf.nn.dropout(h_fc1, keep_prob)
 
 
-# **Takeaway from the plots**
+# Finally, we add a softmax layer, the same one if we use just a  simple [softmax regression](https://en.wikipedia.org/wiki/Softmax_function).
+
+# In[ ]:
+
+
+# readout layer for deep net
+W_fc2 = weight_variable([1024, labels_count])
+b_fc2 = bias_variable([labels_count])
+
+y = tf.nn.softmax(tf.matmul(h_fc1_drop, W_fc2) + b_fc2)
+
+#print (y.get_shape()) # => (40000, 10)
+
+
+# To evaluate network performance we use [cross-entropy](https://en.wikipedia.org/wiki/Cross_entropy) and to minimise it [ADAM optimiser](http://arxiv.org/pdf/1412.6980v8.pdf) is used. 
 # 
-# Most of the store types seem to contain a mix of the clusters, especially with regards to store type "D". Only type "E" stores seem to fall within the single cluster of cluster 10. However with regards to our initial plan of trying to suss out relationships between store types and clusters, it seems that there is nothing apparent that stands out. If we think of store types, one would normally think of categories such as convenience store types, huge general store types or bulk buy types.
+# ADAM optimiser is a gradient based optimization algorithm, based on adaptive estimates, it's more sophisticated than steepest gradient descent and is well suited for problems with large data or many parameters.
 
-# **Stacked barplot of types of stores across the different cities**
+# In[ ]:
+
+
+# cost function
+cross_entropy = -tf.reduce_sum(y_*tf.log(y))
+
+
+# optimisation function
+train_step = tf.train.AdamOptimizer(LEARNING_RATE).minimize(cross_entropy)
+
+# evaluation
+correct_prediction = tf.equal(tf.argmax(y,1), tf.argmax(y_,1))
+
+accuracy = tf.reduce_mean(tf.cast(correct_prediction, 'float'))
+
+
+# To predict values from test data, highest probability is picked from "one-hot vector" indicating that chances of  an image being one of the digits are highest.
+
+# In[ ]:
+
+
+# prediction function
+#[0.1, 0.9, 0.2, 0.1, 0.1 0.3, 0.5, 0.1, 0.2, 0.3] => 1
+predict = tf.argmax(y,1)
+
+
+# *Finally neural network structure is defined and TensorFlow graph is ready for training.*
+# ## Train, validate and predict
+# #### Helper functions
 # 
-# Another interesting distribution to observe would be the types of stores that Corporacion Favorita has decided to open for each city in Ecuador as well as the absolute number of stores for that city. All these three things can be achieved by turning to our usual groupby operation and pivoting again by unstacking and plotting as follows:
-
-# In[ ]:
-
-
-# plt.style.use('dark_background')
-plt.style.use('seaborn-white')
-city_cluster = stores.groupby(['city','type']).store_nbr.size()
-city_cluster.unstack().plot(kind='bar',stacked=True, colormap= 'viridis', figsize=(13,11),  grid=False)
-plt.title('Stacked Barplot of Store types opened for each city')
-plt.ylabel('Count of stores for a particular city')
-plt.show()
-
-
-# **Takeaways from the plot**: 
+# Ideally, we should use all data for every step of the training, but that's expensive. So, instead, we use small "batches" of random data. 
 # 
-# As observed from the stacked barplots, there are two cities that standout in terms of the variety of store types on offer - Guayaquil and Quito. These should come as no surprise as [Quito](https://en.wikipedia.org/wiki/Quito) is the capital city of Ecuador while [Guayaquil](https://en.wikipedia.org/wiki/Guayaquil) is the largest and most populous city in Ecuador. Therefore one would think it logical to expect Corporacion Favorita to target these major cities with the most diverse store types probably to capture different ends of the market (if we think store types as being high-end/premium/wholesale/discount etc) as well as opening up the highest number of stores evinced from the largest counts of store_nbrs attributed to those two cities.
+# This method is called [stochastic training](https://en.wikipedia.org/wiki/Stochastic_gradient_descent). It is cheaper, faster and gives much of the same result.
 
-# ## 2c. Holiday Events data
+# In[ ]:
+
+
+epochs_completed = 0
+index_in_epoch = 0
+num_examples = train_images.shape[0]
+
+# serve data by batches
+def next_batch(batch_size):
+    
+    global train_images
+    global train_labels
+    global index_in_epoch
+    global epochs_completed
+    
+    start = index_in_epoch
+    index_in_epoch += batch_size
+    
+    # when all trainig data have been already used, it is reorder randomly    
+    if index_in_epoch > num_examples:
+        # finished epoch
+        epochs_completed += 1
+        # shuffle the data
+        perm = np.arange(num_examples)
+        np.random.shuffle(perm)
+        train_images = train_images[perm]
+        train_labels = train_labels[perm]
+        # start next epoch
+        start = 0
+        index_in_epoch = batch_size
+        assert batch_size <= num_examples
+    end = index_in_epoch
+    return train_images[start:end], train_labels[start:end]
+
+
+# Now when all operations for every variable are defined in TensorFlow graph all computations will be performed outside Python environment.
+
+# In[ ]:
+
+
+# start TensorFlow session
+init = tf.initialize_all_variables()
+sess = tf.InteractiveSession()
+
+sess.run(init)
+
+
+# Each step of the loop, we get a "batch" of data points from the training set and feed it to the graph to replace the placeholders.  In this case, it's:  *x, y* and *dropout.*
 # 
-# Trudging on, we can inspect the "holiday_events.csv" file which contains data on the national, regional and local level of Ecuador. According to the data dictionary, we should pay special attention to the "transferred" column. 
+# Also, once in a while, we check training accuracy on an upcoming "batch".
 # 
-# *A holiday that is transferred officially falls on that calendar day, but was moved to another date by the government. A transferred day is more like a normal day than a holiday. To find the day that it was actually celebrated, look for the corresponding row where type is Transfer. For example, the holiday Independencia de Guayaquil was transferred from 2012-10-09 to 2012-10-12, which means it was celebrated on 2012-10-12. Days that are type Bridge are extra days that are added to a holiday (e.g., to extend the break across a long weekend). These are frequently made up by the type Work Day which is a day not normally scheduled for work (e.g., Saturday) that is meant to payback the Bridge.*
+# On the local environment, we recommend [saving training progress](https://www.tensorflow.org/versions/master/api_docs/python/state_ops.html#Saver), so it can be recovered for further training, debugging or evaluation.
 
 # In[ ]:
 
 
-holiday_events.head(3)
+# visualisation variables
+train_accuracies = []
+validation_accuracies = []
+x_range = []
 
+display_step=1
+
+for i in range(TRAINING_ITERATIONS):
+
+    #get new batch
+    batch_xs, batch_ys = next_batch(BATCH_SIZE)        
+
+    # check progress on every 1st,2nd,...,10th,20th,...,100th... step
+    if i%display_step == 0 or (i+1) == TRAINING_ITERATIONS:
+        
+        train_accuracy = accuracy.eval(feed_dict={x:batch_xs, 
+                                                  y_: batch_ys, 
+                                                  keep_prob: 1.0})       
+        if(VALIDATION_SIZE):
+            validation_accuracy = accuracy.eval(feed_dict={ x: validation_images[0:BATCH_SIZE], 
+                                                            y_: validation_labels[0:BATCH_SIZE], 
+                                                            keep_prob: 1.0})                                  
+            print('training_accuracy / validation_accuracy => %.2f / %.2f for step %d'%(train_accuracy, validation_accuracy, i))
+            
+            validation_accuracies.append(validation_accuracy)
+            
+        else:
+             print('training_accuracy => %.4f for step %d'%(train_accuracy, i))
+        train_accuracies.append(train_accuracy)
+        x_range.append(i)
+        
+        # increase display_step
+        if i%(display_step*10) == 0 and i:
+            display_step *= 10
+    # train on batch
+    sess.run(train_step, feed_dict={x: batch_xs, y_: batch_ys, keep_prob: DROPOUT})
+
+
+# After training is done, it's good to check accuracy on data that wasn't used in training.
 
 # In[ ]:
 
 
-plt.style.use('seaborn-white')
-# plt.style.use('dark_background')
-holiday_local_type = holiday_events.groupby(['locale_name', 'type']).size()
-holiday_local_type.unstack().plot(kind='bar',stacked=True, colormap= 'magma_r', figsize=(12,10),  grid=False)
-plt.title('Stacked Barplot of locale name against event type')
-plt.ylabel('Count of entries')
-plt.show()
+# check final accuracy on validation set  
+if(VALIDATION_SIZE):
+    validation_accuracy = accuracy.eval(feed_dict={x: validation_images, 
+                                                   y_: validation_labels, 
+                                                   keep_prob: 1.0})
+    print('validation_accuracy => %.4f'%validation_accuracy)
+    plt.plot(x_range, train_accuracies,'-b', label='Training')
+    plt.plot(x_range, validation_accuracies,'-g', label='Validation')
+    plt.legend(loc='lower right', frameon=False)
+    plt.ylim(ymax = 1.1, ymin = 0.7)
+    plt.ylabel('accuracy')
+    plt.xlabel('step')
+    plt.show()
 
 
-# ## D3.js Circular treemapping of Store Type to description
+# When, we're happy with the outcome, we read test data from *test.csv* and predict labels for provided images.
 # 
-# Next, I shall implement a circular treemap via the D3.js visualization library which allows us to intuitively visualize data and their parent clusters that they belong to. The implementation of this treemap requires quite a lot of pre-processing and kernel feature hacking and therefore I have hidden this pre-work from you in the three hidden cells below. The first hidden cell involves preparation of the json file which shall be used as the input source for our D3.js plot while the second hidden cell creates the HTML structure for our embedded visual. The third hidden cell contains embedded javascript syntax for which the the D3 circular treemap is invoked.
-
-# In[ ]:
-
-
-# with pd.option_context('display.max_rows', None, 'display.max_columns', 3):
-#     print(holiday_events[['type','description']].apply(pd.Series.value_counts))
-
-
-# In[ ]:
-
-
-# Prepping the json file
-holiday_json = {
-"name": "flare",
-"children": [
-{
-"name": "Additional",
-"children":[
-{"name": "Batalla de Pichincha",       "size": 5.0},
-{"name": "Cantonizacion de Cayambe",   "size": 6.0},
-{"name": "Cantonizacion de El Carmen", "size": 6.0},
-{"name": "Cantonizacion de Guaranda",  "size": 6.0},
-{"name": "Cantonizacion de Latacunga", "size": 6.0},
-{"name": "Cantonizacion de Libertad",  "size": 6.0},
-{"name": "Cantonizacion de Quevedo",   "size": 6.0},
-{"name": "Cantonizacion de Riobamba",  "size": 6.0},
-{"name": "Cantonizacion de Salinas",   "size": 6.0},
-{"name": "Cantonizacion del Puyo",     "size": 6.0},
-{"name": "Carnaval",                   "size": 0.0},
-{"name": "Dia de Difuntos",            "size": 6.0},
-{"name": "Dia de la Madre",            "size": 5.0},
-{"name": "Dia de la Madre-1",          "size": 5.0},
-{"name": "Dia del Trabajo",             "size": 5.0},
-{"name": "Fundacion de Guayaquil",    "size": 5.0},
-{"name": "Fundacion de Guayaquil-1",  "size": 5.0},
-{"name": "Fundacion de Quito",        "size": 6.0},
-{"name": "Fundacion de Quito-1",      "size": 6.0},
-{"name": "Navidad+1                                      ", "size": 6.0},
-{"name": "Navidad-1                                      ", "size": 6.0},
-{"name": "Navidad-2                                      ", "size": 6.0},
-{"name": "Navidad-3                                      ", "size": 6.0},
-{"name": "Navidad-4                                      ", "size": 6.0},
-]
-},
-{
-"name":  "Holiday",
-"children":[
-{"name": "Fundacion de Ambato",       "size": 6.0},
-{"name": "Fundacion de Cuenca",       "size": 7.0},
-{"name": "Fundacion de Esmeraldas",   "size": 6.0},
-{"name": "Fundacion de Ibarra",       "size": 7.0},
-{"name": "Fundacion de Loja",         "size": 6.0},
-{"name": "Fundacion de Machala",      "size": 6.0},
-{"name": "Fundacion de Manta",        "size": 6.0},
-{"name": "Fundacion de Riobamba",     "size": 6.0},
-{"name": "Fundacion de Santo Domingo", "size": 6.0}
-]
-},
-{
-"name": "Event",
-"children": [
-{"name": "Inauguracion Mundial de futbol Brasil          ", "size": 1.0},
-{"name": "Independencia de Ambato                        ", "size": 6.0},
-{"name": "Independencia de Cuenca                        ", "size": 6.0},
-{"name": "Independencia de Guaranda                      ", "size": 6.0},
-{"name": "Independencia de Guayaquil                     ", "size": 6.0},
-{"name": "Independencia de Latacunga                     ", "size": 6.0},
-{"name": "Mundial de futbol Brasil: Cuartos de Final     ", "size": 2.0},
-{"name": "Mundial de futbol Brasil: Ecuador-Francia      ", "size": 1.0},
-{"name": "Mundial de futbol Brasil: Ecuador-Honduras     ", "size": 1.0},
-{"name": "Mundial de futbol Brasil: Ecuador-Suiza        ", "size": 1.0},
-{"name": "Mundial de futbol Brasil: Final                ", "size": 1.0},
-{"name": "Mundial de futbol Brasil: Octavos de Final     ", "size": 4.0},
-{"name": "Mundial de futbol Brasil: Semifinales          ", "size": 2.0},
-{"name": "Mundial de futbol Brasil: Tercer y cuarto lugar", "size": 1.0},
-{"name": "Navidad                                        ", "size": 6.0},
-{"name": "Primer Grito de Independencia                  ", "size": 6.0},
-{"name": "Primer dia del ano                             ", "size": 5.0},
-{"name": "Primer dia del ano-1                           ", "size": 5.0},
-{"name": "Black Friday",               "size": 3.0},
-{"name": "Cyber Monday",               "size": 3.0},
-{"name": "Provincializacion Santa Elena                  ", "size": 6.0},
-{"name": "Provincializacion de Cotopaxi                  ", "size": 6.0},
-{"name": "Provincializacion de Imbabura                  ", "size": 6.0},
-{"name": "Provincializacion de Santo Domingo             ", "size": 6.0},
-{"name": "Terremoto Manabi                               ", "size": 1.0},
-{"name": "Terremoto Manabi+1                             ", "size": 1.0},
-{"name": "Terremoto Manabi+10                            ", "size": 1.0},
-{"name": "Terremoto Manabi+11                            ", "size": 1.0},
-{"name": "Terremoto Manabi+12                            ", "size": 1.0},
-{"name": "Terremoto Manabi+13                            ", "size": 1.0},
-{"name": "Terremoto Manabi+14                            ", "size": 1.0},
-{"name": "Terremoto Manabi+15                            ", "size": 1.0},
-{"name": "Terremoto Manabi+16                            ", "size": 1.0},
-{"name": "Terremoto Manabi+17                            ", "size": 1.0},
-{"name": "Terremoto Manabi+18                            ", "size": 1.0},
-{"name": "Terremoto Manabi+19                            ", "size": 1.0},
-{"name": "Terremoto Manabi+2                             ", "size": 1.0},
-{"name": "Terremoto Manabi+20                            ", "size": 1.0},
-{"name": "Terremoto Manabi+21                            ", "size": 1.0},
-{"name": "Terremoto Manabi+22                            ", "size": 1.0},
-{"name": "Terremoto Manabi+23                            ", "size": 1.0},
-{"name": "Terremoto Manabi+24                            ", "size": 1.0},
-{"name": "Terremoto Manabi+25                            ", "size": 1.0},
-{"name": "Terremoto Manabi+26                            ", "size": 1.0},
-{"name": "Terremoto Manabi+27                            ", "size": 1.0},
-{"name": "Terremoto Manabi+28                            ", "size": 1.0},
-{"name": "Terremoto Manabi+29                            ", "size": 1.0},
-{"name": "Terremoto Manabi+3                             ", "size": 1.0},
-{"name": "Terremoto Manabi+30                            ", "size": 1.0},
-{"name": "Terremoto Manabi+4                             ", "size": 1.0},
-{"name": "Terremoto Manabi+5                             ", "size": 1.0},
-{"name": "Terremoto Manabi+6                             ", "size": 1.0},
-{"name": "Terremoto Manabi+7                             ", "size": 1.0},
-{"name": "Terremoto Manabi+8                             ", "size": 1.0},
-{"name": "Terremoto Manabi+9                             ", "size": 1.0}
-]
-},
-{
-"name": "Transfer",
-"children":[
-{"name": "Traslado Batalla de Pichincha         ", "size": 2.0},
-{"name": "Traslado Fundacion de Guayaquil       ", "size": 1.0},
-{"name": "Traslado Fundacion de Quito           ", "size": 1.0},
-{"name": "Traslado Independencia de Guayaquil   ", "size": 3.0},
-{"name": "Traslado Primer Grito de Independencia", "size": 2.0},
-{"name": "Traslado Primer dia del ano           ", "size": 1.0},
-{"name": "Viernes Santo                         ", "size": 5.0}
-]
-},
-    {
-"name": "Bridge",
-"children":[
-{"name": "Puente Dia de Difuntos                         ", "size": 1.0},
-{"name": "Puente Navidad                                 ", "size": 2.0},
-{"name": "Puente Primer dia del ano                      ", "size": 2.0},
-]
-},
-{
-"name": "Work Day",
-"children":[
-    {"name": "Recupero puente Navidad", "size": 2.0},
-    {"name": "ecupero puente primer dia del ano", "size": 2.0},
-    {"name": "Recupero Puente Navidad", "size": 2.0},
-    {"name": "Recupero Puente Primer dia del ano", "size": 2.0},
-    {"name": "Recupero Puente Dia de Difuntos", "size": 2.0}
-]
-}
-] 
-}                          
-
-
-# In[ ]:
-
-
-# dumping the holiday_events data into a json file
-with open('output.json', 'w') as outfile:  
-    json.dump(holiday_json, outfile)
-pd.read_json('output.json').head()
-
-#Embedding the html string
-html_string = """
-<!DOCTYPE html>
-<meta charset="utf-8">
-<style>
-
-.node {
-  cursor: pointer;
-}
-
-.node:hover {
-  stroke: #000;
-  stroke-width: 1.5px;
-}
-
-.node--leaf {
-  fill: white;
-}
-
-.label {
-  font: 11px "Helvetica Neue", Helvetica, Arial, sans-serif;
-  text-anchor: middle;
-  text-shadow: 0 1px 0 #fff, 1px 0 0 #fff, -1px 0 0 #fff, 0 -1px 0 #fff;
-}
-
-.label,
-.node--root,
-.node--leaf {
-  pointer-events: none;
-}
-
-</style>
-<svg width="760" height="760"></svg>
-"""
-
-
-# In[ ]:
-
-
-# Finally embed the D3.js to produce the circular treemap
-js_string="""
- require.config({
-    paths: {
-        d3: "https://d3js.org/d3.v4.min"
-     }
- });
-
-  require(["d3"], function(d3) {
-
-   console.log(d3);
-
-var svg = d3.select("svg"),
-    margin = 20,
-    diameter = +svg.attr("width"),
-    g = svg.append("g").attr("transform", "translate(" + diameter / 2 + "," + diameter / 2 + ")");
-
-var color = d3.scaleSequential(d3.interpolateViridis)
-    .domain([-4, 4]);
-
-var pack = d3.pack()
-    .size([diameter - margin, diameter - margin])
-    .padding(2);
-
-d3.json("output.json", function(error, root) {
-  if (error) throw error;
-
-  root = d3.hierarchy(root)
-      .sum(function(d) { return d.size; })
-      .sort(function(a, b) { return b.value - a.value; });
-
-  var focus = root,
-      nodes = pack(root).descendants(),
-      view;
-
-  var circle = g.selectAll("circle")
-    .data(nodes)
-    .enter().append("circle")
-      .attr("class", function(d) { return d.parent ? d.children ? "node" : "node node--leaf" : "node node--root"; })
-      .style("fill", function(d) { return d.children ? color(d.depth) : null; })
-      .on("click", function(d) { if (focus !== d) zoom(d), d3.event.stopPropagation(); });
-
-  var text = g.selectAll("text")
-    .data(nodes)
-    .enter().append("text")
-      .attr("class", "label")
-      .style("fill-opacity", function(d) { return d.parent === root ? 1 : 0; })
-      .style("display", function(d) { return d.parent === root ? "inline" : "none"; })
-      .text(function(d) { return d.data.name; });
-
-  var node = g.selectAll("circle,text");
-
-  svg
-      .style("background", color(-1))
-      .on("click", function() { zoom(root); });
-
-  zoomTo([root.x, root.y, root.r * 2 + margin]);
-
-  function zoom(d) {
-    var focus0 = focus; focus = d;
-
-    var transition = d3.transition()
-        .duration(d3.event.altKey ? 7500 : 750)
-        .tween("zoom", function(d) {
-          var i = d3.interpolateZoom(view, [focus.x, focus.y, focus.r * 2 + margin]);
-          return function(t) { zoomTo(i(t)); };
-        });
-
-    transition.selectAll("text")
-      .filter(function(d) { return d.parent === focus || this.style.display === "inline"; })
-        .style("fill-opacity", function(d) { return d.parent === focus ? 1 : 0; })
-        .on("start", function(d) { if (d.parent === focus) this.style.display = "inline"; })
-        .on("end", function(d) { if (d.parent !== focus) this.style.display = "none"; });
-  }
-
-  function zoomTo(v) {
-    var k = diameter / v[2]; view = v;
-    node.attr("transform", function(d) { return "translate(" + (d.x - v[0]) * k + "," + (d.y - v[1]) * k + ")"; });
-    circle.attr("r", function(d) { return d.r * k; });
-  }
-});
-  });
- """
-
-
-# **Displaying the HTML and D3 visuals on IPython notebook**
+# Test data contains only images and labels are missing. Otherwise, the structure is similar to training data.
 # 
-# Finally we invoke the following code to display the D3 visuals where I will be plotting the various descriptions/names under their parent holiday/event cluster types. The following plot is interactive and zoomable so please click onto the circles to zoom in and click anywhere outside to zoom back to the default view.
+# Predicted labels are stored into CSV file for future submission.
 
 # In[ ]:
 
 
-h = display(HTML(html_string))
-j = IPython.display.Javascript(js_string)
-IPython.display.display_javascript(j)
+# read test data from CSV file 
+test_images = pd.read_csv('../input/test.csv').values
+test_images = test_images.astype(np.float)
+
+# convert from [0:255] => [0.0:1.0]
+test_images = np.multiply(test_images, 1.0 / 255.0)
+
+print('test_images({0[0]},{0[1]})'.format(test_images.shape))
+
+
+# predict test set
+#predicted_lables = predict.eval(feed_dict={x: test_images, keep_prob: 1.0})
+
+# using batches is more resource efficient
+predicted_lables = np.zeros(test_images.shape[0])
+for i in range(0,test_images.shape[0]//BATCH_SIZE):
+    predicted_lables[i*BATCH_SIZE : (i+1)*BATCH_SIZE] = predict.eval(feed_dict={x: test_images[i*BATCH_SIZE : (i+1)*BATCH_SIZE], 
+                                                                                keep_prob: 1.0})
+
+
+print('predicted_lables({0})'.format(len(predicted_lables)))
+
+# output test image and prediction
+display(test_images[IMAGE_TO_DISPLAY])
+print ('predicted_lables[{0}] => {1}'.format(IMAGE_TO_DISPLAY,predicted_lables[IMAGE_TO_DISPLAY]))
+
+# save results
+np.savetxt('submission_softmax.csv', 
+           np.c_[range(1,len(test_images)+1),predicted_lables], 
+           delimiter=',', 
+           header = 'ImageId,Label', 
+           comments = '', 
+           fmt='%d')
+
+
+# ## Appendix
+# As it was mentioned before, it is good to output some variables for a better understanding of the process. 
+# 
+# Here we pull an output of the first convolution layer from TensorFlow graph. 32 features are transformed into an image grid, and it's quite interesting to see how filters picked by NN outline characteristics of different digits.
+
+# In[ ]:
+
+
+layer1_grid = layer1.eval(feed_dict={x: test_images[IMAGE_TO_DISPLAY:IMAGE_TO_DISPLAY+1], keep_prob: 1.0})
+plt.axis('off')
+plt.imshow(layer1_grid[0], cmap=cm.seismic )
 
 
 # In[ ]:
 
 
-holiday_events.type.unique()
+sess.close()
 
 
-# ## 2d. Transactions data
-# 
-
-# 
-# **PERIODICITY IN TRANSACTION PATTERN**
-# 
-# Inspecting the transactions file, we must be aware that the transactional data is only included for the training timeframe according to the competition's data dictionary. Furthermore the columns in this file relate only to the count of sales transactions for 
-
-# In[ ]:
-
-
-print(transactions.head(3))
-print("="*60)
-print("There are {0} rows and {1} columns in the transactions data".
-      format(transactions.shape[0], transactions.shape[1]))
-
-
-# In[ ]:
-
-
-plt.style.use('seaborn-white')
-plt.figure(figsize=(13,11))
-plt.plot(transactions.date.values, transactions.transactions.values, color='darkblue')
-plt.axvline(x='2015-12-23',color='red',alpha=0.3)
-plt.axvline(x='2016-12-23',color='red',alpha=0.3)
-plt.axvline(x='2014-12-23',color='red',alpha=0.3)
-plt.axvline(x='2013-12-23',color='red',alpha=0.3)
-plt.axvline(x='2013-05-12',color='green',alpha=0.2, linestyle= '--')
-plt.axvline(x='2015-05-10',color='green',alpha=0.2, linestyle= '--')
-plt.axvline(x='2016-05-08',color='green',alpha=0.2, linestyle= '--')
-plt.axvline(x='2014-05-11',color='green',alpha=0.2, linestyle= '--')
-plt.axvline(x='2017-05-14',color='green',alpha=0.2, linestyle= '--')
-plt.ylim(-50, 10000)
-plt.title("Distribution of transactions per day from 2013 till 2017")
-plt.ylabel('transactions per day', fontsize= 16)
-plt.xlabel('Date', fontsize= 16)
-plt.show()
-
-
-# **Takeaway from the plots**
-# 
-# Interestingly when plotting transactions on a year-to-year basis, we can already pick out two different periodic spikes in transactions from the data (one in the solid Red line and the other the dotted Green line). The bigger yearly periodic spike in transactions seem to occur at the end of the year in December, specifically on the 23 December every year-end. Perhaps this is due to some sort of Christmas sale/discount that Corporacion Favorita holds every December thereby explaining the bump in transactions on this date. The weaker periodic spike given by the green dotted lines seems to occur around the middle of the months of May , specifically on the sunday in the second week of May. Perhaps another similar scheme is being implemented by Corporacion Favorita on those sundays.
-
-# ## 2e. Items data
-# 
-# Moving onto the "items.csv" file, we can see that there are not many columns in the data. There is a unique item number identifier "item_nbr" which I presume relates to mappings to grocery items such as "Housebrand tomatoes pack of 6" or maybe "4 blueberry muffins" etc. The family column should be pretty self-explanatory in the sense that this relates to parent category that that particular item relates to.
-
-# In[ ]:
-
-
-items.head()
-
-
-# In[ ]:
-
-
-x, y = (list(x) for x in zip(*sorted(zip(items.family.value_counts().index, 
-                                         items.family.value_counts().values), 
-                                        reverse = False)))
-trace2 = go.Bar(
-    y=items.family.value_counts().values,
-    x=items.family.value_counts().index,
-    marker=dict(
-        color=items.family.value_counts().values,
-        colorscale = 'Portland',
-        reversescale = False
-    ),
-    orientation='v',
-)
-
-layout = dict(
-    title='Counts of items per family category',
-     width = 800, height = 800,
-    yaxis=dict(
-        showgrid=False,
-        showline=False,
-        showticklabels=True,
-#         domain=[0, 0.85],
-    ))
-
-fig1 = go.Figure(data=[trace2])
-fig1['layout'].update(layout)
-py.iplot(fig1, filename='plots')
-
-
-# **Takeaways from the plot**
-# 
-# As we can see from this barplot, the y-axis shows the counts of items while the x-axis displays the different family categories that the various retail items fall under, sorted from largest number of item counts to smallest number of items. As we can see from the plot, the top 3 family categories are the GROCERY I, BEVERAGES and CLEANING categories. 
-
-# In[ ]:
-
-
-x, y = (list(x) for x in zip(*sorted(zip(items['class'].value_counts().index, 
-                                         items['class'].value_counts().values), 
-                                        reverse = False)))
-trace2 = go.Bar(
-    x=items['class'].value_counts().index,
-    y=items['class'].value_counts().values,
-    marker=dict(
-        color=items['class'].value_counts().values,
-        colorscale = 'Jet',
-        reversescale = True
-    ),
-    orientation='v',
-)
-
-layout = dict(
-    title='Number of items attributed to a particular item class',
-     width = 800, height = 1400,
-    yaxis=dict(
-        showgrid=False,
-        showline=False,
-        showticklabels=True,
-#         domain=[0, 0.85],
-    ))
-
-fig1 = go.Figure(data=[trace2])
-fig1['layout'].update(layout)
-py.iplot(fig1, filename='plots')
-
-
-# **Takeaways from the plot**
-# 
-# Plotting the count of 
-
-# In[ ]:
-
-
-items.head()
-
-
-# In[ ]:
-
-
-plt.style.use('seaborn-white')
-fam_perishable = items.groupby(['family', 'perishable']).size()
-fam_perishable.unstack().plot(kind='bar',stacked=True, colormap= 'coolwarm', figsize=(12,10),  grid=False)
-plt.title('Stacked Barplot of locale name against event type')
-plt.ylabel('Count of entries')
-plt.show()
-
-
-# **Takeaways from the plot**
-# 
-# 
-
-# # 3. Training Data exploration
-# 
-# Finally we can now conduct an analysis of the training data. Since the entire training set is so large, as observed beforei
-
-# In[ ]:
-
-
-train.head()
-
-
-# In[ ]:
-
-
-plt.style.use('seaborn-deep')
-plt.figure(figsize=(13,11))
-plt.plot(train.date.values, train.unit_sales)
-plt.ylim(-50, 10000)
-plt.ylabel('transactions per day')
-plt.xlabel('Date')
-plt.show()
-
+# ## Reference
+# - [Deep MNIST for Experts](https://www.tensorflow.org/versions/master/tutorials/mnist/pros/index.html#deep-mnist-for-experts)
+# - [A Convolutional Network implementation example using TensorFlow library](https://github.com/aymericdamien/TensorFlow-Examples/blob/master/notebooks/3%20-%20Neural%20Networks/convolutional_network.ipynb)
+# - [Digit recognizer in Python using CNN](https://www.kaggle.com/kobakhit/digit-recognizer/digit-recognizer-in-python-using-cnn)
+# - [Deep Learning in a Nutshell: Core Concepts](http://devblogs.nvidia.com/parallelforall/deep-learning-nutshell-core-concepts/)

@@ -1,265 +1,274 @@
 
 # coding: utf-8
 
+# Simple Analysis using pandas 
+# 
+# **Quality Parameter Encode
+#  - Arsenic - 0
+#  - Fluoride - 1
+#  - Iron - 2
+#  - Nitrate - 3
+#  - Salinity - 4**
+# 
+# 
+#  **Working on It .... more to come**
+
 # In[ ]:
 
 
-import os, sys, email
-import numpy as np 
+import numpy as np
 import pandas as pd
-# Plotting
-import matplotlib.pyplot as plt
+import matplotlib as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-import seaborn as sns; sns.set_style('whitegrid')
-#import plotly
-#plotly.offline.init_notebook_mode()
-#import plotly.graph_objs as go
-import wordcloud
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib.gridspec import GridSpec
+from matplotlib.offsetbox import AnchoredText
 
-# Network analysis
-import networkx as nx
-# NLP
-from nltk.tokenize.regexp import RegexpTokenizer
+
+# In[ ]:
+
 
 from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
 
 
-# # 1. Loading and cleaning data
+# In[ ]:
+
+
+meta_data = pd.read_csv("../input/IndiaAffectedWaterQualityAreas.csv",encoding='latin1')
+
+
+# **Total Columns**
 
 # In[ ]:
 
 
-# Read the data into a DataFrame
-emails_df = pd.read_csv('../input/emails.csv')
-print(emails_df.shape)
-emails_df.head()
+meta_data.columns
 
 
-# In[ ]:
-
-
-# A single message looks like this
-print(emails_df['message'][0])
-
+# **States**
 
 # In[ ]:
 
 
-## Helper functions
-def get_text_from_email(msg):
-    '''To get the content from email objects'''
-    parts = []
-    for part in msg.walk():
-        if part.get_content_type() == 'text/plain':
-            parts.append( part.get_payload() )
-    return ''.join(parts)
+meta_data['State Name'].unique()
 
-def split_email_addresses(line):
-    '''To separate multiple email addresses'''
-    if line:
-        addrs = line.split(',')
-        addrs = frozenset(map(lambda x: x.strip(), addrs))
-    else:
-        addrs = None
-    return addrs
 
+# State wise Counts*
 
 # In[ ]:
 
 
-# Parse the emails into a list email objects
-messages = list(map(email.message_from_string, emails_df['message']))
-emails_df.drop('message', axis=1, inplace=True)
-# Get fields from parsed email objects
-keys = messages[0].keys()
-for key in keys:
-    emails_df[key] = [doc[key] for doc in messages]
-# Parse content from emails
-emails_df['content'] = list(map(get_text_from_email, messages))
-# Split multiple email addresses
-emails_df['From'] = emails_df['From'].map(split_email_addresses)
-emails_df['To'] = emails_df['To'].map(split_email_addresses)
+#meta_data['State Name'].value_counts()
 
-# Extract the root of 'file' as 'user'
-emails_df['user'] = emails_df['file'].map(lambda x:x.split('/')[0])
-del messages
 
-emails_df.head()
-
+# **Water Quality Parameters**
 
 # In[ ]:
 
 
-print('shape of the dataframe:', emails_df.shape)
-# Find number of unique values in each columns
-for col in emails_df.columns:
-    print(col, emails_df[col].nunique())
+meta_data['Quality Parameter'].value_counts()
 
 
-# In[ ]:
-
-
-# Set index and drop columns with two few values
-emails_df = emails_df.set_index('Message-ID')    .drop(['file', 'Mime-Version', 'Content-Type', 'Content-Transfer-Encoding'], axis=1)
-# Parse datetime
-emails_df['Date'] = pd.to_datetime(emails_df['Date'], infer_datetime_format=True)
-emails_df.dtypes
-
-
-# # 2. Exploratory analyses
-# ## When do people send emails?
+# ****State Wise Description With Count and High Frequency Count Quality Parameters ****
 
 # In[ ]:
 
 
-ax = emails_df.groupby(emails_df['Date'].dt.year)['content'].count().plot()
-ax.set_xlabel('Year', fontsize=18)
-ax.set_ylabel('N emails', fontsize=18)
+meta_data['Quality Parameter'].groupby(meta_data['State Name']).describe()
+
+
+# State Wise Entry Count
+
+# In[ ]:
+
+
+#meta_data.groupby("State Name").size()
+
+
+# **Data Month and Year Extraction**
+
+# In[ ]:
+
+
+import dateutil
+meta_data['date'] = meta_data['Year'].apply(dateutil.parser.parse, dayfirst=True)
+import datetime as dt
+meta_data['date'] = pd.to_datetime(meta_data['date'])
+meta_data['year'] = meta_data['date'].dt.year
+meta_data['month'] = meta_data['date'].dt.month
+
+
 
 
 # In[ ]:
 
 
-ax = emails_df.groupby(emails_df['Date'].dt.dayofweek)['content'].count().plot()
-ax.set_xlabel('Day of week', fontsize=18)
-ax.set_ylabel('N emails', fontsize=18)
+State_Data = meta_data[['State Name', 'Quality Parameter', 'year','month']]
+del State_Data ['year']
+del State_Data ['month']
+
+
+# **Used Label Encoder to Categorical Into Numerical**
+
+# In[ ]:
+
+
+import sklearn
+from sklearn.preprocessing import LabelEncoder
+numbers = LabelEncoder()
+
+
+# **** Arsenic - 0
+#  - Fluoride - 1
+#  - Iron - 2
+#  - Nitrate - 3
+#  - Salinity - 4**
+
+# In[ ]:
+
+
+State_Data['Quality'] = numbers.fit_transform(State_Data['Quality Parameter'].astype('str'))
 
 
 # In[ ]:
 
 
-ax = emails_df.groupby(emails_df['Date'].dt.hour)['content'].count().plot()
-ax.set_xlabel('Hour', fontsize=18)
-ax.set_ylabel('N emails', fontsize=18)
-
-
-# ## Who sends most emails?
-
-# In[ ]:
-
-
-# Count words in Subjects and content
-tokenizer = RegexpTokenizer(r'(?u)\b\w\w+\b')
-emails_df['subject_wc'] = emails_df['Subject'].map(lambda x: len(tokenizer.tokenize(x)))
-emails_df['content_wc'] = emails_df['content'].map(lambda x: len(tokenizer.tokenize(x)))
+State_Data.head(5)
 
 
 # In[ ]:
 
 
-grouped_by_people = emails_df.groupby('user').agg({
-        'content': 'count', 
-        'subject_wc': 'mean',
-        'content_wc': 'mean',
-    })
-grouped_by_people.rename(columns={'content': 'N emails', 
-                                  'subject_wc': 'Subject word count', 
-                                  'content_wc': 'Content word count'}, inplace=True)
-grouped_by_people.sort('N emails', ascending=False).head()
+Group1 = State_Data.groupby(['State Name','Quality Parameter','Quality']).count()
+Group1
 
 
 # In[ ]:
 
 
-sns.pairplot(grouped_by_people.reset_index(), hue='user')
-
-
-# ## Social network analyses of email senders and recipients
-# ### Let's see who sends the most emails to whom
-# First we'll only look at emails sent to single email address, which may be more important personal communications
-
-# In[ ]:
-
-
-sub_df = emails_df[['From', 'To', 'Date']].dropna()
-print(sub_df.shape)
-# drop emails sending to multiple addresses
-sub_df = sub_df.loc[sub_df['To'].map(len) == 1]
-print(sub_df.shape)
+#pd.DataFrame({'count' : State_Data.groupby( [ "State Name", "Quality"] ).size()}).reset_index()
 
 
 # In[ ]:
 
 
-sub_df = sub_df.groupby(['From', 'To']).count().reset_index()
-# Unpack frozensets
-sub_df['From'] = sub_df['From'].map(lambda x: next(iter(x)))
-sub_df['To'] = sub_df['To'].map(lambda x: next(iter(x)))
-# rename column
-sub_df.rename(columns={'Date': 'count'}, inplace=True)
-sub_df.sort('count', ascending=False).head(10)
+State_Quality_Count = pd.DataFrame({'count' : State_Data.groupby( [ "State Name", "Quality","Quality Parameter"] ).size()}).reset_index()
 
 
-# Apparently some people send a lot of emails to themselves. It maybe very interesting to look at the differences between emails sent to selves and to others.
+# **Took Six Random States for Analysis**
 
 # In[ ]:
 
 
-# Make a network of email sender and receipients
-G = nx.from_pandas_dataframe(sub_df, 'From', 'To', edge_attr='count', create_using=nx.DiGraph())
-print('Number of nodes: %d, Number of edges: %d' % (G.number_of_nodes(), G.number_of_edges()))
+TAMIL_NADU   =  State_Quality_Count[State_Quality_Count["State Name"] == "TAMIL NADU"]    
+ANDHRA_PRADESH = State_Quality_Count[State_Quality_Count["State Name"] == "ANDHRA PRADESH"]
+KERALA = State_Quality_Count[State_Quality_Count["State Name"] == "KERALA"]
+KARNATAKA = State_Quality_Count[State_Quality_Count["State Name"] == "KARNATAKA"]
+GUJARAT = State_Quality_Count[State_Quality_Count["State Name"] == "GUJARAT"]
+MAHARASHTRA = State_Quality_Count[State_Quality_Count["State Name"] == "MAHARASHTRA"]
+
+
 
 
 # In[ ]:
 
 
-fig, (ax1, ax2) = plt.subplots(1,2, figsize=(12, 8))
-ax1.hist(list(G.in_degree(weight='count').values()), log=True, bins=20)
-ax1.set_xlabel('In-degrees', fontsize=18)
+TAMIL_NADU
 
-ax2.hist(list(G.out_degree(weight='count').values()), log=True, bins=20)
-ax2.set_xlabel('Out-degrees', fontsize=18)
-
-
-# Looks like scale-free degree distribution
-# 
-# ---
-# ### Examine connected components in the network
-# 
 
 # In[ ]:
 
 
-n_nodes_in_cc = []
-for nodes in nx.connected_components(G.to_undirected()):
-    n_nodes_in_cc.append(len(nodes))
+plt.figure(figsize=(6,4))
+ax = sns.barplot(x="count", y ="Quality Parameter", data = TAMIL_NADU)
+ax.set(xlabel='Count')
+sns.despine(left=True, bottom=True)
+plt.title("Water Quality Parameter In Tamil Nadu")
 
-plt.hist(n_nodes_in_cc, bins=20, log=True)
-plt.xlabel('# Nodes in connected components', fontsize=18)
-plt.ylim([.1,1e4])
-
-
-# ## What do the emails say?
-# 
-# ### In the subjects:
 
 # In[ ]:
 
 
-from sklearn.feature_extraction.stop_words import ENGLISH_STOP_WORDS
+KARNATAKA
 
-subjects = ' '.join(emails_df['Subject'])
-fig, ax = plt.subplots(figsize=(16, 12))
-wc = wordcloud.WordCloud(width=800, 
-                         height=600, 
-                         max_words=200,
-                         stopwords=ENGLISH_STOP_WORDS).generate(subjects)
-ax.imshow(wc)
-ax.axis("off")
-
-
-# ### In the contents:
 
 # In[ ]:
 
 
-contents = ' '.join(emails_df.sample(1000)['content'])
-fig, ax = plt.subplots(figsize=(16, 12))
-wc = wordcloud.WordCloud(width=800, 
-                         height=600, 
-                         max_words=200,
-                         stopwords=ENGLISH_STOP_WORDS).generate(contents)
-ax.imshow(wc)
-ax.axis("off")
+plt.figure(figsize=(6,4))
+ax = sns.barplot(x="count", y ="Quality Parameter", data = KARNATAKA)
+ax.set(xlabel='Count')
+sns.despine(left=True, bottom=True)
+plt.title("Water Quality Parameter In Karnataka")
+
+
+# In[ ]:
+
+
+MAHARASHTRA
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(6,4))
+ax = sns.barplot(x="count", y ="Quality Parameter", data = MAHARASHTRA)
+ax.set(xlabel='Count')
+sns.despine(left=True, bottom=True)
+plt.title("Water Quality Parameter In Mahrashtra")
+
+
+# In[ ]:
+
+
+GUJARAT
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(6,4))
+ax = sns.barplot(x="count", y ="Quality Parameter", data = GUJARAT)
+ax.set(xlabel='Count')
+sns.despine(left=True, bottom=True)
+plt.title("Water Quality Parameter In Gujarat")
+
+
+# In[ ]:
+
+
+ANDHRA_PRADESH
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(6,4))
+ax = sns.barplot(x="count", y ="Quality Parameter", data = ANDHRA_PRADESH)
+ax.set(xlabel='Count')
+sns.despine(left=True, bottom=True)
+plt.title("Water Quality Parameter In Andhra Pradesh")
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(6,4))
+ax = sns.barplot(x="count", y ="Quality Parameter", data = KERALA)
+ax.set(xlabel='Count')
+sns.despine(left=True, bottom=True)
+plt.title("Water Quality Parameter In Kerala")
+
+
+# **Total Water Quality Parameter in INDIA**
+
+# In[ ]:
+
+
+x = State_Quality_Count.groupby('State Name')
+plt.rcParams['figure.figsize'] = (9.5, 6.0)
+genre_count = sns.barplot(y='Quality Parameter', x='count', data=State_Quality_Count, palette="Blues", ci=None)
+plt.show()
 

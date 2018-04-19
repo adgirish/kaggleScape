@@ -1,323 +1,200 @@
 
 # coding: utf-8
 
-# You may visit gist for better rendering results:
-# 
-# https://gist.github.com/chenyuntc/554876374e4ccf70fe2d3fe7bec98743
-
-# In[1]:
+# In[2]:
 
 
-import os
+# Import libraries and set desired options
+
+from __future__ import division, print_function
+# Disable Anaconda warnings
+import warnings
+warnings.filterwarnings('ignore')
+get_ipython().run_line_magic('matplotlib', 'inline')
+from matplotlib import pyplot as plt
+import seaborn as sns
+
+import pickle
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
-from tqdm import tqdm
-
-import torch as t
-from torch.utils import data
-from torchvision import transforms as tsf
-
-TRAIN_PATH = './train.pth'
-TEST_PATH = './test.tph'
-get_ipython().run_line_magic('matplotlib', 'inline')
+from scipy.sparse import csr_matrix
+from scipy.sparse import hstack
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_auc_score
+from sklearn.linear_model import LogisticRegression
 
 
-# ## Data Preprocessing
-# Preprocess data and save it to disk
+# ##### Approaching the Problem
+# We will be solving the intruder detection problem analyzing his behavior on the Internet. It is a complicated and interesting problem combining the data analysis and behavioral psychology.
+# 
+# For example: Yandex solves the mailbox intruder detection problem based on the user's behavior patterns. In a nutshell, intruder's behaviour pattern might differ from the owner's one: 
+# - the breaker might not delete emails right after they are read, as the mailbox owner might do
+# - the intruder might mark emails and even move the cursor differently
+# - etc.
+# 
+# So the intruder could be detected and thrown out from the mailbox proposing the owner to be authentificated via SMS-code.
+# This pilot project is described in the Habrahabr article.
+# 
+# Similar things are being developed in Google Analytics and described in scientific researches. You can find more on this topic by searching "Traversal Pattern Mining" and "Sequential Pattern Mining".
+# 
+# In this competition we are going to solve a similar problem: our algorithm is supposed to analyze the sequence of websites consequently visited by a particular person and to predict whether this person is Alice or an intruder (someone else). As a metric we will use [ROC AUC](https://en.wikipedia.org/wiki/Receiver_operating_characteristic). We will reveal who Alice is at the end of the course.
 
-# In[3]:
+# ### 1. Data Downloading and Transformation
+# Register on [Kaggle](www.kaggle.com), if you have not done it before.
+# Go to the competition [page](https://inclass.kaggle.com/c/catch-me-if-you-can-intruder-detection-through-webpage-session-tracking2) and download the data.
+# 
+# First, read the training and test sets. Then explore the data and perform a couple of simple exercises:
 
-
-import os
-from pathlib import Path
-from PIL import Image
-from skimage import io
-import numpy as np
-from tqdm import tqdm
-import torch as t
-
-
-def process(file_path, has_mask=True):
-    file_path = Path(file_path)
-    files = sorted(list(Path(file_path).iterdir()))
-    datas = []
-
-    for file in tqdm(files):
-        item = {}
-        imgs = []
-        for image in (file/'images').iterdir():
-            img = io.imread(image)
-            imgs.append(img)
-        assert len(imgs)==1
-        if img.shape[2]>3:
-            assert(img[:,:,3]!=255).sum()==0
-        img = img[:,:,:3]
-
-        if has_mask:
-            mask_files = list((file/'masks').iterdir())
-            masks = None
-            for ii,mask in enumerate(mask_files):
-                mask = io.imread(mask)
-                assert (mask[(mask!=0)]==255).all()
-                if masks is None:
-                    H,W = mask.shape
-                    masks = np.zeros((len(mask_files),H,W))
-                masks[ii] = mask
-            tmp_mask = masks.sum(0)
-            assert (tmp_mask[tmp_mask!=0] == 255).all()
-            for ii,mask in enumerate(masks):
-                masks[ii] = mask/255 * (ii+1)
-            mask = masks.sum(0)
-            item['mask'] = t.from_numpy(mask)
-        item['name'] = str(file).split('/')[-1]
-        item['img'] = t.from_numpy(img)
-        datas.append(item)
-    return datas
-
-# You can skip this if you have alreadly done it.
-test = process('../input/stage1_test/',False)
-t.save(test, TEST_PATH)
-train_data = process('../input/stage1_train/')
-# t.save(train_data, TRAIN_PATH)
+# In[4]:
 
 
-# ## Data Loader
-# Wrap it with pytorch `Dataset` and `DataLoader` 
+# Read the training and test data sets
+train_df = pd.read_csv('../input/train_sessions.csv',
+                       index_col='session_id')
+test_df = pd.read_csv('../input/test_sessions.csv',
+                      index_col='session_id')
 
-# In[10]:
+# Switch time1, ..., time10 columns to datetime type
+times = ['time%s' % i for i in range(1, 11)]
+train_df[times] = train_df[times].apply(pd.to_datetime)
+test_df[times] = test_df[times].apply(pd.to_datetime)
+
+# Sort the data by time
+train_df = train_df.sort_values(by='time1')
+
+# Look at the first rows of the training set
+train_df.head()
 
 
-import PIL
-class Dataset():
-    def __init__(self,data,source_transform,target_transform):
-        self.datas = data
-#         self.datas = train_data
-        self.s_transform = source_transform
-        self.t_transform = target_transform
-    def __getitem__(self, index):
-        data = self.datas[index]
-        img = data['img'].numpy()
-        mask = data['mask'][:,:,None].byte().numpy()
-        img = self.s_transform(img)
-        mask = self.t_transform(mask)
-        return img, mask
-    def __len__(self):
-        return len(self.datas)
-s_trans = tsf.Compose([
-    tsf.ToPILImage(),
-    tsf.Resize((128,128)),
-    tsf.ToTensor(),
-    tsf.Normalize(mean = [0.5,0.5,0.5],std = [0.5,0.5,0.5])
-]
-)
-t_trans = tsf.Compose([
-    tsf.ToPILImage(),
-    tsf.Resize((128,128),interpolation=PIL.Image.NEAREST),
-    tsf.ToTensor(),]
-)
-dataset = Dataset(train_data,s_trans,t_trans)
-dataloader = t.utils.data.DataLoader(dataset,num_workers=2,batch_size=4)
-
+# The training data set contains the following features:
+# 
+# - **site1** – id of the first visited website in the session
+# - **time1** – visiting time for the first website in the session
+# - ...
+# - **site10** – id of the tenth visited website in the session
+# - **time10** – visiting time for the tenth website in the session
+# - **target** – target variable, possesses value of 1 for Alice's sessions, and 0 for the other users' sessions
+#     
+# User sessions are chosen in the way they are not longer than half an hour or/and contain more than ten websites. I.e. a session is considered as ended either if a user has visited ten websites or if a session has lasted over thirty minutes.
+# 
+# There are some empty values in the table, it means that some sessions contain less than ten websites. Replace empty values with 0 and change columns types to integer. Also load the websites dictionary and check how it looks like:
 
 # In[5]:
 
 
-img,mask = dataset[12]
-plt.subplot(121)
-plt.imshow(img.permute(1,2,0).numpy()*0.5+0.5)
-plt.subplot(122)
-plt.imshow(mask[0].numpy())
+# Change site1, ..., site10 columns type to integer and fill NA-values with zeros
+sites = ['site%s' % i for i in range(1, 11)]
+train_df[sites] = train_df[sites].fillna(0).astype('int')
+test_df[sites] = test_df[sites].fillna(0).astype('int')
 
+# Load websites dictionary
+with open(r"../input/site_dic.pkl", "rb") as input_file:
+    site_dict = pickle.load(input_file)
 
-# ## Model: UNet
+# Create dataframe for the dictionary
+sites_dict = pd.DataFrame(list(site_dict.keys()), index=list(site_dict.values()), columns=['site'])
+print(u'Websites total:', sites_dict.shape[0])
+sites_dict.head()
+
 
 # In[6]:
 
 
-# sub-parts of the U-Net model
+# Answer
+print(test_df.shape, train_df.shape)
 
-from torch import nn
-import torch.nn.functional as F
-
-
-class double_conv(nn.Module):
-    '''(conv => BN => ReLU) * 2'''
-    def __init__(self, in_ch, out_ch):
-        super(double_conv, self).__init__()
-        self.conv = nn.Sequential(
-            nn.Conv2d(in_ch, out_ch, 3, padding=1),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True),
-            nn.Conv2d(out_ch, out_ch, 3, padding=1),
-            nn.BatchNorm2d(out_ch),
-            nn.ReLU(inplace=True)
-        )
-
-    def forward(self, x):
-        x = self.conv(x)
-        return x
-
-
-class inconv(nn.Module):
-    def __init__(self, in_ch, out_ch):
-        super(inconv, self).__init__()
-        self.conv = double_conv(in_ch, out_ch)
-
-    def forward(self, x):
-        x = self.conv(x)
-        return x
-
-
-class down(nn.Module):
-    def __init__(self, in_ch, out_ch):
-        super(down, self).__init__()
-        self.mpconv = nn.Sequential(
-            nn.MaxPool2d(2),
-            double_conv(in_ch, out_ch)
-        )
-
-    def forward(self, x):
-        x = self.mpconv(x)
-        return x
-
-
-class up(nn.Module):
-    def __init__(self, in_ch, out_ch, bilinear=True):
-        super(up, self).__init__()
-
-        #  would be a nice idea if the upsampling could be learned too,
-        #  but my machine do not have enough memory to handle all those weights
-        if bilinear:
-            self.up = nn.Upsample(scale_factor=2)
-        else:
-            self.up = nn.ConvTranspose2d(in_ch, out_ch, 2, stride=2)
-
-        self.conv = double_conv(in_ch, out_ch)
-
-    def forward(self, x1, x2):
-        x1 = self.up(x1)
-        diffX = x1.size()[2] - x2.size()[2]
-        diffY = x1.size()[3] - x2.size()[3]
-        x2 = F.pad(x2, (diffX // 2, int(diffX / 2),
-                        diffY // 2, int(diffY / 2)))
-        x = t.cat([x2, x1], dim=1)
-        x = self.conv(x)
-        return x
-
-
-class outconv(nn.Module):
-    def __init__(self, in_ch, out_ch):
-        super(outconv, self).__init__()
-        self.conv = nn.Conv2d(in_ch, out_ch, 1)
-
-    def forward(self, x):
-        x = self.conv(x)
-        return x
-
-
-class UNet(nn.Module):
-    def __init__(self, n_channels, n_classes):
-        super(UNet, self).__init__()
-        self.inc = inconv(n_channels, 64)
-        self.down1 = down(64, 128)
-        self.down2 = down(128, 256)
-        self.down3 = down(256, 512)
-        self.down4 = down(512, 512)
-        self.up1 = up(1024, 256)
-        self.up2 = up(512, 128)
-        self.up3 = up(256, 64)
-        self.up4 = up(128, 64)
-        self.outc = outconv(64, n_classes)
-
-    def forward(self, x):
-        x1 = self.inc(x)
-        x2 = self.down1(x1)
-        x3 = self.down2(x2)
-        x4 = self.down3(x3)
-        x5 = self.down4(x4)
-        x = self.up1(x5, x4)
-        x = self.up2(x, x3)
-        x = self.up3(x, x2)
-        x = self.up4(x, x1)
-        x = self.outc(x)
-        x = t.nn.functional.sigmoid(x)
-        return x
-
-
-# ## Loss definition
-# Use Soft Dice Loss
 
 # In[7]:
 
 
-def soft_dice_loss(inputs, targets):
-        num = targets.size(0)
-        m1  = inputs.view(num,-1)
-        m2  = targets.view(num,-1)
-        intersection = (m1 * m2)
-        score = 2. * (intersection.sum(1)+1) / (m1.sum(1) + m2.sum(1)+1)
-        score = 1 - score.sum()/num
-        return score
+# Our target variable
+y_train = train_df['target']
+
+# United dataframe of the initial data 
+full_df = pd.concat([train_df.drop('target', axis=1), test_df])
+
+# Index to split the training and test data sets
+idx_split = train_df.shape[0]
 
 
-# ## Train
-# Train it within **1 minutes** with GPU
+# For the very basic model, we will use only the visited websites in the session (but we will not take into account timestamp features). The point behind this data selection is: *Alice has her favorite sites, and the more often you see these sites in the session, the higher probability that this is an Alice's session, and vice versa.*
+# 
+# Let us prepare the data, we will take only features `site1, site2, ... , site10` from the whole dataframe. Keep in mind that the missing values are replaced with zero. Here is how the first rows of the dataframe look like:
+
+# In[8]:
+
+
+# Dataframe with indices of visited websites in session
+full_sites = full_df[sites]
+full_sites.head()
+
+
+# Sessions are the sequences of website indices, and data in this representation is inconvenient for linear methods. According to our hypothesis (Alice has favorite websites) we need to transform this dataframe so each website has corresponding feature (column) and its value is equal to number of this website visits in the session. It can be done in two lines:
+
+# In[9]:
+
+
+# sequence of indices
+sites_flatten = full_sites.values.flatten()
+
+# and the matrix we are looking for
+full_sites_sparse = csr_matrix(([1] * sites_flatten.shape[0],
+                                sites_flatten,
+                                range(0, sites_flatten.shape[0]  + 10, 10)))[:, 1:]
+
+
+# ### 3. Training the first model
+# 
+# So, we have an algorithm and data for it. Let us build our first model, using [logistic regression](http://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html) implementation from ` Sklearn` with default parameters. We will use the first 90% of the data for training (the training data set is sorted by time), and the remaining 10% for validation. Let's write a simple function that returns the quality of the model and then train our first classifier:
+
+# In[10]:
+
+
+def get_auc_lr_valid(X, y, C=1.0, seed=17, ratio = 0.9):
+    # Split the data into the training and validation sets
+    idx = int(round(X.shape[0] * ratio))
+    # Classifier training
+    lr = LogisticRegression(C=C, random_state=seed, n_jobs=-1).fit(X[:idx, :], y[:idx])
+    # Prediction for validation set
+    y_pred = lr.predict_proba(X[idx:, :])[:, 1]
+    # Calculate the quality
+    score = roc_auc_score(y[idx:], y_pred)
+    
+    return score
+
 
 # In[11]:
 
 
-model = UNet(3,1)#.cuda()
-optimizer = t.optim.Adam(model.parameters(),lr = 1e-3)
-
-for epoch in range(2):
-    for x_train, y_train  in tqdm(dataloader):
-        x_train = t.autograd.Variable(x_train)#.cuda())
-        y_train = t.autograd.Variable(y_train)#.cuda())
-        optimizer.zero_grad()
-        o = model(x_train)
-        loss = soft_dice_loss(o, y_train)
-        loss.backward()
-        optimizer.step()
+get_ipython().run_cell_magic('time', '', '# Select the training set from the united dataframe (where we have the answers)\nX_train = full_sites_sparse[:idx_split, :]\n\n# Calculate metric on the validation set\nprint(get_auc_lr_valid(X_train, y_train))')
 
 
-# ## Test
+# The first model demonstrated the quality  of 0.91952 on the validation set. Let's take it as the first baseline and starting point. To make a prediction on the test data set ** we need to train the model again on the entire training data set ** (until this moment, our model used only part of the data for training), which will increase its generalizing ability:
 
-# In[16]:
-
-
-class TestDataset():
-    def __init__(self,path,source_transform):
-        self.datas = t.load(path)
-        self.s_transform = source_transform
-    def __getitem__(self, index):
-        data = self.datas[index]
-        img = data['img'].numpy()
-        img = self.s_transform(img)
-        return img
-    def __len__(self):
-        return len(self.datas)
-
-testset = TestDataset(TEST_PATH, s_trans)
-testdataloader = t.utils.data.DataLoader(testset,num_workers=2,batch_size=2)
+# In[12]:
 
 
-# In[17]:
+# Function for writing predictions to a file
+def write_to_submission_file(predicted_labels, out_file,
+                             target='target', index_label="session_id"):
+    predicted_df = pd.DataFrame(predicted_labels,
+                                index = np.arange(1, predicted_labels.shape[0] + 1),
+                                columns=[target])
+    predicted_df.to_csv(out_file, index_label=index_label)
 
 
-model = model.eval()
-for data in testdataloader:
-    data = t.autograd.Variable(data, volatile=True)#.cuda())
-    o = model(data)
-    break
+# In[13]:
 
 
-# In[18]:
+# Train the model on the whole training data set
+# Use random_state=17 for repeatability
+# Parameter C=1 by default, but here we set it explicitly
+lr = LogisticRegression(C=1.0, random_state=17).fit(X_train, y_train)
 
+# Make a prediction for test data set
+X_test = full_sites_sparse[idx_split:,:]
+y_test = lr.predict_proba(X_test)[:, 1]
 
-tm=o[1][0].data.cpu().numpy()
-plt.subplot(121)
-plt.imshow(data[1].data.cpu().permute(1,2,0).numpy()*0.5+0.5)
-plt.subplot(122)
-plt.imshow(tm)
+# Write it to the file which could be submitted
+write_to_submission_file(y_test, 'baseline_1.csv')
 

@@ -1,93 +1,100 @@
 
 # coding: utf-8
 
-# This is an example notebook to demonstrate how the IoU metric works for a single image. Please note: this is not the official scoring implementation, but should work in the same manner.
+# Updates:
+# 
+# The stacking model:
+# https://www.kaggle.com/schoolpal/nn-stacking-magic-no-magic-30409-private-31063
+# 
+# https://www.kaggle.com/schoolpal/modifications-to-reynaldo-s-script/notebook
+# I just added two XGB models, they were used together with in this one and one more DNN model in the stacking
+# 
+# --------------------------------------------------------
+# 
+# This is a simple LightGBM script. It got two magic number, one took from Andy's script (proposed by Louis?). The second one actually down scale only the "old" investment properties, as the new ones are supported by the mortgage subsidy program? The LB score is at 0.3094. 
+# 
+# 
+# One nice thing is that the classical BoxCox transformation can further improve the performance to 0.3093. It can also be verified by local skewness.  I wonder why no one bring this up in the kernel/forum.
+# 
+# This script (log version) serves as one of the basis model for the later stacking.
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
+from sklearn.model_selection import train_test_split,KFold,TimeSeriesSplit
+from sklearn import model_selection, preprocessing
+import pandas as pd
 import numpy as np
-import skimage.io
-import matplotlib.pyplot as plt
-import skimage.segmentation
+import lightgbm as lgb
+from sklearn import model_selection, preprocessing
+import pdb
 
-# Load a single image and its associated masks
-id = '0a7d30b252359a10fd298b638b90cb9ada3acced4e0c0e5a3692013f432ee4e9'
-file = "../input/stage1_train/{}/images/{}.png".format(id,id)
-masks = "../input/stage1_train/{}/masks/*.png".format(id)
-image = skimage.io.imread(file)
-masks = skimage.io.imread_collection(masks).concatenate()
-height, width, _ = image.shape
-num_masks = masks.shape[0]
+def process(train,test):
+    RS=1
+    np.random.seed(RS)
+    ROUNDS = 1500 # 1300,1400 all works fine
+    params = {
+        'objective': 'regression',
+            'metric': 'rmse',
+            'boosting': 'gbdt',
+            'learning_rate': 0.01 , #small learn rate, large number of iterations
+            'verbose': 0,
+            'num_leaves': 2 ** 5,
+            'bagging_fraction': 0.95,
+            'bagging_freq': 1,
+            'bagging_seed': RS,
+            'feature_fraction': 0.7,
+            'feature_fraction_seed': RS,
+            'max_bin': 100,
+            'max_depth': 7,
+            'num_rounds': ROUNDS,
+        }
+    #Remove the bad prices as suggested by Radar
+    train=train[(train.price_doc>1e6) & (train.price_doc!=2e6) & (train.price_doc!=3e6)]
+    train.loc[(train.product_type=='Investment') & (train.build_year<2000),'price_doc']*=0.9 
+    train.loc[train.product_type!='Investment','price_doc']*=0.969 #Louis/Andy's magic number
+    test = pd.read_csv('../input/test.csv',parse_dates=['timestamp'])
 
-# Make a ground truth label image (pixel value is index of object label)
-labels = np.zeros((height, width), np.uint16)
-for index in range(0, num_masks):
-    labels[masks[index] > 0] = index + 1
+  
+    id_test = test.id
+    times=pd.concat([train.timestamp,test.timestamp])
+    num_train=train.shape[0]
+    y_train = train["price_doc"]
+    train.drop(['price_doc'],inplace=True,axis=1)
+    da=pd.concat([train,test])
+    da['na_count']=da.isnull().sum(axis=1)
+    df_cat=None
+    to_remove=[]
+    for c in da.columns:
+        if da[c].dtype=='object':
+            oh=pd.get_dummies(da[c],prefix=c)
+            if df_cat is None:
+                df_cat=oh
+            else:
+                df_cat=pd.concat([df_cat,oh],axis=1)
+            to_remove.append(c)
+    da.drop(to_remove,inplace=True,axis=1)
 
-# Show label image
-fig = plt.figure()
-plt.imshow(image)
-plt.title("Original image")
-fig = plt.figure()
-plt.imshow(labels)
-plt.title("Ground truth masks")
-
-# Simulate an imperfect submission
-offset = 2 # offset pixels
-y_pred = labels[offset:, offset:]
-y_pred = np.pad(y_pred, ((0, offset), (0, offset)), mode="constant")
-y_pred[y_pred == 20] = 0 # Remove one object
-y_pred, _, _ = skimage.segmentation.relabel_sequential(y_pred) # Relabel objects
-
-# Show simulated predictions
-fig = plt.figure()
-plt.imshow(y_pred)
-plt.title("Simulated imperfect submission")
-
-# Compute number of objects
-true_objects = len(np.unique(labels))
-pred_objects = len(np.unique(y_pred))
-print("Number of true objects:", true_objects)
-print("Number of predicted objects:", pred_objects)
-
-# Compute intersection between all objects
-intersection = np.histogram2d(labels.flatten(), y_pred.flatten(), bins=(true_objects, pred_objects))[0]
-
-# Compute areas (needed for finding the union between all objects)
-area_true = np.histogram(labels, bins = true_objects)[0]
-area_pred = np.histogram(y_pred, bins = pred_objects)[0]
-area_true = np.expand_dims(area_true, -1)
-area_pred = np.expand_dims(area_pred, 0)
-
-# Compute union
-union = area_true + area_pred - intersection
-
-# Exclude background from the analysis
-intersection = intersection[1:,1:]
-union = union[1:,1:]
-union[union == 0] = 1e-9
-
-# Compute the intersection over union
-iou = intersection / union
-
-# Precision helper function
-def precision_at(threshold, iou):
-    matches = iou > threshold
-    true_positives = np.sum(matches, axis=1) == 1   # Correct objects
-    false_positives = np.sum(matches, axis=0) == 0  # Missed objects
-    false_negatives = np.sum(matches, axis=1) == 0  # Extra objects
-    tp, fp, fn = np.sum(true_positives), np.sum(false_positives), np.sum(false_negatives)
-    return tp, fp, fn
-
-# Loop over IoU thresholds
-prec = []
-print("Thresh\tTP\tFP\tFN\tPrec.")
-for t in np.arange(0.5, 1.0, 0.05):
-    tp, fp, fn = precision_at(t, iou)
-    p = tp / (tp + fp + fn)
-    print("{:1.3f}\t{}\t{}\t{}\t{:1.3f}".format(t, tp, fp, fn, p))
-    prec.append(p)
-print("AP\t-\t-\t-\t{:1.3f}".format(np.mean(prec)))
+    #Remove rare features,prevent overfitting
+    to_remove=[]
+    if df_cat is not None:
+        sums=df_cat.sum(axis=0)
+        to_remove=sums[sums<200].index.values
+        df_cat=df_cat.loc[:,df_cat.columns.difference(to_remove)]
+        da = pd.concat([da, df_cat], axis=1)
+    x_train=da[:num_train].drop(['timestamp','id'],axis=1)
+    x_test=da[num_train:].drop(['timestamp','id'],axis=1)
+    #Log transformation, boxcox works better.
+    y_train=np.log(y_train)
+    train_lgb=lgb.Dataset(x_train,y_train)
+    model=lgb.train(params,train_lgb,num_boost_round=ROUNDS)
+    predict=model.predict(x_test)
+    predict=np.exp(predict)
+    return predict,id_test
+if __name__=='__main__':
+    train = pd.read_csv('../input/train.csv',parse_dates=['timestamp'])
+    test = pd.read_csv('../input/test.csv',parse_dates=['timestamp'])
+    predict,id_test=process(train,test)
+    output=pd.DataFrame({'id':id_test,'price_doc':predict})
+    output.to_csv('lgb.csv',index=False)
 

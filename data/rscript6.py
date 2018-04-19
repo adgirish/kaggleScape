@@ -1,83 +1,124 @@
-import os; os.environ['OMP_NUM_THREADS'] = '1'
-from contextlib import contextmanager
-from functools import partial
-from operator import itemgetter
-from multiprocessing.pool import ThreadPool
-import time
-from typing import List, Dict
+__author__ = 'Nick Sarris (ngs5st)'
 
-import keras as ks
 import pandas as pd
-import numpy as np
-import tensorflow as tf
-from sklearn.feature_extraction import DictVectorizer
-from sklearn.feature_extraction.text import TfidfVectorizer as Tfidf
-from sklearn.pipeline import make_pipeline, make_union, Pipeline
-from sklearn.preprocessing import FunctionTransformer, StandardScaler
-from sklearn.metrics import mean_squared_log_error
-from sklearn.model_selection import KFold
+import operator
 
-@contextmanager
-def timer(name):
-    t0 = time.time()
-    yield
-    print(f'[{name}] done in {time.time() - t0:.0f} s')
+# reading data
+prior_orders = pd.read_csv('../input/order_products__prior.csv')
+train_orders = pd.read_csv('../input/order_products__train.csv')
+orders = pd.read_csv('../input/orders.csv')
 
-def preprocess(df: pd.DataFrame) -> pd.DataFrame:
-    df['name'] = df['name'].fillna('') + ' ' + df['brand_name'].fillna('')
-    df['text'] = (df['item_description'].fillna('') + ' ' + df['name'] + ' ' + df['category_name'].fillna(''))
-    return df[['name', 'text', 'shipping', 'item_condition_id']]
+# removing all user_ids not in the test set
+test  = orders[orders['eval_set'] == 'test' ]
+user_ids = test['user_id'].values
+orders = orders[orders['user_id'].isin(user_ids)]
 
-def on_field(f: str, *vec) -> Pipeline:
-    return make_pipeline(FunctionTransformer(itemgetter(f), validate=False), *vec)
+# combine prior rows by user_id, add product_ids to a list
+prior_products = pd.DataFrame(prior_orders.groupby(
+    'order_id')['product_id'].apply(list))
+prior_products.reset_index(level=['order_id'], inplace=True)
+prior_products.columns = ['order_id','products_list']
 
-def to_records(df: pd.DataFrame) -> List[Dict]:
-    return df.to_dict(orient='records')
+# combine train rows by user_id, add product_ids to a list
+train_products = pd.DataFrame(train_orders.groupby(
+    'order_id')['product_id'].apply(list))
+train_products.reset_index(level=['order_id'], inplace=True)
+train_products.columns = ['order_id','products_list']
 
-def fit_predict(xs, y_train) -> np.ndarray:
-    X_train, X_test = xs
-    config = tf.ConfigProto(
-        intra_op_parallelism_threads=1, use_per_session_threads=1, inter_op_parallelism_threads=1)
-    with tf.Session(graph=tf.Graph(), config=config) as sess, timer('fit_predict'):
-        ks.backend.set_session(sess)
-        model_in = ks.Input(shape=(X_train.shape[1],), dtype='float32', sparse=True)
-        out = ks.layers.Dense(192, activation='relu')(model_in)
-        out = ks.layers.Dense(64, activation='relu')(out)
-        out = ks.layers.Dense(64, activation='relu')(out)
-        out = ks.layers.Dense(1)(out)
-        model = ks.Model(model_in, out)
-        model.compile(loss='mean_squared_error', optimizer=ks.optimizers.Adam(lr=3e-3))
-        for i in range(3):
-            with timer(f'epoch {i + 1}'):
-                model.fit(x=X_train, y=y_train, batch_size=2**(11 + i), epochs=1, verbose=0)
-        return model.predict(X_test)[:, 0]
+# seperate orders into prior/train sets
+# turns out there are no test user_ids in the training set so train will be empty
+prior = orders[orders['eval_set'] == 'prior']
+train = orders[orders['eval_set'] == 'train']
 
-def main():
-    vectorizer = make_union(
-        on_field('name', Tfidf(max_features=100000, token_pattern='\w+')),
-        on_field('text', Tfidf(max_features=100000, token_pattern='\w+', ngram_range=(1, 2))),
-        on_field(['shipping', 'item_condition_id'],
-                 FunctionTransformer(to_records, validate=False), DictVectorizer()),
-        n_jobs=4)
-    y_scaler = StandardScaler()
-    with timer('process train'):
-        train = pd.read_table('../input/train.tsv')
-        train = train[train['price'] > 0].reset_index(drop=True)
-        cv = KFold(n_splits=20, shuffle=True, random_state=42)
-        train_ids, valid_ids = next(cv.split(train))
-        train, valid = train.iloc[train_ids], train.iloc[valid_ids]
-        y_train = y_scaler.fit_transform(np.log1p(train['price'].values.reshape(-1, 1)))
-        X_train = vectorizer.fit_transform(preprocess(train)).astype(np.float32)
-        print(f'X_train: {X_train.shape} of {X_train.dtype}')
-        del train
-    with timer('process valid'):
-        X_valid = vectorizer.transform(preprocess(valid)).astype(np.float32)
-    with ThreadPool(processes=4) as pool:
-        Xb_train, Xb_valid = [x.astype(np.bool).astype(np.float32) for x in [X_train, X_valid]]
-        xs = [[Xb_train, Xb_valid], [X_train, X_valid]] * 2
-        y_pred = np.mean(pool.map(partial(fit_predict, y_train=y_train), xs), axis=0)
-    y_pred = np.expm1(y_scaler.inverse_transform(y_pred.reshape(-1, 1))[:, 0])
-    print('Valid RMSLE: {:.4f}'.format(np.sqrt(mean_squared_log_error(valid['price'], y_pred))))
+# find the number of the last order placed
+prior['num_orders'] = prior.groupby(['user_id'])['order_number'].transform(max)
+train['num_orders'] = train.groupby(['user_id'])['order_number'].transform(max)
 
-if __name__ == '__main__':
-    main()
+# merge everything into one dataframe
+prior = pd.merge(prior, prior_products, on='order_id', how='left')
+train = pd.merge(train, train_products, on='order_id', how='left')
+comb = pd.concat([prior, train], axis=0).reset_index(drop=True)
+
+test_cols = ['order_id','user_id']
+cols = ['order_id','user_id','order_number','num_orders','products_list']
+
+comb = comb[cols]
+test = test[test_cols]
+
+# iterate through dataframe, adding data to dictionary
+# data added is in the form of a list:
+    # list[0] = weight of the data: (1 + current order number / final order number), thus later data is weighted more
+    # list[1] = how important the item is to the buyer: (order in the cart / number of items bought), thus items bought first are weighted more
+
+# also used the average amount of items bought every order as a benchmark for how many items to add per user in the final submission
+
+product_dict = {}
+for i, row in comb.iterrows():
+    if i % 100000 == 0:
+        print('Iterated Through {} Rows...'.format(i))
+
+    if row['user_id'] in product_dict:
+        index = 1
+        list.append(product_dict[row['user_id']]['len_products'], len(row['products_list']))
+        for val in row['products_list']:
+            if val in product_dict[row['user_id']]:
+                product_dict[row['user_id']][val][0] += 1 + int(row['order_number']) / int(row['num_orders'])
+                list.append(product_dict[row['user_id']][val][1], index / len(row['products_list']))
+            else:
+                product_dict[row['user_id']][val] = [1 + int(row['order_number']) / int(row['num_orders']),
+                                              [index / len(row['products_list'])]]
+            index += 1
+    else:
+        index = 1
+        product_dict[row['user_id']] = {'len_products': [
+            len(row['products_list'])]}
+        for val in row['products_list']:
+            product_dict[row['user_id']][val] = [1 + int(row['order_number']) / int(row['num_orders']),
+                                          [index / len(row['products_list'])]]
+            index += 1
+
+final_data = {}
+for user_id in product_dict:
+    final_data[user_id] = {}
+    for product_id in product_dict[user_id]:
+        if product_id == 'len_products':
+            final_data[user_id][product_id] = \
+                round(sum(product_dict[user_id][product_id])/
+                    len(product_dict[user_id][product_id]))
+        else:
+            final_data[user_id][product_id] = \
+                [product_dict[user_id][product_id][0],1/
+                 (sum(product_dict[user_id][product_id][1])/
+                len(product_dict[user_id][product_id][1]))]
+
+# iterate through testing dataframe
+# every user_id in test corresponds to a dictionary entry
+# call the dictionary with every row, products by weight, combine them into a string, and append them to products
+
+products = []
+for i, row in test.iterrows():
+    if i % 100000 == 0:
+        print('Iterated Through {} Rows...'.format(i))
+
+    final_products = []
+    len_products = None
+    total_products = final_data[row['user_id']].items()
+    for product in total_products:
+        if product[0] == 'len_products':
+            len_products = product[1]
+        else:
+            list.append(final_products, product)
+
+    output = []
+    product_list = sorted(final_products,
+        key=operator.itemgetter(1), reverse=True)
+    for val in product_list[:len_products]:
+        list.append(output, str(val[0]))
+    final_output = ' '.join(output)
+    list.append(products, final_output)
+
+# create submission
+submission = pd.DataFrame()
+submission['order_id'] = test['order_id']
+submission['products'] = products
+submission.to_csv('submission.csv', index=False)

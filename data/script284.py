@@ -1,179 +1,144 @@
 
 # coding: utf-8
 
-# # Station combinations
+# This is fast image downloader using this trick:
+# https://www.kaggle.com/c/landmark-recognition-challenge/discussion/49703
+# And you can change target size that you prefer.
 # 
-# We have seen [station 32 has high (4.7%) error rate][1].
-# 
-# Let's investigate that failure rate with station combinations.
-# 
-#   [1]: https://www.kaggle.com/jeffd23/bosch-production-line-performance/what-s-wrong-with-station-32
+# Reference:
+# https://www.kaggle.com/c/landmark-recognition-challenge/discussion/48895
+# ```
+# For 256,256 this should be 22 GB
+# For 224,224 this should be 16.8 GB
+# For 139,139 this should be 6.5 GB
+# For 128,128 this should be 5.5 GB
+# For 96,96 this should be 3.1 GB
+# For 64,64 this should be 1.4 GB
+# ```
 
 # In[ ]:
 
 
-get_ipython().run_line_magic('matplotlib', 'inline')
-import numpy as np
+import multiprocessing
+import os
+from io import BytesIO
+from urllib import request
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import gc
-sns.set_style('whitegrid')
+import re
+import tqdm
+from PIL import Image
 
 
-# # Read station and response data
-# 
-# ['S32', 'S33', 'S34'] have the most interesting pattern. 
-# 
-# We read the full train set although only 5 columns.
+# set files and dir
+DATA_FRAME, OUT_DIR = pd.read_csv('../input/train.csv'), '../input/train'  # recognition challenge
+# DATA_FRAME, OUT_DIR = pd.read_csv('../input/index.csv'), '../input/index'  # retrieval challenge
+# DATA_FRAME, OUT_DIR = pd.read_csv('../input/test.csv'), '../input/test'  # test data
 
-# In[ ]:
-
-
-STATIONS = ['S32', 'S33', 'S34']
-train_date_part = pd.read_csv('../input/train_date.csv', nrows=10000)
-date_cols = train_date_part.drop('Id', axis=1).count().reset_index().sort_values(by=0, ascending=False)
-date_cols['station'] = date_cols['index'].apply(lambda s: s.split('_')[1])
-date_cols = date_cols[date_cols['station'].isin(STATIONS)]
-date_cols = date_cols.drop_duplicates('station', keep='first')['index'].tolist()
-print(date_cols)
-train_date = pd.read_csv('../input/train_date.csv', usecols=['Id'] + date_cols)
-print(train_date.columns)
-train_date.columns = ['Id'] + STATIONS
-for station in STATIONS:
-    train_date[station] = 1 * (train_date[station] >= 0)
-response = pd.read_csv('../input/train_numeric.csv', usecols=['Id', 'Response'])
-print(response.shape)
-train = response.merge(train_date, how='left', on='Id')
-# print(train.count())
-train.head(3)
-
-
-# #Aggregation
-# 
-# Remove cases with less than 1000 records to show significant results.
-
-# In[ ]:
-
-
-train['cnt'] = 1
-failure_rate = train.groupby(STATIONS).sum()[['Response', 'cnt']]
-failure_rate['failure_rate'] = failure_rate['Response'] / failure_rate['cnt']
-failure_rate = failure_rate[failure_rate['cnt'] > 1000]  # remove 
-failure_rate.head(20)
+# preferences
+TARGET_SIZE = 128  # image resolution to be stored
+IMG_QUALITY = 90  # JPG quality
+NUM_WORKERS = 8  # Num of CPUs
 
 
 # In[ ]:
 
 
-failure_rate_pretty = failure_rate.reset_index()
-failure_rate_pretty['group'] = ['-'.join([s if row[s] else '' for s in STATIONS])                          for _, row in failure_rate_pretty.iterrows()]
-fig=plt.figure(figsize=(10, 4))
-sns.barplot(x='group', y="failure_rate", data=failure_rate_pretty, color='r', alpha=0.8)
-plt.ylabel('failure rate')
-for i, row in failure_rate_pretty.iterrows():
-    plt.text(i, row['failure_rate']+0.01, np.round(row['failure_rate'], 3),
-             verticalalignment='top', horizontalalignment='center')
-plt.title('Station combinations %s' % str(STATIONS))
-fig.savefig('failure_rate.png', dpi=300)
-plt.show()
+DATA_FRAME.url.apply(lambda x: x.split('/')[-2]).value_counts().head()
 
 
-# #Magic/Leakage features
-# First we need to get the start times for both train and test.
+# We found that almost images have 1600x resolution.
+# Downloading such a high resolution images takes so much time, so I recommend you to download images after changing url "s1600" to "s{TARGET_SIZE}" like the below script.
 
 # In[ ]:
 
 
-train_date_part = pd.read_csv('../input/train_date.csv', nrows=10000)
-date_cols = train_date_part.drop('Id', axis=1).count().reset_index().sort_values(by=0, ascending=False)
-date_cols['station'] = date_cols['index'].apply(lambda s: s.split('_')[1])
-date_cols = date_cols.drop_duplicates('station', keep='first')['index'].tolist()
-# Train start dates
-train_start_date = pd.read_csv('../input/train_date.csv', usecols=['Id'] + date_cols)
-train_start_date['start_date'] = train_start_date[date_cols].min(axis=1)
-train_start_date = train_start_date.drop(date_cols, axis=1)
-print(train_start_date.shape)
-# Test start dates
-test_start_date = pd.read_csv('../input/test_date.csv', usecols=['Id'] + date_cols)
-test_start_date['start_date'] = test_start_date[date_cols].min(axis=1)
-test_start_date = test_start_date.drop(date_cols, axis=1)
-print(test_start_date.shape)
-start_date = pd.concat([train_start_date, test_start_date])
-print(start_date.shape)
-del train_start_date, test_start_date
-gc.collect()
-start_date.head()
+def overwrite_urls(df):
+    def reso_overwrite(url_tail, reso=TARGET_SIZE):
+        pattern = 's[0-9]+'
+        search_result = re.match(pattern, url_tail)
+        if search_result is None:
+            return url_tail
+        else:
+            return 's{}'.format(reso)
+
+    def join_url(parsed_url, s_reso):
+        parsed_url[-2] = s_reso
+        return '/'.join(parsed_url)
+
+    parsed_url = df.url.apply(lambda x: x.split('/'))
+    train_url_tail = parsed_url.apply(lambda x: x[-2])
+    resos = train_url_tail.apply(lambda x: reso_overwrite(x, reso=TARGET_SIZE))
+
+    overwritten_df = pd.concat([parsed_url, resos], axis=1)
+    overwritten_df.columns = ['url', 's_reso']
+    df['url'] = overwritten_df.apply(lambda x: join_url(x['url'], x['s_reso']), axis=1)
+    return df
 
 
-# Then we add Faron's features.
+def parse_data(df):
+    key_url_list = [line[:2] for line in df.values]
+    return key_url_list
+
+
+def download_image(key_url):
+    (key, url) = key_url
+    filename = os.path.join(OUT_DIR, '{}.jpg'.format(key))
+
+    if os.path.exists(filename):
+        print('Image {} already exists. Skipping download.'.format(filename))
+        return 0
+
+    try:
+        response = request.urlopen(url)
+        image_data = response.read()
+    except:
+        print('Warning: Could not download image {} from {}'.format(key, url))
+        return 1
+
+    try:
+        pil_image = Image.open(BytesIO(image_data))
+    except:
+        print('Warning: Failed to parse image {}'.format(key))
+        return 1
+
+    try:
+        pil_image_rgb = pil_image.convert('RGB')
+    except:
+        print('Warning: Failed to convert image {} to RGB'.format(key))
+        return 1
+
+    try:
+        pil_image_resize = pil_image_rgb.resize((TARGET_SIZE, TARGET_SIZE))
+    except:
+        print('Warning: Failed to resize image {}'.format(key))
+        return 1
+
+    try:
+        pil_image_resize.save(filename, format='JPEG', quality=IMG_QUALITY)
+    except:
+        print('Warning: Failed to save image {}'.format(filename))
+        return 1
+
+    return 0
+
+
+def loader(df):
+    if not os.path.exists(OUT_DIR):
+        os.mkdir(OUT_DIR)
+
+    key_url_list = parse_data(df)
+    pool = multiprocessing.Pool(processes=NUM_WORKERS)
+    failures = sum(tqdm.tqdm(pool.imap_unordered(download_image, key_url_list),
+                             total=len(key_url_list)))
+    print('Total number of download failures:', failures)
+    pool.close()
+    pool.terminate()
+
 
 # In[ ]:
 
 
-train_id = pd.read_csv('../input/train_numeric.csv', usecols=['Id'])
-test_id = pd.read_csv('../input/test_numeric.csv', usecols=['Id'])
-train_id = train_id.merge(start_date, on='Id')
-test_id = test_id.merge(start_date, on='Id')
-train_test_id = pd.concat((train_id, test_id)).reset_index(drop=True).reset_index(drop=False)
-train_test_id = train_test_id.sort_values(by=['start_date', 'Id'], ascending=True)
-train_test_id['IdDiff1'] = train_test_id['Id'].diff().fillna(9999999).astype(int)
-train_test_id['IdDiff2'] = train_test_id['Id'].iloc[::-1].diff().fillna(9999999).astype(int)
-train_test_id['Magic'] = 1 + 2 * (train_test_id['IdDiff1'] > 1) + 1 * (train_test_id['IdDiff2'] < -1)
+# now, start downloading
+if __name__ == '__main__':
+    loader(overwrite_urls(DATA_FRAME))
 
-train_with_magic = train.merge(train_test_id[['Id', 'Magic']], on='Id')
-train_with_magic.head()
-
-
-# In[ ]:
-
-
-magic_failure_rate = train_with_magic.groupby(['Magic']).sum()[['Response', 'cnt']]
-magic_failure_rate['failure_rate'] = magic_failure_rate['Response'] / magic_failure_rate['cnt']
-magic_failure_rate.head()
-
-
-# 5% failure rate for 100K rows. Not bad for a single feature.
-
-# In[ ]:
-
-
-magic_failure_rate_pretty = magic_failure_rate.reset_index()
-fig=plt.figure(figsize=(10, 4))
-sns.barplot(x='Magic', y="failure_rate", data=magic_failure_rate_pretty, color='k', alpha=0.8)
-plt.ylabel('failure rate')
-for i, row in magic_failure_rate_pretty.iterrows():
-    plt.text(i, row['failure_rate']+0.01, np.round(row['failure_rate'], 3),
-             verticalalignment='top', horizontalalignment='center')
-fig.savefig('magic_failure_rate.png', dpi=300)
-plt.show()
-
-
-# # Combining the results
-# Let's check ifwe could get something even stronger by combining the previous results.
-
-# In[ ]:
-
-
-combined_failure_rate = train_with_magic.groupby(['Magic','S32', 'S33']).sum()[['Response', 'cnt']]
-combined_failure_rate['failure_rate'] = combined_failure_rate['Response'] / combined_failure_rate['cnt']
-combined_failure_rate.head(20)
-
-
-# In[ ]:
-
-
-full = combined_failure_rate.reset_index()
-full['group'] = 100 * full['Magic'] + 10 * full['S32'] + full['S33']
-fig=plt.figure(figsize=(10, 4))
-sns.barplot(x='group', y="failure_rate", data=full, color='g', alpha=0.8)
-plt.ylabel('failure rate')
-for i, row in full.iterrows():
-    plt.text(i, row['failure_rate']+0.05, np.round(row['failure_rate'], 3),
-             verticalalignment='top', horizontalalignment='center')
-plt.title('Magic & S32 - S33')
-fig.savefig('magic_station_failure_rate.png', dpi=300)
-plt.show()
-
-
-# We are able to find **1000 products with almost 70% failure rate using only 3 features**.

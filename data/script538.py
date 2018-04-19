@@ -1,461 +1,614 @@
 
 # coding: utf-8
 
-# In[1]:
+# # Optimizing maximum scores of multiple submissions
+# 
+# We can submit the to leaderboard multiple times and our best submission counts. Therefore, it is not necessarily best to go for submissions with the largest expected score. If we create submissions with large variance and try many of them, can we get lucky?
+# 
+# I believe the answer is no! So don't expect too much here ;)
+# 
+# In this notebook, I try to estimate some stuff to show why I believe it's not a good idea. I create a simplified model of Santa's bag packing problem and optimize for the largest order statistic over a number of submissions. The outline is as follows:
+# 
+# 1. Exploratory visualizations to understand the problem
+# 2. Computing utility distributions of a large number of different kinds of bags
+# 3. Packing bags and visualizing trade-off between mean and variance of score distributions
+# 4. Creating random submissions
+
+# In[ ]:
 
 
-#It is just a start, i hope. I hope, I will have time for something more clever :-)
+import sys
 import os
-import gc
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import matplotlib.pyplot as plt
+import math
+import numpy as np
+import pandas as pd
 import seaborn as sns
+from scipy.stats import norm, gumbel_r
+from scipy.optimize import linprog
+import matplotlib
+import matplotlib.pyplot as plt
+from sklearn.utils.extmath import cartesian
 get_ipython().run_line_magic('matplotlib', 'inline')
-from sklearn.model_selection import train_test_split
-import lightgbm as lgb
 
-print(os.getcwd())
 
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+# # 1. Exploration via sampling
+# Let's visualize distributions of individual items and bags.
+# We look at both their weights as well as their utilities (their contribution to the score).
+# Rules are that you need at least 3 items per bag and their combined weight must not exceed 50.
 
-import os
-print(os.listdir("../input"))
+# In[ ]:
 
 
-# In[3]:
+def sample_horse(size=1):
+    return np.maximum(0, np.random.normal(5,2,size))
 
+def sample_ball(size=1):
+    return np.maximum(0, 1 + np.random.normal(1,0.3,size))
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+def sample_bike(size=1):
+    return np.maximum(0, np.random.normal(20,10,size))
 
-NROWS1     = 3000000
-NROWS2     = 1000000
-RG         = 500000 #154903891
-SKIPROWS   = range(1,RG)
-path       = '../input/' 
-path_train = path + 'train.csv'
-path_test  =  path + 'test.csv'
-train_cols = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
-test_cols  = ['ip', 'app', 'device', 'os', 'channel', 'click_time']
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        'click_id'      : 'uint32'
-        }
+def sample_train(size=1):
+    return np.maximum(0, np.random.normal(10,5,size))
 
-print('Loading the training data...')
-train = pd.read_csv(path_train, skiprows=SKIPROWS, nrows=NROWS1, dtype=dtypes, header=0)
-print('End loading train data...')
-print('Loading the test data...')
-test = pd.read_csv(path_test, dtype=dtypes, header=0)  #nrows=NROWS2,
-print('End loading test data...')
+def sample_coal(size=1):
+    return 47 * np.random.beta(0.5,0.5,size)
 
+def sample_book(size=1):
+    return np.random.chisquare(2,size)
 
-# In[4]:
+def sample_doll(size=1):
+    return np.random.gamma(5,1,size)
 
+def sample_block(size=1):
+    return np.random.triangular(5,10,20,size)
 
-print("Train head")
-print(train.head(5))
-print("Test head")
-print(test.head(5))
+def sample_gloves(size=1):
+    dist1 = 3.0 + np.random.rand(size)
+    dist2 = np.random.rand(size)
+    toggle = np.random.rand(size) < 0.3
+    dist2[toggle] = dist1[toggle]
+    return dist2
 
-
-# In[6]:
-
-
-print("Unique data train")
-Unique_data_train = pd.to_datetime(train.click_time).dt.day.astype('uint8').value_counts().sort_index()
-print(Unique_data_train)
-print("Unique data test")
-Unique_data_test =  pd.to_datetime(test.click_time).dt.day.astype('uint8').value_counts().sort_index()
-print(Unique_data_test)
-
-
-# In[7]:
-
-
-len_train = len(train)
-print('The initial size of the train set is', len_train)
-train = train.append(test)
-print('Binding the training and test set together...')
-del test
-
-
-# In[9]:
-
-
-print("Train and test together")
-print(train.head(5))
-
-
-# In[11]:
-
-
-#time
-train['hour']    = pd.to_datetime(train.click_time).dt.hour.astype('uint8')
-train['day']     = pd.to_datetime(train.click_time).dt.day.astype('uint8')
-train['wday']    = pd.to_datetime(train.click_time).dt.dayofweek.astype('uint8')
-train['minute']  = pd.to_datetime(train.click_time).dt.minute.astype('uint8')
-train['second']  = pd.to_datetime(train.click_time).dt.second.astype('uint8')
-train["doy"]     = pd.to_datetime(train.click_time).dt.dayofyear.astype('uint8')
-train            = train.drop(['click_time', 'attributed_time'], axis=1)
-print(train.dtypes) 
-
-
-# In[12]:
-
-
-print("Frequent hours")
-frequent_hour = train.hour.value_counts().sort_index()
-print(frequent_hour)
-print("Frequent days")
-frequent_day = train.day.value_counts().sort_index()
-print(frequent_day)
-print("Frequent doy")
-frequent_doy = train.doy.value_counts().sort_index()
-print(frequent_doy)
-print("Frequent week days")
-frequent_wday = train.wday.value_counts().sort_index()
-print(frequent_wday)
-print("Frequent minutes")
-frequent_minute = train.minute.value_counts().sort_index()
-print(frequent_minute)
-print("Frequent seconds")
-frequent_second = train.second.value_counts().sort_index()
-print(frequent_minute)
-
-
-# In[13]:
-
-
-plt.figure(figsize=(15,20))
-
-plt.subplot(321)
-frequent_hour.plot(kind='bar')
-plt.title("Frequent hours")
-plt.xlabel("Hours")
-plt.ylabel("Number")
-
-plt.subplot(322)
-frequent_day.plot(kind='bar')
-plt.title("Frequent days")
-plt.xlabel("Days")
-plt.ylabel("Number")
-
-plt.subplot(323)
-frequent_doy.plot(kind='bar')
-plt.title("Frequent day of year")
-plt.xlabel("Frequent day of year")
-plt.ylabel("Number")
-
-plt.subplot(324)
-frequent_wday.plot(kind='bar')
-plt.title("Frequent day of week")
-plt.xlabel("Frequent day of week")
-plt.ylabel("Number")
-
-plt.subplot(325)
-frequent_minute.plot(kind='bar')
-plt.xticks(np.arange(0, 69, step=10), (0,9,19,29,39,49,59))
-plt.title("Frequent  minutes")
-plt.xlabel("Minutes")
-plt.ylabel("Number")
-
-plt.subplot(326)
-frequent_second.plot(kind='bar')
-plt.xticks(np.arange(0, 69, step=10), (0,9,19,29,39,49,59))
-plt.title("Frequent seconds")
-plt.xlabel("Seconds")
-plt.ylabel("Number")
-
-del frequent_hour,frequent_day,frequent_doy,frequent_wday,frequent_minute,frequent_second
-gc.collect()
-
-
-# In[14]:
-
-
-BIN = 30
-plt.figure(figsize=(15,20))
-plt.subplot(321)
-plt.hist(train['hour'], bins=BIN)
-plt.title("Histogram of frequent hours")
-plt.xlabel("Frequent hours")
-
-plt.subplot(322)
-plt.hist(train['day'], bins=BIN)
-plt.title("Histogram of frequent days")
-plt.xlabel("Frequent days")
-
-plt.subplot(323)
-plt.hist(train['doy'], bins=BIN)
-plt.title("Histogram of frequent doys")
-plt.xlabel("Frequent doys")
-
-plt.subplot(324)
-plt.hist(train['wday'], bins=BIN)
-plt.title("Histogram of frequent week days")
-plt.xlabel("Frequent week days")
-
-plt.subplot(325)
-plt.hist(train['minute'], bins=BIN)
-plt.title("Histogram of frequent minutes")
-plt.xlabel("Frequent minutes")
-
-plt.subplot(326)
-plt.hist(train['second'], bins=BIN)
-plt.title("Histogram of frequent seconds")
-plt.xlabel("Frequent seconds")
-plt.show()
-
-
-# In[15]:
-
-
-most_freq_hours_in_data    = [4, 5, 9, 10, 13, 14]
-middle1_freq_hours_in_data = [16, 17, 22]
-least_freq_hours_in_data   = [6, 11, 15]
-train['in_hh'] = (   4 
-                     - 3*train['hour'].isin(  most_freq_hours_in_data ) 
-                     - 2*train['hour'].isin(  middle1_freq_hours_in_data ) 
-                     - 1*train['hour'].isin( least_freq_hours_in_data ) ).astype('uint8')
-
-gp    = train[['ip', 'day', 'in_hh', 'channel']].groupby(by=['ip', 'day', 'in_hh'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'nip_day_hh'})
-train = train.merge(gp, on=['ip','day','in_hh'], how='left')
-train.drop(['in_hh'], axis=1, inplace=True)
-train['nip_day_hh'] = train['nip_day_hh'].astype('uint32')
-del gp
-gc.collect()
-
-
-# In[16]:
-
-
-print("Train new time parameters")
-print(train.dtypes)
-
-
-# In[17]:
-
-
-# Define all the groupby transformations
-GROUPBY_AGGREGATIONS = [
-    # Variance in day, for ip-app-channel
-    {'groupby': ['ip','app','channel'], 'select': 'day', 'agg': 'var', 'type': 'float32'},
-    # Variance in day, for ip-app-device
-    {'groupby': ['ip','app','device'], 'select': 'day', 'agg': 'var', 'type': 'float32'},
-    # Variance in day, for ip-app-os
-    {'groupby': ['ip','app','os'], 'select': 'day', 'agg': 'var', 'type': 'float32'},
-    
-    # Variance in hour, for ip-app-channel
-    #{'groupby': ['ip','app','channel'], 'select': 'hour', 'agg': 'var'},
-    # Variance in hour, for ip-app-device
-    #{'groupby': ['ip','app','device'], 'select': 'hour', 'agg': 'var'},
-    # Variance in hour, for ip-app-os
-    #{'groupby': ['ip','app','os'], 'select': 'hour', 'agg': 'var'},
-
-    # Count, for ip-day
-    #{'groupby': ['ip','day'], 'select': 'channel', 'agg': 'count'},
-    # Count, for ip-day
-    #{'groupby': ['ip','day'], 'select': 'device', 'agg': 'count'},
-    # Count, for ip-day
-    #{'groupby': ['ip','day'], 'select': 'os', 'agg': 'count'},
-    
-    # Count, for ip-hour
-   # {'groupby': ['ip','hour'], 'select': 'channel', 'agg': 'count'},
-    # Count, for ip-hour
-    #{'groupby': ['ip','hour'], 'select': 'device', 'agg': 'count'},
-    # Count, for ip-hour
-    #{'groupby': ['ip','hour'], 'select': 'os', 'agg': 'count'},
-
-    # Count, for ip-day-hour
-    {'groupby': ['ip','day','hour'], 'select': 'channel', 'agg': 'count', 'type': 'uint32'},
-    # Count, for ip-day-hour
-    #{'groupby': ['ip','day','hour'], 'select': 'device', 'agg': 'count', 'type': 'uint32'},
-    # Count, for ip-day-hour
-   # {'groupby': ['ip','day','hour'], 'select': 'os', 'agg': 'count', 'type': 'uint32'},
-    
-    # Count, for ip-app
-    {'groupby': ['ip', 'app'], 'select': 'channel', 'agg': 'count', 'type': 'uint32'},        
-    # Count, for ip-app-os
-    {'groupby': ['ip', 'app', 'os'], 'select': 'channel', 'agg': 'count', 'type': 'uint32'},
-    # Count, for ip-app-day-hour
-    {'groupby': ['ip','app','day','hour'], 'select': 'channel', 'agg': 'count', 'type': 'uint32'},
-    
-    # Mean hour, for ip-app-channel
-    {'groupby': ['ip','app','channel'], 'select': 'hour', 'agg': 'mean', 'type': 'float32', 'type': 'float32'}
-]
-# Apply all the groupby transformations
-for spec in GROUPBY_AGGREGATIONS:
-    print(f"Grouping by {spec['groupby']}, and aggregating {spec['select']} with {spec['agg']}")
-    
-    # Unique list of features to select
-    all_features = list(set(spec['groupby'] + [spec['select']]))
-    # Name of new feature
-    new_feature = '{}_{}_{}'.format('_'.join(spec['groupby']), spec['agg'], spec['select'])
-     # Perform the groupby
-    gp = train[all_features].         groupby(spec['groupby'])[spec['select']].         agg(spec['agg']).         reset_index().         rename(index=str, columns={spec['select']: new_feature}).astype(spec['type'])
-     # Merge back to X_train
-    train = train.merge(gp, on=spec['groupby'], how='left')
-del gp
-gc.collect()
-print("End")
-
-
-# In[18]:
-
-
-print(train.dtypes)
-
-
-# In[19]:
-
-
-train['app']           = train['app'].astype('uint16')
-train['channel']       = train['channel'].astype('uint16')
-train['device']        = train['device'].astype('uint16')
-train['ip']            = train['ip'].astype('uint32')
-train['os']            = train['os'].astype('uint16')
-
-
-# In[20]:
-
-
-train_X  = train[:len_train].drop(['click_id', 'is_attributed'], axis=1)
-train_y  = train[:len_train]['is_attributed'].astype('uint8')
-test_X   = train[len_train:].drop(['click_id', 'is_attributed'], axis=1)
-test_id  = train[len_train:]['click_id'].astype('int')
-del train
-
-
-# In[21]:
-
-
-print(train_X.dtypes)
-
-
-# In[22]:
-
-
-#path_train_X = path_out + 'train_X.csv'
-#path_train_y = path_out + 'train_y.csv'
-#print('Loading the pre training data...')
-#train_X = pd.read_csv(path_train_X, header=0)
-#train_y = pd.read_csv(path_train_y, header=0)
-#print('End loading pre train data...')
-predictors  = ['app','device','os', 'channel', 'hour', 'day', 'doy', 'wday','minute','second',
-               'ip_app_channel_var_day',
-               'ip_app_device_var_day',
-               'ip_app_os_var_day',
-               'ip_day_hour_count_channel',
-               'ip_app_count_channel',
-               'ip_app_os_count_channel',
-               'ip_app_day_hour_count_channel',
-               'ip_app_channel_mean_hour',
-              'nip_day_hh']
-categorical = ['app','device','os', 'channel', 'hour', 'day', 'doy', 'wday','minute','second']           
-
-
-# In[23]:
-
-
-metrics = 'auc'
-lgb_params = {
-        'boosting_type': 'gbdt',
-        'objective': 'binary',
-        'metric':metrics,
-        'learning_rate': 0.05,
-        'num_leaves': 7,  # we should let it be smaller than 2^(max_depth)
-        'max_depth': 4,  # -1 means no limit
-        'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
-        'max_bin': 100,  # Number of bucketed bin for feature values
-        'subsample': 0.7,  # Subsample ratio of the training instance.
-        'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
-        'colsample_bytree': 0.7,  # Subsample ratio of columns when constructing each tree.
-        'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-        'min_split_gain': 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
-        'nthread': 8,
-        'verbose': 0,
-        'scale_pos_weight':99.7, # because training data is extremely unbalanced 
-        'metric':metrics
+samplers = {
+    "horse": sample_horse,
+    "ball": sample_ball,
+    "bike": sample_bike,
+    "train": sample_train,
+    "coal": sample_coal,
+    "book": sample_book,
+    "doll": sample_doll,
+    "blocks": sample_block,
+    "gloves": sample_gloves
 }
- 
-early_stopping_rounds = 100
-num_boost_round       = 10000
 
-print("Preparing validation datasets")
-train_X, val_X = train_test_split(train_X, train_size=.95, shuffle=False )
-train_y, val_y = train_test_split(train_y, train_size=.95, shuffle=False )
-print("End preparing validation datasets")
+def sample(gift, quantity=1, size=1):
+    return np.sum(samplers[gift](quantity * size).reshape(quantity, size), axis=0)
 
-xgtrain = lgb.Dataset(train_X[predictors].values, label=train_y,feature_name=predictors,
-                       categorical_feature=categorical)
-xgvalid = lgb.Dataset(val_X[predictors].values, label=val_y,feature_name=predictors,
-                      categorical_feature=categorical)
-evals_results = {}
-model_lgb     = lgb.train(lgb_params,xgtrain,valid_sets=[xgtrain, xgvalid], 
-                          valid_names=['train','valid'], 
-                           evals_result=evals_results, 
-                           num_boost_round=num_boost_round,
-                           early_stopping_rounds=early_stopping_rounds,
-                           verbose_eval=10, feval=None)   
+print(sample("horse", 2, 10))
 
 
+# Ok, so we can sample weights for individual gifts now and can also increase their quantities.
+# Let's combine different gifts into bags now.
 
-# In[24]:
-
-
-print("Features importance...")
-gain = model_lgb.feature_importance('gain')
-ft = pd.DataFrame({'feature':model_lgb.feature_name(), 
-                   'split':model_lgb.feature_importance('split'), 
-                   'gain':100 * gain / gain.sum()}).sort_values('gain', ascending=False)
-print(ft.head(50))
-ft.to_csv('importance_lightgbm.csv',index=True)
-plt.figure()
-ft = ft.sort_values('gain', ascending=True)
-ft[['feature','gain']].head(50).plot(kind='barh', x='feature', y='gain', legend=False, figsize=(10, 10))
-plt.gcf().savefig('features_importance.png')
+# In[ ]:
 
 
-# In[25]:
+def bag_name(bag):
+    return str(list(map(lambda gift: "{}({})".format(gift, bag[gift]), sorted(bag.keys()))))
+
+def create_bag_weight_sampler(bag):
+    def bag_weight_sampler(size=1):
+        weight = np.array([0.0]*size)
+        for gift in sorted(bag.keys()):
+            weight += sample(gift, bag[gift], size)
+        return weight
+    return bag_weight_sampler, bag_name(bag)
+
+bag = { "horse": 1, "ball": 2 }
+bag_weight_sampler, name = create_bag_weight_sampler(bag)
+print("Sampling from bag {}: {}".format(name, bag_weight_sampler(3)))
 
 
-sub = pd.DataFrame()
-sub['click_id'] = test_id
-print("Sub dimension "    + str(sub.shape))
-print("Test_X dimension " + str(test_X.shape))
+# Got the bag weight samplers, so let's see what the distributions look like:
+
+# In[ ]:
 
 
-# In[27]:
+def plot_bag_weight_distributions(bags, size=10000):
+    plot_distributions(bags, create_bag_weight_sampler, size=size, fit=norm)
+
+def plot_distributions(bags, sampler_builder, size=10000, fit=None):
+    num_plots = len(bags)
+    num_cols = int(round(math.sqrt(num_plots)))
+    num_rows = (num_plots // num_cols)
+    num_rows = num_rows if num_plots % num_cols == 0 else num_rows + 1
+    
+    f, axes = plt.subplots(num_rows, num_cols)
+    axes = axes.reshape(-1)
+    for i in range(num_plots):
+        current_bag = bags[i]
+        current_bag_sampler, current_bag_name = sampler_builder(current_bag)
+        current_sample = current_bag_sampler(size)
+        print("{}: mean={} | std={}".format(current_bag_name, np.mean(current_sample), np.std(current_sample)))
+        current_axis = axes[i]
+        sns.distplot(current_sample, ax=current_axis, fit=fit, kde=False)
+        current_axis.set_title(current_bag_name)
+        current_axis.set_yticklabels([])
+    plt.tight_layout()
+    plt.show()
+    
+single_gift_bags = [
+    {"horse": 1},
+    {"ball": 1},
+    {"bike": 1},
+    {"train": 1},
+    {"coal": 1},
+    {"book": 1},
+    {"doll": 1},
+    {"blocks": 1},
+    {"gloves": 1}
+]
+
+plot_bag_weight_distributions(single_gift_bags)
 
 
-print("Predicting...")
-sub['is_attributed'] = model_lgb.predict(test_X[predictors])  #
-print("Writing...")
-sub.to_csv('sub_Yatsenko_01.csv',index=False)
-print("Done...")
+# Note: some gift weight distributions are (almost) normal, others not at all.
+# Let's look at bigger bags now:
+
+# In[ ]:
+
+
+example_bags = [
+    {"horse": 1, "ball": 2},
+    {"train": 3, "bike": 1},
+    {"coal": 2, "book": 2},
+    {"gloves": 12, "book": 12},
+]
+
+plot_bag_weight_distributions(example_bags)
+
+
+# Nice :)
+# Even though individual gifts are not necessarily normal, big bags will almost certainly be (if we pack sufficiently many gifts into them).
+# Let's take a break to thank nature for the central limit theorem.
+# This is really cool because we can approximate the bag weight distribution by just summing up means and variances of the gift weight distributions.
+# 
+# Now: estimate how utilities of bags will be distributed.
+# I'll ignore the `enter code here`minimum count of 3 here and only do clipping at weight 50.
+
+# In[ ]:
+
+
+def plot_bag_utility_distributions(bags, size=10000, fit=norm):
+    plot_distributions(bags, create_bag_utility_sampler, size=size, fit=fit)
+
+def create_bag_utility_sampler(bag):
+    bag_weight_sampler, bag_name = create_bag_weight_sampler(bag)
+    def bag_utility_sampler(size=1):
+        samples = bag_weight_sampler(size)
+        samples[samples > 50] = 0
+        return samples
+    return bag_utility_sampler, bag_name
+
+bag = { "horse": 2, "ball": 19 }
+bag_utility_sampler, name = create_bag_utility_sampler(bag)
+print("Sampling utility from bag {}: {}\n".format(name, bag_utility_sampler(3)))
+plot_bag_utility_distributions(example_bags)
+
+
+# As expected, now that we clip at 50, distributions are again not at all normal because we get a lot of zeors (for bags with expected weighy close to 50, which we need for good scores).
+# Still, as we will pack a 1000 bags, the central limit theorem will again come to rescue and things will get back to normal when we add up many bags.
+# We will be able to approximate the final score distribution just by summing up means and variances of the bag utility distributions.
+# Thus, it makes sense to also characterize bag utilities by mean and standard deviation.
+# 
+# Let's now see what our score will be if we combine a lot of bags. One part is estimating the score distribution we will get from the bags. Furthermore, we will estimate what the best score would be if we could draw multiple times from that score distribution. This makes sense since we can submit to the leaderboard multiple times with randomly permuted gifts inside the bags. Hence, what we will get in the end is the best out of many trials.
+# 
+# Important to note: what I do below assumed iid draws from the score distributions.
+# For the leaderboard gift weights are fixed and we can only generate permutations of IDs.
+# Thus, the assumptions don't really hold. This will be a rather crude approximation to keep things simple.
+
+# In[ ]:
+
+
+def plot_score_distribution(bags, num_tries=60, size=10000, fit=norm, extremal_fit=gumbel_r):
+    scores = np.zeros(size)
+    for i, bag in enumerate(bags):
+        current_bag_sampler, _ = create_bag_utility_sampler(bag)
+        scores += current_bag_sampler(size)
+    score_mean, score_std = np.mean(scores), np.std(scores)
+    print("Scores: mean = {:0.2f} | std = {:0.2f}".format(score_mean, score_std))
+    sns.distplot(scores, fit=fit, kde=False)
+    
+    plot_extreme_value_distribution(scores, num_tries)
+    plt.title("Score distribution / submission distribution with {} tries".format(num_tries))
+    plt.show()
+
+def plot_extreme_value_distribution(scores, num_tries, size=10000):
+    samples = np.max(np.random.choice(scores, size=(size, num_tries)), axis=1)
+    sns.distplot(samples, fit=gumbel_r, kde=False)
+    expected_score = np.mean(samples)
+    plt.axvline(expected_score, color='r')
+    print("Expected score after {} trials: {:0.2f}".format(num_tries, expected_score))
+
+plot_score_distribution(example_bags)
+
+
+# For our small set of 4 example bags, we not only get a crappy score but also the distribution does not look normal. But - interestingly - we can see that our score after 60 submissions would be a lot better than the score distribution's expected value.
+# 
+# What would happen if we could create 1000 bag
+# s of a certain kind? Also, let's verify that we can compute the score distribution from the means and variances of the bag utility distributions.
+
+# In[ ]:
+
+
+def n_bags(bag, n):
+    return [bag for i in range(n)]
+
+def estimate_mean_std_utility(bag, n=1, size=10000):
+    current_bag_sampler, _ = create_bag_utility_sampler(bag)
+    sample = current_bag_sampler(size)
+    return np.mean(sample) * n, math.sqrt(math.pow(np.std(sample), 2) * n)
+
+bag = {"gloves": 12, "book": 12}
+n = 1000
+
+est_bag_utility_mean, est_bag_utility_std = estimate_mean_std_utility(bag, n=n)
+print("Computed statistics for {} bags: mean = {:0.2f}, std = {:0.2f}".format(n, est_bag_utility_mean, est_bag_utility_std))
+plot_score_distribution(n_bags(bag, n))
+
+
+# Nice.
+# Computing and sampling delivers roughly the same (normal) score distribution.
+# 
+# ## Summary
+# 
+# Main observations from the experiments above are:
+# 
+# - To get a weight distribution for individual bags, it is sufficient to add means and variances of individual gift weight distributions.
+# - Getting the utility distribution for bags requires sampling as there is no immediately available formula (that I would know of).
+# - Getting the overall score distribution can be done by adding means and variance of individual bag utility distributions.
+# - Getting an estimate of the expected final score after _n_ submissions can be done by sampling from score distribution (or probably also algebraically, but that does not matter too much imho)
+
+# # 2. Computing good bags
+# So let's start by finding bags with good utility distributions in three steps:
+# 
+# 1. Get individual gift weight distributions: easy - just sample as there are so few
+# 2. Get candiate bags: compute many weight distributions for many bags and eliminate most of them heuristically
+# 3. Getting bag utility distributions: easy but inefficient - we use sampling for the candidate bags
+
+# ## 2.1 Get individual gift weight distributions
+# As in 1., we just sample mean and variance for gift weights:
+
+# In[ ]:
+
+
+np.random.seed(42) # reset seed to make things reproducibe even if you fiddle around in the part above
+
+def get_gift_weight_distributions(gifts, size=10000):
+    def get_gift_weight_dsitribution(gift):
+        sampler = samplers[gift]
+        sample = sampler(size)
+        return np.mean(sample), np.var(sample)
+    
+    distributions = np.zeros((len(gifts), 2))
+    for i, gift in enumerate(gifts):
+        distributions[i, :] = get_gift_weight_dsitribution(gift)
+    return distributions
+
+gifts = sorted(samplers.keys())
+print("Canonical gift order: {}\n".format(gifts))
+gift_weight_distributions = get_gift_weight_distributions(gifts)
+print(pd.DataFrame(data=gift_weight_distributions, index=gifts, columns=["mean", "std"]))
+
+
+# ## 2.2 Get bag weight distributions
+# Next, we must create a list of bags we want to consider.
+# We do so by creating a numpy array with each row corresponding to a bag, each column to a gift type and the matrix itself to gift quantities per bag.
+# As it does not make much sense to increase expected weights beyond 50, we limit quantities correspondingly.
+
+# In[ ]:
+
+
+def get_mixed_item_bags_max_quantities(upper_limit=None):
+    max_quantities = np.ceil(50 / gift_weight_distributions[:, 0])
+    if upper_limit is not None:
+        max_quantities[max_quantities > upper_limit] = upper_limit
+    return max_quantities
+
+mixed_item_max_quantities = get_mixed_item_bags_max_quantities()
+print("maximum quantities:\n{}".format(np.dstack((np.array(gifts), mixed_item_max_quantities)).squeeze()))
+print("number of different bags: {}".format(np.prod(mixed_item_max_quantities)))
+
+
+# These are really a lot of combinations.
+# Let's limit the gift quantities by 11 to not explode to much here.
+# We can then manually add some bags consisting of lots of low weight gifts (balls, books and gloves) combined with very few gifts of other kinds.
+
+# In[ ]:
+
+
+mixed_item_max_quantities = get_mixed_item_bags_max_quantities(11)
+print("maximum quantities:\n{}".format(np.dstack((np.array(gifts), mixed_item_max_quantities)).squeeze()))
+print("number of different bags: {}".format(np.prod(mixed_item_max_quantities)))
 
 
 # In[ ]:
 
 
-#train[:len_train].drop(['click_time', 'click_id', 'is_attributed'], axis=1).to_csv('train_X.csv', index=False)
-#print('End saving train_X')
-#train[:len_train]['is_attributed'].astype('uint8').to_csv('train_y.csv', index=False)
-#print('End saving train_y')
-#train[len_train:].drop(['click_time', 'click_id', 'is_attributed'], axis=1).to_csv('test_X.csv', index=False)
-#print('End saving test_X')
-#train[len_train:]['click_id'].astype('int').to_csv('test_ids.csv', index=False)
-#print('End saving test_ids')
-#del train
+def create_candidate_bags(max_quantities):
+    gift_counts = []
+    for max_quantity in max_quantities:
+        gift_counts.append(np.arange(max_quantity))
+    return cartesian(gift_counts)
 
+mixed_item_candiadte_bags = create_candidate_bags(mixed_item_max_quantities)
+print("Created candiadate bags: {}".format(mixed_item_candiadte_bags.shape))
+
+
+# In[ ]:
+
+
+def get_bag_weight_distributions(candidate_bags, min_mean=30, max_mean=50):
+    return np.dot(candidate_bags, gift_weight_distributions)
+
+def filter_by_mean(bags, distributions, min_mean=30, max_mean=50):
+    min_mask = mean_of(distributions) > min_mean
+    distributions = distributions[min_mask]
+    bags = bags[min_mask]
+    max_mask = mean_of(distributions) < max_mean
+    distributions = distributions[max_mask]
+    bags = bags[max_mask]
+    return bags, distributions
+
+def mean_of(distributions):
+    return distributions[:,0]
+
+mixed_item_bag_weight_distributions = get_bag_weight_distributions(mixed_item_candiadte_bags)
+mixed_item_candiadte_bags, mixed_item_bag_weight_distributions =     filter_by_mean(mixed_item_candiadte_bags, mixed_item_bag_weight_distributions)
+print("Candidate bags left: {}".format(mixed_item_candiadte_bags.shape))
+
+
+# To these candidate bags, we now add bags that consist primarily of one of the 3 low weight items (ball / book / gloves), combined with few of the others:
+
+# In[ ]:
+
+
+def get_low_weight_item_candidate_bags():
+    bags = []
+    distributions = []
+    for gift in ["ball", "book", "gloves"]:
+        max_quantities = get_low_weight_item_bags_max_quantities_for(gift)
+        candiadte_bags = create_candidate_bags(max_quantities)
+        bags.append(candiadte_bags)
+        cadidate_bag_weight_distributions = get_bag_weight_distributions(candiadte_bags)
+        distributions.append(cadidate_bag_weight_distributions)
+    return np.vstack(bags), np.vstack(distributions)
+        
+
+def get_low_weight_item_bags_max_quantities_for(gift):
+    max_quantities = np.ceil(50 / gift_weight_distributions[:, 0])
+    gift_index = gifts.index(gift)
+    for i in range(len(max_quantities)):
+        if not i == gift_index:
+            max_quantities[i] = 5
+    print("Gift {}: number of different bags: {}".format(gift, np.prod(max_quantities)))
+    return max_quantities
+
+low_weight_item_candidate_bags, low_weight_item_bag_weight_distributions =     filter_by_mean(*get_low_weight_item_candidate_bags())
+print("Total number of canidate bags: {}".format(low_weight_item_candidate_bags.shape))
+
+
+# In[ ]:
+
+
+def drop_duplicate(candidate_bags, distributions):
+    df = pd.DataFrame(data=np.hstack((candidate_bags, distributions)), columns=gifts + ["mean", "std"])
+    df.drop_duplicates(subset=gifts, inplace=True)
+    return df[gifts].values, df[["mean", "std"]].values
+
+candidate_bags = np.vstack([mixed_item_candiadte_bags, low_weight_item_candidate_bags])
+bag_weight_distributions = np.vstack([mixed_item_bag_weight_distributions, low_weight_item_bag_weight_distributions])
+print("Combined candiadte bags: {}".format(candidate_bags.shape))
+candidate_bags, bag_weight_distributions = drop_duplicate(candidate_bags, bag_weight_distributions)
+print("Final candidate bags without duplicates: {}".format(candidate_bags.shape))
+
+
+# ## 2.3 Get bag utility distributions
+# Now we use our sampler to estimate the utility distributions.
+# This will take a few minutes...
+
+# In[ ]:
+
+
+def get_bag_utility_distributions(candidate_bags):
+    distributions = []
+    size = len(candidate_bags)
+    for i, candidate_bag in enumerate(candidate_bags):
+        if i % 7000 == 0:
+            sys.stdout.write("{:.4f}\r".format(float(i) / float(size)))
+        distributions.append(get_bag_utility_distribution(candidate_bag))
+    print("")
+    return np.vstack(distributions)
+
+def get_bag_utility_distribution(candidate_bag):
+    bag = { gifts[i]: int(candidate_bag[i]) for i in range(len(gifts)) if candidate_bag[i] > 0 }
+    sampler, name = create_bag_utility_sampler(bag)
+    sample = sampler(10000)
+    return np.mean(sample), np.var(sample)
+
+bag_utility_distributions = get_bag_utility_distributions(candidate_bags)
+print(bag_utility_distributions.shape)
+
+
+# # 3. Combining good bags to bag sets
+# Now we have a list of individual bags with their gift quantities and estimated utility distributions.
+# We can use these to create bag sets with their distributions.
+# Contsrained optimization is needed obey maximum gift number restrictions.
+# As long as we optimize the mean of the score distribution we can use linear programming.
+# If what we care for is the maximum order statistic though and we also like variance, it's not that easy.
+# Hence, we proceed in two steps:
+# - build a bag packer with LP that optimizes expected scores only but allows for a minimum variance constraint
+# - grid search over minimum variances and compare resulting score distributions by sampling expected maximum values
+
+# In[ ]:
+
+
+num_gifts_available = {
+    "horse": 1000,
+    "ball": 1100,
+    "bike": 500,
+    "train": 1000,
+    "book": 1200,
+    "doll": 1000,
+    "blocks": 1000,
+    "gloves": 200,
+    "coal": 166
+}
+
+
+# ## 3.1 Packing bags with linear programming
+# Linear programming is not integer programming, so after solving the problem, we need to fiddle around a bit with the solution to make things work. The main strategy is:
+# - floor all bag quantities to get integer values
+# - increase maximum bags the algorithm packs until we get >= 1000 bags after flooring
+# - if that gives us > 1000 bags, just throw random bags away until we reach 1000
+# 
+# Sometimes when I run this, the solver thinks the problem is infeasible. The code also accounts for that and assigns 0 score in these cases. 
+
+# In[ ]:
+
+
+def pack_linprog(bags, distributions, min_variance, max_bags=1000):
+    # objective: c.T * x -> min
+    c = - distributions[:,0] # optimize sum of expected bag utilities
+    
+    # constraint: A_ub * x <= b_ub
+    A_ub = bags.T # don't use more gifts than available
+    b_ub = np.array([num_gifts_available[gift] for gift in gifts])
+    
+    A_ub = np.vstack([A_ub, np.ones(A_ub.shape[1])]) # pack at most max_bags gifts
+    b_ub = np.hstack([b_ub, [max_bags]])
+    
+    if min_variance is not None:
+        A_ub = np.vstack([A_ub, -distributions[:,1]]) # require minimum variance
+        b_ub = np.hstack([b_ub, [-min_variance]])
+    
+    result = linprog(c, A_ub=A_ub, b_ub=b_ub)
+    if result["success"] == False:
+        return [], True
+    else:
+        return result["x"].astype('int64'), False
+
+
+def pack_bags(bags, distributions, min_variance=None):
+    max_bags = 1000
+    bag_quantities, infeasible = pack_linprog(bags, distributions, min_variance=min_variance)
+    while np.sum(bag_quantities) < 1000:
+        max_bags += 1
+        bag_quantities, infeasible = pack_linprog(bags, distributions, min_variance=min_variance, max_bags=max_bags)
+        if max_bags > 1015:
+            print("WARNING: not getting 1000 bags")
+            break
+        if infeasible:
+            continue
+    
+    if infeasible:
+        print("infeasible")
+        return [], [], []
+    
+    chosen_bag_idx = np.where(bag_quantities)[0]
+    chosen_bags = bags[chosen_bag_idx]
+    chosen_distributions = distributions[chosen_bag_idx]
+    chosen_quantities = bag_quantities[chosen_bag_idx]
+    
+    while np.sum(chosen_quantities) > 1000:
+        idx = np.random.randint(len(chosen_quantities))
+        chosen_quantities[idx] = max (chosen_quantities[idx]-1, 0)
+    
+    score_distribution = np.dot(chosen_quantities, chosen_distributions)
+    print("{} bags - score distribution: mean = {:.2f} | var = {:.2f}"
+          .format(np.sum(chosen_quantities), score_distribution[0], score_distribution[1]))
+    
+    return chosen_bags, chosen_distributions, chosen_quantities
+
+packed_bags, packed_distributions, packed_quantities     = pack_bags(candidate_bags, bag_utility_distributions, min_variance=None)
+
+
+# In[ ]:
+
+
+def evaluate_variances():
+    results = {}
+    for i, min_variance in enumerate(np.linspace(100000, 410000, num=10)):
+        bags, distributions, quantities = pack_bags(candidate_bags, bag_utility_distributions, min_variance=min_variance)
+        results[min_variance] = np.dot(quantities, distributions)
+    return results
+
+scores_for_min_variance = evaluate_variances()
+
+
+# In[ ]:
+
+
+def plot_expected_scores_after(num_submissions, score_distributions):
+    min_variances = sorted(score_distributions.keys())
+    expected_scores = []
+    for min_variance in min_variances:
+        score_distribution = score_distributions[min_variance]
+        if not type(score_distribution) == np.ndarray:
+            expected_scores.append(0)
+            continue
+        samples = np.random.normal(score_distribution[0], math.sqrt(score_distribution[1]), (100000, num_submissions))
+        expected_scores.append(np.mean(np.max(samples, axis=1)))
+        print("{} - {}".format(min_variance, np.mean(np.max(samples, axis=1))))
+    df = pd.DataFrame(data=np.hstack((np.expand_dims(min_variances, 1), np.expand_dims(expected_scores, 1))), columns=["min_variance", "expected_score"])
+    sns.regplot(data=df, x="min_variance", y="expected_score", order=2)
+    plt.title("Expected score by minimum variance constraint")
+
+plot_expected_scores_after(60, scores_for_min_variance)
+
+
+# How sad: we cannot gain anything by increasing variance. It seems as if it's just best to optimize for expected score. Let's create submissions then.
+
+# # 4. Make submissions
+# We now create a lot of submissions with randomly permuted gifts and hope there is a good one among them.
+
+# In[ ]:
+
+
+def create_submissions(bags, quantities, num_submissions=60):
+    def create_stock(n):
+        stock = { gift: list(map(lambda id: "{}_{}".format(gift, id) ,np.arange(num_gifts_available[gift]))) for gift in gifts }
+        return shuffle(stock, n)
+    
+    def shuffle(stock, seed):
+        np.random.seed(seed)
+        for gift in stock.keys():
+            np.random.shuffle(stock[gift])
+        return stock
+    
+    def generate_submission(n):
+        stock = create_stock(n)
+        with open("submission_{}.csv".format(n), 'w+') as submission_file:
+            submission_file.write('Gifts\n')
+            for i in range(len(bags)):
+                for quantity in range(quantities[i]):
+                    current_gifts = bags[i]
+                    for gift_idx, gift_quantity in enumerate(current_gifts[:len(gifts)]):
+                        gift_name = gifts[gift_idx]
+                        for j in range(int(gift_quantity)):
+                            submission_file.write("{} ".format(stock[gift_name].pop()))
+                    submission_file.write("\n")
+    
+    for n in range(num_submissions):
+        generate_submission(n)
+        
+
+create_submissions(packed_bags, packed_quantities)
+
+
+# In[ ]:
+
+
+pd.read_csv('submission_0.csv').head()
 

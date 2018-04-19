@@ -1,174 +1,354 @@
 
 # coding: utf-8
 
-# # TalkingData AdTracking Fraud Detection Challenge
-# 
-# TalkingData is back with another competition: This time, our task is to predict where a click on some advertising is fraudlent given a few basic attributes about the device that made the click. What sets this competition apart is the sheer scale of the dataset: with 240 million rows it might be the biggest one I've seen on Kaggle so far.
-# 
-# There are some similarities with the last competition TalkingData launched: https://www.kaggle.com/c/talkingdata-mobile-user-demographics - that competition was about predicting the demographics of a user given their activity, and you can view this as a similar problem (predicting whether a user is real or not given their activity). However, that competition was plagued by a [leak](https://www.kaggle.com/wiki/Leakage) where the dataset wasn't sorted properly and certain portions of the dataset had different demographic distribtions. This meant that by adding the row ID as a feature you could get a huge boost in performance. Let's hope TalkingData have learnt their lesson this time around. 😉
-# 
-# Looking at the evaluation page, we can see that the evaluation metric used is** ROC-AUC** (the area under a curve on a Receiver Operator Characteristic graph).
-# In english, this means a few important things:
-# * This competition is a **binary classification** problem - i.e. our target variable is a binary attribute (Is the user making the click fraudlent or not?) and our goal is to classify users into "fraudlent" or "not fraudlent" as well as possible
-# * Unlike metrics such as [LogLoss](http://www.exegetic.biz/blog/2015/12/making-sense-logarithmic-loss/), the AUC score only depends on **how well you well you can separate the two classes**. In practice, this means that only the order of your predictions matter,
-#     * As a result of this, any rescaling done to your model's output probabilities will have no effect on your score. In some other competitions, adding a constant or multiplier to your predictions to rescale it to the distribution can help but that doesn't apply here.
-#   
-# If you want a more intuitive explanation of how AUC works, I recommend [this post](https://stats.stackexchange.com/questions/132777/what-does-auc-stand-for-and-what-is-it).
-# 
-# Let's dive right in by looking at the data we're given:
+# Based on [olivier's script](https://www.kaggle.com/ogrellier/xgb-classifier-upsampling-lb-0-283) (with new addition of RGF option based on [Scirpus' kernel](https://www.kaggle.com/scirpus/regularized-greedy-forest) with olivier's suggested parameters -- and largely identical to [Bojan's version](https://www.kaggle.com/tunguz/rgf-target-encoding-0-282-on-lb))   This version takes the average of the log-odds-transformed predictions across folds instead of raw probabilities.
 
-# In[18]:
+# In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import mlcrate as mlc
-import os
+USE_RGF_INSTEAD = True
+MAX_XGB_ROUNDS = 400
+OPTIMIZE_XGB_ROUNDS = False
+XGB_LEARNING_RATE = 0.07
+XGB_EARLY_STOPPING_ROUNDS = 50
+
+
+# In[ ]:
+
+
+import numpy as np
+import pandas as pd
+from xgboost import XGBClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold
+from sklearn.preprocessing import LabelEncoder
+from rgf.sklearn import RGFClassifier
+from numba import jit
+import time
 import gc
-import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-pal = sns.color_palette()
-
-print('# File sizes')
-for f in os.listdir('../input'):
-    if 'zip' not in f:
-        print(f.ljust(30) + str(round(os.path.getsize('../input/' + f) / 1000000, 2)) + 'MB')
-
-
-# Wow, that is some really big data. Unfortunately we don't have enough kernel memory to load the full dataset into memory; however we can get a glimpse at some of the statistics:
-
-# In[19]:
-
-
 import subprocess
-print('# Line count:')
-for file in ['train.csv', 'test.csv', 'train_sample.csv']:
-    lines = subprocess.run(['wc', '-l', '../input/{}'.format(file)], stdout=subprocess.PIPE).stdout.decode('utf-8')
-    print(lines, end='', flush=True)
+import glob
 
 
-# That makes **185 million rows** in the training set and ** 19 million** in the test set. Handily the organisers have provided a `train_sample.csv` which contains 100K rows in case you don't want to download the full data
-# 
-# For this analysis, I'm going to use the first 1M rows of the training and test datasets.
-# 
-# ## Data overview
-
-# In[20]:
+# In[ ]:
 
 
-df_train = pd.read_csv('../input/train.csv', nrows=1000000)
-df_test = pd.read_csv('../input/test.csv', nrows=1000000)
+# Compute gini
+
+# from CPMP's kernel https://www.kaggle.com/cpmpml/extremely-fast-gini-computation
+@jit
+def eval_gini(y_true, y_prob):
+    y_true = np.asarray(y_true)
+    y_true = y_true[np.argsort(y_prob)]
+    ntrue = 0
+    gini = 0
+    delta = 0
+    n = len(y_true)
+    for i in range(n-1, -1, -1):
+        y_i = y_true[i]
+        ntrue += y_i
+        gini += y_i * delta
+        delta += 1 - y_i
+    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
+    return gini
 
 
-# In[24]:
+# In[ ]:
 
 
-print('Training set:')
-df_train.head()
+# Funcitons from olivier's kernel
+# https://www.kaggle.com/ogrellier/xgb-classifier-upsampling-lb-0-283
+
+def gini_xgb(preds, dtrain):
+    labels = dtrain.get_label()
+    gini_score = -eval_gini(labels, preds)
+    return [('gini', gini_score)]
 
 
-# In[26]:
+def add_noise(series, noise_level):
+    return series * (1 + noise_level * np.random.randn(len(series)))
 
 
-print('Test set:')
-df_test.head()
+def target_encode(trn_series=None,    # Revised to encode validation series
+                  val_series=None,
+                  tst_series=None,
+                  target=None,
+                  min_samples_leaf=1,
+                  smoothing=1,
+                  noise_level=0):
+    """
+    Smoothing is computed like in the following paper by Daniele Micci-Barreca
+    https://kaggle2.blob.core.windows.net/forum-message-attachments/225952/7441/high%20cardinality%20categoricals.pdf
+    trn_series : training categorical feature as a pd.Series
+    tst_series : test categorical feature as a pd.Series
+    target : target data as a pd.Series
+    min_samples_leaf (int) : minimum samples to take category average into account
+    smoothing (int) : smoothing effect to balance categorical average vs prior
+    """
+    assert len(trn_series) == len(target)
+    assert trn_series.name == tst_series.name
+    temp = pd.concat([trn_series, target], axis=1)
+    # Compute target mean
+    averages = temp.groupby(by=trn_series.name)[target.name].agg(["mean", "count"])
+    # Compute smoothing
+    smoothing = 1 / (1 + np.exp(-(averages["count"] - min_samples_leaf) / smoothing))
+    # Apply average function to all target data
+    prior = target.mean()
+    # The bigger the count the less full_avg is taken into account
+    averages[target.name] = prior * (1 - smoothing) + averages["mean"] * smoothing
+    averages.drop(["mean", "count"], axis=1, inplace=True)
+    # Apply averages to trn and tst series
+    ft_trn_series = pd.merge(
+        trn_series.to_frame(trn_series.name),
+        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+        on=trn_series.name,
+        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+    # pd.merge does not keep the index so restore it
+    ft_trn_series.index = trn_series.index
+    ft_val_series = pd.merge(
+        val_series.to_frame(val_series.name),
+        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+        on=val_series.name,
+        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+    # pd.merge does not keep the index so restore it
+    ft_val_series.index = val_series.index
+    ft_tst_series = pd.merge(
+        tst_series.to_frame(tst_series.name),
+        averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+        on=tst_series.name,
+        how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+    # pd.merge does not keep the index so restore it
+    ft_tst_series.index = tst_series.index
+    return add_noise(ft_trn_series, noise_level), add_noise(ft_val_series, noise_level), add_noise(ft_tst_series, noise_level)
 
 
-# ### Looking at the columns
-# 
-# According to the data page, our data contains:
-# 
-# * `ip`: ip address of click
-# * `app`: app id for marketing
-# * `device`: device type id of user mobile phone (e.g., iphone 6 plus, iphone 7, huawei mate 7, etc.)
-# * `os`: os version id of user mobile phone
-# * `channel`: channel id of mobile ad publisher
-# * `click_time`: timestamp of click (UTC)
-# * `attributed_time`: if user download the app for after clicking an ad, this is the time of the app download
-# * `is_attributed`: the target that is to be predicted, indicating the app was downloaded
-# 
-# **A few things of note:**
-# * If you look at the data samples above, you'll notice that all these variables are encoded - meaning we don't know what the actual value corresponds to - each value has instead been assigned an ID which we're given. This has likely been done because data such as IP addresses are sensitive, although it does unfortunately reduce the amount of feature engineering we can do on these.
-# * The `attributed_time` variable is only available in the training set - it's not immediately useful for classification but it could be used for some interesting analysis (for example, one could fill in the variable in the test set by building a model to predict it).
-# 
-# For each of our encoded values, let's look at the number of unique values:
-
-# In[53]:
+# In[ ]:
 
 
-plt.figure(figsize=(15, 8))
-cols = ['ip', 'app', 'device', 'os', 'channel']
-uniques = [len(df_train[col].unique()) for col in cols]
-sns.set(font_scale=1.2)
-ax = sns.barplot(cols, uniques, palette=pal, log=True)
-ax.set(xlabel='Feature', ylabel='log(unique count)', title='Number of unique values per feature')
-for p, uniq in zip(ax.patches, uniques):
-    height = p.get_height()
-    ax.text(p.get_x()+p.get_width()/2.,
-            height + 10,
-            uniq,
-            ha="center") 
-# for col, uniq in zip(cols, uniques):
-#     ax.text(col, uniq, uniq, color='black', ha="center")
+# Read data
+train_df = pd.read_csv('../input/train.csv', na_values="-1") # .iloc[0:200,:]
+test_df = pd.read_csv('../input/test.csv', na_values="-1")
 
 
-# ##  Encoded variables statistics
-# 
-# Although the actual values of these variables aren't helpful for us, it can still be useful to know what their distributions are. Note these statistics are computed on 1M samples, and so will be higher for the full dataset.
-
-# In[79]:
+# In[ ]:
 
 
-for col, uniq in zip(cols, uniques):
-    counts = df_train[col].value_counts()
+# from olivier
+train_features = [
+    "ps_car_13",  #            : 1571.65 / shadow  609.23
+	"ps_reg_03",  #            : 1408.42 / shadow  511.15
+	"ps_ind_05_cat",  #        : 1387.87 / shadow   84.72
+	"ps_ind_03",  #            : 1219.47 / shadow  230.55
+	"ps_ind_15",  #            :  922.18 / shadow  242.00
+	"ps_reg_02",  #            :  920.65 / shadow  267.50
+	"ps_car_14",  #            :  798.48 / shadow  549.58
+	"ps_car_12",  #            :  731.93 / shadow  293.62
+	"ps_car_01_cat",  #        :  698.07 / shadow  178.72
+	"ps_car_07_cat",  #        :  694.53 / shadow   36.35
+	"ps_ind_17_bin",  #        :  620.77 / shadow   23.15
+	"ps_car_03_cat",  #        :  611.73 / shadow   50.67
+	"ps_reg_01",  #            :  598.60 / shadow  178.57
+	"ps_car_15",  #            :  593.35 / shadow  226.43
+	"ps_ind_01",  #            :  547.32 / shadow  154.58
+	"ps_ind_16_bin",  #        :  475.37 / shadow   34.17
+	"ps_ind_07_bin",  #        :  435.28 / shadow   28.92
+	"ps_car_06_cat",  #        :  398.02 / shadow  212.43
+	"ps_car_04_cat",  #        :  376.87 / shadow   76.98
+	"ps_ind_06_bin",  #        :  370.97 / shadow   36.13
+	"ps_car_09_cat",  #        :  214.12 / shadow   81.38
+	"ps_car_02_cat",  #        :  203.03 / shadow   26.67
+	"ps_ind_02_cat",  #        :  189.47 / shadow   65.68
+	"ps_car_11",  #            :  173.28 / shadow   76.45
+	"ps_car_05_cat",  #        :  172.75 / shadow   62.92
+	"ps_calc_09",  #           :  169.13 / shadow  129.72
+	"ps_calc_05",  #           :  148.83 / shadow  120.68
+	"ps_ind_08_bin",  #        :  140.73 / shadow   27.63
+	"ps_car_08_cat",  #        :  120.87 / shadow   28.82
+	"ps_ind_09_bin",  #        :  113.92 / shadow   27.05
+	"ps_ind_04_cat",  #        :  107.27 / shadow   37.43
+	"ps_ind_18_bin",  #        :   77.42 / shadow   25.97
+	"ps_ind_12_bin",  #        :   39.67 / shadow   15.52
+	"ps_ind_14",  #            :   37.37 / shadow   16.65
+]
+# add combinations
+combs = [
+    ('ps_reg_01', 'ps_car_02_cat'),  
+    ('ps_reg_01', 'ps_car_04_cat'),
+]
 
-    sorted_counts = np.sort(counts.values)
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1)
-    line, = ax.plot(sorted_counts, color='red')
-    ax.set_yscale('log')
-    plt.title("Distribution of value counts for {}".format(col))
-    plt.ylabel('log(Occurence count)')
-    plt.xlabel('Index')
-    plt.show()
+
+# In[ ]:
+
+
+# Process data
+id_test = test_df['id'].values
+id_train = train_df['id'].values
+y = train_df['target']
+
+start = time.time()
+for n_c, (f1, f2) in enumerate(combs):
+    name1 = f1 + "_plus_" + f2
+    print('current feature %60s %4d in %5.1f'
+          % (name1, n_c + 1, (time.time() - start) / 60), end='')
+    print('\r' * 75, end='')
+    train_df[name1] = train_df[f1].apply(lambda x: str(x)) + "_" + train_df[f2].apply(lambda x: str(x))
+    test_df[name1] = test_df[f1].apply(lambda x: str(x)) + "_" + test_df[f2].apply(lambda x: str(x))
+    # Label Encode
+    lbl = LabelEncoder()
+    lbl.fit(list(train_df[name1].values) + list(test_df[name1].values))
+    train_df[name1] = lbl.transform(list(train_df[name1].values))
+    test_df[name1] = lbl.transform(list(test_df[name1].values))
+
+    train_features.append(name1)
     
-    fig = plt.figure()
-    ax = fig.add_subplot(1, 1, 1)
-    plt.hist(sorted_counts, bins=50)
-    ax.set_yscale('log', nonposy='clip')
-    plt.title("Histogram of value counts for {}".format(col))
-    plt.ylabel('Number of IDs')
-    plt.xlabel('Occurences of value for ID')
-    plt.show()
+X = train_df[train_features]
+test_df = test_df[train_features]
+
+f_cats = [f for f in X.columns if "_cat" in f]
+
+
+# In[ ]:
+
+
+y_valid_pred = 0*y
+y_test_pred = 0
+
+
+# In[ ]:
+
+
+# Set up folds
+K = 5
+kf = KFold(n_splits = K, random_state = 1, shuffle = True)
+np.random.seed(0)
+
+
+# In[ ]:
+
+
+# Set up classifier
+xgbmodel = XGBClassifier(    
+                        n_estimators=MAX_XGB_ROUNDS,
+                        max_depth=4,
+                        objective="binary:logistic",
+                        learning_rate=XGB_LEARNING_RATE, 
+                        subsample=.8,
+                        min_child_weight=6,
+                        colsample_bytree=.8,
+                        scale_pos_weight=1.6,
+                        gamma=10,
+                        reg_alpha=8,
+                        reg_lambda=1.3,
+                     )
+rgf = RGFClassifier(   # See https://www.kaggle.com/scirpus/regularized-greedy-forest#241285
+                    max_leaf=1200,  # Parameters suggested by olivier in link above
+                    algorithm="RGF",  
+                    loss="Log",
+                    l2=0.01,
+                    sl2=0.01,
+                    normalize=False,
+                    min_samples_leaf=10,
+                    n_iter=None,
+                    opt_interval=100,
+                    learning_rate=.5,
+                    calc_prob="sigmoid",
+                    n_jobs=-1,
+                    memory_policy="generous",
+                    verbose=0
+                   )
+
+
+# In[ ]:
+
+
+# Run CV
+
+for i, (train_index, test_index) in enumerate(kf.split(train_df)):
     
-    max_count = np.max(counts)
-    min_count = np.min(counts)
-    gt = [10, 100, 1000]
-    prop_gt = []
-    for value in gt:
-        prop_gt.append(round((counts > value).mean()*100, 2))
-    print("Variable '{}': | Unique values: {} | Count of most common: {} | Count of least common: {} | count>10: {}% | count>100: {}% | count>1000: {}%".format(col, uniq, max_count, min_count, *prop_gt))
+    # Create data for this fold
+    y_train, y_valid = y.iloc[train_index].copy(), y.iloc[test_index]
+    X_train, X_valid = X.iloc[train_index,:].copy(), X.iloc[test_index,:].copy()
+    X_test = test_df.copy()
+    print( "\nFold ", i)
     
+    # Enocode data
+    for f in f_cats:
+        X_train[f + "_avg"], X_valid[f + "_avg"], X_test[f + "_avg"] = target_encode(
+                                                        trn_series=X_train[f],
+                                                        val_series=X_valid[f],
+                                                        tst_series=X_test[f],
+                                                        target=y_train,
+                                                        min_samples_leaf=200,
+                                                        smoothing=10,
+                                                        noise_level=0
+                                                        )
+    # Run model for this fold
+    if USE_RGF_INSTEAD:
+        X_train = X_train.fillna(X_train.mean())
+        rgf.fit(X_train, y_train)
+    elif OPTIMIZE_XGB_ROUNDS:
+        eval_set=[(X_valid,y_valid)]
+        fit_model = xgbmodel.fit( X_train, y_train, 
+                               eval_set=eval_set,
+                               eval_metric=gini_xgb,
+                               early_stopping_rounds=XGB_EARLY_STOPPING_ROUNDS,
+                               verbose=False
+                             )
+        print( "  Best N trees = ", xgbmodel.best_ntree_limit )
+        print( "  Best gini = ", xgbmodel.best_score )
+    else:
+        fit_model = xgbmodel.fit( X_train, y_train )
+        
+    # Generate validation predictions for this fold
+    if USE_RGF_INSTEAD:
+        pred = rgf.predict_proba(X_valid.fillna(X_train.mean()))[:,1]
+    else:
+        pred = fit_model.predict_proba(X_valid)[:,1]
+    print( "  Gini = ", eval_gini(y_valid, pred) )
+    y_valid_pred.iloc[test_index] = pred
+    
+    # Accumulate test set predictions
+    if USE_RGF_INSTEAD:
+        probs = rgf.predict_proba(X_test.fillna(X_train.mean()))[:,1]
+        try:
+            subprocess.call('rm -rf /tmp/rgf/*', shell=True)
+            print("Clean up is successfull")
+            print(glob.glob("/tmp/rgf/*"))
+        except Exception as e:
+            print(str(e))
+    else:
+        probs = fit_model.predict_proba(X_test)[:,1]
+    almost_zero = 1e-12
+    almost_one = 1 - almost_zero  # To avoid division by zero
+    probs[probs>almost_one] = almost_one
+    probs[probs<almost_zero] = almost_zero
+    y_test_pred += np.log(probs/(1-probs))
+    
+    del X_test, X_train, X_valid, y_train
+    
+y_test_pred /= K  # Average test set predictions
+y_test_pred =  1  /  ( 1 + np.exp(-y_test_pred) )
+
+print( "\nGini for full training set:" )
+eval_gini(y, y_valid_pred)
 
 
-# ## What we're trying to predict
-
-# In[63]:
+# In[ ]:
 
 
-plt.figure(figsize=(8, 8))
-sns.set(font_scale=1.2)
-mean = (df_train.is_attributed.values == 1).mean()
-ax = sns.barplot(['Fraudulent (1)', 'Not Fradulent (0)'], [mean, 1-mean], palette=pal)
-ax.set(xlabel='Target Value', ylabel='Probability', title='Target value distribution')
-for p, uniq in zip(ax.patches, [mean, 1-mean]):
-    height = p.get_height()
-    ax.text(p.get_x()+p.get_width()/2.,
-            height+0.01,
-            '{}%'.format(round(uniq * 100, 2)),
-            ha="center") 
+# Save validation predictions for stacking/ensembling
+val = pd.DataFrame()
+val['id'] = id_train
+val['target'] = y_valid_pred.values
+val.to_csv('kfloa_valid.csv', float_format='%.6f', index=False)
 
 
-# Wow, that's a really unbalanced dataset. Only 0.2% of the dataset is made up of fradulent clicks. This means that any models we run on the data will either need to be robust against class imbalance or will require some data resampling.
+# In[ ]:
+
+
+# Create submission file
+sub = pd.DataFrame()
+sub['id'] = id_test
+sub['target'] = y_test_pred
+sub.to_csv('kfloa_submit.csv', float_format='%.6f', index=False)
+

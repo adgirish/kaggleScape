@@ -1,558 +1,757 @@
 
 # coding: utf-8
 
-# *CAVEAT: Sorry but just note this notebook can be a bit slow to load probably due to the Plotly embeddings displaying a large number of points*
-# 
-# #Introduction
-# 
-# There already exists a plethora of notebooks discussing the merits of dimensionality reduction methods, in particular the Big 3 of PCA (Principal Component Analysis), LDA ( Linear Discriminant Analysis) and TSNE ( T-Distributed Stochastic Neighbour Embedding). Quite a handful of these have compared one to the other but few have gathered all 3 in one go. Therefore this notebook will aim to provide an introductory exposition on these 3 methods as well as to portray their visualisations interactively and hopefully more intuitively via the Plotly visualisation library. The chapters are structuredas follows:
-# 
-#  1. **Principal Component Analysis ( PCA )**  - Unsupervised, linear method
-# 
-# 
-#  2. **Linear Discriminant Analysis (LDA)** - Supervised, linear method
-# 
-# 
-#  3. **t-distributed Stochastic Neighbour Embedding (t-SNE)** - Nonlinear, probabilistic method
-# 
-# Lets go.
-
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+#changes:
+#optimizing Ridge and applying lightgbm
+#using thread and gc to optimize memory
+#reference from great notebook of Peter
+import time
+start_time = time.time()
 
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-import seaborn as sns
-import matplotlib.image as mpimg
-import matplotlib.pyplot as plt
-import matplotlib
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-# Import the 3 dimensionality reduction methods
-from sklearn.manifold import TSNE
-from sklearn.decomposition import PCA
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+SUBMIT_MODE = True
 
 
-# **Curse of Dimensionality & Dimensionality Reduction**
-# 
-# The term "Curse of Dimensionality" has been oft been thrown about, especially when PCA, LDA and TSNE is thrown into the mix. This phrase refers to how our perfectly good and reliable Machine Learning methods may suddenly perform badly when we are dealing in a very high-dimensional space. But what exactly do all these 3 acronyms do? They are essentially transformation methods used for dimensionality reduction. Therefore, if we are able to project our data from a higher-dimensional space to a lower one while keeping most of the relevant information, that would make life a lot easier for our learning methods.
+import pandas as pd
+import numpy as np
+import time
+import gc
+import string
+import re
 
-# # MNIST Dataset
-# 
-# For the purposes of this interactive guide, the MNIST (Mixed National Institute of Standards and Technology) computer vision digit dataset was chosen partly due to its simplicity and also surprisingly deep and informative research that can be done with the dataset. So let's load the training data and see what we have
+from nltk.corpus import stopwords
 
-# In[ ]:
+from scipy.sparse import csr_matrix, hstack
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.feature_selection.univariate_selection import SelectKBest, f_regression
+from sklearn.preprocessing import LabelBinarizer
 
+import wordbatch
+from wordbatch.extractors import WordBag
+from wordbatch.models import FM_FTRL
 
-train = pd.read_csv('../input/train.csv')
-train.head()
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import Ridge
+from sklearn.naive_bayes import MultinomialNB
+import lightgbm as lgb
 
 
 # In[ ]:
 
 
-print(train.shape)
-
-
-# The MNIST set consists of 42,000 rows and 785 columns. There are 28 x 28 pixel images of digits  ( contributing to 784 columns) as well as one extra label column which is essentially a class label to state whether the row-wise contribution to each digit gives a 1 or a 9. Each row component contains a value between one and zero and this describes the intensity of each pixel. 
-
-# **Pearson Correlation Plot**
-# 
-# Since we are still having the problem that our dataset consists of a relatively large number of features (columns),  it is perfect time to introduce Dimensionality Reduction methods. Before we start off, let's conduct some cleaning of the train data by saving the label feature and then removing it from the dataframe
-
-# In[ ]:
-
-
-# save the labels to a Pandas series target
-target = train['label']
-# Drop the label feature
-train = train.drop("label",axis=1)
-
-
-# # 1. Principal Component Analysis (PCA)
-# 
-# In a nutshell, PCA is a linear transformation algorithm that seeks to project the original features of our data onto a smaller set of features ( or subspace ) while still retaining most of the information. To do this the algorithm tries to find the most appropriate directions/angles ( which are the principal components ) that maximise the variance in the new subspace. Why maximise the variance though? 
-# 
-# To answer the question, more context has to be given about the PCA method. One has to understand that the principal components are orthogonal to each other ( think right angle ). As such when generating the covariance matrix ( measure of how related 2 variables are to each other ) in our new subspace, the off-diagonal values of the covariance matrix will be zero and only the diagonals ( or eigenvalues) will be non-zero. It is these diagonal values that represent the *variances* of the principal components that we are talking about or information about the variability of our features. 
-# 
-# Therefore when PCA seeks to maximise this variance, the method is trying to find directions ( principal components ) that contain the largest spread/subset of data points or information ( variance ) relative to all the data points present. For a brilliant and detailed description on this, check out this stackexchange thread: 
-# 
-# [PCA and proportion of variance explained][1] by amoeba
-# 
-#   [1]: http://stats.stackexchange.com/a/140579/3277
-
-# ### Calculating the Eigenvectors
-# 
-# Now it may be informative to observe how the variances look like for the digits in the MNIST dataset. Therefore to achieve this, let us calculate the eigenvectors and eigenvalues of the covarience matrix as follows:
-
-# In[ ]:
-
-
-# Standardize the data
-from sklearn.preprocessing import StandardScaler
-X = train.values
-X_std = StandardScaler().fit_transform(X)
-
-# Calculating Eigenvectors and eigenvalues of Cov matirx
-mean_vec = np.mean(X_std, axis=0)
-cov_mat = np.cov(X_std.T)
-eig_vals, eig_vecs = np.linalg.eig(cov_mat)
-# Create a list of (eigenvalue, eigenvector) tuples
-eig_pairs = [ (np.abs(eig_vals[i]),eig_vecs[:,i]) for i in range(len(eig_vals))]
-
-# Sort the eigenvalue, eigenvector pair from high to low
-eig_pairs.sort(key = lambda x: x[0], reverse= True)
-
-# Calculation of Explained Variance from the eigenvalues
-tot = sum(eig_vals)
-var_exp = [(i/tot)*100 for i in sorted(eig_vals, reverse=True)] # Individual explained variance
-cum_var_exp = np.cumsum(var_exp) # Cumulative explained variance
-
-
-# Now having calculated both our Individual Explained Variance and Cumulative Explained Variance values, let's use the Plotly visualisation package to produce an interactive chart to showcase this.
-
-# In[ ]:
-
-
-trace1 = go.Scatter(
-    x=list(range(784)),
-    y= cum_var_exp,
-    mode='lines+markers',
-    name="'Cumulative Explained Variance'",
-    hoverinfo= cum_var_exp,
-    line=dict(
-        shape='spline',
-        color = 'goldenrod'
-    )
-)
-trace2 = go.Scatter(
-    x=list(range(784)),
-    y= var_exp,
-    mode='lines+markers',
-    name="'Individual Explained Variance'",
-    hoverinfo= var_exp,
-    line=dict(
-        shape='linear',
-        color = 'black'
-    )
-)
-fig = tls.make_subplots(insets=[{'cell': (1,1), 'l': 0.7, 'b': 0.5}],
-                          print_grid=True)
-
-fig.append_trace(trace1, 1, 1)
-fig.append_trace(trace2,1,1)
-fig.layout.title = 'Explained Variance plots - Full and Zoomed-in'
-fig.layout.xaxis = dict(range=[0, 80], title = 'Feature columns')
-fig.layout.yaxis = dict(range=[0, 60], title = 'Explained Variance')
-fig['data'] += [go.Scatter(x= list(range(784)) , y=cum_var_exp, xaxis='x2', yaxis='y2', name = 'Cumulative Explained Variance')]
-fig['data'] += [go.Scatter(x=list(range(784)), y=var_exp, xaxis='x2', yaxis='y2',name = 'Individual Explained Variance')]
-
-# fig['data'] = data
-# fig['layout'] = layout
-# fig['data'] += data2
-# fig['layout'] += layout2
-py.iplot(fig, filename='inset example')
-
-
-# *PLEASE CLICK AND MOVE THE SCATTER PLOTS ABOVE. THEY ARE INTERACTIVE. DOUBLE CLICK TO GET BACK TO THE ORIGINAL VIEW*
-
-# **Takeaway from the Plot**
-# 
-# There are two plots above, a smaller one embedded within the larger plot. The smaller plot ( Green and Red) shows the distribution of the Individual and Explained variances across all features while the larger plot ( Golden and black ) portrays a zoomed section of the explained variances only.
-# 
-# As we can see, out of our 784 features or columns approximately 90% of the Explained Variance can be described by using just over 200 over features. So if one wanted to implement a PCA on this, extracting the top 200 features would be a very logical choice as they already account for the majority of the data.
-# In the section below, I will use the immensely powerful Sklearn toolkit and its built-in PCA method. Unfortunately for brevity I will not be covering how to implement PCA from scratch, partly due to the multitude of resources already available. One excellent article to check out for this would be:
-# 
-# [Principal Component Analysis in 3 Simple Steps][1] by Sebastian Raschka 
-# 
-#   [1]: http://sebastianraschka.com/Articles/2015_pca_in_3_steps.html
-
-# **Visualizing the Eigenvalues**
-# 
-# As alluded to above, since the PCA method seeks to obtain the optimal directions (or eigenvectors) that captures the most variance ( spreads out the data points the most ). Therefore it may be informative ( and cool) to visualise these directions and their associated eigenvalues. For the purposes of this notebook and for speed, I will invoke PCA to only extract the top 30 eigenvalues ( using Sklearn's .components_ call) from the digit dataset and visually compare the top 5 eigenvalues to some of the other smaller ones to see if we can glean any insights as follows:
-
-# In[ ]:
-
-
-# Invoke SKlearn's PCA method
-n_components = 30
-pca = PCA(n_components=n_components).fit(train.values)
-
-eigenvalues = pca.components_.reshape(n_components, 28, 28)
-
-# Extracting the PCA components ( eignevalues )
-#eigenvalues = pca.components_.reshape(n_components, 28, 28)
-eigenvalues = pca.components_
+def rmse(predicted, actual):
+    return np.sqrt(((predicted - actual) ** 2).mean())
+def split_cat(text):
+    try:
+        return text.split("/")
+    except:
+        return ("No Label", "No Label", "No Label")
 
 
 # In[ ]:
 
 
-n_row = 4
-n_col = 7
+class TargetEncoder:
+    # Adapted from https://www.kaggle.com/ogrellier/python-target-encoding-for-categorical-features
+    def __repr__(self):
+        return 'TargetEncoder'
 
-# Plot the first 8 eignenvalues
-plt.figure(figsize=(13,12))
-for i in list(range(n_row * n_col)):
-#     for offset in [10, 30,0]:
-#     plt.subplot(n_row, n_col, i + 1)
-    offset =0
-    plt.subplot(n_row, n_col, i + 1)
-    plt.imshow(eigenvalues[i].reshape(28,28), cmap='jet')
-    title_text = 'Eigenvalue ' + str(i + 1)
-    plt.title(title_text, size=6.5)
-    plt.xticks(())
-    plt.yticks(())
-plt.show()
+    def __init__(self, cols, smoothing=1, min_samples_leaf=1, noise_level=0, keep_original=False):
+        self.cols = cols
+        self.smoothing = smoothing
+        self.min_samples_leaf = min_samples_leaf
+        self.noise_level = noise_level
+        self.keep_original = keep_original
 
+    @staticmethod
+    def add_noise(series, noise_level):
+        return series * (1 + noise_level * np.random.randn(len(series)))
 
-# **Takeaway from the Plots**
-# 
-# The subplots above portray the top 30 optimal directions or principal component axes that the PCA method has decided to generate for our digit dataset. Of interest is when one compares the first component "Eigenvalue 1" to the 28th component "Eigenvalue 28", it is obvious that more complicated directions or components are being generated in the search to maximise variance in the new feature subspace.
+    def encode(self, train, test, target):
+        for col in self.cols:
+            if self.keep_original:
+                train[col + '_te'], test[col + '_te'] = self.encode_column(train[col], test[col], target)
+            else:
+                train[col], test[col] = self.encode_column(train[col], test[col], target)
+        return train, test
 
-# **Visualising the MNIST Digit set on its own**
-# 
-# Now just for the fun and curiosity of it, let's plot the actual MNIST digit set to see what the underlying dataset actually represents, rather than being caught up with just looking at 1 and 0's.
+    def encode_column(self, trn_series, tst_series, target):
+        temp = pd.concat([trn_series, target], axis=1)
+        # Compute target mean
+        averages = temp.groupby(by=trn_series.name)[target.name].agg(["mean", "count"])
+        # Compute smoothing
+        smoothing = 1 / (1 + np.exp(-(averages["count"] - self.min_samples_leaf) / self.smoothing))
+        # Apply average function to all target data
+        prior = target.mean()
+        # The bigger the count the less full_avg is taken into account
+        averages[target.name] = prior * (1 - smoothing) + averages["mean"] * smoothing
+        averages.drop(['mean', 'count'], axis=1, inplace=True)
+        # Apply averages to trn and tst series
+        ft_trn_series = pd.merge(
+            trn_series.to_frame(trn_series.name),
+            averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+            on=trn_series.name,
+            how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+        # pd.merge does not keep the index so restore it
+        ft_trn_series.index = trn_series.index
+        ft_tst_series = pd.merge(
+            tst_series.to_frame(tst_series.name),
+            averages.reset_index().rename(columns={'index': target.name, target.name: 'average'}),
+            on=tst_series.name,
+            how='left')['average'].rename(trn_series.name + '_mean').fillna(prior)
+        # pd.merge does not keep the index so restore it
+        ft_tst_series.index = tst_series.index
+        return self.add_noise(ft_trn_series, self.noise_level), self.add_noise(ft_tst_series, self.noise_level)  
+
 
 # In[ ]:
 
 
-# plot some of the numbers
-plt.figure(figsize=(14,12))
-for digit_num in range(0,70):
-    plt.subplot(7,10,digit_num+1)
-    grid_data = train.iloc[digit_num].as_matrix().reshape(28,28)  # reshape from 1d to 2d pixel array
-    plt.imshow(grid_data, interpolation = "none", cmap = "afmhot")
-    plt.xticks([])
-    plt.yticks([])
-plt.tight_layout()
+def to_number(x):
+    try:
+        if not x.isdigit():
+            return 0
+        x = int(x)
+        if x > 100:
+            return 100
+        else:
+            return x
+    except:
+        return 0
 
+def sum_numbers(desc):
+    if not isinstance(desc, str):
+        return 0
+    try:
+        return sum([to_number(s) for s in desc.split()])
+    except:
+        return 0
 
-# Phew, they are definitely digits all right. So let's proceed onto the main event.
-
-# ###PCA Implementation via Sklearn
-# 
-# Now using the Sklearn toolkit, we implement the Principal Component Analysis algorithm as follows:
 
 # In[ ]:
 
 
-# Delete our earlier created X object
-del X
-# Taking only the first N rows to speed things up
-X= train[:6000].values
+# Define helpers for text normalization
+stopwords = {x: 1 for x in stopwords.words('english')}
+non_alphanums = re.compile(u'[^A-Za-z0-9]+')
+non_alphanumpunct = re.compile(u'[^A-Za-z0-9\.?!,; \(\)\[\]\'\"\$]+')
+RE_PUNCTUATION = '|'.join([re.escape(x) for x in string.punctuation])
+
+def normalize_text(text):
+    return u" ".join(
+        [x for x in [y for y in non_alphanums.sub(' ', text).lower().strip().split(" ")] \
+         if len(x) > 1 and x not in stopwords])
+
+def clean_name(x):
+    if len(x):
+        x = non_alphanums.sub(' ', x).split()
+        if len(x):
+            return x[0].lower()
+    return ''
+
+    
+print('[{}] Finished defining stuff'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+train = pd.read_table('../input/train.tsv', engine='c', 
+                      dtype={'item_condition_id': 'category',
+                             'shipping': 'category',
+                            }, 
+                     converters={'category_name': split_cat})
+test = pd.read_table('../input/test.tsv', engine='c', 
+                      dtype={'item_condition_id': 'category',
+                             'shipping': 'category',
+                            },
+                    converters={'category_name': split_cat})
+print('[{}] Finished load data'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+train['is_train'] = 1
+test['is_train'] = 0
+print('[{}] Compiled train / test'.format(time.time() - start_time))
+print('Train shape: ', train.shape)
+print('Test shape: ', test.shape)
+
+train = train[train.price != 0].reset_index(drop=True)
+print('[{}] Removed nonzero price'.format(time.time() - start_time))
+print('Train shape: ', train.shape)
+print('Test shape: ', test.shape)
+
+y = np.log1p(train['price'])
+nrow_train = train.shape[0]
+
+merge = pd.concat([train, test])
+submission = test[['test_id']]
+print('[{}] Compiled merge'.format(time.time() - start_time))
+print('Merge shape: ', merge.shape)
+
+
+# In[ ]:
+
+
 del train
-# Standardising the values
-X_std = StandardScaler().fit_transform(X)
+del test
+merge.drop(['train_id', 'test_id', 'price'], axis=1, inplace=True)
+gc.collect()
+print('[{}] Garbage collection'.format(time.time() - start_time))
 
-# Call the PCA method with 5 components. 
-pca = PCA(n_components=5)
-pca.fit(X_std)
-X_5d = pca.transform(X_std)
-
-# For cluster coloring in our Plotly plots, remember to also restrict the target values 
-Target = target[:6000]
-
-
-# What the chunk of code does above is to first normalise the data (actually no need to do so for this data set as they are all 1's and 0's) using Sklearn's convenient StandardScaler call.
-# 
-# Next we invoke Sklearn's inbuilt PCA function by providing into its argument *n_components*, the number of components/dimensions we would like to project the data onto. In practise, one would educate and motivate the choice of components for example by looking at the proportion of variance captured vs each feature's eigenvalue, such as in our Explained Variance plots. To be honest, there are a multitude of papers in the literature with research on what should be a good indicator on choice of components. Here are some references for the interested: However for the essence of this notebook being a guide of sorts, I have just decided to take a PCA on 5 components ( against perhaps taking 200 over components).
-# 
-# Finally I call both fit and transform methods which fits the PCA model with the standardised digit data set and then does a transformation by applying the dimensionality reduction on the data.
-
-# ###Interactive visualisations of PCA representation
-# 
-# When it comes to these dimensionality reduction methods, scatter plots are most commonly implemented because they allow for great and convenient visualisations of clustering ( if any existed ) and this will be exactly what we will be doing as we plot the first 2 principal components as follows:
 
 # In[ ]:
 
 
-trace0 = go.Scatter(
-    x = X_5d[:,0],
-    y = X_5d[:,1],
-    name = Target,
-    hoveron = Target,
-    mode = 'markers',
-    text = Target,
-    showlegend = False,
-    marker = dict(
-        size = 8,
-        color = Target,
-        colorscale ='Jet',
-        showscale = False,
-        line = dict(
-            width = 2,
-            color = 'rgb(255, 255, 255)'
-        ),
-        opacity = 0.8
-    )
-)
-data = [trace0]
+merge['gencat_name'] = merge['category_name'].str.get(0).replace('', 'missing').astype('category')
+merge['subcat1_name'] = merge['category_name'].str.get(1).fillna('missing').astype('category')
+merge['subcat2_name'] = merge['category_name'].str.get(2).fillna('missing').astype('category')
+merge.drop('category_name', axis=1, inplace=True)
+print('[{}] Split categories completed.'.format(time.time() - start_time))
 
-layout = go.Layout(
-    title= 'Principal Component Analysis (PCA)',
-    hovermode= 'closest',
-    xaxis= dict(
-         title= 'First Principal Component',
-        ticklen= 5,
-        zeroline= False,
-        gridwidth= 2,
-    ),
-    yaxis=dict(
-        title= 'Second Principal Component',
-        ticklen= 5,
-        gridwidth= 2,
-    ),
-    showlegend= True
-)
+merge['item_condition_id'] = merge['item_condition_id'].cat.add_categories(['missing']).fillna('missing')
+merge['shipping'] = merge['shipping'].cat.add_categories(['missing']).fillna('missing')
+merge['item_description'].fillna('missing', inplace=True)
+merge['brand_name'] = merge['brand_name'].fillna('missing').astype('category')
+print('[{}] Handle missing completed.'.format(time.time() - start_time))
 
-
-fig = dict(data=data, layout=layout)
-py.iplot(fig, filename='styled-scatter')
-
-
-# *PLEASE CLICK AND MOVE THE SCATTER PLOTS ABOVE. THEY ARE INTERACTIVE. DOUBLE CLICK TO GET BACK TO THE ORIGINAL VIEW*
-
-# **Takeaway from the Plot**
-# 
-# As observed from the scatter plot, you can just about make out a few discernible clusters evinced from the collective blotches of colors. These clusters represent the underlying digit that each data point should contribute to and one may therefore be tempted to think that it was quite a piece of cake in implementing and visualising PCA in this section.
-# 
-# However, the devil lies in the tiny details of the python implementation because as alluded to earlier, PCA is actually in fact an unsupervised method which does not depend on class labels. I have sneakily snuck in class labelings whilst generating the scatter plots therefore resulting in the clusters of colours as you see them.
-
-# ###K-Means Clustering to identify possible classes
-# 
-# Imagine just for a moment that we were not provided with the class labels to this digit set because after all PCA is an unsupervised method. Therefore how would we be able to separate out our data points in the new feature space? We can apply a clustering algorithm on our new PCA projection data and hopefully arrive at distinct clusters which would tell us something about the underlying class separation in the data. 
-# 
-# To start off, we set up a KMeans clustering method with Sklearn's *KMeans* call and use the *fit_predict* method to compute cluster centers and predict cluster indices for the first and second PCA projections (to see if we can observe any appreciable clusters).
 
 # In[ ]:
 
 
-from sklearn.cluster import KMeans # KMeans clustering 
-# Set a KMeans clustering with 9 components ( 9 chosen sneakily ;) as hopefully we get back our 9 class labels)
-kmeans = KMeans(n_clusters=9)
-# Compute cluster centers and predict cluster indices
-X_clustered = kmeans.fit_predict(X_5d)
+merge['name_first'] = merge['name'].apply(clean_name)
+print('[{}] FE 1/37'.format(time.time() - start_time))
+merge['name_first_count'] = merge.groupby('name_first')['name_first'].transform('count')
+print('[{}] FE 2/37'.format(time.time() - start_time))
+merge['gencat_name_count'] = merge.groupby('gencat_name')['gencat_name'].transform('count')
+print('[{}] FE 3/37'.format(time.time() - start_time))
+merge['subcat1_name_count'] = merge.groupby('subcat1_name')['subcat1_name'].transform('count')
+print('[{}] FE 4/37'.format(time.time() - start_time))
+merge['subcat2_name_count'] = merge.groupby('subcat2_name')['subcat2_name'].transform('count')
+print('[{}] FE 5/37'.format(time.time() - start_time))
+merge['brand_name_count'] = merge.groupby('brand_name')['brand_name'].transform('count')
+print('[{}] FE 6/37'.format(time.time() - start_time))
+merge['NameLower'] = merge.name.str.count('[a-z]')
+print('[{}] FE 7/37'.format(time.time() - start_time))
+merge['DescriptionLower'] = merge.item_description.str.count('[a-z]')
+print('[{}] FE 8/37'.format(time.time() - start_time))
+merge['NameUpper'] = merge.name.str.count('[A-Z]')
+print('[{}] FE 9/37'.format(time.time() - start_time))
+merge['DescriptionUpper'] = merge.item_description.str.count('[A-Z]')
+print('[{}] FE 10/37'.format(time.time() - start_time))
+merge['name_len'] = merge['name'].apply(lambda x: len(x))
+print('[{}] FE 11/37'.format(time.time() - start_time))
+merge['des_len'] = merge['item_description'].apply(lambda x: len(x))
+print('[{}] FE 12/37'.format(time.time() - start_time))
+merge['name_desc_len_ratio'] = merge['name_len']/merge['des_len']
+print('[{}] FE 13/37'.format(time.time() - start_time))
+merge['desc_word_count'] = merge['item_description'].apply(lambda x: len(x.split()))
+print('[{}] FE 14/37'.format(time.time() - start_time))
+merge['mean_des'] = merge['item_description'].apply(lambda x: 0 if len(x) == 0 else float(len(x.split())) / len(x)) * 10
+print('[{}] FE 15/37'.format(time.time() - start_time))
+merge['name_word_count'] = merge['name'].apply(lambda x: len(x.split()))
+print('[{}] FE 16/37'.format(time.time() - start_time))
+merge['mean_name'] = merge['name'].apply(lambda x: 0 if len(x) == 0 else float(len(x.split())) / len(x))  * 10
+print('[{}] FE 17/37'.format(time.time() - start_time))
+merge['desc_letters_per_word'] = merge['des_len'] / merge['desc_word_count']
+print('[{}] FE 18/37'.format(time.time() - start_time))
+merge['name_letters_per_word'] = merge['name_len'] / merge['name_word_count']
+print('[{}] FE 19/37'.format(time.time() - start_time))
+merge['NameLowerRatio'] = merge['NameLower'] / merge['name_len']
+print('[{}] FE 20/37'.format(time.time() - start_time))
+merge['DescriptionLowerRatio'] = merge['DescriptionLower'] / merge['des_len']
+print('[{}] FE 21/37'.format(time.time() - start_time))
+merge['NameUpperRatio'] = merge['NameUpper'] / merge['name_len']
+print('[{}] FE 22/37'.format(time.time() - start_time))
+merge['DescriptionUpperRatio'] = merge['DescriptionUpper'] / merge['des_len']
+print('[{}] FE 23/37'.format(time.time() - start_time))
+merge['NamePunctCount'] = merge.name.str.count(RE_PUNCTUATION)
+print('[{}] FE 24/37'.format(time.time() - start_time))
+merge['DescriptionPunctCount'] = merge.item_description.str.count(RE_PUNCTUATION)
+print('[{}] FE 25/37'.format(time.time() - start_time))
+merge['NamePunctCountRatio'] = merge['NamePunctCount'] / merge['name_word_count']
+print('[{}] FE 26/37'.format(time.time() - start_time))
+merge['DescriptionPunctCountRatio'] = merge['DescriptionPunctCount'] / merge['desc_word_count']
+print('[{}] FE 27/37'.format(time.time() - start_time))
+merge['NameDigitCount'] = merge.name.str.count('[0-9]')
+print('[{}] FE 28/37'.format(time.time() - start_time))
+merge['DescriptionDigitCount'] = merge.item_description.str.count('[0-9]')
+print('[{}] FE 29/37'.format(time.time() - start_time))
+merge['NameDigitCountRatio'] = merge['NameDigitCount'] / merge['name_word_count']
+print('[{}] FE 30/37'.format(time.time() - start_time))
+merge['DescriptionDigitCountRatio'] = merge['DescriptionDigitCount']/merge['desc_word_count']
+print('[{}] FE 31/37'.format(time.time() - start_time))
+merge['stopword_ratio_desc'] = merge['item_description'].apply(lambda x: len([w for w in x.split() if w in stopwords])) / merge['desc_word_count']
+print('[{}] FE 32/37'.format(time.time() - start_time))
+merge['num_sum'] = merge['item_description'].apply(sum_numbers) 
+print('[{}] FE 33/37'.format(time.time() - start_time))
+merge['weird_characters_desc'] = merge['item_description'].str.count(non_alphanumpunct)
+print('[{}] FE 34/37'.format(time.time() - start_time))
+merge['weird_characters_name'] = merge['name'].str.count(non_alphanumpunct)
+print('[{}] FE 35/37'.format(time.time() - start_time))
+merge['prices_count'] = merge['item_description'].str.count('[rm]')
+print('[{}] FE 36/37'.format(time.time() - start_time))
+merge['price_in_name'] = merge['item_description'].str.contains('[rm]', regex=False).astype('int')
+print('[{}] FE 37/37'.format(time.time() - start_time))
 
-trace_Kmeans = go.Scatter(x=X_5d[:, 0], y= X_5d[:, 1], mode="markers",
-                    showlegend=False,
-                    marker=dict(
-                            size=8,
-                            color = X_clustered,
-                            colorscale = 'Portland',
-                            showscale=False, 
-                            line = dict(
-            width = 2,
-            color = 'rgb(255, 255, 255)'
-        )
-                   ))
-
-layout = go.Layout(
-    title= 'KMeans Clustering',
-    hovermode= 'closest',
-    xaxis= dict(
-         title= 'First Principal Component',
-        ticklen= 5,
-        zeroline= False,
-        gridwidth= 2,
-    ),
-    yaxis=dict(
-        title= 'Second Principal Component',
-        ticklen= 5,
-        gridwidth= 2,
-    ),
-    showlegend= True
-)
-
-data = [trace_Kmeans]
-fig1 = dict(data=data, layout= layout)
-# fig1.append_trace(contour_list)
-py.iplot(fig1, filename="svm")
-
-
-# **Takeaway from the Plot**
-# 
-# Visually, the clusters generated by the KMeans algorithm appear to provide a clearer demarcation amongst clusters as compared to naively adding in class labels into our PCA projections. This should come as no surprise as PCA is meant to be an unsupervised method and therefore not optimised for separating different class labels. This particular task however is accomplished by the very next method that we will talk about.
-
-# #2. Linear Discriminant Analysis (LDA)
-# 
-# LDA, much like PCA is also a linear transformation method commonly used in dimensionality reduction tasks. However unlike the latter which is an unsupervised learning algorithm, LDA falls into the class of supervised learning methods. As such the goal of LDA is that with available information about class labels, LDA will seek to maximise the separation between the different classes by computing the component axes (linear discriminants ) which does this.
 
 # In[ ]:
 
 
-from IPython.display import display, Math, Latex
+cols = set(merge.columns.values)
+basic_cols = {'name', 'item_condition_id', 'brand_name',
+  'shipping', 'item_description', 'gencat_name',
+  'subcat1_name', 'subcat2_name', 'name_first', 'is_train'}
 
+cols_to_normalize = cols - basic_cols - {'price_in_name'}
+other_cols = basic_cols | {'price_in_name'}
 
-# ### LDA Implementation from Scratch
-# 
-# The objective of LDA is to preserve the class separation information whilst still  reducing the dimensions of the dataset. As such implementing the method from scratch can roughly be split into 4 distinct stages as below. As an aside, since this section will be quite equation heavy therefore we will also be embedding some mathematical equations into the upcoming sections. The good thing about IPython notebook is that you can render your equations (LaTeX) automatically by putting them within the **$$** symbol, courtesy of the use of MathJax - a JavaScript equation display engine.
-# 
-# **A. Projected Means**
-# 
-# Since this method was designed to take into account class labels we therefore first need to establish a suitable metric with which to measure the 'distance' or separation between different classes. Let's assume that we have a set of data points *x* that belong to one particular class *w*. Therefore in LDA the first step is to the project these points onto a new line, Y that contains the class-specific information via the transformation  
-# 
-# $$Y = \omega^\intercal x $$
-# 
-# With this the idea is to find some method that maximises the separation of these new projected variables. To do so, we first calculate the projected mean.
-# 
-# **B.  Scatter Matrices and their solutions**
-# Having introduced our projected means, we now need to find a function that can represent the difference between the means and then maximise it. Like in linear regression, where the most basic case is to find the line of best fit we need to find the equivalent of the variance in this context. And hence this is where we introduce scatter matrices where the scatter is the equivalent of the variance.
-# 
-# $$ \tilde{S}^{2} = (y - \tilde{mu})^{2}$$
-# 
-# 
-# **C.  Selecting Optimal Projection Matrices**
-# 
-# **D.  Transforming features onto new subspace**
-
-# *SECTION STILL UNDER-WAY*
-
-# ###LDA Implementation via Sklearn
-# 
-# Having gone through the nitty-gritty details of the LDA implementation in theory, let us now implement the method in practise. Surprise, surprise we find that the Sklearn toolkit also comes with its own inbuilt LDA function and hence we invoke an LDA model as follows:
 
 # In[ ]:
 
 
-lda = LDA(n_components=5)
-# Taking in as second argument the Target as labels
-X_LDA_2D = lda.fit_transform(X_std, Target.values )
+merge_to_normalize = merge[list(cols_to_normalize)]
+merge_to_normalize = (merge_to_normalize - merge_to_normalize.mean()) / (merge_to_normalize.max() - merge_to_normalize.min())
+print('[{}] FE Normalized'.format(time.time() - start_time))
 
+merge = merge[list(other_cols)]
+merge = pd.concat([merge, merge_to_normalize],axis=1)
+print('[{}] FE Merged'.format(time.time() - start_time))
 
-# The syntax for the LDA implementation is very much akin to that of PCA whereby one calls the fit and transform methods which fits the LDA model with the data and then does a transformation by applying the LDA dimensionality reduction to it. However since LDA is a supervised learning algorithm , there is a second argument to the method that the user must provide and this would be the class labels, which in this case is the target labels of the digits.
+del(merge_to_normalize)
+gc.collect()
+print('[{}] Garbage collection'.format(time.time() - start_time))
 
-# ###Interactive visualisations of LDA representation
 
 # In[ ]:
 
 
-8# Using the Plotly library again
-traceLDA = go.Scatter(
-    x = X_LDA_2D[:,0],
-    y = X_LDA_2D[:,1],
-    name = Target,
-#     hoveron = Target,
-    mode = 'markers',
-    text = Target,
-    showlegend = True,
-    marker = dict(
-        size = 8,
-        color = Target,
-        colorscale ='Jet',
-        showscale = False,
-        line = dict(
-            width = 2,
-            color = 'rgb(255, 255, 255)'
-        ),
-        opacity = 0.8
-    )
-)
-data = [traceLDA]
+df_test = merge.loc[merge['is_train'] == 0]
+df_train = merge.loc[merge['is_train'] == 1]
+del merge
+gc.collect()
+df_test = df_test.drop(['is_train'], axis=1)
+df_train = df_train.drop(['is_train'], axis=1)
 
-layout = go.Layout(
-    title= 'Linear Discriminant Analysis (LDA)',
-    hovermode= 'closest',
-    xaxis= dict(
-         title= 'First Linear Discriminant',
-        ticklen= 5,
-        zeroline= False,
-        gridwidth= 2,
-    ),
-    yaxis=dict(
-        title= 'Second Linear Discriminant',
-        ticklen= 5,
-        gridwidth= 2,
-    ),
-    showlegend= False
-)
+if SUBMIT_MODE:
+    y_train = y
+    del y
+    gc.collect()
+else:
+    df_train, df_test, y_train, y_test = train_test_split(df_train, y, test_size=0.2, random_state=144)
 
-fig = dict(data=data, layout=layout)
-py.iplot(fig, filename='styled-scatter')
+print('[{}] Splitting completed.'.format(time.time() - start_time))
 
-
-# *PLEASE CLICK AND MOVE THE SCATTER PLOTS ABOVE. THEY ARE INTERACTIVE. DOUBLE CLICK TO GET BACK TO THE ORIGINAL VIEW*
-
-# From the scatter plot above, we can see that the data points are more clearly clustered when using LDA with as compared to implementing PCA with class labels. This is an inherent advantage in having class labels to supervise the method with. In short picking the right tool for the right job.
-
-# #3. T-SNE ( t-Distributed Stochastic Neighbour Embedding )
-# 
-# The t-SNE method has become widely popular ever since it was introduced by van der Maaten and Hinton in 2008. Unlike the previous two linear methods of PCA and LDA discussed above, t-SNE is a non-linear, probabilistic dimensionality reduction method.
-# 
-# The internal mechanisms of the algorithm 
-# Therefore instead of looking at directions/axes which maximise information or class separation, T-SNE aims to convert the Euclidean distances between points into conditional probabilities. A Student-t distribution is then applied on these probabilities which serve as metrics to calculate the similarity between one datapoint to another. 
-# 
-# However this brief summary does no justice in any manner or shape to the original t-SNE paper by Maaten and Hinton so please do check the original out [here][1].
-# 
-#   [1]: http://www.cs.toronto.edu/~hinton/absps/tsne.pdf
 
 # In[ ]:
 
 
-# Invoking the t-SNE method
-tsne = TSNE(n_components=2)
-tsne_results = tsne.fit_transform(X_std) 
+wb = wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 2,
+                                                              "hash_ngrams_weights": [1.5, 1.0],
+                                                              "hash_size": 2 ** 29,
+                                                              "norm": None,
+                                                              "tf": 'binary',
+                                                              "idf": None,
+                                                              }), procs=8)
+wb.dictionary_freeze = True
+X_name_train = wb.fit_transform(df_train['name'])
+X_name_test = wb.transform(df_test['name'])
+del(wb)
+mask = np.where(X_name_train.getnnz(axis=0) > 3)[0]
+X_name_train = X_name_train[:, mask]
+X_name_test = X_name_test[:, mask]
+print('[{}] Vectorize `name` completed.'.format(time.time() - start_time))
 
-
-# Having invoked the t-SNE algorithm by simply calling *TSNE()* we fit the digit data to the model and reduce its dimensions with *fit_transform*. Finally let's plot the first two components in the new feature space in a scatter plot
 
 # In[ ]:
 
 
-traceTSNE = go.Scatter(
-    x = tsne_results[:,0],
-    y = tsne_results[:,1],
-    name = Target,
-     hoveron = Target,
-    mode = 'markers',
-    text = Target,
-    showlegend = True,
-    marker = dict(
-        size = 8,
-        color = Target,
-        colorscale ='Jet',
-        showscale = False,
-        line = dict(
-            width = 2,
-            color = 'rgb(255, 255, 255)'
-        ),
-        opacity = 0.8
-    )
-)
-data = [traceTSNE]
-
-layout = dict(title = 'TSNE (T-Distributed Stochastic Neighbour Embedding)',
-              hovermode= 'closest',
-              yaxis = dict(zeroline = False),
-              xaxis = dict(zeroline = False),
-              showlegend= False,
-
-             )
-
-fig = dict(data=data, layout=layout)
-py.iplot(fig, filename='styled-scatter')
+wb = wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 2,
+                                                              "hash_ngrams_weights": [1.0, 1.0],
+                                                              "hash_size": 2 ** 28,
+                                                              "norm": "l2",
+                                                              "tf": 1.0,
+                                                              "idf": None}), procs=8)
+wb.dictionary_freeze = True
+X_description_train = wb.fit_transform(df_train['item_description'])
+X_description_test = wb.transform(df_test['item_description'])
+del(wb)
+mask = np.where(X_description_train.getnnz(axis=0) > 3)[0]
+X_description_train = X_description_train[:, mask]
+X_description_test = X_description_test[:, mask]
+print('[{}] Vectorize `item_description` completed.'.format(time.time() - start_time))
 
 
-# *PLEASE CLICK AND MOVE THE SCATTER PLOTS ABOVE. THEY ARE INTERACTIVE. DOUBLE CLICK TO GET BACK TO THE ORIGINAL VIEW*
+# In[ ]:
 
-# **Takeaway from the Plots**
-# 
-# From the t-SNE scatter plot the first thing that strikes is that clusters ( and even subclusters ) are very well defined and segregated resulting in Jackson-Pollock like Modern Art visuals, even more so than the PCA and LDA methods. This ability to provide very good cluster visualisations can be boiled down to the topology-preserving attributes of the algorithm. 
-# 
-# However t-SNE is not without its drawbacks. Multiple local minima may occur as the algorithm is identifying clusters/sub-clusters and this can be evinced from the scatter plot, where we can see that clusters of the same colour exist as 2 sub-clusters in different areas of the plot.
 
-# # Concluding Remarks
-# 
-# In conclusion, this notebook has introduced and briefly covered three different dimensionality reduction methods commonly used by ML practitioners - PCA, LDA and t-SNE. We touched on the concepts of finding principal components and linear discriminants as well as the topology preserving capabilities of t-SNE. We've also discussed the relative merits of using supervised and unsupervised methods as well as the KMeans clustering technique when it comes to an unsupervised scenario.  
-# 
-# Apart from these three common reduction methods, there exists a whole host of other dimensionality reduction methods not discussed in this notebook. Just to name a few, they include methods like Sammon's Mapping, Multi-dimensional Scaling or even some graph based visualisation methods.  
-# 
-# I hope this notebook has been useful especially with regards to introducing the concepts of dimensionality reduction if it is new to you. And the key takeaway would be that each method has its own pros and cons and are not to be used as a one-size-fits-all/I-will-only-use-my-favourite method but rather to be implemented as the situation calls for it. 
-# 
-# Peace out 
+X_train_1, X_train_2, y_train_1, y_train_2 = train_test_split(X_description_train, y_train,
+                                                              test_size = 0.5,
+                                                              shuffle = False)
+print('[{}] Finished splitting'.format(time.time() - start_time))
+
+# Ridge adapted from https://www.kaggle.com/object/more-effective-ridge-script?scriptVersionId=1851819
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_1, y_train_1)
+print('[{}] Finished to train desc ridge (1)'.format(time.time() - start_time))
+desc_ridge_preds1 = model.predict(X_train_2)
+desc_ridge_preds1f = model.predict(X_description_test)
+print('[{}] Finished to predict desc ridge (1)'.format(time.time() - start_time))
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_2, y_train_2)
+print('[{}] Finished to train desc ridge (2)'.format(time.time() - start_time))
+desc_ridge_preds2 = model.predict(X_train_1)
+desc_ridge_preds2f = model.predict(X_description_test)
+print('[{}] Finished to predict desc ridge (2)'.format(time.time() - start_time))
+desc_ridge_preds_oof = np.concatenate((desc_ridge_preds2, desc_ridge_preds1), axis=0)
+desc_ridge_preds_test = (desc_ridge_preds1f + desc_ridge_preds2f) / 2.0
+print('RMSLE OOF: {}'.format(rmse(desc_ridge_preds_oof, y_train)))
+if not SUBMIT_MODE:
+    print('RMSLE TEST: {}'.format(rmse(desc_ridge_preds_test, y_test)))
+
+
+X_train_1, X_train_2, y_train_1, y_train_2 = train_test_split(X_name_train, y_train,
+                                                              test_size = 0.5,
+                                                              shuffle = False)
+print('[{}] Finished splitting'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_1, y_train_1)
+print('[{}] Finished to train name ridge (1)'.format(time.time() - start_time))
+name_ridge_preds1 = model.predict(X_train_2)
+name_ridge_preds1f = model.predict(X_name_test)
+print('[{}] Finished to predict name ridge (1)'.format(time.time() - start_time))
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_2, y_train_2)
+print('[{}] Finished to train name ridge (2)'.format(time.time() - start_time))
+name_ridge_preds2 = model.predict(X_train_1)
+name_ridge_preds2f = model.predict(X_name_test)
+print('[{}] Finished to predict name ridge (2)'.format(time.time() - start_time))
+name_ridge_preds_oof = np.concatenate((name_ridge_preds2, name_ridge_preds1), axis=0)
+name_ridge_preds_test = (name_ridge_preds1f + name_ridge_preds2f) / 2.0
+print('RMSLE OOF: {}'.format(rmse(name_ridge_preds_oof, y_train)))
+if not SUBMIT_MODE:
+    print('RMSLE TEST: {}'.format(rmse(name_ridge_preds_test, y_test)))
+
+
+# In[ ]:
+
+
+del X_train_1
+del X_train_2
+del y_train_1
+del y_train_2
+del name_ridge_preds1
+del name_ridge_preds1f
+del name_ridge_preds2
+del name_ridge_preds2f
+del desc_ridge_preds1
+del desc_ridge_preds1f
+del desc_ridge_preds2
+del desc_ridge_preds2f
+gc.collect()
+print('[{}] Finished garbage collection'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+lb = LabelBinarizer(sparse_output=True)
+X_brand_train = lb.fit_transform(df_train['brand_name'])
+X_brand_test = lb.transform(df_test['brand_name'])
+print('[{}] Finished label binarize `brand_name`'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+X_cat_train = lb.fit_transform(df_train['gencat_name'])
+X_cat_test = lb.transform(df_test['gencat_name'])
+X_cat1_train = lb.fit_transform(df_train['subcat1_name'])
+X_cat1_test = lb.transform(df_test['subcat1_name'])
+X_cat2_train = lb.fit_transform(df_train['subcat2_name'])
+X_cat2_test = lb.transform(df_test['subcat2_name'])
+print('[{}] Finished label binarize categories'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+X_dummies_train = csr_matrix(
+    pd.get_dummies(df_train[list(cols - (basic_cols - {'item_condition_id', 'shipping'}))],
+                   sparse=True).values)
+print('[{}] Create dummies completed - train'.format(time.time() - start_time))
+
+X_dummies_test = csr_matrix(
+    pd.get_dummies(df_test[list(cols - (basic_cols - {'item_condition_id', 'shipping'}))],
+                   sparse=True).values)
+print('[{}] Create dummies completed - test'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+sparse_merge_train = hstack((X_dummies_train, X_description_train, X_brand_train, X_cat_train,
+                             X_cat1_train, X_cat2_train, X_name_train)).tocsr()
+del X_description_train, lb, X_name_train, X_dummies_train
+gc.collect()
+print('[{}] Create sparse merge train completed'.format(time.time() - start_time))
+
+sparse_merge_test = hstack((X_dummies_test, X_description_test, X_brand_test, X_cat_test,
+                             X_cat1_test, X_cat2_test, X_name_test)).tocsr()
+del X_description_test, X_name_test, X_dummies_test
+gc.collect()
+print('[{}] Create sparse merge test completed'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+if SUBMIT_MODE:
+    iters = 3
+else:
+    iters = 1
+    rounds = 3
+
+model = FM_FTRL(alpha=0.035, beta=0.001, L1=0.00001, L2=0.15, D=sparse_merge_train.shape[1],
+                alpha_fm=0.05, L2_fm=0.0, init_fm=0.01,
+                D_fm=100, e_noise=0, iters=iters, inv_link="identity", threads=4)
+
+if SUBMIT_MODE:
+    model.fit(sparse_merge_train, y_train)
+    print('[{}] Train FM completed'.format(time.time() - start_time))
+    predsFM = model.predict(sparse_merge_test)
+    print('[{}] Predict FM completed'.format(time.time() - start_time))
+else:
+    for i in range(rounds):
+        model.fit(sparse_merge_train, y_train)
+        predsFM = model.predict(sparse_merge_test)
+        print('[{}] Iteration {}/{} -- RMSLE: {}'.format(time.time() - start_time, i + 1, rounds, rmse(predsFM, y_test)))
+
+
+# In[ ]:
+
+
+del model
+gc.collect()
+if not SUBMIT_MODE:
+    print("FM_FTRL dev RMSLE:", rmse(predsFM, y_test))
+
+
+fselect = SelectKBest(f_regression, k=48000)
+train_features = fselect.fit_transform(sparse_merge_train, y_train)
+test_features = fselect.transform(sparse_merge_test)
+print('[{}] Select best completed'.format(time.time() - start_time))
+
+
+del sparse_merge_train
+del sparse_merge_test
+gc.collect()
+print('[{}] Garbage collection'.format(time.time() - start_time))
+
+
+# In[ ]:
+
+
+tv = TfidfVectorizer(max_features=250000,
+                     ngram_range=(1, 3),
+                     stop_words=None)
+X_name_train = tv.fit_transform(df_train['name'])
+print('[{}] Finished TFIDF vectorize `name` (1/2)'.format(time.time() - start_time))
+X_name_test = tv.transform(df_test['name'])
+print('[{}] Finished TFIDF vectorize `name` (2/2)'.format(time.time() - start_time))
+
+tv = TfidfVectorizer(max_features=500000,
+                     ngram_range=(1, 3),
+                     stop_words=None)
+X_description_train = tv.fit_transform(df_train['item_description'])
+print('[{}] Finished TFIDF vectorize `item_description` (1/2)'.format(time.time() - start_time))
+X_description_test = tv.transform(df_test['item_description'])
+print('[{}] Finished TFIDF vectorize `item_description` (2/2)'.format(time.time() - start_time))
+
+X_dummies_train = csr_matrix(
+    pd.get_dummies(df_train[['item_condition_id', 'shipping']], sparse=True).values)
+X_dummies_test = csr_matrix(
+    pd.get_dummies(df_test[['item_condition_id', 'shipping']], sparse=True).values)
+
+sparse_merge_train = hstack((X_description_train, X_brand_train, X_cat_train,
+                             X_cat1_train, X_cat2_train, X_name_train)).tocsr()
+del X_dummies_train, X_description_train, X_brand_train, X_cat_train
+del X_cat1_train, X_cat2_train, X_name_train
+gc.collect()
+print('[{}] Create sparse merge train completed'.format(time.time() - start_time))
+
+sparse_merge_test = hstack((X_description_test, X_brand_test, X_cat_test,
+                            X_cat1_test, X_cat2_test, X_name_test)).tocsr()
+del X_dummies_test, X_description_test, X_brand_test, X_cat_test
+del X_cat1_test, X_cat2_test, X_name_test
+gc.collect()
+print('[{}] Create sparse merge test completed'.format(time.time() - start_time))
+
+
+X_train_1, X_train_2, y_train_1, y_train_2 = train_test_split(sparse_merge_train, y_train,
+                                                              test_size = 0.5,
+                                                              shuffle = False)
+print('[{}] Finished splitting'.format(time.time() - start_time))
+
+
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_1, y_train_1)
+print('[{}] Finished to train ridge (1)'.format(time.time() - start_time))
+ridge_preds1 = model.predict(X_train_2)
+ridge_preds1f = model.predict(sparse_merge_test)
+print('[{}] Finished to predict ridge (1)'.format(time.time() - start_time))
+model = Ridge(solver="sag", fit_intercept=True, random_state=205, alpha=3.3)
+model.fit(X_train_2, y_train_2)
+print('[{}] Finished to train ridge (2)'.format(time.time() - start_time))
+ridge_preds2 = model.predict(X_train_1)
+ridge_preds2f = model.predict(sparse_merge_test)
+print('[{}] Finished to predict ridge (2)'.format(time.time() - start_time))
+ridge_preds_oof = np.concatenate((ridge_preds2, ridge_preds1), axis=0)
+ridge_preds_test = (ridge_preds1f + ridge_preds2f) / 2.0
+print('RMSLE OOF: {}'.format(rmse(ridge_preds_oof, y_train)))
+if not SUBMIT_MODE:
+    print('RMSLE TEST: {}'.format(rmse(ridge_preds_test, y_test)))
+
+
+model = MultinomialNB(alpha=0.01)
+model.fit(X_train_1, y_train_1 >= 4)
+print('[{}] Finished to train MNB (1)'.format(time.time() - start_time))
+mnb_preds1 = model.predict_proba(X_train_2)[:, 1]
+mnb_preds1f = model.predict_proba(sparse_merge_test)[:, 1]
+print('[{}] Finished to predict MNB (1)'.format(time.time() - start_time))
+model = MultinomialNB(alpha=0.01)
+model.fit(X_train_2, y_train_2 >= 4)
+print('[{}] Finished to train MNB (2)'.format(time.time() - start_time))
+mnb_preds2 = model.predict_proba(X_train_1)[:, 1]
+mnb_preds2f = model.predict_proba(sparse_merge_test)[:, 1]
+print('[{}] Finished to predict MNB (2)'.format(time.time() - start_time))
+mnb_preds_oof = np.concatenate((mnb_preds2, mnb_preds1), axis=0)
+mnb_preds_test = (mnb_preds1f + mnb_preds2f) / 2.0
+
+
+del ridge_preds1
+del ridge_preds1f
+del ridge_preds2
+del ridge_preds2f
+del mnb_preds1
+del mnb_preds1f
+del mnb_preds2
+del mnb_preds2f
+del X_train_1
+del X_train_2
+del y_train_1
+del y_train_2
+del sparse_merge_train
+del sparse_merge_test
+del model
+gc.collect()
+print('[{}] Finished garbage collection'.format(time.time() - start_time))
+
+
+df_train['ridge'] = ridge_preds_oof
+df_train['name_ridge'] = name_ridge_preds_oof
+df_train['desc_ridge'] = desc_ridge_preds_oof
+df_train['mnb'] = mnb_preds_oof
+df_test['ridge'] = ridge_preds_test
+df_test['name_ridge'] = name_ridge_preds_test
+df_test['desc_ridge'] = desc_ridge_preds_test
+df_test['mnb'] = mnb_preds_test
+print('[{}] Finished adding submodels'.format(time.time() - start_time))
+
+
+f_cats = ['brand_name', 'gencat_name', 'subcat1_name', 'subcat2_name', 'name_first']
+target_encode = TargetEncoder(min_samples_leaf=100, smoothing=10, noise_level=0.01,
+                              keep_original=True, cols=f_cats)
+df_train, df_test = target_encode.encode(df_train, df_test, y_train)
+print('[{}] Finished target encoding'.format(time.time() - start_time))
+
+
+df_train.drop(f_cats, axis=1, inplace=True)
+df_test.drop(f_cats, axis=1, inplace=True)
+del mnb_preds_oof
+del mnb_preds_test
+del ridge_preds_oof
+del ridge_preds_test
+gc.collect()
+print('[{}] Finished garbage collection'.format(time.time() - start_time))
+
+
+cols = ['gencat_name_te', 'brand_name_te', 'subcat1_name_te', 'subcat2_name_te',
+        'name_first_te', 'mnb', 'desc_ridge', 'name_ridge', 'ridge']
+train_dummies = csr_matrix(df_train[cols].values)
+print('[{}] Finished dummyizing model 1/5'.format(time.time() - start_time))
+test_dummies = csr_matrix(df_test[cols].values)
+print('[{}] Finished dummyizing model 2/5'.format(time.time() - start_time))
+del df_train
+del df_test
+gc.collect()
+print('[{}] Finished dummyizing model 3/5'.format(time.time() - start_time))
+train_features = hstack((train_features, train_dummies)).tocsr()
+print('[{}] Finished dummyizing model 4/5'.format(time.time() - start_time))
+test_features = hstack((test_features, test_dummies)).tocsr()
+print('[{}] Finished dummyizing model 5/5'.format(time.time() - start_time))
+
+
+d_train = lgb.Dataset(train_features, label=y_train)
+del train_features; gc.collect()
+if SUBMIT_MODE:
+    watchlist = [d_train]
+else:
+    d_valid = lgb.Dataset(test_features, label=y_test)
+    watchlist = [d_train, d_valid]
+
+params = {
+    'learning_rate': 0.15,
+    'application': 'regression',
+    'max_depth': 13,
+    'num_leaves': 400,
+    'verbosity': -1,
+    'metric': 'RMSE',
+    'data_random_seed': 1,
+    'bagging_fraction': 0.8,
+    'feature_fraction': 0.6,
+    'nthread': 4,
+    'lambda_l1': 10,
+    'lambda_l2': 10
+}
+print('[{}] Finished compiling LGB'.format(time.time() - start_time))
+
+modelL = lgb.train(params,
+                  train_set=d_train,
+                  num_boost_round=1350,
+                  valid_sets=watchlist,
+                  verbose_eval=50)
+
+predsL = modelL.predict(test_features)
+predsL[predsL < 0] = 0
+
+if not SUBMIT_MODE:
+    print("LGB RMSLE:", rmse(predsL, y_test))
+
+del d_train
+del modelL
+if not SUBMIT_MODE:
+    del d_valid
+gc.collect()
+
+
+preds_final = predsFM * 0.33 + predsL * 0.67
+if not SUBMIT_MODE:
+    print('Final RMSE: ', rmse(preds_final, y_test))
+
+
+if SUBMIT_MODE:
+    preds_final = np.expm1(preds_final)
+    submission['price'] = preds_final
+    submission.to_csv('lgb_and_fm.csv', index=False)
+    print('[{}] Writing submission done'.format(time.time() - start_time))
+

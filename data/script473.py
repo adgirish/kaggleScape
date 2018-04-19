@@ -1,485 +1,866 @@
 
 # coding: utf-8
 
-# This was put together in a couple of hours using code that I used to participate in other Kaggle events. This is a basic startup for those that are interested in using residual networks using Keras. With the code below, the hardware that I was using is:
-# 
-# 1.    Ubuntu 14.04
-# 2.    x64 I7 processor
-# 3.    Python 2.7
-# 4.    Used PIP installer for all python packages (and apt-get for specialized code such as OpenCV)
-# 5.    SSD Harddrive with 1TB storage (I don't think you need more than 100GB though)
-# 6.    NVidia 1080 GTX Founders Edition graphics card
-# 
-# This was meant as a starting point to build upon for those that are interested.
-# 
-# Enjoy!
-# 
-# Rodney Thomas
+# ## Medical Appointment No Shows
+
+# ### 1. Load Libraries
+
+# Below we will load all the required libraries. Libraries for reading CSV File, Basic EDA, Visualization and Data Modeling are all loaded in the below cell.
 
 # In[ ]:
 
 
-from __future__ import division
-
-import six
-import numpy as np
 import pandas as pd
-import cv2
-import glob
-import random
+import numpy as np
+import datetime
+from time import strftime
 
-np.random.seed(2016)
-random.seed(2016)
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import GridSearchCV
+from sklearn.preprocessing import LabelEncoder
 
-from keras.models import Model
-from keras.layers import Input, Activation, merge, Dense, Flatten
-from keras.layers.convolutional import Convolution2D, MaxPooling2D, AveragePooling2D
-from keras.layers.normalization import BatchNormalization
-from keras.regularizers import l2
-from keras import backend as K
-from keras.callbacks import EarlyStopping, ModelCheckpoint
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
 
+import matplotlib.pyplot as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-# ## Removes autoscroll throughout process
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('javascript', '', 'IPython.OutputArea.prototype._should_scroll = function(lines) {\n    return false;\n}')
-
-
-# ## Global Declarations
-
-# In[ ]:
-
-
-conf = dict()
-
-# How many patients will be in train and validation set during training. Range: (0; 1)
-conf['train_valid_fraction'] = 0.75
-
-# Batch size for CNN [Depends on GPU and memory available]
-conf['batch_size'] = 1
-
-# Number of epochs for CNN training
-#conf['nb_epoch'] = 200
-conf['nb_epoch'] = 1
-
-# Early stopping. Stop training after epochs without improving on validation
-conf['patience'] = 3
-
-# Shape of image for CNN (Larger the better, but you need to increase CNN as well)
-#conf['image_shape'] = (4160,4128)
-#conf['image_shape'] = (2080,2064)
-#conf['image_shape'] = (1024,1024)
-conf['image_shape'] = (64,64)
-
-
-# ## Residual Network Class
-
-# In[ ]:
-
-
-def _bn_relu(input):
-    """Helper to build a BN -> relu block
-    """
-    norm = BatchNormalization(axis=CHANNEL_AXIS)(input)
-    return Activation("relu")(norm)
+import seaborn as sns
 
 
 # In[ ]:
 
 
-def _conv_bn_relu(**conv_params):
-    """Helper to build a conv -> BN -> relu block
-    """
-    nb_filter = conv_params["nb_filter"]
-    nb_row = conv_params["nb_row"]
-    nb_col = conv_params["nb_col"]
-    subsample = conv_params.setdefault("subsample", (1, 1))
-    init = conv_params.setdefault("init", "he_normal")
-    border_mode = conv_params.setdefault("border_mode", "same")
-    W_regularizer = conv_params.setdefault("W_regularizer", l2(1.e-4))
+week_key = ['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']
 
-    def f(input):
-        conv = Convolution2D(nb_filter=nb_filter, nb_row=nb_row, nb_col=nb_col, subsample=subsample,
-                             init=init, border_mode=border_mode, W_regularizer=W_regularizer)(input)
-        return _bn_relu(conv)
 
-    return f
+# ### 2. Load Data
+
+# In the below cell we will load the data from the CSV file in to a DataFrame. We will also check the row and column count by getting the shape of the data.
+
+# In[ ]:
+
+
+df = pd.read_csv('../input/KaggleV2-May-2016.csv')
 
 
 # In[ ]:
 
 
-def _bn_relu_conv(**conv_params):
-    """Helper to build a BN -> relu -> conv block.
-    This is an improved scheme proposed in http://arxiv.org/pdf/1603.05027v2.pdf
-    """
-    nb_filter = conv_params["nb_filter"]
-    nb_row = conv_params["nb_row"]
-    nb_col = conv_params["nb_col"]
-    subsample = conv_params.setdefault("subsample", (1,1))
-    init = conv_params.setdefault("init", "he_normal")
-    border_mode = conv_params.setdefault("border_mode", "same")
-    W_regularizer = conv_params.setdefault("W_regularizer", l2(1.e-4))
+print("The shape of the DataFrame is => {}".format(df.shape))
 
-    def f(input):
-        activation = _bn_relu(input)
-        return Convolution2D(nb_filter=nb_filter, nb_row=nb_row, nb_col=nb_col, subsample=subsample,
-                             init=init, border_mode=border_mode, W_regularizer=W_regularizer)(activation)
 
-    return f
+# ### 3. Basic Info of the Data
+
+# In the below cells we will see the basic information about the data that we had loaded in the previous step.
+
+# In[ ]:
+
+
+df.info()
+
+
+# As can be seen above there are no NaN values in any of the columns.
+
+# In[ ]:
+
+
+# Print the top 5 rows
+df.head()
+
+
+# ### 4. Correct Incosistencies in Data
+
+# Below we will correct some of the inconsistencies in the data:
+# 
+# 1. PatientId is an Integer and not Float. So, we will convert it into int64.
+# 2. Data Type of ScheduledDay and AppointmentDay will be changed to DateTime.
+# 3. Typo's in the Column names will be corrected
+# 4. As the AppointmentDay has 00:00:00 in it's TimeStamp, we will ignore it.
+# 5. As we removed the Time from AppointmentDay's TimeStamp we will do a similar thing for ScheduledDay also. (Ideally the Time in AppointmentDay column will help us better rather than in the ScheduledDay)
+
+# In[ ]:
+
+
+# Convert PatientId from Float to Integer
+df['PatientId'] = df['PatientId'].astype('int64')
+
+# Convert ScheduledDay and AppointmentDay from 'object' type to 'datetime64[ns]'
+df['ScheduledDay'] = pd.to_datetime(df['ScheduledDay']).dt.date.astype('datetime64[ns]')
+df['AppointmentDay'] = pd.to_datetime(df['AppointmentDay']).dt.date.astype('datetime64[ns]')
+
+# Rename incorrect column names.
+df = df.rename(columns={'Hipertension': 'Hypertension', 'Handcap': 'Handicap', 'SMS_received': 'SMSReceived', 'No-show': 'NoShow'})
 
 
 # In[ ]:
 
 
-def _shortcut(input, residual):
-    """Adds a shortcut between input and residual block and merges them with "sum"
-    """
-    # Expand channels of shortcut to match residual.
-    # Stride appropriately to match residual (width, height)
-    # Should be int if network architecture is correctly configured.
-    input_shape = K.int_shape(input)
-    residual_shape = K.int_shape(residual)
-    stride_width = int(round(input_shape[ROW_AXIS] / residual_shape[ROW_AXIS]))
-    stride_height = int(round(input_shape[COL_AXIS] / residual_shape[COL_AXIS]))
-    equal_channels = input_shape[CHANNEL_AXIS] == residual_shape[CHANNEL_AXIS]
-
-    shortcut = input
-    # 1 X 1 conv if shape is different. Else identity.
-    if stride_width > 1 or stride_height > 1 or not equal_channels:
-        shortcut = Convolution2D(nb_filter=residual_shape[CHANNEL_AXIS],
-                                 nb_row=1, nb_col=1,
-                                 subsample=(stride_width, stride_height),
-                                 init="he_normal", border_mode="valid",
-                                 W_regularizer=l2(0.0001))(input)
-
-    return merge([shortcut, residual], mode="sum")
+df.info()
 
 
 # In[ ]:
 
 
-def _residual_block(block_function, nb_filter, repetitions, is_first_layer=False):
-    """Builds a residual block with repeating bottleneck blocks.
-    """
-    def f(input):
-        for i in range(repetitions):
-            init_subsample = (1, 1)
-            if i == 0 and not is_first_layer:
-                init_subsample = (2, 2)
-            input = block_function(nb_filter=nb_filter, init_subsample=init_subsample,
-                                   is_first_block_of_first_layer=(is_first_layer and i == 0))(input)
-        return input
+df.head()
 
-    return f
+
+# ### 5. Data Wrangling, Feature Engineering and EDA
+
+# In[ ]:
+
+
+print("Features in the DataFrame => {}".format(df.columns.ravel()))
+
+
+# From the above Info of the DataFrame and the sample data we can see that there are 14 columns in total.
+# 
+#  - There are 13 Independent Variables -> ['PatientId' 'AppointmentID' 'Gender' 'ScheduledDay' 'AppointmentDay' 'Age' 'Neighbourhood' 'Scholarship' 'Hypertension' 'Diabetes' 'Alcoholism' 'Handicap' 'SMSReceived']
+#  - The Dependent Variable is -> ['NoShow']
+
+# Below, we will drop 'PatientId' and 'AppointmentID' from the dataframe as they are just some system genrated numbers and shouldn't be used for predicting the dependent variable.
+
+# In[ ]:
+
+
+# Drop 'PatientId' and 'AppointmentID' as they are just some system genrated numbers.
+df.drop(['PatientId', 'AppointmentID'], axis=1, inplace=True)
 
 
 # In[ ]:
 
 
-def basic_block(nb_filter, init_subsample=(1, 1), is_first_block_of_first_layer=False):
-    """Basic 3 X 3 convolution blocks for use on resnets with layers <= 34.
-    Follows improved proposed scheme in http://arxiv.org/pdf/1603.05027v2.pdf
-    """
-    def f(input):
+# Print Unique Values
+print("Unique Values in `Gender` => {}".format(df.Gender.unique()))
+print("Unique Values in `Scholarship` => {}".format(df.Scholarship.unique()))
+print("Unique Values in `Hypertension` => {}".format(df.Hypertension.unique()))
+print("Unique Values in `Diabetes` => {}".format(df.Diabetes.unique()))
+print("Unique Values in `Alcoholism` => {}".format(df.Alcoholism.unique()))
+print("Unique Values in `Handicap` => {}".format(df.Handicap.unique()))
+print("Unique Values in `SMSReceived` => {}".format(df.SMSReceived.unique()))
 
-        if is_first_block_of_first_layer:
-            # don't repeat bn->relu since we just did bn->relu->maxpool
-            conv1 = Convolution2D(nb_filter=nb_filter,
-                                 nb_row=3, nb_col=3,
-                                 subsample=init_subsample,
-                                 init="he_normal", border_mode="same",
-                                 W_regularizer=l2(0.0001))(input)
-        else:
-            conv1 = _bn_relu_conv(nb_filter=nb_filter, nb_row=3, nb_col=3,
-                                  subsample=init_subsample)(input)
 
-        residual = _bn_relu_conv(nb_filter=nb_filter, nb_row=3, nb_col=3)(conv1)
-        return _shortcut(input, residual)
+# From the above detail we can see that except for `Handicap` which has four values and `Gender` which has 'M' and 'F' all the other features have 'Yes' or 'No' kind of values. So, we will convert those columns to `'object'` type.
 
-    return f
+# In[ ]:
+
+
+df['Scholarship'] = df['Scholarship'].astype('object')
+df['Hypertension'] = df['Hypertension'].astype('object')
+df['Diabetes'] = df['Diabetes'].astype('object')
+df['Alcoholism'] = df['Alcoholism'].astype('object')
+df['Handicap'] = df['Handicap'].astype('object')
+df['SMSReceived'] = df['SMSReceived'].astype('object')
 
 
 # In[ ]:
 
 
-def bottleneck(nb_filter, init_subsample=(1, 1), is_first_block_of_first_layer=False):
-    """Bottleneck architecture for > 34 layer resnet.
-    Follows improved proposed scheme in http://arxiv.org/pdf/1603.05027v2.pdf
-
-    Returns:
-        A final conv layer of nb_filter * 4
-    """
-    def f(input):
-
-        if is_first_block_of_first_layer:
-            # don't repeat bn->relu since we just did bn->relu->maxpool
-            conv_1_1 = Convolution2D(nb_filter=nb_filter,
-                                 nb_row=1, nb_col=1,
-                                 subsample=init_subsample,
-                                 init="he_normal", border_mode="same",
-                                 W_regularizer=l2(0.0001))(input)
-        else:
-            conv_1_1 = _bn_relu_conv(nb_filter=nb_filter, nb_row=1, nb_col=1,
-                                     subsample=init_subsample)(input)
-
-        conv_3_3 = _bn_relu_conv(nb_filter=nb_filter, nb_row=3, nb_col=3)(conv_1_1)
-        residual = _bn_relu_conv(nb_filter=nb_filter * 4, nb_row=1, nb_col=1)(conv_3_3)
-        return _shortcut(input, residual)
-
-    return f
+df.info()
 
 
 # In[ ]:
 
 
-def _handle_dim_ordering():
-    global ROW_AXIS
-    global COL_AXIS
-    global CHANNEL_AXIS
-    if K.image_dim_ordering() == 'tf':
-        ROW_AXIS = 1
-        COL_AXIS = 2
-        CHANNEL_AXIS = 3
-    else:
-        CHANNEL_AXIS = 1
-        ROW_AXIS = 2
-        COL_AXIS = 3
+# Print some sample data
+df.sample(n=5)
 
 
 # In[ ]:
 
 
-def _get_block(identifier):
-    if isinstance(identifier, six.string_types):
-        res = globals().get(identifier)
-        if not res:
-            raise ValueError('Invalid {}'.format(identifier))
-        return res
-    return identifier
+# Print Unique Values for 'Age'
+print("Unique Values in `Age` => {}".format(np.sort(df.Age.unique())))
+
+
+# In the below code we will check few details about the patients with `Age` `0` and `-1`.
+
+# In[ ]:
+
+
+print("Patients with `Age` less than -1 -> {}".format(df[df.Age == -1].shape[0]))
+print("Patients with `Age` equal to 0 -> {}".format(df[df.Age == 0].shape[0]))
+
+
+# As there is only 1 patient with `Age` less than 0 we will delete that record assuming that they was a typo.
+
+# In[ ]:
+
+
+df = df[df.Age >= 0]
+
+
+# As we have 3539 patients with `Age` equal to 0 we are assuming that these are the small babies with few months of Age. Usually as babies doesn't have `Hypertension` or `Diabetes` or `Alcoholism` we will check these features for the above records to see if our assumption is correct.
+
+# In[ ]:
+
+
+df[(df.Age <= 0) & ((df.Hypertension.astype(int) == 1) | (df.Diabetes.astype(int) == 1) | (df.Alcoholism.astype(int) == 1))]
+
+
+# As we have no records above, we will confirm our conclusion that `Age` value of 0 indeed represents babies who are just few months old.
+
+# In[ ]:
+
+
+# Print Unique Values for 'ScheduledDay'
+print("Unique Values in `ScheduledDay` => {}".format(np.sort(df.ScheduledDay.dt.strftime('%Y-%m-%d').unique())))
+
+
+# We can see from the above details that the `ScheduledDay` for appointments are ranging from **2015-11-10** to **2016-06-08** and that's around 7 months of data.
+
+# In[ ]:
+
+
+# Print Unique Values for 'AppointmentDay'
+print("Unique Values in `AppointmentDay` => {}".format(np.sort(df.AppointmentDay.dt.strftime('%Y-%m-%d').unique())))
+
+
+# From the above detail we can see that `AppointmentDay` ranges from **2016-04-29** to **2016-06-08**. The `AppointmentDay` spans just above 1 Month in contrast to the `ScheduledDay` that spans around 7 Months.
+
+# In[ ]:
+
+
+# Print Unique Values for 'Neighbourhood'
+print("Unique Values in `Neighbourhood` => {}".format(np.sort(df.Neighbourhood.unique())))
 
 
 # In[ ]:
 
 
-class ResnetBuilder(object):
-    @staticmethod
-    def build(input_shape, num_outputs, block_fn, repetitions):
-        """Builds a custom ResNet like architecture.
-
-        Args:
-            input_shape: The input shape in the form (nb_channels, nb_rows, nb_cols)
-            num_outputs: The number of outputs at final softmax layer
-            block_fn: The block function to use. This is either `basic_block` or `bottleneck`.
-                The original paper used basic_block for layers < 50
-            repetitions: Number of repetitions of various block units.
-                At each block unit, the number of filters are doubled and the input size is halved
-
-        Returns:
-            The keras `Model`.
-        """
-        _handle_dim_ordering()
-        if len(input_shape) != 3:
-            raise Exception("Input shape should be a tuple (nb_channels, nb_rows, nb_cols)")
-
-        # Permute dimension order if necessary
-        if K.image_dim_ordering() == 'tf':
-            input_shape = (input_shape[1], input_shape[2], input_shape[0])
-
-        # Load function from str if needed.
-        block_fn = _get_block(block_fn)
-
-        input = Input(shape=input_shape)
-        conv1 = _conv_bn_relu(nb_filter=64, nb_row=7, nb_col=7, subsample=(2, 2))(input)
-        pool1 = MaxPooling2D(pool_size=(3, 3), strides=(2, 2), border_mode="same")(conv1)
-
-        block = pool1
-        nb_filter = 64
-        for i, r in enumerate(repetitions):
-            block = _residual_block(block_fn, nb_filter=nb_filter, repetitions=r, is_first_layer=(i == 0))(block)
-            nb_filter *= 2
-
-        # Last activation
-        block = _bn_relu(block)
-
-        block_norm = BatchNormalization(mode=0, axis=CHANNEL_AXIS)(block)
-        block_output = Activation("relu")(block_norm)
-
-        # Classifier block
-        block_shape = K.int_shape(block)
-        pool2 = AveragePooling2D(pool_size=(block_shape[ROW_AXIS], block_shape[COL_AXIS]),
-                                 strides=(1, 1))(block_output)
-        flatten1 = Flatten()(pool2)
-        dense = Dense(output_dim=num_outputs, init="he_normal", activation="softmax")(flatten1)
-        #dense = Dense(output_dim=num_outputs, W_regularizer=l2(0.01), init="he_normal", activation="linear")(flatten1)
-
-        model = Model(input=input, output=dense)
-        return model
-
-    @staticmethod
-    def build_resnet_test(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, basic_block, [1, 1, 1, 1])
-
-    @staticmethod
-    def build_resnet_18(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, basic_block, [2, 2, 2, 2])
-
-    @staticmethod
-    def build_resnet_34(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, basic_block, [3, 4, 6, 3])
-
-    @staticmethod
-    def build_resnet_50(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, bottleneck, [3, 4, 6, 3])
-
-    @staticmethod
-    def build_resnet_101(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, bottleneck, [3, 4, 23, 3])
-
-    @staticmethod
-    def build_resnet_152(input_shape, num_outputs):
-        return ResnetBuilder.build(input_shape, num_outputs, bottleneck, [3, 8, 36, 3])
+# Print Total Count for 'Neighbourhood'
+print("Total Count for `Neighbourhood` => {}".format(df.Neighbourhood.unique().size))
 
 
-# ## Batch Generator for model fit_generator
+# Get Day of the Week for `ScheduledDay` and `AppointmentDay` to see if there are many 'NoShows' over the weekends.
+# Week for `ScheduledDay` and `AppointmentDay` also helps us to see if there is a particular pattern where most patients are coming for a visit.
 
 # In[ ]:
 
 
-def batch_generator_train(files, batch_size):
-    number_of_batches = np.ceil(len(files)/batch_size)
-    counter = 0
-    random.shuffle(files)
-    while True:
-        batch_files = files[batch_size*counter:batch_size*(counter+1)]
-        image_list = []
-        mask_list = []
-        for f in batch_files:
-            image = cv2.imread(f)
-            image = cv2.resize(image, conf['image_shape'])
-
-            cancer_type = f[20:21] # relies on path lengths that is hard coded below
-            if cancer_type == '1':
-                mask = [1, 0, 0]
-            elif cancer_type == '2':
-                mask = [0, 1, 0]
-            else:
-                mask = [0, 0, 1]
-
-            image_list.append(image)
-            mask_list.append(mask)
-        counter += 1
-        image_list = np.array(image_list)
-        mask_list = np.array(mask_list)
-
-        yield image_list, mask_list
-
-        if counter == number_of_batches:
-            random.shuffle(files)
-            counter = 0
+# Get Day of the Week for ScheduledDay and AppointmentDay
+df['ScheduledDay_DOW'] = df['ScheduledDay'].dt.weekday_name
+df['AppointmentDay_DOW'] = df['AppointmentDay'].dt.weekday_name
 
 
-# ## Hardcoded paths to training files. Note that the "additional" directories have been left out.
+# Ideally the `AppointmentDay` should be on or after the `ScheduledDay`. Below we will check if there are any records where there is an inconsistency. In case if the `ScheduledDay` is after the `AppointmentDay` we will consider it as an error and correct the `ScheduledDay` to the `AppointmentDay`.
 
 # In[ ]:
 
 
-# file paths to training and additional samples
-filepaths = []
-filepaths.append('../input/train/Type_1/')
-filepaths.append('../input/train/Type_2/')
-filepaths.append('../input/train/Type_3/')
+df['AppointmentDay'] = np.where((df['AppointmentDay'] - df['ScheduledDay']).dt.days < 0, df['ScheduledDay'], df['AppointmentDay'])
 
+# Get the Waiting Time in Days of the Patients.
+df['Waiting_Time_days'] = df['AppointmentDay'] - df['ScheduledDay']
+df['Waiting_Time_days'] = df['Waiting_Time_days'].dt.days
 
-# ## Get a list of all training files
 
 # In[ ]:
 
 
-allFiles = []
+# Sanity check to see if the Waiting Time is less than Zero for any of the data points.
+print("There are [{}] records where the Waiting Time is less than Zero.".format(df[df.Waiting_Time_days < 0].shape[0]))
 
-for i, filepath in enumerate(filepaths):
-    files = glob.glob(filepath + '*.jpg')
-    allFiles = allFiles + files
-
-
-# ## Split data into training and validation sets
 
 # In[ ]:
 
 
-split_point = int(round(conf['train_valid_fraction']*len(allFiles)))
+df.info()
 
-random.shuffle(allFiles)
-
-train_list = allFiles[:split_point]
-valid_list = allFiles[split_point:]
-print('Train patients: {}'.format(len(train_list)))
-print('Valid patients: {}'.format(len(valid_list)))
-
-
-# ## Testing model generator
 
 # In[ ]:
 
 
-print('Create and compile model...')
+df.sample(n=10)
 
-nb_classes = 3
-img_rows, img_cols = conf['image_shape'][1], conf['image_shape'][0]
-img_channels = 3
-
-model = ResnetBuilder.build_resnet_34((img_channels, img_rows, img_cols), nb_classes)
-model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-#model.compile(loss='hinge',optimizer='adadelta',metrics=['accuracy'])
-
-callbacks = [
-    EarlyStopping(monitor='val_loss', patience=conf['patience'], verbose=0),
-    ModelCheckpoint('cervical_best.hdf5', monitor='val_loss', save_best_only=True, verbose=0),
-]
-
-print('Fit model...')
-fit = model.fit_generator(generator=batch_generator_train(train_list, conf['batch_size']),
-                      nb_epoch=conf['nb_epoch'],
-                      #samples_per_epoch=len(train_list),
-                      samples_per_epoch=3,
-                      validation_data=batch_generator_train(valid_list, conf['batch_size']),
-                      #nb_val_samples=len(valid_list),
-                      nb_val_samples=1,
-                      verbose=1,
-                      callbacks=callbacks)
-
-
-# ## Create submission files with prediction for submission
 
 # In[ ]:
 
 
-#from keras.models import load_model
-#model = load_model('cervical_best.hdf5')
+print("NoShow and Show Count of Patients\n")
+print(df.groupby(['NoShow']).size())
 
-sample_subm = pd.read_csv("../input/sample_submission.csv")
-ids = sample_subm['image_name'].values
+print("\nNoShow and Show '%' of Patients\n")
+show = df.groupby(['NoShow']).size()[0]/(df.groupby(['NoShow']).size()[0]+df.groupby(['NoShow']).size()[1])
+print("Percent of Patients who `Showed Up` => {:.2f}%".format(show*100))
+noshow = df.groupby(['NoShow']).size()[1]/(df.groupby(['NoShow']).size()[0]+df.groupby(['NoShow']).size()[1])
+print("Percent of Patients who Did `Not Showed Up` => {:.2f}%".format(noshow*100))
 
-for id in ids:
-    print('Predict for image {}'.format(id))
-    files = glob.glob("../input/test/" + id)
-    image_list = []
-    for f in files:
-        image = cv2.imread(f)
-        image = cv2.resize(image, conf['image_shape'])
-        image_list.append(image)
-        
-    image_list = np.array(image_list)
 
-    predictions = model.predict(image_list, verbose=1, batch_size=1)
+# From the above information we can see that there is clearly a class imbalance. Around 80% of the patients are coming for the visit after an appointment and around 20% are skipping their appointments.
 
-    sample_subm.loc[sample_subm['image_name'] == id, 'Type_1'] = predictions[0,0]
-    sample_subm.loc[sample_subm['image_name'] == id, 'Type_2'] = predictions[0,1]
-    sample_subm.loc[sample_subm['image_name'] == id, 'Type_3'] = predictions[0,2]
-    
-sample_subm.to_csv("subm.csv", index=False)
+# ### 5. Data Visualization
 
+# #### 5.0 Show/NoShow
+
+# Below we can see that out of 110,500 patients around 88,000 of them have turned up and that's around 80%.
+
+# In[ ]:
+
+
+ax = sns.countplot(x=df.NoShow, data=df)
+ax.set_title("Show/NoShow Patients")
+plt.show()
+
+
+# #### 5.1 Gender
+
+# - Below we can see that out of the 88,000 patients that have turned up, around 57,000 of them are Females and 31,000 are Males.
+# - Of the 22,500 patients that haven't come for the visit around 15,000 are Females and 7,500 are Males
+# - The ratio of Females to Males that have turned up looks simiar to those who haven't come for a visit.
+
+# In[ ]:
+
+
+ax = sns.countplot(x=df.Gender, hue=df.NoShow, data=df)
+ax.set_title("Show/NoShow for Females and Males")
+x_ticks_labels=['Female', 'Male']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# From the above visualization we can clearly see that 'Female' patients usually have more appointments that 'Male' patients. So, **Gender** might be an important factor. But if we closely look at the NoShow distribution across Male's and Female's it is almost the same. So, **Gender** may not play an important role in determining if a patient comes for a visit or not.
+
+# #### 5.2 Age
+
+# We will draw a boxplot for the `Age` feature to check it's distribution.
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,2))
+plt.xticks(rotation=90)
+_ = sns.boxplot(x=df.Age)
+
+
+# From the above `BoxPlot` we can see that the Median Age is around 30 and the IQR is between 18 and 55.
+# Though the BoxPlot shows few datapoints as outliers we will not consider them as true outliers for this case.
+
+# Below we will plot the number of patients for different Age.
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+plt.xticks(rotation=90)
+ax = sns.countplot(x=df.Age)
+ax.set_title("No of Appointments by Age")
+plt.show()
+
+
+# From the above Histogram we can see that there are peaks for the Infants and then the distribution starts to be uniform. Later, after the Age of around 60 we see a right-skewed distribution.
+
+# Below we will plot the Show/NoShow for the patients based on their Age.
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+plt.xticks(rotation=90)
+ax = sns.countplot(x=df.Age, hue=df.NoShow)
+ax.set_title("Show/NoShow of Appointments by Age")
+plt.show()
+
+
+# From the above visualization looks like the ratio of Show to NoShow is almost the same for all Age's except for 'Age 0' and 'Age 1'. We will get a better clarity on the ratio of Show to NoShow for all Age's.
+
+# In[ ]:
+
+
+df_age_ratio = df[df.NoShow == 'No'].groupby(['Age']).size()/df.groupby(['Age']).size()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+plt.xticks(rotation=90)
+ax = sns.barplot(x=df_age_ratio.index, y=df_age_ratio)
+ax.set_title("Percentage of Patients that Showed Up by Age")
+plt.show()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+plt.xticks(rotation=90)
+ax = plt.hist(df_age_ratio)
+plt.title("Distribution of Percentage Show Up by Age")
+plt.show()
+
+
+# From the above visualization we could clearly see that most of the Age group patients have around 80% Show rate.
+
+# #### 5.3 Neighbourhood
+
+# Below we will see the patients count for each Neighbourhood.
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+plt.xticks(rotation=90)
+ax = sns.countplot(x=np.sort(df.Neighbourhood))
+ax.set_title("No of Appointments by Neighbourhood")
+plt.show()
+
+
+# From the above visualization we can see that the number of patients for few Neighbourhood's is very high.
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+plt.xticks(rotation=90)
+ax = sns.countplot(x=np.sort(df.Neighbourhood), hue=df.NoShow, order=df.Neighbourhood.value_counts().index)
+ax.set_title("Show/NoShow by Neighbourhood")
+plt.show()
+
+
+# From the above visualization looks like the ratio of Show to NoShow is almost the same for all Neighbourhood's. We will get a better clarity on the ratio of Show to NoShow for all Neighbourhood's in the below visualization.
+
+# In[ ]:
+
+
+df_n_ratio = df[df.NoShow == 'No'].groupby(['Neighbourhood']).size()/df.groupby(['Neighbourhood']).size()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+plt.xticks(rotation=90)
+ax = sns.barplot(x=df_n_ratio.index, y=df_n_ratio)
+ax.set_title("Percetage Show Up of Patients by Neighbourhood")
+plt.show()
+
+
+# As most of the Neighbourhood have around 80% Show rate, this feature may not add much value while building a model to help us determine which segment of patients are tuning up for a visit the most.
+
+# #### 5.4 Scholarship
+
+# In[ ]:
+
+
+ax = sns.countplot(x=df.Scholarship, hue=df.NoShow, data=df)
+ax.set_title("Show/NoShow for Scholarship")
+x_ticks_labels=['No Scholarship', 'Scholarship']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# In[ ]:
+
+
+df_s_ratio = df[df.NoShow == 'No'].groupby(['Scholarship']).size()/df.groupby(['Scholarship']).size()
+ax = sns.barplot(x=df_s_ratio.index, y=df_s_ratio, palette="RdBu_r")
+ax.set_title("Show Percentage for Scholarship")
+x_ticks_labels=['No Scholarship', 'Scholarship']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# - From the above visualization we can see that there are around 100,000 patients without Scholarship and out of them around 80% have come for the visit.
+# - Out of the 10,500 patients with Scholarship around 75% of them have come for the visit.
+# 
+# So, Scholarship feature could help us in determining if a patient will turn up for the visit after an appointment.
+
+# #### 5.5 Hypertension
+
+# In[ ]:
+
+
+ax = sns.countplot(x=df.Hypertension, hue=df.NoShow, data=df)
+ax.set_title("Show/NoShow for Hypertension")
+x_ticks_labels=['No Hypertension', 'Hypertension']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# In[ ]:
+
+
+df_h_ratio = df[df.NoShow == 'No'].groupby(['Hypertension']).size()/df.groupby(['Hypertension']).size()
+ax = sns.barplot(x=df_h_ratio.index, y=df_h_ratio, palette="RdBu_r")
+ax.set_title("Show Percentage for Hypertension")
+x_ticks_labels=['No Hypertension', 'Hypertension']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# - From the above visualization we can see that there are around 88,000 patients without Hypertension and out of them around 78% have come for the visit.
+# - Out of the 22,500 patients with Hypertension around 85% of them have come for the visit.
+# 
+# So, Hypertension feature could help us in determining if a patient will turn up for the visit after an appointment.
+
+# #### 5.6 Diabetes
+
+# In[ ]:
+
+
+ax = sns.countplot(x=df.Diabetes, hue=df.NoShow, data=df)
+ax.set_title("Show/NoShow for Diabetes")
+x_ticks_labels=['No Diabetes', 'Diabetes']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# In[ ]:
+
+
+df_d_ratio = df[df.NoShow == 'No'].groupby(['Diabetes']).size()/df.groupby(['Diabetes']).size()
+ax = sns.barplot(x=df_d_ratio.index, y=df_d_ratio, palette="RdBu_r")
+ax.set_title("Show Percentage for Diabetes")
+x_ticks_labels=['No Diabetes', 'Diabetes']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# - From the above visualization we can see that there are around 102,000 patients without Diabetes and out of them around 80% have come for the visit.
+# - Out of the 8,500 patients with Diabetes around 83% of them have come for the visit.
+# 
+# So, Diabetes feature could help us in determining if a patient will turn up for the visit after an appointment.
+
+# #### 5.7 Alcoholism
+
+# In[ ]:
+
+
+ax = sns.countplot(x=df.Alcoholism, hue=df.NoShow, data=df)
+ax.set_title("Show/NoShow for Alcoholism")
+x_ticks_labels=['No Alcoholism', 'Alcoholism']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# In[ ]:
+
+
+df_a_ratio = df[df.NoShow == 'No'].groupby(['Alcoholism']).size()/df.groupby(['Alcoholism']).size()
+ax = sns.barplot(x=df_a_ratio.index, y=df_a_ratio, palette="RdBu_r")
+ax.set_title("Show Percentage for Alcoholism")
+x_ticks_labels=['No Alcoholism', 'Alcoholism']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# - From the above visualization we can see that there are around 105,000 patients without Alcoholism and out of them around 80% have come for the visit.
+# - Out of the 5,500 patients with Alcoholism around 80% of them have come for the visit.
+# 
+# As the percentage of visits for patients with and without Alcoholism is the same it may not help us in determining if a patient will come for a visit.
+
+# #### 5.8 Handicap
+
+# In[ ]:
+
+
+ax = sns.countplot(x=df.Handicap, hue=df.NoShow, data=df)
+ax.set_title("Show/NoShow for Handicap")
+plt.show()
+
+
+# In[ ]:
+
+
+df_ha_ratio = df[df.NoShow == 'No'].groupby(['Handicap']).size()/df.groupby(['Handicap']).size()
+ax = sns.barplot(x=df_ha_ratio.index, y=df_ha_ratio, palette="RdBu_r")
+ax.set_title("Show Percentage for Handicap")
+plt.show()
+
+
+# - From the above visualization we can see that there are around 110,000 patients without Handicap and out of them around 80% have come for the visit.
+# 
+# As we can see a clear distinction between different Handicap levels this feature will help us in determining if a patient will turn up for the visit after taking an appointment.
+
+# #### 5.9 SMSReceived
+
+# In[ ]:
+
+
+ax = sns.countplot(x=df.SMSReceived, hue=df.NoShow, data=df)
+ax.set_title("Show/NoShow for SMSReceived")
+x_ticks_labels=['No SMSReceived', 'SMSReceived']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# In[ ]:
+
+
+df_s_ratio = df[df.NoShow == 'No'].groupby(['SMSReceived']).size()/df.groupby(['SMSReceived']).size()
+ax = sns.barplot(x=df_s_ratio.index, y=df_s_ratio, palette="RdBu_r")
+ax.set_title("Show Percentage for SMSReceived")
+x_ticks_labels=['No SMSReceived', 'SMSReceived']
+ax.set_xticklabels(x_ticks_labels)
+plt.show()
+
+
+# - From the above visualization we can see that there are around 75,000 patients who have not received SMS and out of them around 84% have come for the visit.
+# - Out of the 35,500 patients who have received SMS around 72% of them have come for the visit. (This looks opposite to what usually happens. People who do receive a reminder SMS usually tend to visit the hospital more than those who haven't received an SMS. Or this could be an SMS that was recived while booking an appointment and could possibly have no correlation with the visit probability.)
+# 
+# As we can see a clear distinction between people reveiving SMS and not receiving SMS this feature will help us in determining if a patient will turn up for the visit after taking an appointment.
+
+# #### 5.10 ScheduledDay_DOW
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+ax = sns.countplot(x=df.ScheduledDay_DOW, order=week_key)
+ax.set_title("Appointment Count for Scheduled Day of Week")
+plt.show()
+
+
+# - Looks like the call center that takes the appointments doesn't work over the weekends as we do not see any appointments taken on `Saturday` and `Sunday'.
+
+# #### 5.11 AppointmentDay_DOW
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+ax = sns.countplot(x=df.AppointmentDay_DOW, order=week_key)
+ax.set_title("Appointment Count for Appointment Day of Week")
+plt.show()
+
+
+# - There looks like a pattern with the appointments from the above visualizations. Also, we can see there are very less appointments on `Saturday` and no appointments on `Sunday`.
+# 
+# So, AppointmentDay_DOW could help in determining if a patient visits the hospital after taking an appointment.
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+ax = sns.countplot(x=df.AppointmentDay_DOW, hue=df.NoShow, order=week_key)
+ax.set_title("Show/NoShow for Appointment Day of the Week")
+plt.show()
+
+
+# In[ ]:
+
+
+df_a_dow_ratio = df[df.NoShow == 'No'].groupby(['AppointmentDay_DOW']).size()/df.groupby(['AppointmentDay_DOW']).size()
+plt.figure(figsize=(16,4))
+ax = sns.barplot(x=df_a_dow_ratio.index, y=df_a_dow_ratio, order=week_key, palette="RdBu_r")
+ax.set_title("Show Percent for Appointment Day of the Week")
+plt.show()
+
+
+# - As we predicted earlier, we do not see a clear pattern in the patients visits based on the week day. But we can observe that on Saturday's the percentage of visits is less. So, AppointmentDay_DOW can help us in predicting the visits by a small number.
+
+# #### 5.12 Waiting_Time
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+ax = sns.countplot(x=df.Waiting_Time_days, order=df.Waiting_Time_days.value_counts().iloc[:55].index)
+ax.set_title("Waiting Time in Days (Descending Order)")
+plt.show()
+
+
+# - From the above visualization we can see that most of the patients are booking their appointments on the same day. The next highest waiting times are 2days, 4 days and 1 day.
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+ax = sns.countplot(x=df.Waiting_Time_days, order=df.Waiting_Time_days.value_counts(ascending=True).iloc[:55].index)
+ax.set_title("Waiting Time in Days (Ascending Order)")
+plt.show()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+ax = sns.countplot(x=df.Waiting_Time_days, hue=df.NoShow, order=df.Waiting_Time_days.value_counts().iloc[:25].index)
+ax.set_title("Show/NoShow Count for Waiting Time in Days (High Count)")
+plt.show()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+ax = sns.countplot(x=df.Waiting_Time_days, hue=df.NoShow, order=df.Waiting_Time_days.value_counts(ascending=True).iloc[:55].index)
+ax.set_title("Show/NoShow Count for Waiting Time in Days (Low Count)")
+plt.show()
+
+
+# - Below we will visualize the last few rows (High WaitTime) for the Waiting_Time_days column.
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+ax = sns.countplot(x=df[['Waiting_Time_days']].sort_values('Waiting_Time_days', ascending=False).Waiting_Time_days.iloc[:400])
+ax.set_title("Descending Waiting Time in Days")
+plt.show()
+
+
+# In[ ]:
+
+
+plt.figure(figsize=(16,4))
+ax = sns.countplot(x=df[['Waiting_Time_days']].sort_values('Waiting_Time_days', ascending=False).Waiting_Time_days.iloc[:400], hue=df.NoShow)
+ax.set_title("Show/NoShow - Descending Waiting Time in Days")
+plt.show()
+
+
+# In[ ]:
+
+
+df_w_ratio = df[df.NoShow == 'No'].groupby(['Waiting_Time_days']).size()/df.groupby(['Waiting_Time_days']).size()
+
+plt.figure(figsize=(16,4))
+ax = sns.barplot(x=df_w_ratio.index, y=df_w_ratio, order=df.Waiting_Time_days.iloc[:70].index, palette="BuGn_d")
+ax.set_title("Percent of Show for Waiting Time in Days")
+plt.show()
+
+
+# From the above visualization we can see that around 95% of the patients who have booked their appointments on the same day and visiting the hospital without fail. Also close to 80% of the patients are visiting the hospital if they had booked their appointments just before 4 days.
+# 
+# As we have a clear distinction for the patients Show/NoShow with the Waiting_Time_days feature this indeed should help us with a better prediction.
+
+# ### 6. Model Building
+
+# In[ ]:
+
+
+df.info()
+
+
+# In[ ]:
+
+
+# Use `LabelEncoder` to encode labels with value between 0 and n_classes-1.
+#Gender
+le = LabelEncoder()
+df['Gender'] = le.fit_transform(df['Gender'])
+#Neighbourhood
+le = LabelEncoder()
+df['Neighbourhood'] = le.fit_transform(df['Neighbourhood'])
+#ScheduledDay_DOW
+le = LabelEncoder()
+df['ScheduledDay_DOW'] = le.fit_transform(df['ScheduledDay_DOW'])
+#AppointmentDay_DOW
+le = LabelEncoder()
+df['AppointmentDay_DOW'] = le.fit_transform(df['AppointmentDay_DOW'])
+print("LabelEncoder Completed")
+
+#NoShow
+le = LabelEncoder()
+df['NoShow'] = le.fit_transform(df['NoShow'])
+
+
+# In[ ]:
+
+
+df['ScheduledDay_Y'] = df['ScheduledDay'].dt.year
+df['ScheduledDay_M'] = df['ScheduledDay'].dt.month
+df['ScheduledDay_D'] = df['ScheduledDay'].dt.day
+df.drop(['ScheduledDay'], axis=1, inplace=True)
+
+df['AppointmentDay_Y'] = df['AppointmentDay'].dt.year
+df['AppointmentDay_M'] = df['AppointmentDay'].dt.month
+df['AppointmentDay_D'] = df['AppointmentDay'].dt.day
+df.drop(['AppointmentDay'], axis=1, inplace=True)
+
+
+# In[ ]:
+
+
+df.sample(n=10)
+
+
+# **From the basic EDA we see that there are around 80% of the patients who have turned up. We see a clear class imbalance problem here. A naive approach of predicting that every one shows up gives us an accuracy of 0.8. Below we shall see how well the classifiers score on this dataset.**
+
+# In[ ]:
+
+
+# Get the Dependent and Independent Features.
+X = df.drop(['NoShow'], axis=1)
+y = df['NoShow']
+
+
+# In[ ]:
+
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=0)
+
+
+# #### 6.1 DecisionTreeClassifier
+
+# In[ ]:
+
+
+dt_clf = DecisionTreeClassifier(random_state=0)
+dt_clf.fit(X_train, y_train)
+
+
+# In[ ]:
+
+
+print("Feature Importance:\n")
+for name, importance in zip(X.columns, np.sort(dt_clf.feature_importances_)[::-1]):
+    print("{} -- {:.2f}".format(name, importance))
+
+
+# In[ ]:
+
+
+dt_clf.score(X_test, y_test)
+
+
+# #### 6.2 RandomForestClassifier
+
+# In[ ]:
+
+
+rf_clf = RandomForestClassifier(random_state=0)
+rf_clf.fit(X_train, y_train)
+
+
+# In[ ]:
+
+
+print("Feature Importance:\n")
+for name, importance in zip(X.columns, np.sort(rf_clf.feature_importances_)[::-1]):
+    print("{} -- {:.2f}".format(name, importance))
+
+
+# In[ ]:
+
+
+rf_clf.score(X_test, y_test)
+
+
+# #### 6.3 GridSearchCV
+
+# In[ ]:
+
+
+params={'n_estimators':[10,20], 'max_depth':[None, 5], 'min_samples_split':[2,3]}
+rf_clf = RandomForestClassifier(random_state=0)
+clf_grid = GridSearchCV(rf_clf, params, cv=5, n_jobs=-1, verbose=1)
+clf_grid.fit(X, y)
+print(clf_grid.best_params_)
+print(clf_grid.best_score_)
+
+
+# From the above Model Score we can see that we are doing almost similar to the naive predictor. Also, as we have imbalanced classes, we should ideally use different metric like `F1-Score` rather than `Accuracy`.
+
+# #### 7. LImitations
+
+# From the data we can see that the AppointmentDay spans just over a month which means that we were given only a snapshot of complete data. Though there are no null values in the data, making exact predictions and analysis on a snapshot data is difficult and the analysis might not make a representation of the whole data.
+# 
+# Another very important thing that was missing from the data is the Time details in the AppointmentDay which would really help us a lot in predicting NoShow of a patient. As we have the time detail for ScheduledDay, we should have saved the similar thing in AppointmentDay also and not just normalize it.
+# 
+# Also, a reason for the appointment and the consultation doctor specialization would have helped us a lot in making better analysis and predictions for the NoShow of a patient.
+
+# #### 8. Conclusion
+
+# From the above feature importance, we could see that `Gender`, `Age`, `Neighbourhood`, `Scholarship` and `Hypertension` are some of the top features that would help us determine if the patient who has taken an appointment will Show/NoShow.

@@ -1,325 +1,558 @@
 
 # coding: utf-8
 
-# **Introduction**
-# ----------------
 # 
-# In this notebook, I will use [basemap][1] and [pyplot][2] to illustrate the data published by "The Smithsonian Institution" and "US Geological Survey". The Volcanoes dataset contains the recent details about volcanoes and their eruptive history over the past 10,000 years. The Earthquakes dataset contains the date, time, location, depth, magnitude, and source of every earthquake with a reported magnitude 5.5 or higher since 1965.
+# Report:
+# *     Successfully Recovering Columns:
+# 1. *     **regionidcity**
+# 1. *     **regionidzip**
+# 1. *     **propertycountylandusecode**
+# * 
+# *     Recovering Denied
+# 1. *   **regionidneighborhood**
+# 1. *   **propertyzoningdesc**
+# 1. *   **censustractandblock**
+# * 
+# * Neutural (After Droping)
+# 1. *   **propertycountylandusecode**
+# 1. *   **propertylandusetypeid**
+# 1. *   **regionidcounty**
+# 1. *   **rawcensustractandblock**
+# * 
+# * Drop Missing
+# 1. * **latitude**  OR **longitude**
 # 
-# Work in progress :)
-#   [1]: http://matplotlib.org/basemap/
-#   [2]: http://matplotlib.org/api/pyplot_api.html
+# 
+# 
+# 
+
+# ML algo:
+# **K-Nearest Neighbors** ( view method **fillna_knn** for detail )
+
+# Note:
+# * All the recovery do not consider the row with missing ***latitude*** and ***longitude*** values
+# * For those special row, just consider filling the latitude and longitude with north pole location i.e (N 90, ... ) and put some weird value to the geo columns. (merely don't want the value get recover by the knn algorithm )
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from pandas import Series
+import numpy as np
+import pandas as pd
+import gc
+from sklearn import preprocessing
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-from mpl_toolkits.basemap import Basemap
-import warnings
-warnings.filterwarnings('ignore')
+import seaborn as sns
 
-volcanoes = pd.read_csv("../input/volcanic-eruptions/database.csv")
-earthquakes = pd.read_csv("../input/earthquake-database/database.csv")
+sns.set(font_scale=1.5)
+#sns.set_context("notebook", font_scale=1.5, rc={"lines.linewidth": 2.5})
 
-
-# In[ ]:
-
-
-#volcanoes.columns
+#from sklearn.gaussian_process import GaussianProcessRegressor
+#from sklearn.gaussian_process.kernels import Matern, WhiteKernel
+#from scipy.optimize import minimize
+#from scipy.stats import norm
 
 
 # In[ ]:
 
 
-#volcanoes.head()
+prop = pd.read_csv('../input/properties_2016.csv')
 
 
 # In[ ]:
 
 
-#earthquakes.columns
+prop.columns.tolist() 
+
+
+# Those columns contain Geographic Information :
+# *     || *latitude* *longitude*
+# *     || *propertycountylandusecode* *propertylandusetypeid* *propertyzoningdesc*
+# *     || *regionidcity* *regionidcounty* *regionidneighborhood* *regionidzip*
+# *     || *censustractandblock* *rawcensustractandblock*
+
+# In[ ]:
+
+
+geocolumns = [  'latitude', 'longitude'
+                            ,'propertycountylandusecode', 'propertylandusetypeid', 'propertyzoningdesc'
+                            ,'regionidcity','regionidcounty', 'regionidneighborhood', 'regionidzip'
+                            ,'censustractandblock', 'rawcensustractandblock']
 
 
 # In[ ]:
 
 
-#earthquakes.head()
+geoprop = prop[geocolumns]
+del prop; gc.collect()
 
 
-# Bar type figure definition
-
-# In[ ]:
-
-
-def fig_p(data):
-    series=Series(data).value_counts().sort_index()
-    series.plot(kind='bar')
-
-
-# **Data Visualization**
-# ----------------------
-
-# ***Recent location of eruption***
+# Find out the most completed column which could be use as a reference to impute the missing value
 
 # In[ ]:
 
 
-#the earthquakes dataset has nuclear explosions data in it so here i use only the earthquakes information
-earthquakes_eq=pd.DataFrame()
-earthquakes_eq=earthquakes[earthquakes['Type']=='Earthquake']
+missingcount = geoprop.isnull().sum(axis=0)
+plt.figure( figsize = (16,8) )
+plot= sns.barplot( x = geocolumns,y = missingcount.values )
+plt.setp( plot.get_xticklabels(), rotation = 45 )
+missingcount
+
+
+# **Seems like we have 7 candidational columns **
+# Recalled from Geo101, latitude and longitude is the basic info and enough info to tell a location. Every pair of lat and lon refer to a percise location on the earth. Therefore, in here we take latitude and longitude as bases.
+
+# **Let's find the correlation between the missing values**
+
+# In[ ]:
+
+
+corr = geoprop.isnull().corr()
+sns.heatmap( corr, xticklabels = corr.columns.values, yticklabels = corr.columns.values ) 
+
+
+# **Seems like the missing *latitude* ,*longitude* values cause the missing of *rawcensustractandblock*, *regionidzip*, *regionidcounty*, *propertylandusetypeid*, *propertycountylandusecode* values, observing from the bottom to the top.    **                                
+
+# In[ ]:
+
+
+# let's clean the row without the latitude and longitude value
+geoprop.dropna( axis = 0, subset = [ 'latitude', 'longitude' ], inplace = True )
+
+
+# Okay, let see where are those real estates located in
+
+# In[ ]:
+
+
+geoprop.loc[:,'latitude'] = geoprop.loc[:,'latitude']/1e6
+geoprop.loc[:,'longitude'] = geoprop.loc[:,'longitude']/1e6
+
+maxlat = (geoprop['latitude']).max()
+maxlon = (geoprop['longitude']).max()
+minlat = (geoprop['latitude']).min()
+minlon = (geoprop['longitude']).min()
+print('maxlat {} minlat {} maxlon {} minlon {}'.format(maxlat, minlat, maxlon, minlon))
+
+CAparms = { 'llcrnrlat' : minlat,
+                     'urcrnrlat' : maxlat+0.2,
+                     'llcrnrlon' : maxlon-2.5,
+                     'urcrnrlon' :minlon+2.5 }
+
+
+# print( geoprop['regionidcity'].nunique() )
+# print( geoprop['regionidcity'].unique())
+
+# In[ ]:
+
+
+from mpl_toolkits.basemap import Basemap, cm
 
 
 # In[ ]:
 
 
-m = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c')
-fig = plt.figure(figsize=(12,10))
+def create_basemap( llcrnrlat=20,urcrnrlat=50,llcrnrlon=-130,urcrnrlon=-60, figsize=(16,9) ):
+    fig=plt.figure( figsize = figsize )
+    Bm = Basemap( projection='merc', 
+                llcrnrlat=llcrnrlat,urcrnrlat=urcrnrlat,
+                llcrnrlon=llcrnrlon,urcrnrlon=urcrnrlon,
+                lat_ts=20,resolution='i' )
+    # draw coastlines, state and country boundaries, edge of map.
+    Bm.drawcoastlines(); Bm.drawstates(); Bm.drawcountries() 
+    return Bm, fig    
 
-longitudes_vol = volcanoes["Longitude"].tolist()
-latitudes_vol = volcanoes["Latitude"].tolist()
 
-longitudes_eq = earthquakes_eq["Longitude"].tolist()
-latitudes_eq = earthquakes_eq["Latitude"].tolist()
+# In[ ]:
 
-x,y = m(longitudes_vol,latitudes_vol)
-a,b= m(longitudes_eq,latitudes_eq)
 
-plt.title("Volcanos areas (red) Earthquakes (green)")
-m.plot(x, y, "o", markersize = 5, color = 'red')
-m.plot(a, b, "o", markersize = 3, color = 'green')
-
-m.drawcoastlines()
-m.drawcountries()
-m.fillcontinents(color='coral',lake_color='aqua')
-m.drawmapboundary()
-m.drawcountries()
+Bm, fig = create_basemap()
+x,y = Bm( geoprop['longitude'].values, geoprop['latitude'].values)                           
+Bm.scatter( x, y, marker = 'D',color = 'm', s = 1 )
 plt.show()
 
 
-# **Where volcanoes are located and where earthquakes happen (close to the north/south pole or to the equator)?**
-# 
-# Here I divided the locations of erupted volcanoes and earthquakes to three sections. 
+# Wow, CA! Zoom in and see what happen
+
+# hardcoding the locations of the main cities in CA
 
 # In[ ]:
 
 
-#division of long&lat
-def division(data):
-    north_n=sum(data["Latitude"] >=30)
-    middle_n=sum(np.logical_and(data["Latitude"]<30, data["Latitude"]>-30))
-    south_n=sum(data["Latitude"]<= -30)
-    #precentage
-    total=north_n+middle_n+south_n
-    north_p=north_n/total*100
-    middle_p=middle_n/total*100
-    south_p=south_n/total*100
-    return north_n,middle_n,south_n,north_p,middle_p,south_p
+citydict = {}
+citydict['Los Angle'] = [ 34.088537, -118.249923 ]
+citydict['Anaheim'] = [ 33.838199,  -117.924770 ]
+citydict['Irvine'] = [ 33.683549,  -117.793723 ]
+citydict['Long Beach'] = [ 33.778341,  -118.285261]
+citydict['Oxnard'] = [ 34.171196, -119.165045 ]
+citydict['Ventura'] = [ 34.283106, -119.225597 ]
+citydict['Palmdale'] = [34.612009, -118.127173]
+citydict['Lancaster'] = [34.719710, -118.135903]
+citydict['Hesperia'] = [34.420196, -117.289121]
+citydict['Riverside'] = [33.972528, -117.405517]
 
-volc=division(volcanoes)
-eq=division(earthquakes_eq)
-
-print("There are",volc[0],"volcanoes in latitude over 30N",volc[1],
-      "in latitude between 30N and 30S and",volc[2],
-      "in latitude over 30S. In precentage it is %.2f%%"% volc[3],",",
-      "%.2f%%"% volc[4],"and","%.2f%%"% volc[5],"respectively.\n")
-
-print("There were",eq[0],"earthquakes in latitude over 30N",eq[1],
-      "in latitude between 30N and 30S and",eq[2],
-      "in latitude over 30S. In precentage it is %.2f%%"% eq[3],",",
-      "%.2f%%"% eq[4],"and","%.2f%%"% eq[5],"respectively.")
-
-
-# Most of the volcanic eruptions and earthquakes were in the equator area.
-
-# **Where volcanoes erupted and where earthquakes happen in the last 5 years?**
 
 # In[ ]:
 
 
-recent_active = volcanoes[(volcanoes["Last Known Eruption"]>='2012 CE') & (volcanoes["Last Known Eruption"]<='2016 CE')]
-print(recent_active.shape)
-longitudes_vol = recent_active["Longitude"].tolist()
-latitudes_vol = recent_active["Latitude"].tolist()
+def plot_maincities( Bm, citydict ):
+    for key, values in citydict.items():
+        x , y = Bm( values[1], values[0] )
+        Bm.plot( x, y, 'bo', markersize = 5)
+        plt.text( x+3000, y+3000, key )    
 
-earthquakes_eq["Date"] = pd.to_datetime(earthquakes_eq["Date"])
-earthquakes_eq["year"] = earthquakes_eq['Date'].dt.year
-last_eq = earthquakes_eq[(earthquakes_eq["year"]>=2012) & (earthquakes_eq["year"]<=2016)]
-print(last_eq.shape)
 
-longitudes_eq = last_eq["Longitude"].tolist()
-latitudes_eq = last_eq["Latitude"].tolist()
+# In[ ]:
 
-n = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c')
-x,y = n(longitudes_vol,latitudes_vol)
-c,d = n(longitudes_eq,latitudes_eq)
-fig2 = plt.figure(figsize=(12,10))
-plt.title("Volcanoes (red) that were recently active and Earthquakes (green) in the last 5 years")
-n.plot(x, y, "o", markersize = 5, color = 'red')
-n.plot(c, d, "o", markersize = 3, color = 'green')
-n.drawcoastlines()
-n.fillcontinents(color='coral',lake_color='aqua')
-n.drawmapboundary()
-n.drawcountries()
+
+def view_missing( df, target,see_known=True ,ignorefirst = False ):
+
+
+    Bm, fig = create_basemap( **CAparms )
+
+    # plot the known data
+    if see_known:
+        notmiss_df = df.loc[ df[target].notnull() ]
+        groupby = notmiss_df.groupby(target)
+        groups = [ groupby.get_group(g) for g in groupby.groups ]
+        groups = groups[1:] if ignorefirst else groups 
+        print( 'num groups:  ', len( groups ) )
+        for group in groups:
+            x,y = Bm( group['longitude'].values, group['latitude'].values )  
+            Bm.scatter( x, y,  marker = 'D', s = 1 )
+
+    # plot the missing data
+    missing_target = df[target].isnull()
+    if missing_target.any():
+        print( '{} missing value at column: {}'.format( missing_target.sum(), target ) )
+        missing = df.loc[ missing_target, ['latitude','longitude'] ]
+        x,y = Bm( missing['longitude'].values, missing['latitude'].values )  
+        Bm.scatter( x, y,  marker='D',s = 3, color = 'yellow', alpha = 0.1 )
+    else:
+        print('zero missing value at column: ', target )
+        
+    Bm.drawcounties( color='b', linewidth=0.3 )
+
+    plot_maincities( Bm, citydict )
+
+    plt.show()
+
+
+# In[ ]:
+
+
+Bm, fig = create_basemap( **CAparms )
+
+x , y = Bm( geoprop['longitude'].values, geoprop['latitude'].values ) 
+
+Bm.scatter(x,y , marker='D',color='m',s=1 )
+Bm.drawcounties(color='b')
+
+plot_maincities( Bm, citydict )
+
 plt.show()
 
 
-# **Distribution of volcanoes by region**
+# Whoa, It basically cover the cites around Los Angle and some of those are far way from the urban erea meaning that it not belongs to any big city.
+# 
+
+# Let's check our assumption 
+
+# **Plot the location where missing the 'regionidcity' values**
 
 # In[ ]:
 
 
-fig_p(volcanoes["Region"])
-plt.ylabel("Count")
-plt.title("Region with most volcanoes")
+misscity = geoprop['regionidcity'].isnull()
 
+Bm, fig = create_basemap( **CAparms )
 
-# **Distribution of volcanoes by country**
+x,y = Bm( geoprop.loc[ misscity, 'longitude' ].values, geoprop.loc[ misscity,'latitude' ].values )                        
 
-# In[ ]:
+#plot the property
+Bm.scatter(x, y , marker = 'D',color = 'm',s = 1 )
+Bm.drawcounties( color = 'b' )
 
+#plot the location of the main cities
+plot_maincities( Bm, citydict )
 
-plt.figure(figsize=(20,10))
-fig_p(volcanoes["Country"])
-plt.ylabel("Count")
-plt.title("Country with most volcanoes")
-
-
-# In[ ]:
-
-
-from wordcloud import WordCloud
-
-text= ' '
-for s, row in volcanoes.iterrows():
-    text = " ".join([text,"_".join(row['Country'].strip().split(" "))])
-text = text.strip()
-
-plt.figure(figsize=(12,6))
-wordcloud = WordCloud(width=600, height=300, max_font_size=60, max_words=20, collocations=False).generate(text)
-wordcloud.recolor(random_state=0)
-plt.imshow(wordcloud)
-plt.title("20 Countries with most recently erupted volcanoes", fontsize=30)
-plt.axis("off")
 plt.show()
 
 
-# In[ ]:
-
-
-most_vol_region=Series(volcanoes["Region"]).value_counts().sort_index().idxmax(axis=1)
-most_vol_country=Series(volcanoes["Country"]).value_counts().sort_index().idxmax(axis=1)
-
-print("The region with most volcanoes is:",most_vol_region)
-print("The country with most volcanoes is:",most_vol_country)
-
-
-# **What is the main evidence of eruption?**
-
-# In[ ]:
-
-
-fig_p(volcanoes["Activity Evidence"])
-plt.ylabel("Count")
-plt.title("Common evidanve of activity")
-
-
-# **What is the most common rock type of volcanoes?**
-
-# In[ ]:
-
-
-fig_p(volcanoes["Dominant Rock Type"])
-plt.ylabel("Count")
-plt.title("Dominant Rock Type")
-
-
-# **How mant volcanoes are located on each of the tectonic settings?**
-
-# In[ ]:
-
-
-fig_p(volcanoes["Tectonic Setting"])
-plt.ylabel("Count")
-plt.title("Tectonic Setting")
-
-
-# **Which year had the most earthquakes?**
-
-# In[ ]:
-
-
-earthquakes_eq['year'] = earthquakes_eq['Date'].dt.year
-
-plt.figure(figsize=(10,5))
-fig_p(earthquakes_eq['year'])
-plt.ylabel("Count")
-plt.title("Number of earthquakes by year")
-
-
-# In[ ]:
-
-
-most_eq_year=Series(earthquakes_eq['year']).value_counts().sort_index().idxmax(axis=1)
-print("The year with most earthquakes is:", most_eq_year)
-
-
-# **Magnitude of the earthquakes**
-# 
-# The eqrthquakes data holds information for magnitude over 5.5.
+# My assumption is wrong, the values is just randomly missing.......
 # 
 
-# In[ ]:
-
-
-fig_p(np.around(earthquakes_eq["Magnitude"]))
-plt.ylabel("Count")
-plt.title("Earthquakes magnitude (round up)")
-
+# Let's plot the location before we fill the missing value
 
 # In[ ]:
 
 
-#still trying to figure out those figures
-#plt.scatter(earthquakes_eq["Depth"],earthquakes_eq["Longitude"])
-#plt.scatter(earthquakes_eq["Depth"],earthquakes_eq["Latitude"])
+view_missing( geoprop, 'regionidcity', ignorefirst = False )
 
 
-# **Nuclear Explosions**
-# 
-# Magnitude of nuclear explosions from the earthquake data.
+# Let's fill those values
 
 # In[ ]:
 
 
-earthquakes_nex=pd.DataFrame()
-earthquakes_nex=earthquakes[earthquakes['Type']=='Nuclear Explosion']
+from sklearn import neighbors
+from sklearn.preprocessing import OneHotEncoder
 
-fig_p(np.around(earthquakes_nex["Magnitude"]))
-plt.ylabel("Count")
-plt.title("Nuclear Explosions magnitude (round up)")
+def fillna_knn( df, base, target, fraction = 1, threshold = 10 ):
+    assert isinstance( base , list ) or isinstance( base , np.ndarray ) and isinstance( target, str ) 
+    whole = [ target ] + base
+    
+    miss = df[target].isnull()
+    notmiss = ~miss 
+    nummiss = miss.sum()
+    
+    enc = OneHotEncoder()
+    X_target = df.loc[ notmiss, whole ].sample( frac = fraction )
+    
+    enc.fit( X_target[ target ].unique().reshape( (-1,1) ) )
+    
+    Y = enc.transform( X_target[ target ].values.reshape((-1,1)) ).toarray()
+    X = X_target[ base  ]
+    
+    print( 'fitting' )
+    n_neighbors = 10
+    clf = neighbors.KNeighborsClassifier( n_neighbors, weights = 'uniform' )
+    clf.fit( X, Y )
+    
+    print( 'the shape of active features: ' ,enc.active_features_.shape )
+    
+    print( 'perdicting' )
+    Z = clf.predict(geoprop.loc[ miss, base  ])
+    
+    numunperdicted = Z[:,0].sum()
+    if numunperdicted / nummiss *100 < threshold :
+        print( 'writing result to df' )    
+        df.loc[ miss, target ]  = np.dot( Z , enc.active_features_ )
+        print( 'num of unperdictable data: ', numunperdicted )
+        return enc
+    else:
+        print( 'out of threshold: {}% > {}%'.format( numunperdicted / nummiss *100 , threshold ) )
+        
 
-
-# **Distribution of Nuclear Explosion by year.**
 
 # In[ ]:
 
 
-earthquakes_nex["Date"] = pd.to_datetime(earthquakes_nex["Date"])
-earthquakes_nex['year'] = earthquakes_nex['Date'].dt.year
-fig_p(earthquakes_nex['year'])
-plt.ylabel("Count")
-plt.title("Number of Nuclear Explosion by year")
+fillna_knn( df = geoprop,
+                  base = [ 'latitude', 'longitude' ] ,
+                  target = 'regionidcity', fraction = 0.15 )
 
 
-# Conclusions
-# -----------
+# Let's see how well the KNN do on the recovery
+
+# In[ ]:
+
+
+groupscity = geoprop.groupby('regionidcity')
+groups =[ groupscity.get_group(x) for x in groupscity.groups ]
+print('num groups : ',len(groups))
+
+
+# In[ ]:
+
+
+groups[0].regionidcity.values[0]
+del groups, groupscity ; gc.collect()
+
+
+# 0.0 means the knn could not find a suitable city id for that pair of latitude and longitude 
+# So we just ignore the first group
+
+# In[ ]:
+
+
+view_missing( geoprop, 'regionidcity', ignorefirst = True )
+
+
+# After fullfillign the regionidcity, let's check what columns are left 
+
+# In[ ]:
+
+
+missingcount = geoprop.isnull().sum(axis=0)
+missingcount[missingcount>0]
+
+
+# **The columns still have missing values are**
+# 1. *propertycountylandusecode*
+# 2. *propertyzoningdesc*
+# 3. *regionidneighborhood*
+# 4. *regionidzip*
+# 4. *censustractandblock*                         
+
+# Let's deal with *regionidzip* first. We could apply the same trick onto *regionidzip* as well as *regionidcity*
+
+# In[ ]:
+
+
+fillna_knn( df = geoprop,
+                  base = [ 'latitude', 'longitude' ] ,
+                  target = 'regionidzip', fraction = 0.1 )
+
+
+# In[ ]:
+
+
+missingcount = geoprop.isnull().sum( axis = 0 )
+missingcount[ missingcount>0 ]
+
+
+# Let's analyse the regionidneighborhood.
+# This data is simply means community identity
+
+# In[ ]:
+
+
+print('The number of categories : ' ,geoprop.regionidneighborhood.nunique())
+print(geoprop.regionidneighborhood.value_counts().head() )
+
+
+# let's plot it on the map 
+
+# In[ ]:
+
+
+view_missing( geoprop, 'regionidneighborhood', ignorefirst = False )
+
+
+# Seems like the map is got contaminated by the highlighter (tells where the neighborhood data is missing ) . Does it merely means most of the properties actually don't have a community?
+# If so, would it affact the performance of the zillow model? I would left this question until I fullfill all the missing geodata
+
+# But after I conduct an Investigation on the neighborhood in Lancaster CA, I found there are at least **63** neighborhood in Lancaster. 
+
+# Whoa... It is impossible to recover the missing neighborhood data with the original data.... Hope there would be a version_3 could complete the neighborhood data
+
+# Now, let's take a break and move on to the *propertycountylandusecode*
+
+# Let's look at the definition first:
+#      County land use code i.e. it's zoning at the county level
+#      Okay, would it means the land use code describe in that county's land use law?
+# Takes a look at the L.A. county code:
+#      
+# >      22.52.3450 - Permitted Land Use.	
+# >         Eligible land uses under the UAIZ Program may include any agricultural land uses that are permitted or conditionally permitted both by the Act and by local regulations, including local planning and zoning codes
 # 
-# It has been amazing to see the exact locations of each volcano and earthquake in the map and to imagine a line between them to find the boundaries between the tectonic plates. 54 percent of the volcanoes presented in the data are located close to the equator and 64 percent of the earthquakes occur in the same area, this is a sign that the earth's axis is becoming more unstable. 
+#  URL:     https://library.municode.com/ca/los_angeles_county/codes/code_of_ordinances?nodeId=TIT22PLZO_DIV1PLZO_CH22.52GERE_PT31URAGINZOPR_22.52.3450PELAUS
+
+# So it is the zooning codes designed by the local government for limited reason...
+
+# Let's examine the zooning code used by three different county in our data.
+
+# In[ ]:
+
+
+groupby_county = geoprop.groupby('regionidcounty')
+groups = [ groupby_county.get_group(g) for g in groupby_county.groups ]
+print('num groups : ', len(groups))
+for g in groups:
+    print( 'num unique ', g.propertycountylandusecode.nunique() )
+    print( g.propertycountylandusecode.unique() )
+    print('----------------------------------------------------------------------')
+
+
+# Three county use three different type of code, great discovery. Maybe we could split the data into groups by counties.
+
+# Let's see how well it is missing. 
+
+# In[ ]:
+
+
+view_missing( geoprop, 'propertycountylandusecode', ignorefirst = False )
+
+
+# Not much missing, same trick could work also. 
+
+# * One more step needed is: converting the datatype from mixture to numerical datatype. 
+
+# In[ ]:
+
+
+from sklearn.preprocessing import LabelEncoder
+
+def zoningcode2int( df, target ):
+    storenull = df[ target ].isnull()
+    enc = LabelEncoder( )
+    df[ target ] = df[ target ].astype( str )
+
+    print('fit and transform')
+    df[ target ]= enc.fit_transform( df[ target ].values )
+    print( 'num of categories: ', enc.classes_.shape  )
+    df.loc[ storenull, target ] = np.nan
+    print('recover the nan value')
+    return enc
+
+
+# In[ ]:
+
+
+zoningcode2int( df = geoprop,
+                            target = 'propertycountylandusecode' )
+
+
+# In[ ]:
+
+
+geoprop.propertycountylandusecode.nunique()
+
+
+# In[ ]:
+
+
+enc=fillna_knn( df = geoprop,
+                  base = [ 'latitude', 'longitude' ] ,
+                  target = 'propertycountylandusecode', fraction = 0.1 )
+
+
+# We get only around 140 active features which are far away from the total features. Maybe the remaining 100 feature just not show up frequently in the dataset. 
+
+# In[ ]:
+
+
+geoprop.propertycountylandusecode.value_counts().tail(100)
+
+
 # 
+# For this column **propertyzoningdesc ** the information behind the code could refer to: 
+# > Standard Land Use Code
+# > https://www.austintexas.gov/sites/default/files/files/Planning/zoning_landuse_chart.pdf
 # 
+# > http://planning.lacounty.gov/luz/summary/category/industrial_zones
+# > 
+# > https://www.zillow.com/advice-thread/what-is-LAR-1-and-LAR-3-zoning/285772/
+
+# In[ ]:
+
+
+vc = geoprop.propertyzoningdesc.value_counts()
+fig = plt.figure(figsize=((16,9)))
+sns.barplot( x = vc.index[:10], y = vc.values[:10] )
+
+
+# LAR1 may refer to Los Angle R-1 zoning
+
+# In[ ]:
+
+
+view_missing(geoprop,'propertyzoningdesc')
+
+
+# Only thing I know is that the zillow team still has potiontial  find the description .
 # 
-# Please upvote if you liked it :)
+
+# What about the last one
+
+# In[ ]:
+
+
+view_missing(geoprop,'censustractandblock',see_known=False)
+
+
+# ... Another bad news, please drop it. 
+
+# ------------------------------------------------------**The End**-------------------------------------------------------
+
+# Please left your comment below if there are anything confuse you or just for sharing your insight of the data :-)

@@ -1,364 +1,380 @@
 
 # coding: utf-8
 
-# Intro
-# -----
+# It seems like none of the Keras scripts published so far managed to get above 0.26. As written below, this script won't do much better either, but that is with 4 folds, and only two repeated runs and 3 epochs per fold. A proper version of this script with 5 folds and 3 repeated runs has out-of-fold CV of 0.274 and a leaderboard score of 0.270.
 # 
-# Hello! This is a short guide on how to set up basic classifiers for the "Leaf Classification" dataset. I'm still a novice in the field, I've been poking around Kaggle for a while now, so this is more of a notebook for myself, to keep track of what I am learning, than an actual guide. Suggestions and comments are more than welcome!  
-# I will use three of the simplest classification methods (Naïve Bayes, Random Forest and Logistic Regression) and, given the high number of features in this dataset, I will briefly comment on how to reduce their correlation with Principal Component Analysis.
-
-# Here are some of the kernels on Kaggle that I used to learn and to build my code:  
-# [10 Classifier Showdown][1],
-# [Random Forest][2],
-# [Logistic Regression][3].
-# 
-# 
-# 
-# [1]: https://www.kaggle.com/jeffd23/leaf-classification/10-classifier-showdown-in-scikit-learn
-# [2]: https://www.kaggle.com/sunnyrain/leaf-classification/random-forests-with-0-68-score/code
-# [3]: https://www.kaggle.com/bmetka/leaf-classification/logistic-regression/code
-
-# Import Libraries and Define Functions
-# -------------------------------------
+# Keep on reading for suggestions how to get this script to score better.
 
 # In[ ]:
 
 
-#Let's start importing the libraries that we will use
-import csv as csv 
 import numpy as np
+np.random.seed()
 import pandas as pd
-import matplotlib.cm as cm
-import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
-#from random import randint
-from scipy import stats  
+from datetime import datetime
+from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.model_selection import StratifiedKFold
+from sklearn.preprocessing import MinMaxScaler
 
-#Here are the sklearn libaries
-from sklearn.preprocessing import StandardScaler, LabelEncoder
-from sklearn.naive_bayes import GaussianNB
-from sklearn.ensemble import ExtraTreesClassifier
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import KFold,GridSearchCV
-from sklearn.decomposition import PCA
-
-#Here we define a function to calculate the Pearson's correlation coefficient
-#which we will use in a later part of the notebook
-def pearson(x,y):
-	if len(x)!=len(y):
-		print("I can't calculate Pearson's Coefficient, sets are not of the same length!")
-		return
-	else:
-		sumxy = 0
-		for i in range(len(x)):
-			sumxy = sumxy + x[i]*y[i]
-		return (sumxy - len(x)*np.mean(x)*np.mean(y))			/((len(x)-1)*np.std(x, ddof=1)*np.std(y, ddof=1))
+from keras.models import load_model
+from keras.models import Sequential, Model
+from keras.layers import Input, Dense, Dropout, Activation
+from keras.layers.normalization import BatchNormalization
+from keras.callbacks import EarlyStopping, ModelCheckpoint, CSVLogger, Callback
+from keras.wrappers.scikit_learn import KerasClassifier
 
 
-# Import and Prepare the Data
-# ---------------------------
-
-# In[ ]:
-
-
-#Import the dataset and do some basic manipulation
-traindf = pd.read_csv('../input/train.csv', header=0) 
-#testdf = pd.read_csv('../input/test.csv', header=0) I won't use the test set in this notebook
-
-#We can have a look at the data, shape and types, but I'll skip this step here
-#traindf.dtypes
-#traindf.info()
-#traindf.describe
-#The dataset is complete, so there's no need here to clean it from empty entries.
-#traindf = traindf.dropna() 
-
-#We separate the features from the classes, 
-#we can either put them in ndarrays or leave them as pandas dataframes, since sklearn can handle both. 
-#x_train = traindf.values[:, 2:] 
-#y_train = traindf.values[:, 1]
-x_train = traindf.drop(['id', 'species'], axis=1)
-y_train = traindf.pop('species')
-#x_test = traindf.drop(['id'], axis=1)
-
-#Sometimes it may be useful to encode labels with numeric values, but is unnecessary in this case 
-#le = LabelEncoder().fit(traindf['species']) 
-#y_train = le.transform(train['species'])
-#classes = list(le.classes_)
-
-#However, it's a good idea to standardize the data (namely to rescale it around zero 
-#and with unit variance) to avoid that certain unscaled features 
-#may weight more on the classifier decision 
-scaler = StandardScaler().fit(x_train) #find mean and std for the standardization
-x_train = scaler.transform(x_train) #standardize the training values
-#x_test = scaler.transform(x_test)
-
-
-# First Classifiers
-# ---------------
+# This callback is very important. It calculates roc_auc and gini values so they can be monitored during the run. Also, it creates a log of those parameters so that they can be used for early stopping. A tip of the hat to **[Roberto](https://www.kaggle.com/rspadim)** and **[this kernel](https://www.kaggle.com/rspadim/gini-keras-callback-earlystopping-validation)** for helping me figure out the latter.
 # 
-# We can now start setting up our classifiers and naively apply them to the dataset as it is. Ideally, one should first look at the data in depth and think how to reduce it or manipulate it to get the most out of the classifiers. However, we will need these results later, to compare how effective the Features Reduction is in each case. 
-# To compare performance and efficacy of each technique we will use a  **K-fold cross validation**. This technique randomly splits the training dataset in k subsets. While one subset is kept to test the model, the remaining k-1 sets are used to train the data.
+# *Note that this callback in combination with early stopping doesn't print well if you are using verbose=1 (moving arrow) during fitting. I recommend that you use verbose=2 in fitting.*
 
 # In[ ]:
 
 
-#Initialise the K-fold with k=5
-kfold = KFold(n_splits=5, shuffle=True, random_state=4)
+class roc_auc_callback(Callback):
+    def __init__(self,training_data,validation_data):
+        self.x = training_data[0]
+        self.y = training_data[1]
+        self.x_val = validation_data[0]
+        self.y_val = validation_data[1]
+
+    def on_train_begin(self, logs={}):
+        return
+
+    def on_train_end(self, logs={}):
+        return
+
+    def on_epoch_begin(self, epoch, logs={}):
+        return
+
+    def on_epoch_end(self, epoch, logs={}):
+        y_pred = self.model.predict_proba(self.x, verbose=0)
+        roc = roc_auc_score(self.y, y_pred)
+        logs['roc_auc'] = roc_auc_score(self.y, y_pred)
+        logs['norm_gini'] = ( roc_auc_score(self.y, y_pred) * 2 ) - 1
+
+        y_pred_val = self.model.predict_proba(self.x_val, verbose=0)
+        roc_val = roc_auc_score(self.y_val, y_pred_val)
+        logs['roc_auc_val'] = roc_auc_score(self.y_val, y_pred_val)
+        logs['norm_gini_val'] = ( roc_auc_score(self.y_val, y_pred_val) * 2 ) - 1
+
+        print('\rroc_auc: %s - roc_auc_val: %s - norm_gini: %s - norm_gini_val: %s' % (str(round(roc,5)),str(round(roc_val,5)),str(round((roc*2-1),5)),str(round((roc_val*2-1),5))), end=10*' '+'\n')
+        return
+
+    def on_batch_begin(self, batch, logs={}):
+        return
+
+    def on_batch_end(self, batch, logs={}):
+        return
 
 
-# We start with **Naïve Bayes**, one of the most basic classifiers. Here the Bayesian probability theorem is used to predict the classes, with the "naïve" assumption that the features are independent. In the *sklearn* library implementation **Gaussian Naïve Bayes**, the likelihood of the features is Gaussian-shaped and its parameters are calculated with the maximum likelihood method.   
-
-# In[ ]:
-
-
-#Initialise Naive Bayes
-nb = GaussianNB()
-#We can now run the K-fold validation on the dataset with Naive Bayes
-#this will output an array of scores, so we can check the mean and standard deviation
-nb_validation=[nb.fit(x_train[train], y_train[train]).score(x_train[test], y_train[test]).mean()            for train, test in kfold.split(x_train)]
-
-
-# We repeat the process, this time with **Random Forest**, one of the most popular classifiers here on Kaggle. An high number of decision trees (or *forest*) are built and trained on the dataset and the mode of the results is then given as output. 
-# To improve statistics and avoid over-fitting, the **Extremely Randomized Trees** (or *Extra-Trees*) found in *sklearn* is used here. This implementation generates randomised decision trees which are then fitted on random sub-sets of the data and finally averaged. 
-
-# In[ ]:
-
-
-#Initialise Extra-Trees Random Forest
-rf = ExtraTreesClassifier(n_estimators=500, random_state=0)
-#Run K-fold validation with RF
-#Again the classifier is trained on the k-1 sub-sets and then tested on the remaining k-th subset
-#and scores are calcualted
-rf_validation=[rf.fit(x_train[train], y_train[train]).score(x_train[test], y_train[test]).mean()                for train, test in kfold.split(x_train)]
-
-
-# The *sklearn* implementation of **Random Forest** allows to get information on which features are the most important in the classification; although not that useful here, it can usually be beneficial in the features reduction phase, to identify which descriptor are more likely to lead to loss of valuable information if dropped.
-
-# In[ ]:
-
-
-#We extract the importances, their indices and standard deviations
-importances = rf.feature_importances_
-indices = np.argsort(importances)[::-1]
-imp_std = np.std([est.feature_importances_ for est in rf.estimators_], axis=0)
-
-#And we plot the first and last 10 features out of curiosity
-fig = plt.figure(figsize=(8, 6))
-gs1 = gridspec.GridSpec(1, 2)#, height_ratios=[1, 1]) 
-ax1, ax2 = fig.add_subplot(gs1[0]), fig.add_subplot(gs1[1])
-ax1.margins(0.05), ax2.margins(0.05) 
-ax1.bar(range(10), importances[indices][:10],        color="#6480e5", yerr=imp_std[indices][:10], ecolor='#31427e', align="center")
-ax2.bar(range(10), importances[indices][-10:],        color="#e56464", yerr=imp_std[indices][-10:], ecolor='#7e3131', align="center")
-ax1.set_xticks(range(10)), ax2.set_xticks(range(10))
-ax1.set_xticklabels(indices[:10]), ax2.set_xticklabels(indices[-10:])
-ax1.set_xlim([-1, 10]), ax2.set_xlim([-1, 10])
-ax1.set_ylim([0, 0.035]), ax2.set_ylim([0, 0.035])
-ax1.set_xlabel('Feature #'), ax2.set_xlabel('Feature #')
-ax1.set_ylabel('Random Forest Normalized Importance') 
-ax2.set_ylabel('Random Forest Normalized Importance')
-ax1.set_title('First 10 Important Features'), ax2.set_title('Last 10 Important Features')
-gs1.tight_layout(fig)
-#plt.show()
-
-
-# Finally we try **Logistic Regression**, another very popular classifier. It's a **Generalized Linear Model** (the target values is expected to be a linear combination of the input variables) for classification, where a logistic (or *sigmoid*) function is fitted on the data to describe the probability of an outcome at each trial. This model requires in input set of *hyper-parameters*, that can't be learned by the model.  **Exhaustive Grid Search** comes to the rescue: given a range for each parameter,  it explores the hyper-space of the parameters within the boundaries set by these ranges and finds the values that maximise specific scoring functions.
+# Housekeeping utilities.
 
 # In[ ]:
 
 
-#We first define the ranges for each parameter we are interested in searching 
-#(while the others are left as default):
-#C is the inverse of the regularization strength
-#tol is the tolerance for stopping the criteria
-params = {'C':[100, 1000], 'tol': [0.001, 0.0001]}
-#We initialise the Logistic Regression
-lr = LogisticRegression(solver='lbfgs', multi_class='multinomial')
-#We initialise the Exhaustive Grid Search, we leave the scoring as the default function of 
-#the classifier singe log loss gives an error when running with K-fold cross validation
-#add n_jobs=-1 in a parallel computing calculation to use all CPUs available
-#cv=3 increasing this parameter makes it too difficult for kaggle to run the script
-gs = GridSearchCV(lr, params, scoring=None, refit='True', cv=3) 
-gs_validation=[gs.fit(x_train[train], y_train[train]).score(x_train[test], y_train[test]).mean()                for train, test in kfold.split(x_train)]
+def timer(start_time=None):
+    if not start_time:
+        start_time = datetime.now()
+        return start_time
+    elif start_time:
+        thour, temp_sec = divmod(
+            (datetime.now() - start_time).total_seconds(), 3600)
+        tmin, tsec = divmod(temp_sec, 60)
+        print('\n Time taken: %i hours %i minutes and %s seconds.' %
+              (thour, tmin, round(tsec, 2)))
+
+def scale_data(X, scaler=None):
+    if not scaler:
+        scaler = MinMaxScaler(feature_range=(-1, 1))
+        scaler.fit(X)
+    X = scaler.transform(X)
+    return X, scaler
 
 
-# Now that we set up our three classifiers we can check the validation results and compare their performances looking at the averages of their cross validation results.
+# I never seem to be able to write a generic routine for data loading where one would just plug in file names and everything else would be done automatically. Still trying.
 
 # In[ ]:
 
 
-print("Validation Results\n==========================================")
-print("Naive Bayes: " + '{:1.3f}'.format(np.mean(nb_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(nb_validation)))
-print("Random Forest: " + '{:1.3f}'.format(np.mean(rf_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(rf_validation)))
-print("Logistic Regression: " + '{:1.3f}'.format(np.mean(gs_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(gs_validation)))
+# train and test data path
+DATA_TRAIN_PATH = '../input/train.csv'
+DATA_TEST_PATH = '../input/test.csv'
+
+def load_data(path_train=DATA_TRAIN_PATH, path_test=DATA_TEST_PATH):
+    train_loader = pd.read_csv(path_train, dtype={'target': np.int8, 'id': np.int32})
+    train = train_loader.drop(['target', 'id'], axis=1)
+    train_labels = train_loader['target'].values
+    train_ids = train_loader['id'].values
+    print('\n Shape of raw train data:', train.shape)
+
+    test_loader = pd.read_csv(path_test, dtype={'id': np.int32})
+    test = test_loader.drop(['id'], axis=1)
+    test_ids = test_loader['id'].values
+    print(' Shape of raw test data:', test.shape)
+
+    return train, train_labels, test, train_ids, test_ids
 
 
-# The results are very interesting, while both Random Forest and Logistic Regression perform fairly well (with the latter slightly better than the former), Naïve Bayes validation result is extremely low. 
-# This could be due to the fact that the initial assumption of independent features doesn't hold of this dataset. It would be worth at this point to polish a bit the features, and see if by reducing their number we can improve the results of our classifiers.
-
-# Features Reduction
-# ------------------
-
-# A straightforward way to simplify the features is to remove possible correlations. We can intuitively assume that Naïve Bayes results will improve significantly, but it would be good to see if this choice will also improve the validation results for the other two classifiers. 
+# You can ignore most of the parameters below other than the top two. Obviously, more folds means longer running time, but I can tell you from experience that 10 folds with Keras will usually do better than 4. The number of "runs" should be in the 3-5 range. At a minimum, I suggest 5 folds and 3 independent runs per fold (which will eventually get averaged).  This is because of stochastic nature of neural networks, so one run per fold may or may not produce the best possible result.
 # 
-# The dataset contains  total of 192 descriptors, subdivided in three categories: margin, shape and texture. We can first check if within each one of these categories the features are correlated by calculating correlation scores between couples of features (in this case we will use the *Pearson's correlation coefficient*), and then if one of the categories has highly correlated results, we can build a correlation matrix among all the descriptors within such category.
+# **If you can afford it, 10 folds and 5 runs per fold would be my recommendation. Be warned that it may take a day or two, even if you have a GPU.**
 
 # In[ ]:
 
 
-#First we find the sets of margin, shape and texture columns 
-margin_cols = [col for col in traindf.columns if 'margin' in col]
-shape_cols = [col for col in traindf.columns if 'shape' in col] 
-texture_cols = [col for col in traindf.columns if 'texture' in col] 
-margin_pear, shape_pear, texture_pear = [],[],[]
+folds = 4
+runs = 2
 
-#Then we calculate the correlation coefficients for each couple of columns: we can either do this
-#between random columns of between consecutive columns, the difference won't matter much since we are
-#just exploring the data
-for i in range(len(margin_cols)-1):
-    margin_pear.append(pearson(traindf[margin_cols[i]],traindf[margin_cols[i+1]]))
-	#margin_pear.append(pearson(traindf[margin_cols[randint(0,len(margin_cols)-1)]],\
-        #traindf[margin_cols[randint(0,len(margin_cols)-1)]]))
-for i in range(len(shape_cols)-1):
-	shape_pear.append(pearson(traindf[shape_cols[i]],traindf[shape_cols[i+1]]))
-	#shape_pear.append(pearson(traindf[shape_cols[randint(0,len(shape_cols)-1)]],\
-        #traindf[shape_cols[randint(0,len(shape_cols)-1)]]))
-for i in range(len(texture_cols)-1):
-	texture_pear.append(pearson(traindf[texture_cols[i]],traindf[texture_cols[i+1]]))
-	#texture_pear.append(pearson(traindf[texture_cols[randint(0,len(texture_cols)-1)]],\
-        #traindf[texture_cols[randint(0,len(texture_cols)-1)]]))
-
-#We calculate average and standard deviation for each cathergory 
-#and we give it a position on the X axis of the graph
-margin_mean, margin_std = np.mean(margin_pear), np.std(margin_pear, ddof=1)
-margin_x=[0]*len(margin_pear)
-shape_mean, shape_std =	np.mean(shape_pear), np.std(shape_pear, ddof=1)
-shape_x=[1]*len(shape_pear)	
-texture_mean, texture_std =	np.mean(texture_pear), np.std(texture_pear, ddof=1)	
-texture_x=[2]*len(texture_pear)
-
-#We set up the graph
-fig = plt.figure(figsize=(8, 6))
-gs1 = gridspec.GridSpec(1, 2)#, height_ratios=[1, 1]) 
-ax1, ax2 = fig.add_subplot(gs1[0]), fig.add_subplot(gs1[1])
-ax1.margins(0.05), ax2.margins(0.05) 
-
-#We fill the first graph with a scatter plot on a single axis for each category and we add
-#mean and standard deviation, which we can also print to screen as a reference
-ax1.scatter(margin_x, margin_pear, color='blue', alpha=.3, s=100)
-ax1.errorbar([0],margin_mean, yerr=margin_std, color='white', alpha=1, fmt='o', mec='white', lw=2)
-ax1.scatter(shape_x, shape_pear, color='red', alpha=.3, s=100)
-ax1.errorbar([1],shape_mean, yerr=shape_std, color='white', alpha=1, fmt='o', mec='white', lw=2)
-ax1.scatter(texture_x, texture_pear, color='green', alpha=.3, s=100)
-ax1.errorbar([2],texture_mean, yerr=texture_std, color='white', alpha=1, fmt='o', mec='white', lw=2)
-ax1.set_ylim(-1.25, 1.25), ax1.set_xlim(-0.25, 2.25)
-ax1.set_xticks([0,1,2]), ax1.set_xticklabels(['margin','shape','texture'], rotation='vertical')
-ax1.set_xlabel('Category'), ax1.set_ylabel('Pearson\'s Correlation')
-ax1.set_title('Neighbours Correlation')
-ax1.set_aspect(2.5)
-
-print("Pearson's Correlation between neighbours\n==========================================")
-print("Margin: " + '{:1.3f}'.format(margin_mean) + u' \u00B1 '        + '{:1.3f}'.format(margin_std))
-print("Shape: " + '{:1.3f}'.format(shape_mean) + u' \u00B1 '        + '{:1.3f}'.format(shape_std))
-print("Texture: " + '{:1.3f}'.format(texture_mean) + u' \u00B1 '        + '{:1.3f}'.format(texture_std))
-
-#And now, we build a more detailed (and expensive!) correlation matrix, 
-#but only for the shape category, which, as we will see, is highly correlated
-shape_mat=[]
-
-for i in range(traindf[shape_cols].shape[1]):
-    shape_mat.append([])
-    for j in range(traindf[shape_cols].shape[1]):
-        shape_mat[i].append(pearson(traindf[shape_cols[i]],traindf[shape_cols[j]]))
-
-cmap = cm.RdBu_r
-MS= ax2.imshow(shape_mat, interpolation='none', cmap=cmap, vmin=-1, vmax=1)
-ax2.set_xlabel('Shape Feature'), ax2.set_ylabel('Shape Feature')
-cbar = plt.colorbar(MS, ticks=np.arange(-1.0,1.1,0.2))
-cbar.set_label('Pearson\'s Correlation')
-ax2.set_title('Shape Category Correlation Matrix')
-
-#And we have a look at the resulting graphs
-gs1.tight_layout(fig)
-#plt.show()
+cv_LL = 0
+cv_AUC = 0
+cv_gini = 0
+fpred = []
+avpred = []
+avreal = []
+avids = []
 
 
-# The *Pearson's Coefficient* goes from 1 for perfectly correlated arrays, to -1 for perfectly anti-correlated arrays. The midpoint 0 represents uncorrelated data. The results shown in the graph are very interesting. From the plot on the left it's possible to observe that couples of features categorised under "texture" (in green) are fairly uncorrelated, the mean is close to zero and the variance is low, with only one case with correlation higher then 0.5. Similarly,  the "margin" features are centred in zero, but their variance is higher and we can observe a few points with about 0.8 of correlation.
-# 
-# The most striking result is however observed with the "shape" category, where close couples of features are highly correlated. Taking random couples of descriptors doesn't improve the situation much, and this can be easily understood by looking in detail at the second graph, where the correlation matrix of all the features is shown. The descriptors are highly correlated with their closest neighbours, but also with other features periodically. This data forms a nice pattern, yes, but can lead to bad results if not properly taken care of. This also confirms our theory that the starting assumption of Naïve Bayes was wrong. 
-# 
-# Obviously correlation is not the only parameter one should look at when cleaning the data, but for this notebook we are going to focus only on this problem.
-
-# Principal Component Analysis
-# ----------------------------
-# 
-# **Principal Component Analysis**  (or *PCA* in short) allows to transform sets of correlated variables, like our leaves features, into linearly uncorrelated, orthogonal, vectors (the principal components). The output sets are ordered so that the first principal component accounts for as much variability (and thus information) as possible from the input data, and it has the largest variance, while the following vectors have the highest possible variance allowed by their orthogonality.  
-# 
-# The number of sets in output can be lower than the number of input features, sometimes all information from our descriptors can be contained in a lower number of vectors, and for this reason **PCA** is often used as a dimensionality reduction method. It implementation in *sklearn* is based on the **Singular Value Decomposition** (or *SVD*),  a method to extract the eigenvectors, the orthogonal vectors, by means of a factorisation of the matrix of the input features. 
-# 
-# Although in principle we could apply **PCA** it only to a subset of the training data, given that some of the categories don't have much correlation among their members, we will apply here to the whole data set, to make sure that all features are orthogonal.
+# Loading data. Converting "categorical" variables, even though in this dataset they are actually numeric.
 
 # In[ ]:
 
 
-#We initialise pca choosing Minka’s MLE to guess the minimum number of output components necessary
-#to maintain the same information coming from the input descriptors and we ask to solve SVD in full
-pca = PCA(n_components = 'mle', svd_solver = 'full')
-#Then we fit pca on our training set and we apply to the same entire set
-x_train_pca=pca.fit_transform(x_train)
+# Load data set and target values
+train, target, test, tr_ids, te_ids = load_data()
+n_train = train.shape[0]
+train_test = pd.concat((train, test)).reset_index(drop=True)
+col_to_drop = train.columns[train.columns.str.endswith('_cat')]
+col_to_dummify = train.columns[train.columns.str.endswith('_cat')].astype(str).tolist()
 
-#Now we can compare the dimensions of the training set before and after applying PCA and see if we 
-#managed to reduce the number of features. 
-print("Number of descriptors before PCA: " + '{:1.0f}'.format(x_train.shape[1]))
-print("Number of descriptors after PCA: " + '{:1.0f}'.format(x_train_pca.shape[1]))
+for col in col_to_dummify:
+    dummy = pd.get_dummies(train_test[col].astype('category'))
+    columns = dummy.columns.astype(str).tolist()
+    columns = [col + '_' + w for w in columns]
+    dummy.columns = columns
+    train_test = pd.concat((train_test, dummy), axis=1)
 
-
-# As we can see, **PCA** only reduced the features by one element. This doesn't mean, however, that the results won't be improved. We can now apply again our classifiers to this new set and see if anything has changed.
-
-# In[ ]:
-
-
-#Naive Bayes
-nb_validation=[nb.fit(x_train_pca[train], y_train[train]).score(x_train_pca[test], y_train[test]).mean()            for train, test in kfold.split(x_train)]
-#Random Forest
-rf_validation=[rf.fit(x_train_pca[train], y_train[train]).score(x_train_pca[test], y_train[test]).mean()                for train, test in kfold.split(x_train)]
-#Logistic Regression
-gs_validation=[gs.fit(x_train_pca[train], y_train[train]).score(x_train_pca[test], y_train[test]).mean()                for train, test in kfold.split(x_train)]
-
-#And we print the results
-print("Validation Results After PCA\n==========================================")
-print("Naive Bayes: " + '{:1.3f}'.format(np.mean(nb_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(nb_validation)))
-print("Random Forest: " + '{:1.3f}'.format(np.mean(rf_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(rf_validation)))
-print("Logistic Regression: " + '{:1.3f}'.format(np.mean(gs_validation)) + u' \u00B1 '        + '{:1.3f}'.format(np.std(gs_validation)))
+train_test.drop(col_to_dummify, axis=1, inplace=True)
+train_test_scaled, scaler = scale_data(train_test)
+train = train_test_scaled[:n_train, :]
+test = train_test_scaled[n_train:, :]
+print('\n Shape of processed train data:', train.shape)
+print(' Shape of processed test data:', test.shape)
 
 
-# As we expected, the validation results improve significantly for the Naïve Bayes classifier, since now the features independence assumption is correct. No difference is observed instead for the other two classifiers, where the results are consistent with those before **PCA** within a standard deviation. 
+# The two parameters below are worth playing with. Larger patience gives the network a better chance to find solutions when it gets close to the local/global minimum. It also means longer training times. Batch size is one of those parameters that can always be optimized for any given dataset. If you have a GPU, larger batch sizes translate to faster training, but that may or may not be better for the quality of training.
 
 # In[ ]:
 
 
-#Again, we can check if anything changed in the features importance of our Random Forest classifier
-importances = rf.feature_importances_
-indices = np.argsort(importances)[::-1]
-imp_std = np.std([est.feature_importances_ for est in rf.estimators_], axis=0)
-
-fig = plt.figure(figsize=(8, 6))
-gs1 = gridspec.GridSpec(1, 2)#, height_ratios=[1, 1]) 
-ax1, ax2 = fig.add_subplot(gs1[0]), fig.add_subplot(gs1[1])
-ax1.margins(0.05), ax2.margins(0.05) 
-ax1.bar(range(10), importances[indices][:10],        color="#6480e5", yerr=imp_std[indices][:10], ecolor='#31427e', align="center")
-ax2.bar(range(10), importances[indices][-10:],        color="#e56464", yerr=imp_std[indices][-10:], ecolor='#7e3131', align="center")
-ax1.set_xticks(range(10)), ax2.set_xticks(range(10))
-ax1.set_xticklabels(indices[:10]) ,ax2.set_xticklabels(indices[-10:])
-ax1.set_xlim([-1, 10]), ax2.set_xlim([-1, 10])
-ax1.set_ylim([0, 0.035]), ax2.set_ylim([0, 0.035])
-ax1.set_xlabel('Feature #'), ax2.set_xlabel('Feature #')
-ax1.set_ylabel('Random Forest Normalized Importance'), ax2.set_ylabel('Random Forest Normalized Importance')
-ax1.set_title('First 10 Important Features (after PCA)'), ax2.set_title('Last 10 Important Features (after PCA)')
-gs1.tight_layout(fig)
-#plt.show()
+patience = 10
+batchsize = 128
 
 
-# However, looking at the feature importances of the **Random Forest** classifier we can see how the information has been restructured and divided among the features. The 10 first important features (on the left) are taken among the first in the first vectors of the **PCA**, the ones with highest variance, while the least important features for the classifier are mostly among the last vectors of our modified dataset, where the remaining information has been stored. Dropping them would lead to a modest loss of information. Moreover, the actual value of the importance is increased for the first ten vectors and equally low for the last ten.  
-# It is interesting to note how this rearrangement of the information through **PCA** and the elimination of just one descriptor doesn't significantly affect the results for the **Random Forest** classifier. 
+# There are lots of comments within the code below. I think the callback section is particularly import.
 
-# These results gives us a nice example of how the results of different classifiers are highly dependent on the structure of our input data. One should consider carefully which classifier to use depending on the kind problem and data provided and only after an in depth analysis and proper cleaning of the dataset.
+# In[ ]:
+
+
+# Let's split the data into folds. I always use the same random number for reproducibility, 
+# and suggest that you do the same (you certainly don't have to use 1001).
+
+skf = StratifiedKFold(n_splits=folds, random_state=1001)
+starttime = timer(None)
+for i, (train_index, test_index) in enumerate(skf.split(train, target)):
+    start_time = timer(None)
+    X_train, X_val = train[train_index], train[test_index]
+    y_train, y_val = target[train_index], target[test_index]
+    train_ids, val_ids = tr_ids[train_index], tr_ids[test_index]
+    
+# This is where we define and compile the model. These parameters are not optimal, as they were chosen 
+# to get a notebook to complete in 60 minutes. Other than leaving BatchNormalization and last sigmoid 
+# activation alone, virtually everything else can be optimized: number of neurons, types of initializers, 
+# activation functions, dropout values. The same goes for the optimizer at the end.
+
+#########
+# Never move this model definition to the beginning of the file or anywhere else outside of this loop. 
+# The model needs to be initialized anew every time you run a different fold. If not, it will continue 
+# the training from a previous model, and that is not what you want.
+#########
+
+    # This definition must be within the for loop or else it will continue training previous model
+    def baseline_model():
+        model = Sequential()
+        model.add(
+            Dense(
+                200,
+                input_dim=X_train.shape[1],
+                kernel_initializer='glorot_normal',
+                ))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.5))
+        model.add(Dense(100, kernel_initializer='glorot_normal'))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.25))
+        model.add(Dense(50, kernel_initializer='glorot_normal'))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.15))
+        model.add(Dense(25, kernel_initializer='glorot_normal'))
+        model.add(Activation('relu'))
+        model.add(BatchNormalization())
+        model.add(Dropout(0.1))
+        model.add(Dense(1, activation='sigmoid'))
+
+        # Compile model
+        model.compile(optimizer='adam', metrics = ['accuracy'], loss='binary_crossentropy')
+
+        return model
+
+# This is where we repeat the runs for each fold. If you choose runs=1 above, it will run a 
+# regular N-fold procedure.
+
+#########
+# It is important to leave the call to random seed here, so each run starts with a different seed.
+#########
+
+    for run in range(runs):
+        print('\n Fold %d - Run %d\n' % ((i + 1), (run + 1)))
+        np.random.seed()
+
+# Lots to unpack here.
+
+# The first callback prints out roc_auc and gini values at the end of each epoch. It must be listed 
+# before the EarlyStopping callback, which monitors gini values saved in the previous callback. Make 
+# sure to set the mode to "max" because the default value ("auto") will not handle gini properly 
+# (it will act as if the model is not improving even when roc/gini go up).
+
+# CSVLogger creates a record of all iterations. Not really needed but it doesn't hurt to have it.
+
+# ModelCheckpoint saves a model each time gini improves. Its mode also must be set to "max" for reasons 
+# explained above.
+
+        callbacks = [
+            roc_auc_callback(training_data=(X_train, y_train),validation_data=(X_val, y_val)),  # call this before EarlyStopping
+            EarlyStopping(monitor='norm_gini_val', patience=patience, mode='max', verbose=1),
+            CSVLogger('keras-5fold-run-01-v1-epochs.log', separator=',', append=False),
+            ModelCheckpoint(
+                    'keras-5fold-run-01-v1-fold-' + str('%02d' % (i + 1)) + '-run-' + str('%02d' % (run + 1)) + '.check',
+                    monitor='norm_gini_val', mode='max', # mode must be set to max or Keras will be confused
+                    save_best_only=True,
+                    verbose=1)
+        ]
+
+# The classifier is defined here. Epochs should be be set to a very large number (not 3 like below) which 
+# will never be reached anyway because of early stopping. I usually put 5000 there. Because why not.
+
+        nnet = KerasClassifier(
+            build_fn=baseline_model,
+# Epoch needs to be set to a very large number ; early stopping will prevent it from reaching
+#            epochs=5000,
+            epochs=3,
+            batch_size=batchsize,
+            validation_data=(X_val, y_val),
+            verbose=2,
+            shuffle=True,
+            callbacks=callbacks)
+
+        fit = nnet.fit(X_train, y_train)
+        
+# We want the best saved model - not the last one where the training stopped. So we delete the old 
+# model instance and load the model from the last saved checkpoint. Next we predict values both for 
+# validation and test data, and create a summary of parameters for each run.
+
+        del nnet
+        nnet = load_model('keras-5fold-run-01-v1-fold-' + str('%02d' % (i + 1)) + '-run-' + str('%02d' % (run + 1)) + '.check')
+        scores_val_run = nnet.predict_proba(X_val, verbose=0)
+        LL_run = log_loss(y_val, scores_val_run)
+        print('\n Fold %d Run %d Log-loss: %.5f' % ((i + 1), (run + 1), LL_run))
+        AUC_run = roc_auc_score(y_val, scores_val_run)
+        print(' Fold %d Run %d AUC: %.5f' % ((i + 1), (run + 1), AUC_run))
+        print(' Fold %d Run %d normalized gini: %.5f' % ((i + 1), (run + 1), AUC_run*2-1))
+        y_pred_run = nnet.predict_proba(test, verbose=0)
+        if run > 0:
+            scores_val = scores_val + scores_val_run
+            y_pred = y_pred + y_pred_run
+        else:
+            scores_val = scores_val_run
+            y_pred = y_pred_run
+            
+# We average all runs from the same fold and provide a parameter summary for each fold. Unless something 
+# is wrong, the numbers printed here should be better than any of the individual runs.
+
+    scores_val = scores_val / runs
+    y_pred = y_pred / runs
+    LL = log_loss(y_val, scores_val)
+    print('\n Fold %d Log-loss: %.5f' % ((i + 1), LL))
+    AUC = roc_auc_score(y_val, scores_val)
+    print(' Fold %d AUC: %.5f' % ((i + 1), AUC))
+    print(' Fold %d normalized gini: %.5f' % ((i + 1), AUC*2-1))
+    timer(start_time)
+    
+# We add up predictions on the test data for each fold. Create out-of-fold predictions for validation data.
+
+    if i > 0:
+        fpred = pred + y_pred
+        avreal = np.concatenate((avreal, y_val), axis=0)
+        avpred = np.concatenate((avpred, scores_val), axis=0)
+        avids = np.concatenate((avids, val_ids), axis=0)
+    else:
+        fpred = y_pred
+        avreal = y_val
+        avpred = scores_val
+        avids = val_ids
+    pred = fpred
+    cv_LL = cv_LL + LL
+    cv_AUC = cv_AUC + AUC
+    cv_gini = cv_gini + (AUC*2-1)
+
+
+# Here we average all the predictions and provide the final summary.
+
+# In[ ]:
+
+
+LL_oof = log_loss(avreal, avpred)
+print('\n Average Log-loss: %.5f' % (cv_LL/folds))
+print(' Out-of-fold Log-loss: %.5f' % LL_oof)
+AUC_oof = roc_auc_score(avreal, avpred)
+print('\n Average AUC: %.5f' % (cv_AUC/folds))
+print(' Out-of-fold AUC: %.5f' % AUC_oof)
+print('\n Average normalized gini: %.5f' % (cv_gini/folds))
+print(' Out-of-fold normalized gini: %.5f' % (AUC_oof*2-1))
+score = str(round((AUC_oof*2-1), 5))
+timer(starttime)
+mpred = pred / folds
+
+
+# Save the file with out-of-fold predictions. For easier book-keeping, file names have the out-of-fold gini score and are are tagged by date and time.
+
+# In[ ]:
+
+
+print('#\n Writing results')
+now = datetime.now()
+oof_result = pd.DataFrame(avreal, columns=['target'])
+oof_result['prediction'] = avpred
+oof_result['id'] = avids
+oof_result.sort_values('id', ascending=True, inplace=True)
+oof_result = oof_result.set_index('id')
+sub_file = 'train_5fold-keras-run-01-v1-oof_' + str(score) + '_' + str(now.strftime('%Y-%m-%d-%H-%M')) + '.csv'
+print('\n Writing out-of-fold file:  %s' % sub_file)
+oof_result.to_csv(sub_file, index=True, index_label='id')
+
+
+# Save the final prediction. This is the one to submit.
+
+# In[ ]:
+
+
+result = pd.DataFrame(mpred, columns=['target'])
+result['id'] = te_ids
+result = result.set_index('id')
+print('\n First 10 lines of your 5-fold average prediction:\n')
+print(result.head(10))
+sub_file = 'submission_5fold-average-keras-run-01-v1_' + str(score) + '_' + str(now.strftime('%Y-%m-%d-%H-%M')) + '.csv'
+print('\n Writing submission:  %s' % sub_file)
+result.to_csv(sub_file, index=True, index_label='id')
+

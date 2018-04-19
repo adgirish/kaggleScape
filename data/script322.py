@@ -1,131 +1,135 @@
 
 # coding: utf-8
 
-# Hi guys. Please take a look at some features that I've come up with and haven't seen in solutions of other participants. I hope you can fit them nicely in your models :)
+# # Import Data
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# Let's load the test and train sets:
-
-# In[ ]:
-
-
-def read_train_test():
-    data_path = "../input/"
-    train_file = data_path + "train.json"
-    test_file = data_path + "test.json"
-    train_df = pd.read_json(train_file)
-    test_df = pd.read_json(test_file)
-    return train_df, test_df
-
-train_df, test_df = read_train_test()
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy import stats
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.datasets import fetch_20newsgroups_vectorized
+from sklearn.feature_selection import chi2
+from sklearn.feature_selection import RFE
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn import datasets
+from sklearn import metrics
+import types
+from sklearn.manifold import TSNE
+import plotly.graph_objs as go
+from plotly.offline import download_plotlyjs, init_notebook_mode, plot, iplot
+init_notebook_mode(connected=True)
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
+import seaborn as sns
+sns.set(style="whitegrid", palette="muted")
+current_palette = sns.color_palette()
+df = pd.read_csv("../input/2015.csv")
+df.head(2)
 
-# **Let's thing about the coordinates of our flats. Are the patterns of high/low interest really vertical? Let's try look at them from different perspective = let's rotate them!
-# Also, while we're in the are of coordinate systems, let's add polar coordinates, picking central park as the central point.**
+
+# # Check out Correlations
 
 # In[ ]:
 
 
-import math
-def cart2rho(x, y):
-    rho = np.sqrt(x**2 + y**2)
-    return rho
+sns.distplot(df['Happiness Score'])
 
-
-def cart2phi(x, y):
-    phi = np.arctan2(y, x)
-    return phi
-
-
-def rotation_x(row, alpha):
-    x = row['latitude']
-    y = row['longitude']
-    return x*math.cos(alpha) + y*math.sin(alpha)
-
-
-def rotation_y(row, alpha):
-    x = row['latitude']
-    y = row['longitude']
-    return y*math.cos(alpha) - x*math.sin(alpha)
-
-
-def add_rotation(degrees, df):
-    namex = "rot" + str(degrees) + "_X"
-    namey = "rot" + str(degrees) + "_Y"
-
-    df['num_' + namex] = df.apply(lambda row: rotation_x(row, math.pi/(180/degrees)), axis=1)
-    df['num_' + namey] = df.apply(lambda row: rotation_y(row, math.pi/(180/degrees)), axis=1)
-
-    return df
-
-def operate_on_coordinates(tr_df, te_df):
-    for df in [tr_df, te_df]:
-        #polar coordinates system
-        df["num_rho"] = df.apply(lambda x: cart2rho(x["latitude"] - 40.78222222, x["longitude"]+73.96527777), axis=1)
-        df["num_phi"] = df.apply(lambda x: cart2phi(x["latitude"] - 40.78222222, x["longitude"]+73.96527777), axis=1)
-        #rotations
-        for angle in [15,30,45,60]:
-            df = add_rotation(angle, df)
-
-    return tr_df, te_df
-
-train_df, test_df = operate_on_coordinates(train_df, test_df)
-
-
-# Finaly, let's add some other interesting features :)
 
 # In[ ]:
 
 
-import re
-
-def cap_share(x):
-    return sum(1 for c in x if c.isupper())/float(len(x)+1)
-
-for df in [train_df, test_df]:
-    # do you think that users might feel annoyed BY A DESCRIPTION THAT IS SHOUTING AT THEM?
-    df['num_cap_share'] = df['description'].apply(cap_share)
-    
-    # how long in lines the desc is?
-    df['num_nr_of_lines'] = df['description'].apply(lambda x: x.count('<br /><br />'))
-   
-    # is the description redacted by the website?        
-    df['num_redacted'] = 0
-    df['num_redacted'].ix[df['description'].str.contains('website_redacted')] = 1
-
-    
-    # can we contact someone via e-mail to ask for the details?
-    df['num_email'] = 0
-    df['num_email'].ix[df['description'].str.contains('@')] = 1
-    
-    #and... can we call them?
-    
-    reg = re.compile(".*?(\(?\d{3}\D{0,3}\d{3}\D{0,3}\d{4}).*?", re.S)
-    def try_and_find_nr(description):
-        if reg.match(description) is None:
-            return 0
-        return 1
-
-    df['num_phone_nr'] = df['description'].apply(try_and_find_nr)
+corrmat = df.corr()
+sns.heatmap(corrmat, vmax=.8, square=True)
 
 
-# That's it guys, hopefully the features improve your models
+# # Investigate Regional Happiness Ranking
+
+# In[ ]:
+
+
+g = sns.stripplot(x="Region", y="Happiness Rank", data=df, jitter=True)
+plt.xticks(rotation=90)
+
+
+# # Investigate Global Happiness Ranking
+
+# In[ ]:
+
+
+data = dict(type = 'choropleth', 
+           locations = df['Country'],
+           locationmode = 'country names',
+           z = df['Happiness Rank'], 
+           text = df['Country'],
+           colorbar = {'title':'Happiness'})
+layout = dict(title = 'Global Happiness', 
+             geo = dict(showframe = False, 
+                       projection = {'type': 'Mercator'}))
+choromap3 = go.Figure(data = [data], layout=layout)
+iplot(choromap3)
+
+
+# # Setting up Linear Model to Predict Happiness
+
+# In[ ]:
+
+
+y = df['Happiness Score']
+X = df.drop(['Happiness Score', 'Happiness Rank', 'Country', 'Region'], axis=1)
+
+
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=101)
+from sklearn.linear_model import LinearRegression
+lm = LinearRegression()
+lm.fit(X_train,y_train)
+
+
+# In[ ]:
+
+
+print('Coefficients: \n', lm.coef_)
+
+
+# In[ ]:
+
+
+predictions = lm.predict( X_test)
+
+
+# In[ ]:
+
+
+plt.scatter(y_test,predictions)
+plt.xlabel('Y Test')
+plt.ylabel('Predicted Y')
+
+
+# In[ ]:
+
+
+from sklearn import metrics
+
+print('MAE:', metrics.mean_absolute_error(y_test, predictions))
+print('MSE:', metrics.mean_squared_error(y_test, predictions))
+print('RMSE:', np.sqrt(metrics.mean_squared_error(y_test, predictions)))
+
+
+# In[ ]:
+
+
+coeffecients = pd.DataFrame(lm.coef_,X.columns)
+coeffecients.columns = ['Coeffecient']
+coeffecients
+

@@ -1,102 +1,97 @@
+import nltk
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
+import re
+from sklearn.base import BaseEstimator
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.pipeline import Pipeline
+from sklearn.ensemble import RandomForestClassifier
 
-print('Loading data...')
-data_path = '../input/'
-train = pd.read_csv(data_path + 'train.csv', dtype={'msno' : 'category',
-                                                'source_system_tab' : 'category',
-                                                  'source_screen_name' : 'category',
-                                                  'source_type' : 'category',
-                                                  'target' : np.uint8,
-                                                  'song_id' : 'category'})
-test = pd.read_csv(data_path + 'test.csv', dtype={'msno' : 'category',
-                                                'source_system_tab' : 'category',
-                                                'source_screen_name' : 'category',
-                                                'source_type' : 'category',
-                                                'song_id' : 'category'})
-songs = pd.read_csv(data_path + 'songs.csv',dtype={'genre_ids': 'category',
-                                                  'language' : 'category',
-                                                  'artist_name' : 'category',
-                                                  'composer' : 'category',
-                                                  'lyricist' : 'category',
-                                                  'song_id' : 'category'})
-members = pd.read_csv(data_path + 'members.csv',dtype={'city' : 'category',
-                                                      'bd' : np.uint8,
-                                                      'gender' : 'category',
-                                                      'registered_via' : 'category'})
-songs_extra = pd.read_csv(data_path + 'song_extra_info.csv')
+train = pd.read_csv("../input/train.csv").fillna("")
+test  = pd.read_csv("../input/test.csv").fillna("")
 
-print('Data preprocessing...')
-song_cols = ['song_id', 'artist_name', 'genre_ids', 'song_length', 'language']
-train = train.merge(songs[song_cols], on='song_id', how='left')
-test = test.merge(songs[song_cols], on='song_id', how='left')
+class FeatureMapper:
+    def __init__(self, features):
+        self.features = features
 
-members['registration_year'] = members['registration_init_time'].apply(lambda x: int(str(x)[0:4]))
-members['registration_month'] = members['registration_init_time'].apply(lambda x: int(str(x)[4:6]))
-members['registration_date'] = members['registration_init_time'].apply(lambda x: int(str(x)[6:8]))
+    def fit(self, X, y=None):
+        for feature_name, column_name, extractor in self.features:
+            extractor.fit(X[column_name], y)
 
-members['expiration_year'] = members['expiration_date'].apply(lambda x: int(str(x)[0:4]))
-members['expiration_month'] = members['expiration_date'].apply(lambda x: int(str(x)[4:6]))
-members['expiration_date'] = members['expiration_date'].apply(lambda x: int(str(x)[6:8]))
-members = members.drop(['registration_init_time'], axis=1)
+    def transform(self, X):
+        extracted = []
+        for feature_name, column_name, extractor in self.features:
+            fea = extractor.transform(X[column_name])
+            if hasattr(fea, "toarray"):
+                extracted.append(fea.toarray())
+            else:
+                extracted.append(fea)
+        if len(extracted) > 1:
+            return np.concatenate(extracted, axis=1)
+        else: 
+            return extracted[0]
 
-def isrc_to_year(isrc):
-    if type(isrc) == str:
-        if int(isrc[5:7]) > 17:
-            return 1900 + int(isrc[5:7])
-        else:
-            return 2000 + int(isrc[5:7])
-    else:
-        return np.nan
-        
-songs_extra['song_year'] = songs_extra['isrc'].apply(isrc_to_year)
-songs_extra.drop(['isrc', 'name'], axis = 1, inplace = True)
+    def fit_transform(self, X, y=None):
+        extracted = []
+        for feature_name, column_name, extractor in self.features:
+            fea = extractor.fit_transform(X[column_name], y)
+            if hasattr(fea, "toarray"):
+                extracted.append(fea.toarray())
+            else:
+                extracted.append(fea)
+        if len(extracted) > 1:
+            return np.concatenate(extracted, axis=1)
+        else: 
+            return extracted[0]
 
-train = train.merge(members, on='msno', how='left')
-test = test.merge(members, on='msno', how='left')
+def identity(x):
+    return x
 
-train = train.merge(songs_extra, on = 'song_id', how = 'left')
-test = test.merge(songs_extra, on = 'song_id', how = 'left')
+class SimpleTransform(BaseEstimator):
+    def __init__(self, transformer=identity):
+        self.transformer = transformer
 
-import gc
-del members, songs; gc.collect();
+    def fit(self, X, y=None):
+        return self
 
-for col in train.columns:
-    if train[col].dtype == object:
-        train[col] = train[col].astype('category')
-        test[col] = test[col].astype('category')
+    def fit_transform(self, X, y=None):
+        return self.transform(X)
 
-X = train.drop(['target'], axis=1)
-y = train['target'].values
+    def transform(self, X, y=None):
+        return np.array([self.transformer(x) for x in X], ndmin=2).T
 
-X_test = test.drop(['id'], axis=1)
-ids = test['id'].values
+#                          Feature Set Name            Data Frame Column              Transformer
+features = FeatureMapper([('QueryBagOfWords',          'query',                       CountVectorizer(max_features=200)),
+                          ('TitleBagOfWords',          'product_title',               CountVectorizer(max_features=200)),
+                          ('DescriptionBagOfWords',    'product_description',         CountVectorizer(max_features=200)),
+                          ('QueryTokensInTitle',       'query_tokens_in_title',       SimpleTransform()),
+                          ('QueryTokensInDescription', 'query_tokens_in_description', SimpleTransform())])
 
-del train, test; gc.collect();
+def extract_features(data):
+    token_pattern = re.compile(r"(?u)\b\w\w+\b")
+    data["query_tokens_in_title"] = 0.0
+    data["query_tokens_in_description"] = 0.0
+    for i, row in data.iterrows():
+        query = set(x.lower() for x in token_pattern.findall(row["query"]))
+        title = set(x.lower() for x in token_pattern.findall(row["product_title"]))
+        description = set(x.lower() for x in token_pattern.findall(row["product_description"]))
+        if len(title) > 0:
+            data.set_value(i, "query_tokens_in_title", len(query.intersection(title))/len(title))
+        if len(description) > 0:
+            data.set_value(i, "query_tokens_in_description", len(query.intersection(description))/len(description))
 
-d_train = lgb.Dataset(X, y)
-watchlist = [d_train]
+extract_features(train)
+extract_features(test)
 
-#Those parameters are almost out of hat, so feel free to play with them. I can tell
-#you, that if you do it right, you will get better results for sure ;)
-print('Training LGBM model...')
-params = {}
-params['learning_rate'] = 0.2
-params['application'] = 'binary'
-params['max_depth'] = 8
-params['num_leaves'] = 2**8
-params['verbosity'] = 0
-params['metric'] = 'auc'
+pipeline = Pipeline([("extract_features", features),
+                     ("classify", RandomForestClassifier(n_estimators=200,
+                                                         n_jobs=1,
+                                                         min_samples_split=2,
+                                                         random_state=1))])
 
-model = lgb.train(params, train_set=d_train, num_boost_round=50, valid_sets=watchlist, \
-verbose_eval=5)
+pipeline.fit(train, train["median_relevance"])
 
-print('Making predictions and saving them...')
-p_test = model.predict(X_test)
+predictions = pipeline.predict(test)
 
-subm = pd.DataFrame()
-subm['id'] = ids
-subm['target'] = p_test
-subm.to_csv('submission.csv.gz', compression = 'gzip', index=False, float_format = '%.5f')
-print('Done!')
+submission = pd.DataFrame({"id": test["id"], "prediction": predictions})
+submission.to_csv("python_benchmark.csv", index=False)

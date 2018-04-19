@@ -1,0 +1,11 @@
+--2018-04-18 20:52:42--  https://www.kaggle.com/kernels/scriptcontent/379783/download
+Resolving www.kaggle.com (www.kaggle.com)... 168.62.224.124
+Connecting to www.kaggle.com (www.kaggle.com)|168.62.224.124|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: 50259 (49K) [application/octet-stream]
+Saving to: ‘data/script.ipynb.128’
+
+script.ipynb.128    100%[===================>]  49.08K  --.-KB/s    in 0.07s   
+
+2018-04-18 20:52:43 (659 KB/s) - ‘data/script.ipynb.128’ saved [50259/50259]
+

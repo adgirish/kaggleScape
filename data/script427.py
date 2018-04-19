@@ -1,752 +1,426 @@
 
 # coding: utf-8
 
-# # Recommender Systems in Python 101
+# **Update**
+# 
+# *Included Neural Networks in the learning ensemble*
 
-# This notebook is a practical introduction to the main [Recommender System](https://en.wikipedia.org/wiki/Recommender_system) (RecSys) techniques. The objective of a RecSys is to recommend relevant items for users, based on their preference. Preference and relevance are subjective, and they are generally inferred by items users have consumed previously.  
-# The main RecSys techniques are:  
-# - [**Collaborative Filtering**](https://en.wikipedia.org/wiki/Collaborative_filtering): This method makes automatic predictions (filtering) about the interests of a user by collecting preferences or taste information from many users (collaborating). The underlying assumption of the collaborative filtering approach is that if a person A has the same opinion as a person B on a set of items, A is more likely to have B's opinion for a given item than that of a randomly chosen person.   
-# - [**Content-Based Filtering**](http://recommender-systems.org/content-based-filtering/): This method uses only information about the description and attributes of the items users has previously consumed to model user's preferences. In other words, these algorithms try to recommend items that are similar to those that a user liked in the past (or is examining in the present). In particular, various candidate items are compared with items previously rated by the user and the best-matching items are recommended.  
-# - **Hybrid methods**:  Recent research has demonstrated that a hybrid approach, combining collaborative filtering and content-based filtering could be more effective than pure approaches in some cases. These methods can also be used to overcome some of the common problems in recommender systems such as cold start and the sparsity problem.
+# Hi everybody,
+# 
+# in this notebook, I'm going to present some text and numeric feature extraction techniques. Some of them are already presented in the other kernels and some are new. We will focus mostly on the text and we try to place ourselves in the shoes of grant administrators to see what they might focus on when processing the application, *consciously* or *unconsciously*.
+# 
+# Let's start with importing modules and loading the files:
 
-# In this notebook, we use a dataset we've shared on Kaggle Datasets: [Articles Sharing and Reading from CI&T Deskdrop](https://www.kaggle.com/gspmoreira/articles-sharing-reading-from-cit-deskdrop).  
-# We will demonstrate how to implement **Collaborative Filtering**, **Content-Based Filtering** and **Hybrid methods** in Python, for the task of providing personalized recommendations to the users.
-
-# In[ ]:
+# In[1]:
 
 
-import numpy as np
-import scipy
-import pandas as pd
-import math
-import random
-import sklearn
+import pylab as pl # linear algebra + plots
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import re
+import gc
+import xgboost as xgb
+import lightgbm as lgb
+import seaborn as sns
+from sklearn.preprocessing import LabelEncoder, OneHotEncoder
+from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
+from sklearn.metrics import roc_auc_score as auc
+from sklearn.model_selection import StratifiedKFold
+from collections import defaultdict, Counter
+from nltk.tag import pos_tag
 from nltk.corpus import stopwords
-from sklearn.model_selection import train_test_split
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from scipy.sparse.linalg import svds
-import matplotlib.pyplot as plt
+from nltk.stem import PorterStemmer
+from textblob import TextBlob
+from scipy.stats import pearsonr
+from scipy.sparse import hstack
+from multiprocessing import Pool
+
+Folder = "../input/"
+Ttr = pd.read_csv(Folder + 'train.csv')
+Tts = pd.read_csv(Folder + 'test.csv', low_memory=False)
+R = pd.read_csv(Folder + 'resources.csv')
 
 
-# # Loading data: CI&T Deskdrop dataset
-
-# In this section, we load the [Deskdrop dataset](https://www.kaggle.com/gspmoreira/articles-sharing-reading-from-cit-deskdrop), which contains a real sample of 12 months logs (Mar. 2016 - Feb. 2017) from CI&T's Internal Communication platform (DeskDrop). It contains about 73k logged users interactions on more than 3k public articles shared in the platform.
-# It is composed of two CSV files:  
-# - **shared_articles.csv**
-# - **users_interactions.csv**
+# **Data Cleaning**
 # 
-# Take a look in this kernels for a better picture of the dataset: 
-# - Deskdrop datasets EDA 
-# - DeskDrop Articles Topic Modeling
-
-# ## shared_articles.csv
-
-# Contains information about the articles shared in the platform. Each article has its sharing date (timestamp), the original url, title, content in plain text, the article' lang (Portuguese: pt or English: en) and information about the user who shared the article (author).
+# We know from the data description page that the essay column formats had changed on 2016-05-17, and thereafter, there are only 2 essays; essay 1 matches to the combination of essays 1&2 and new essay 2 is somehow equal to old essays 3&4.
 # 
-# There are two possible event types at a given timestamp: 
-# - CONTENT SHARED: The article was shared in the platform and is available for users. 
-# - CONTENT REMOVED: The article was removed from the platform and not available for further recommendation.
+# So, I first move the contents of 'project_essay_2' to 'project_essay_4' when essay 4 is nan, then we simply combine 1&2 and 3&4 to make a uniform dataset.
+
+# In[2]:
+
+
+# combine the tables into one
+target = 'project_is_approved'
+Ttr['tr'] = 1; Tts['tr'] = 0
+Ttr['ts'] = 0; Tts['ts'] = 1
+
+T = pd.concat((Ttr,Tts))
+
+T.loc[T.project_essay_4.isnull(), ['project_essay_4','project_essay_2']] =     T.loc[T.project_essay_4.isnull(), ['project_essay_2','project_essay_4']].values
+
+T[['project_essay_2','project_essay_3']] = T[['project_essay_2','project_essay_3']].fillna('')
+
+T['project_essay_1'] = T.apply(lambda row: ' '.join([str(row['project_essay_1']), 
+                                                     str(row['project_essay_2'])]), axis=1)
+T['project_essay_2'] = T.apply(lambda row: ' '.join([str(row['project_essay_3']),
+                                                     str(row['project_essay_4'])]), axis=1)
+
+T = T.drop(['project_essay_3', 'project_essay_4'], axis=1)
+
+
+# **Resource Features**
 # 
-# For the sake of simplicity, we only consider here the "CONTENT SHARED" event type, assuming (naively) that all articles were available during the whole one year period. For a more precise evaluation (and higher accuracy), only articles that were available at a given time should be recommended, but we let this exercice for you.
-
-# In[ ]:
-
-
-articles_df = pd.read_csv('../input/shared_articles.csv')
-articles_df = articles_df[articles_df['eventType'] == 'CONTENT SHARED']
-articles_df.head(5)
-
-
-# ## users_interactions.csv
-
-# Contains logs of user interactions on shared articles. It can be joined to **articles_shared.csv** by **contentId** column.
+# Here we extract some features from the resource file. For each application, there are some resources listed in this file. We can extract how many items and at what prices are requested. minimum, maximum and average price and quantity of each item and for all requested items per application can be important in the decision-making process.
 # 
-# The eventType values are:  
-# - **VIEW**: The user has opened the article. 
-# - **LIKE**: The user has liked the article. 
-# - **COMMENT CREATED**: The user created a comment in the article. 
-# - **FOLLOW**: The user chose to be notified on any new comment in the article. 
-# - **BOOKMARK**: The user has bookmarked the article for easy return in the future.
+# Also, I combine the resource description columns and make a new text column in table T. Later, we will do text analysis on this column as well.
 
-# In[ ]:
+# In[7]:
 
 
-interactions_df = pd.read_csv('../input/users_interactions.csv')
-interactions_df.head(10)
+R['priceAll'] = R['quantity']*R['price']
+newR = R.groupby('id').agg({'description':'count',
+                            'quantity':'sum',
+                            'price':'sum',
+                            'priceAll':'sum'}).rename(columns={'description':'items'})
+newR['avgPrice'] = newR.priceAll / newR.quantity
+numFeatures = ['items', 'quantity', 'price', 'priceAll', 'avgPrice']
+
+for func in ['min', 'max', 'mean']:
+    newR = newR.join(R.groupby('id').agg({'quantity':func,
+                                          'price':func,
+                                          'priceAll':func}).rename(
+                                columns={'quantity':func+'Quantity',
+                                         'price':func+'Price',
+                                         'priceAll':func+'PriceAll'}).fillna(0))
+    numFeatures += [func+'Quantity', func+'Price', func+'PriceAll']
+
+newR = newR.join(R.groupby('id').agg({'description':lambda x:' '.join(x.values.astype(str))}).rename(
+    columns={'description':'resource_description'}))
+
+T = T.join(newR, on='id')
+
+del Ttr, Tts, R, newR
+gc.collect();
 
 
-# ## Data munging
-
-# As there are different interactions types, we associate them with a weight or strength, assuming that, for example, a comment in an article indicates a higher interest of the user on the item than a like, or than a simple view.
-
-# In[ ]:
-
-
-event_type_strength = {
-   'VIEW': 1.0,
-   'LIKE': 2.0, 
-   'BOOKMARK': 2.5, 
-   'FOLLOW': 3.0,
-   'COMMENT CREATED': 4.0,  
-}
-
-interactions_df['eventStrength'] = interactions_df['eventType'].apply(lambda x: event_type_strength[x])
-
-
-# Recommender systems have a problem known as ***user cold-start***, in which is hard do provide personalized recommendations for users with none or a very few number of consumed items, due to the lack of information to model their preferences.  
-# For this reason, we are keeping in the dataset only users with at leas 5 interactions.
-
-# In[ ]:
-
-
-users_interactions_count_df = interactions_df.groupby(['personId', 'contentId']).size().groupby('personId').size()
-print('# users: %d' % len(users_interactions_count_df))
-users_with_enough_interactions_df = users_interactions_count_df[users_interactions_count_df >= 5].reset_index()[['personId']]
-print('# users with at least 5 interactions: %d' % len(users_with_enough_interactions_df))
-
-
-# In[ ]:
-
-
-print('# of interactions: %d' % len(interactions_df))
-interactions_from_selected_users_df = interactions_df.merge(users_with_enough_interactions_df, 
-               how = 'right',
-               left_on = 'personId',
-               right_on = 'personId')
-print('# of interactions from users with at least 5 interactions: %d' % len(interactions_from_selected_users_df))
-
-
-# In Deskdrop, users are allowed to view an article many times, and interact with them in different ways (eg. like or comment). Thus, to model the user interest on a given article, we aggregate all the interactions the user has performed in an item by a weighted sum of interaction type strength and apply a log transformation to smooth the distribution.
-
-# In[ ]:
-
-
-def smooth_user_preference(x):
-    return math.log(1+x, 2)
-    
-interactions_full_df = interactions_from_selected_users_df                     .groupby(['personId', 'contentId'])['eventStrength'].sum()                     .apply(smooth_user_preference).reset_index()
-print('# of unique user/item interactions: %d' % len(interactions_full_df))
-interactions_full_df.head(10)
-
-
-# # Evaluation
-
-# Evaluation is important for machine learning projects, because it allows to compare objectivelly different algorithms and hyperparameter choices for models.  
-# One key aspect of evaluation is to ensure that the trained model generalizes for data it was not trained on, using **Cross-validation** techniques. We are using here a simple cross-validation approach named **holdout**, in which a random data sample (20% in this case) are kept aside in the training process, and exclusively used for evaluation. All evaluation metrics reported here are computed using the **test set**.
+# **Statistical Features**
 # 
-# Ps. A more robust evaluation approach could be to split train and test sets by a reference date, where the train set is composed by all interactions before that date, and the test set are interactions after that date. For the sake of simplicity, we chose the first random approach for this notebook, but you may want to try the second approach to better simulate how the recsys would perform in production predicting "future" users interactions.
-
-# In[ ]:
-
-
-interactions_train_df, interactions_test_df = train_test_split(interactions_full_df,
-                                   stratify=interactions_full_df['personId'], 
-                                   test_size=0.20,
-                                   random_state=42)
-
-print('# interactions on Train set: %d' % len(interactions_train_df))
-print('# interactions on Test set: %d' % len(interactions_test_df))
-
-
-# In Recommender Systems, there are a set metrics commonly used for evaluation. We chose to work with **Top-N accuracy metrics**, which evaluates the accuracy of the top recommendations provided to a user, comparing to the items the user has actually interacted in test set.  
-# This evaluation method works as follows:
+# We know some teachers have applied many times, and knowing the history of their applications, can be helpful to predict approval. So, I convert the teacher_id to numeric values and include it in my numeric features.
 # 
-# * For each user
-#     * For each item the user has interacted in test set
-#         * Sample 100 other items the user has never interacted.   
-#         Ps. Here we naively assume those non interacted items are not relevant to the user, which might not be true, as the user may simply not be aware of those not interacted items. But let's keep this assumption.
-#         * Ask the recommender model to produce a ranked list of recommended items, from a set composed one interacted item and the 100 non-interacted ("non-relevant!) items
-#         * Compute the Top-N accuracy metrics for this user and interacted item from the recommendations ranked list
-# * Aggregate the global Top-N accuracy metrics
+# Often times, knowing the statistics of categorical features, i.e. knowing how many times a certain value has repeated in the dataset can help. So let's extract this information:
 
-# The Top-N accuracy metric choosen was **Recall@N** which evaluates whether the interacted item is among the top N items (hit) in the ranked list of 101 recommendations for a user.  
-# Ps. Other popular ranking metrics are **NDCG@N** and **MAP@N**, whose score calculation takes into account the position of the relevant item in the ranked list (max. value if relevant item is in the first position). You can find a reference to implement this metrics in this [post](http://fastml.com/evaluating-recommender-systems/).
-
-# In[ ]:
+# In[8]:
 
 
-#Indexing by personId to speed up the searches during evaluation
-interactions_full_indexed_df = interactions_full_df.set_index('personId')
-interactions_train_indexed_df = interactions_train_df.set_index('personId')
-interactions_test_indexed_df = interactions_test_df.set_index('personId')
+le = LabelEncoder()
+T['teacher_id'] = le.fit_transform(T['teacher_id'])
+numFeatures += ['teacher_number_of_previously_posted_projects','teacher_id']
+
+statFeatures = []
+for col in ['school_state', 'teacher_id', 'teacher_prefix', 'project_grade_category', 'project_subject_categories', 'project_subject_subcategories', 'teacher_number_of_previously_posted_projects']:
+    Stat = T[['id', col]].groupby(col).agg('count').rename(columns={'id':col+'_stat'})
+    Stat /= Stat.sum()
+    T = T.join(Stat, on=col)
+    statFeatures.append(col+'_stat')
 
 
-# In[ ]:
-
-
-def get_items_interacted(person_id, interactions_df):
-    # Get the user's data and merge in the movie information.
-    interacted_items = interactions_df.loc[person_id]['contentId']
-    return set(interacted_items if type(interacted_items) == pd.Series else [interacted_items])
-
-
-# In[ ]:
-
-
-#Top-N accuracy metrics consts
-EVAL_RANDOM_SAMPLE_NON_INTERACTED_ITEMS = 100
-
-class ModelEvaluator:
-
-
-    def get_not_interacted_items_sample(self, person_id, sample_size, seed=42):
-        interacted_items = get_items_interacted(person_id, interactions_full_indexed_df)
-        all_items = set(articles_df['contentId'])
-        non_interacted_items = all_items - interacted_items
-
-        random.seed(seed)
-        non_interacted_items_sample = random.sample(non_interacted_items, sample_size)
-        return set(non_interacted_items_sample)
-
-    def _verify_hit_top_n(self, item_id, recommended_items, topn):        
-            try:
-                index = next(i for i, c in enumerate(recommended_items) if c == item_id)
-            except:
-                index = -1
-            hit = int(index in range(0, topn))
-            return hit, index
-
-    def evaluate_model_for_user(self, model, person_id):
-        #Getting the items in test set
-        interacted_values_testset = interactions_test_indexed_df.loc[person_id]
-        if type(interacted_values_testset['contentId']) == pd.Series:
-            person_interacted_items_testset = set(interacted_values_testset['contentId'])
-        else:
-            person_interacted_items_testset = set([int(interacted_values_testset['contentId'])])  
-        interacted_items_count_testset = len(person_interacted_items_testset) 
-
-        #Getting a ranked recommendation list from a model for a given user
-        person_recs_df = model.recommend_items(person_id, 
-                                               items_to_ignore=get_items_interacted(person_id, 
-                                                                                    interactions_train_indexed_df), 
-                                               topn=10000000000)
-
-        hits_at_5_count = 0
-        hits_at_10_count = 0
-        #For each item the user has interacted in test set
-        for item_id in person_interacted_items_testset:
-            #Getting a random sample (100) items the user has not interacted 
-            #(to represent items that are assumed to be no relevant to the user)
-            non_interacted_items_sample = self.get_not_interacted_items_sample(person_id, 
-                                                                          sample_size=EVAL_RANDOM_SAMPLE_NON_INTERACTED_ITEMS, 
-                                                                          seed=item_id%(2**32))
-
-            #Combining the current interacted item with the 100 random items
-            items_to_filter_recs = non_interacted_items_sample.union(set([item_id]))
-
-            #Filtering only recommendations that are either the interacted item or from a random sample of 100 non-interacted items
-            valid_recs_df = person_recs_df[person_recs_df['contentId'].isin(items_to_filter_recs)]                    
-            valid_recs = valid_recs_df['contentId'].values
-            #Verifying if the current interacted item is among the Top-N recommended items
-            hit_at_5, index_at_5 = self._verify_hit_top_n(item_id, valid_recs, 5)
-            hits_at_5_count += hit_at_5
-            hit_at_10, index_at_10 = self._verify_hit_top_n(item_id, valid_recs, 10)
-            hits_at_10_count += hit_at_10
-
-        #Recall is the rate of the interacted items that are ranked among the Top-N recommended items, 
-        #when mixed with a set of non-relevant items
-        recall_at_5 = hits_at_5_count / float(interacted_items_count_testset)
-        recall_at_10 = hits_at_10_count / float(interacted_items_count_testset)
-
-        person_metrics = {'hits@5_count':hits_at_5_count, 
-                          'hits@10_count':hits_at_10_count, 
-                          'interacted_count': interacted_items_count_testset,
-                          'recall@5': recall_at_5,
-                          'recall@10': recall_at_10}
-        return person_metrics
-
-    def evaluate_model(self, model):
-        #print('Running evaluation for users')
-        people_metrics = []
-        for idx, person_id in enumerate(list(interactions_test_indexed_df.index.unique().values)):
-            #if idx % 100 == 0 and idx > 0:
-            #    print('%d users processed' % idx)
-            person_metrics = self.evaluate_model_for_user(model, person_id)  
-            person_metrics['_person_id'] = person_id
-            people_metrics.append(person_metrics)
-        print('%d users processed' % idx)
-
-        detailed_results_df = pd.DataFrame(people_metrics)                             .sort_values('interacted_count', ascending=False)
-        
-        global_recall_at_5 = detailed_results_df['hits@5_count'].sum() / float(detailed_results_df['interacted_count'].sum())
-        global_recall_at_10 = detailed_results_df['hits@10_count'].sum() / float(detailed_results_df['interacted_count'].sum())
-        
-        global_metrics = {'modelName': model.get_model_name(),
-                          'recall@5': global_recall_at_5,
-                          'recall@10': global_recall_at_10}    
-        return global_metrics, detailed_results_df
-    
-model_evaluator = ModelEvaluator()    
-
-
-# # Popularity model
-
-# A common (and usually hard-to-beat) baseline approach is the Popularity model. This model is not actually personalized - it simply recommends to a user the most popular items that the user has not previously consumed. As the popularity accounts for the "wisdom of the crowds", it usually provides good recommendations, generally interesting for most people.   
-# Ps. The main objective of a recommender system is to leverage the long-tail items to the users with very specific interests, which goes far beyond this simple technique.
+# **Sentimental Analysis**
+# 
+# With the help of textblob module, we can find polarity and subjectivity of texts to some extent. It is, unfortunately, a little time-consuming. There might be other modules that work faster like [VADER-Sentiment](https://github.com/cjhutto/vaderSentiment). Though, I haven't checked other modules. Their quality of analysis can also be different. Have you ever tried other modules? Do you know any better one?
+# 
+# Another way of doing (sort of) sentimental analysis is to check for certain words and characters in the texts. I, personally, for example, feel uncomfortable if a text has so many exclamation marks :D. But, seriously, some of these may have an unconscious effect on the examiner. For example, if any words are bolded by ", or the number of sentences (number of "."), number of paragraphs (\r), talking about money ($) or percentages (%), having a URL (http), etc. can influence the decision. What other words or characters do you think can be important?
+# 
+# Talking about **I** or **WE** and having positive or negative words and phrases like that can also be influential. In one of the following sections (**Text Features**), by extracting n-grams, I hope to catch such phrases if they appear as repeated patterns.
+# 
+# The number of words or the length of the texts can be another factor that can influence the decision unconsciously (or even consciously!). Number of transitional words, verbs, adjectives, adverbs, etc. in an essay can also indicate some aspects of the quality of the text.
+# 
+# But, certainly, the quality of the essays is the most effective factor in my opinion. Things like the grammar errors, spelling errors, quality of the texts, word choices etc. are very important. Another important factor, if I was a grant examiner, would have been to check if the application writer could relate their needs to the resources they want through essays and project title. One primitive way to do this is to check for common words in different texts. Let me know if you know any better way to do these type of analysis.
 
 # In[ ]:
 
 
-#Computes the most popular items
-item_popularity_df = interactions_full_df.groupby('contentId')['eventStrength'].sum().sort_values(ascending=False).reset_index()
-item_popularity_df.head(10)
+get_ipython().run_cell_magic('time', '', 'textColumns = [\'project_essay_1\', \'project_essay_2\', \'project_resource_summary\', \'resource_description\', \'project_title\']\n\ndef getSentFeat(s):\n    sent = TextBlob(s).sentiment\n    return (sent.polarity, sent.subjectivity)\n\nprint(\'sentimental analysis\')\nwith Pool(4) as p:\n    for col in textColumns:\n        temp = pl.array(list(p.map(getSentFeat, T[col])))\n        T[col+\'_pol\'] = temp[:,0]\n        T[col+\'_sub\'] = temp[:,1]\n        numFeatures += [col+\'_pol\', col+\'_sub\']\n\nprint(\'key words\')\nKeyChars = [\'!\', \'\\?\', \'@\', \'#\', \'\\$\', \'%\', \'&\', \'\\*\', \'\\(\', \'\\[\', \'\\{\', \'\\|\', \'-\', \'_\', \'=\', \'\\+\',\n            \'\\.\', \':\', \';\', \',\', \'/\', \'\\\\\\\\r\', \'\\\\\\\\t\', \'\\\\"\', \'\\.\\.\\.\', \'etc\', \'http\']\nfor col in textColumns:\n    for c in KeyChars:\n        T[col+\'_\'+c] = T[col].apply(lambda x: len(re.findall(c, x.lower())))\n        numFeatures.append(col+\'_\'+c)\n\n#####\nprint(\'num words\')\nfor col in textColumns:\n    T[\'n_\'+col] = T[col].apply(lambda x: len(x.split()))\n    numFeatures.append(\'n_\'+col)\n\n#####\nprint(\'word tags\')\nTags = [\'CC\', \'CD\', \'DT\', \'IN\', \'JJ\', \'LS\', \'MD\', \'NN\', \'NNS\', \'NNP\', \'NNPS\', \n        \'PDT\', \'POS\', \'PRP\', \'PRP$\', \'RB\', \'RBR\', \'RBS\', \'RP\', \'SYM\', \'TO\', \n        \'UH\', \'VB\', \'VBD\', \'VBG\', \'VBN\', \'VBP\', \'VBZ\', \'WDT\', \'WP\', \'WP$\', \'WRB\']\ndef getTagFeat(s):\n    d = Counter([t[1] for t in pos_tag(s.split())])\n    return [d[t] for t in Tags]\n\nwith Pool(4) as p:\n    for col in textColumns:\n        temp = pl.array(list(p.map(getTagFeat, T[col])))\n        for i, t in enumerate(Tags):\n            if temp[:,i].sum() == 0:\n                continue\n            T[col+\'_\'+t] = temp[:, i]\n            numFeatures += [col+\'_\'+t]\n\n#####\nprint(\'common words\')\nfor i, col1 in enumerate(textColumns[:-1]):\n    for col2 in textColumns[i+1:]:\n        T[\'%s_%s_common\' % (col1, col2)] = T.apply(lambda row:len(set(re.split(\'\\W\', row[col1])).intersection(re.split(\'\\W\', row[col2]))), axis=1)\n        numFeatures.append(\'%s_%s_common\' % (col1, col2))\n')
 
 
-# In[ ]:
-
-
-class PopularityRecommender:
-    
-    MODEL_NAME = 'Popularity'
-    
-    def __init__(self, popularity_df, items_df=None):
-        self.popularity_df = popularity_df
-        self.items_df = items_df
-        
-    def get_model_name(self):
-        return self.MODEL_NAME
-        
-    def recommend_items(self, user_id, items_to_ignore=[], topn=10, verbose=False):
-        # Recommend the more popular items that the user hasn't seen yet.
-        recommendations_df = self.popularity_df[~self.popularity_df['contentId'].isin(items_to_ignore)]                                .sort_values('eventStrength', ascending = False)                                .head(topn)
-
-        if verbose:
-            if self.items_df is None:
-                raise Exception('"items_df" is required in verbose mode')
-
-            recommendations_df = recommendations_df.merge(self.items_df, how = 'left', 
-                                                          left_on = 'contentId', 
-                                                          right_on = 'contentId')[['eventStrength', 'contentId', 'title', 'url', 'lang']]
-
-
-        return recommendations_df
-    
-popularity_model = PopularityRecommender(item_popularity_df, articles_df)
-
-
-# Here we perform the evaluation of the Popularity model, according to the method described above.  
-# It achieved the **Recall@5** of **0.2417**, which means that about **24%** of interacted items in test set were ranked by Popularity model among the top-5 items (from lists with 100 random items). And **Recall@10** was even higher (**37%**), as expected.  
-# It might be surprising to you that usually Popularity models could perform so well!
+# Guess what! someone didn't like **!**s in essays. 
 
 # In[ ]:
 
 
-print('Evaluating Popularity recommendation model...')
-pop_global_metrics, pop_detailed_results_df = model_evaluator.evaluate_model(popularity_model)
-print('\nGlobal metrics:\n%s' % pop_global_metrics)
-pop_detailed_results_df.head(10)
+pl.figure(figsize=(15,5))
+sns.violinplot(data=T,x=target,y='project_essay_2_!');
+pl.figure(figsize=(15,5))
+sns.violinplot(data=T,x=target,y='project_essay_1_!');
 
 
-# # Content-Based Filtering model
-
-# Content-based filtering approaches leverage description or attributes from items the user has interacted to recommend similar items. It depends only on the user previous choices, making this method robust to avoid the *cold-start* problem.
-# For textual items, like articles, news and books, it is simple to use the raw text to build item profiles and user profiles.  
-# Here we are using a very popular technique in information retrieval (search engines) named [TF-IDF](https://en.wikipedia.org/wiki/Tf%E2%80%93idf). This technique converts unstructured text into a vector structure, where each word is represented by a position in the vector, and the value measures how relevant a given word is for an article. As all items will be represented in the same [Vector Space Model](https://en.wikipedia.org/wiki/Vector_space_model), it is to compute similarity between articles.  
-# See this [presentation](https://www.slideshare.net/gabrielspmoreira/discovering-users-topics-of-interest-in-recommender-systems-tdc-sp-2016) (from slide 30) for more information on TF-IDF and Cosine similarity.
+# **Time Features**
+# 
+# The time at which the proposal was submitted can be important. Most importantly, we know thanks to [Heads or Tails](https://www.kaggle.com/headsortails/an-educated-guess-update-feature-engineering) that there is a slight approval rate modulation over time. So we need to extract date info. Day of the week it has been posted can also play a role. I doubt if the hour it was submitted has any significance, but let's let the decision trees take care of that. Next, let's extract some statistics from time features as well.
 
 # In[ ]:
 
 
-#Ignoring stopwords (words with no semantics) from English and Portuguese (as we have a corpus with mixed languages)
-stopwords_list = stopwords.words('english') + stopwords.words('portuguese')
+dateCol = 'project_submitted_datetime'
+def getTimeFeatures(T):
+    T['year'] = T[dateCol].apply(lambda x: x.year)
+    T['month'] = T[dateCol].apply(lambda x: x.month)
+    T['day'] = T[dateCol].apply(lambda x: x.day)
+    T['dow'] = T[dateCol].apply(lambda x: x.dayofweek)
+    T['hour'] = T[dateCol].apply(lambda x: x.hour)
+    T['days'] = (T[dateCol]-T[dateCol].min()).apply(lambda x: x.days)
+    return T
 
-#Trains a model whose vectors size is 5000, composed by the main unigrams and bigrams found in the corpus, ignoring stopwords
-vectorizer = TfidfVectorizer(analyzer='word',
-                     ngram_range=(1, 2),
-                     min_df=0.003,
-                     max_df=0.5,
-                     max_features=5000,
-                     stop_words=stopwords_list)
+T[dateCol] = pd.to_datetime(T[dateCol])
+T = getTimeFeatures(T)
 
-item_ids = articles_df['contentId'].tolist()
-tfidf_matrix = vectorizer.fit_transform(articles_df['title'] + "" + articles_df['text'])
-tfidf_feature_names = vectorizer.get_feature_names()
-tfidf_matrix
+P_tar = T[T.tr==1][target].mean()
+timeFeatures = ['year', 'month', 'day', 'dow', 'hour', 'days']
+for col in timeFeatures:
+    Stat = T[['id', col]].groupby(col).agg('count').rename(columns={'id':col+'_stat'})
+    Stat /= Stat.sum()
+    T = T.join(Stat, on=col)
+    statFeatures.append(col+'_stat')
 
-
-# To model the user profile, we take all the item profiles the user has interacted and average them. The average is weighted by the interaction strength, in other words, the articles the user has interacted the most (eg. liked or commented) will have a higher strength in the final user profile.   
-
-# In[ ]:
+numFeatures += timeFeatures
+numFeatures += statFeatures
 
 
-def get_item_profile(item_id):
-    idx = item_ids.index(item_id)
-    item_profile = tfidf_matrix[idx:idx+1]
-    return item_profile
-
-def get_item_profiles(ids):
-    item_profiles_list = [get_item_profile(x) for x in ids]
-    item_profiles = scipy.sparse.vstack(item_profiles_list)
-    return item_profiles
-
-def build_users_profile(person_id, interactions_indexed_df):
-    interactions_person_df = interactions_indexed_df.loc[person_id]
-    user_item_profiles = get_item_profiles(interactions_person_df['contentId'])
-    
-    user_item_strengths = np.array(interactions_person_df['eventStrength']).reshape(-1,1)
-    #Weighted average of item profiles by the interactions strength
-    user_item_strengths_weighted_avg = np.sum(user_item_profiles.multiply(user_item_strengths), axis=0) / np.sum(user_item_strengths)
-    user_profile_norm = sklearn.preprocessing.normalize(user_item_strengths_weighted_avg)
-    return user_profile_norm
-
-def build_users_profiles(): 
-    interactions_indexed_df = interactions_full_df[interactions_full_df['contentId']                                                    .isin(articles_df['contentId'])].set_index('personId')
-    user_profiles = {}
-    for person_id in interactions_indexed_df.index.unique():
-        user_profiles[person_id] = build_users_profile(person_id, interactions_indexed_df)
-    return user_profiles
-
+# **Polynomial Features**
+# 
+# So far, I have extracted some numerical features. Often it helps the decision trees to provide some polynomial features to them. Here I include first-order interaction polynomials, and I check for the significance of the new variable before adding it to the columns. I add it only if it really helps to predict the approval better. A trick that I'm using here is that, maybe, the division of two variables is more significantly predicting the target! That would be the case if 1/V is a more significant predictor than V. So, I check for the significance of 1/(V+1) and V+1 (+1 is to avoid production or division by 0), and replace the most significant one to the original variable V. What do you think about this? It certainly helped though!
+# 
+# By checking the significance and correlation in training set, there will be an over-training chance, which I'm trying to decrease by computing the average of correlations and p-values over randomly selected subsets.
 
 # In[ ]:
 
 
-user_profiles = build_users_profiles()
-len(user_profiles)
+get_ipython().run_cell_magic('time', '', "T2 = T[numFeatures+['id','tr','ts',target]].copy()\nTtr = T2[T.tr==1]\nTar_tr = Ttr[target].values\nn = 10\ninx = [pl.randint(0, Ttr.shape[0], int(Ttr.shape[0]/n)) for k in range(n)]\n# inx is used for crossvalidation of calculating the correlation and p-value\nCorr = {}\nfor c in numFeatures:\n    # since some values might be 0s, I use x+1 to avoid missing some important relations\n    C1,P1=pl.nanmean([pearsonr(Tar_tr[inx[k]],   (1+Ttr[c].iloc[inx[k]])) for k in range(n)], 0)\n    C2,P2=pl.nanmean([pearsonr(Tar_tr[inx[k]], 1/(1+Ttr[c].iloc[inx[k]])) for k in range(n)], 0)\n    if P2<P1:\n        T2[c] = 1/(1+T2[c])\n        Corr[c] = [C2,P2]\n    else:\n        T2[c] = 1+T2[c]\n        Corr[c] = [C1,P1]\n\npolyCol = []\nthrP = 0.01\nthrC = 0.02\nprint('columns \\t\\t\\t Corr1 \\t\\t Corr2 \\t\\t Corr Combined')\nfor i, c1 in enumerate(numFeatures[:-1]):\n    C1, P1 = Corr[c1]\n    for c2 in numFeatures[i+1:]:\n        C2, P2 = Corr[c2]\n        V = T2[c1] * T2[c2]\n        Vtr = V[T2.tr==1].values\n        C, P = pl.nanmean([pearsonr(Tar_tr[inx[k]], Vtr[inx[k]]) for k in range(n)], 0)\n        if P<thrP and abs(C) - max(abs(C1),abs(C2)) > thrC:\n            T[c1+'_'+c2+'_poly'] = V\n            polyCol.append(c1+'_'+c2+'_poly')\n            print(c1+'_'+c2, '\\t\\t(%g, %g)\\t(%g, %g)\\t(%g, %g)'%(C1,P1, C2,P2, C,P))\n\nnumFeatures += polyCol\nprint(len(numFeatures))\ndel T2, Ttr\ngc.collect();")
 
 
-# Let's take a look in the profile. It is a [unit vector](https://en.wikipedia.org/wiki/Unit_vector) of 5000 length. The value in each position represents how relevant is a token (unigram or bigram) for me.  
-# Looking my profile, it appears that the top relevant tokens really represent my professional interests in **machine learning**, **deep learning**, **artificial intelligence** and **google cloud platform**! So we might expect good recommendations here!
+# For example, the variable created out of *maxPrice* and *meanPrice* is much more informative:
 
 # In[ ]:
 
 
-myprofile = user_profiles[-1479311724257856983]
-print(myprofile.shape)
-pd.DataFrame(sorted(zip(tfidf_feature_names, 
-                        user_profiles[-1479311724257856983].flatten().tolist()), key=lambda x: -x[1])[:20],
-             columns=['token', 'relevance'])
+pl.figure(figsize=(15,5));sns.violinplot(data=T,x=target,y='maxPrice')
+pl.figure(figsize=(15,5));sns.violinplot(data=T,x=target,y='meanPrice')
+pl.figure(figsize=(15,5));sns.violinplot(data=T,x=target,y='maxPrice_meanPrice_poly');
 
 
-# In[ ]:
+# **Categorical Features**
+# 
+# Next, we include categorical features. Two well-known ways are to use one-hot encoding (one column per value with 0s and 1s) or label encoding (assigning a number to each value). I tried both; sometimes one-hot works better and sometimes label encoder. Currently, I have not activated the one-hot encoder. Categorical features are teacher prefix, state, grade, and subject categories.
 
+# In[9]:
 
-class ContentBasedRecommender:
-    
-    MODEL_NAME = 'Content-Based'
-    
-    def __init__(self, items_df=None):
-        self.item_ids = item_ids
-        self.items_df = items_df
-        
-    def get_model_name(self):
-        return self.MODEL_NAME
-        
-    def _get_similar_items_to_user_profile(self, person_id, topn=1000):
-        #Computes the cosine similarity between the user profile and all item profiles
-        cosine_similarities = cosine_similarity(user_profiles[person_id], tfidf_matrix)
-        #Gets the top similar items
-        similar_indices = cosine_similarities.argsort().flatten()[-topn:]
-        #Sort the similar items by similarity
-        similar_items = sorted([(item_ids[i], cosine_similarities[0,i]) for i in similar_indices], key=lambda x: -x[1])
-        return similar_items
-        
-    def recommend_items(self, user_id, items_to_ignore=[], topn=10, verbose=False):
-        similar_items = self._get_similar_items_to_user_profile(user_id)
-        #Ignores items the user has already interacted
-        similar_items_filtered = list(filter(lambda x: x[0] not in items_to_ignore, similar_items))
-        
-        recommendations_df = pd.DataFrame(similar_items_filtered, columns=['contentId', 'recStrength'])                                     .head(topn)
 
-        if verbose:
-            if self.items_df is None:
-                raise Exception('"items_df" is required in verbose mode')
-
-            recommendations_df = recommendations_df.merge(self.items_df, how = 'left', 
-                                                          left_on = 'contentId', 
-                                                          right_on = 'contentId')[['recStrength', 'contentId', 'title', 'url', 'lang']]
-
-
-        return recommendations_df
-    
-content_based_recommender_model = ContentBasedRecommender(articles_df)
-
-
-# Yay! With personalized recommendations of content-based filtering model, we have a jump on **Recall@5** to about **0.4145**, which means that about **41%** of interacted items in test set were ranked by this model among the top-5 items (from lists with 100 random items).  
-# And **Recall@10** was **0.5241 (52%)**. Definitelly not bad!
-
-# In[ ]:
-
-
-print('Evaluating Content-Based Filtering model...')
-cb_global_metrics, cb_detailed_results_df = model_evaluator.evaluate_model(content_based_recommender_model)
-print('\nGlobal metrics:\n%s' % cb_global_metrics)
-cb_detailed_results_df.head(10)
-
-
-# # Collaborative Filtering model
-
-# Collaborative Filtering (CF) has two main implementation strategies:  
-# - **Memory-based**: This approach uses the memory of previous users interactions to compute users similarities based on items they've interacted (user-based approach) or compute items similarities based on the users that have interacted with them (item-based approach).  
-# A typical example of this approach is User Neighbourhood-based CF, in which the top-N similar users (usually computed using Pearson correlation) for a user are selected and used to recommend items those similar users liked, but the current user have not interacted yet. This approach is very simple to implement, but usually do not scale well for many users. A nice Python implementation of this approach in available in [Crab](http://muricoca.github.io/crab/).
-# - **Model-based**: This approach, models are developed using different machine learning algorithms to recommend items to users. There are many model-based CF algorithms, like neural networks, bayesian networks, clustering models, and latent factor models such as Singular Value Decomposition (SVD) and, probabilistic latent semantic analysis.
-
-# ## Matrix Factorization
-
-# Latent factor models compress user-item matrix into a low-dimensional representation in terms of latent factors. One advantage of using this approach is that instead of having a high dimensional matrix containing abundant number of missing values we will be dealing with a much smaller matrix in lower-dimensional space.  
-# A reduced presentation could be utilized for either user-based or item-based neighborhood algorithms that are presented in the previous section. There are several advantages with this paradigm. It handles the sparsity of the original matrix better than memory based ones. Also comparing similarity on the resulting matrix is much more scalable especially in dealing with large sparse datasets.  
-
-# Here we a use popular latent factor model named [Singular Value Decomposition (SVD)](https://en.wikipedia.org/wiki/Singular_value_decomposition). There are other matrix factorization frameworks more specific to CF you might try, like [surprise](https://github.com/NicolasHug/Surprise), [mrec](https://github.com/Mendeley/mrec) or [python-recsys](https://github.com/ocelma/python-recsys). We chose a [SciPy](https://docs.scipy.org/doc/scipy/reference/generated/scipy.sparse.linalg.svds.html) implemenation of SVD because it is available on Kaggle kernels.  
-# Ps. See an example of SVD on a movies dataset in this [blog post](https://beckernick.github.io/matrix-factorization-recommender/).
-
-# An important decision is the number of factors to factor the user-item matrix. The higher the number of factors, the more precise is the factorization in the original matrix reconstructions. Therefore, if the model is allowed to  memorize too much details of the original matrix, it may not generalize well for data it was not trained on. Reducing the number of factors increases the model generalization.
-
-# In[ ]:
-
-
-#Creating a sparse pivot table with users in rows and items in columns
-users_items_pivot_matrix_df = interactions_train_df.pivot(index='personId', 
-                                                          columns='contentId', 
-                                                          values='eventStrength').fillna(0)
-
-users_items_pivot_matrix_df.head(10)
-
-
-# In[ ]:
-
-
-users_items_pivot_matrix = users_items_pivot_matrix_df.as_matrix()
-users_items_pivot_matrix[:10]
-
-
-# In[ ]:
-
-
-users_ids = list(users_items_pivot_matrix_df.index)
-users_ids[:10]
-
-
-# In[ ]:
-
-
-#The number of factors to factor the user-item matrix.
-NUMBER_OF_FACTORS_MF = 15
-#Performs matrix factorization of the original user item matrix
-U, sigma, Vt = svds(users_items_pivot_matrix, k = NUMBER_OF_FACTORS_MF)
-
-
-# In[ ]:
-
-
-U.shape
-
-
-# In[ ]:
-
-
-Vt.shape
-
-
-# In[ ]:
-
-
-sigma = np.diag(sigma)
-sigma.shape
-
-
-# After the factorization, we try to to reconstruct the original matrix by multiplying its factors. The resulting matrix is not sparse any more. It was generated predictions for items the user have not yet interaction, which we will exploit for recommendations.
-
-# In[ ]:
-
-
-all_user_predicted_ratings = np.dot(np.dot(U, sigma), Vt) 
-all_user_predicted_ratings
-
-
-# In[ ]:
-
-
-#Converting the reconstructed matrix back to a Pandas dataframe
-cf_preds_df = pd.DataFrame(all_user_predicted_ratings, columns = users_items_pivot_matrix_df.columns, index=users_ids).transpose()
-cf_preds_df.head(10)
-
-
-# In[ ]:
-
-
-len(cf_preds_df.columns)
-
-
-# In[ ]:
-
-
-class CFRecommender:
-    
-    MODEL_NAME = 'Collaborative Filtering'
-    
-    def __init__(self, cf_predictions_df, items_df=None):
-        self.cf_predictions_df = cf_predictions_df
-        self.items_df = items_df
-        
-    def get_model_name(self):
-        return self.MODEL_NAME
-        
-    def recommend_items(self, user_id, items_to_ignore=[], topn=10, verbose=False):
-        # Get and sort the user's predictions
-        sorted_user_predictions = self.cf_predictions_df[user_id].sort_values(ascending=False)                                     .reset_index().rename(columns={user_id: 'recStrength'})
-
-        # Recommend the highest predicted rating movies that the user hasn't seen yet.
-        recommendations_df = sorted_user_predictions[~sorted_user_predictions['contentId'].isin(items_to_ignore)]                                .sort_values('recStrength', ascending = False)                                .head(topn)
-
-        if verbose:
-            if self.items_df is None:
-                raise Exception('"items_df" is required in verbose mode')
-
-            recommendations_df = recommendations_df.merge(self.items_df, how = 'left', 
-                                                          left_on = 'contentId', 
-                                                          right_on = 'contentId')[['recStrength', 'contentId', 'title', 'url', 'lang']]
-
-
-        return recommendations_df
-    
-cf_recommender_model = CFRecommender(cf_preds_df, articles_df)
-
-
-# Evaluating the Collaborative Filtering model (SVD matrix factorization), we observe that we got **Recall@5 (33%)** and **Recall@10 (46%)** values higher than Popularity model, but lower than Content-Based model.  
-# It appears that for this dataset, Content-Based approach is being benefited by the rich item attributes (text) for a better modeling of users preferences.
-
-# In[ ]:
-
-
-print('Evaluating Collaborative Filtering (SVD Matrix Factorization) model...')
-cf_global_metrics, cf_detailed_results_df = model_evaluator.evaluate_model(cf_recommender_model)
-print('\nGlobal metrics:\n%s' % cf_global_metrics)
-cf_detailed_results_df.head(10)
-
-
-# ## Hybrid Recommender
-
-# What if we combine Collaborative Filtering and Content-Based Filtering approaches?    
-# Would that provide us with more accurate recommendations?    
-# In fact, hybrid methods have performed better than individual approaches in many studies and have being extensively used by researchers and practioners.  
-# Let's build a simple hybridization method, by only multiply the CF score with the Content-Based score, and ranking by resulting score.
-
-# In[ ]:
-
-
-class HybridRecommender:
-    
-    MODEL_NAME = 'Hybrid'
-    
-    def __init__(self, cb_rec_model, cf_rec_model, items_df):
-        self.cb_rec_model = cb_rec_model
-        self.cf_rec_model = cf_rec_model
-        self.items_df = items_df
-        
-    def get_model_name(self):
-        return self.MODEL_NAME
-        
-    def recommend_items(self, user_id, items_to_ignore=[], topn=10, verbose=False):
-        #Getting the top-1000 Content-based filtering recommendations
-        cb_recs_df = self.cb_rec_model.recommend_items(user_id, items_to_ignore=items_to_ignore, verbose=verbose,
-                                                           topn=1000).rename(columns={'recStrength': 'recStrengthCB'})
-        
-        #Getting the top-1000 Collaborative filtering recommendations
-        cf_recs_df = self.cf_rec_model.recommend_items(user_id, items_to_ignore=items_to_ignore, verbose=verbose, 
-                                                           topn=1000).rename(columns={'recStrength': 'recStrengthCF'})
-        
-        #Combining the results by contentId
-        recs_df = cb_recs_df.merge(cf_recs_df,
-                                   how = 'inner', 
-                                   left_on = 'contentId', 
-                                   right_on = 'contentId')
-        
-        #Computing a hybrid recommendation score based on CF and CB scores
-        recs_df['recStrengthHybrid'] = recs_df['recStrengthCB'] * recs_df['recStrengthCF']
-        
-        #Sorting recommendations by hybrid score
-        recommendations_df = recs_df.sort_values('recStrengthHybrid', ascending=False).head(topn)
-
-        if verbose:
-            if self.items_df is None:
-                raise Exception('"items_df" is required in verbose mode')
-
-            recommendations_df = recommendations_df.merge(self.items_df, how = 'left', 
-                                                          left_on = 'contentId', 
-                                                          right_on = 'contentId')[['recStrengthHybrid', 'contentId', 'title', 'url', 'lang']]
-
-
-        return recommendations_df
-    
-hybrid_recommender_model = HybridRecommender(content_based_recommender_model, cf_recommender_model, articles_df)
-
-
-# **It appears we have a new champion!**  
-# Our simple hybrid approach surpasses Content-Based filtering with its combination with Collaborative Filtering. Now we have a **Recall@5** of **43%** and **Recall@10** of **53%**
-
-# In[ ]:
-
-
-print('Evaluating Hybrid model...')
-hybrid_global_metrics, hybrid_detailed_results_df = model_evaluator.evaluate_model(hybrid_recommender_model)
-print('\nGlobal metrics:\n%s' % hybrid_global_metrics)
-hybrid_detailed_results_df.head(10)
-
-
-# ## Comparing the methods
-
-# In[ ]:
-
-
-global_metrics_df = pd.DataFrame([pop_global_metrics, cf_global_metrics, cb_global_metrics, hybrid_global_metrics])                         .set_index('modelName')
-global_metrics_df
-
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('matplotlib', 'inline')
-ax = global_metrics_df.transpose().plot(kind='bar', figsize=(15,8))
-for p in ax.patches:
-    ax.annotate("%.3f" % p.get_height(), (p.get_x() + p.get_width() / 2., p.get_height()), ha='center', va='center', xytext=(0, 10), textcoords='offset points')
-
-
-# # Testing
-
-# Let's test the best model (Hybrid) for my user.
-
-# In[ ]:
-
-
-def inspect_interactions(person_id, test_set=True):
-    if test_set:
-        interactions_df = interactions_test_indexed_df
+def getCatFeatures(T, Col, Encoder='OneHot'):
+    ohe = OneHotEncoder()
+    le = LabelEncoder()
+    if Encoder=='OneHot':
+        X = ohe.fit_transform(le.fit_transform(T[Col].fillna('')).reshape((-1,1)))
     else:
-        interactions_df = interactions_train_indexed_df
-    return interactions_df.loc[person_id].merge(articles_df, how = 'left', 
-                                                      left_on = 'contentId', 
-                                                      right_on = 'contentId') \
-                          .sort_values('eventStrength', ascending = False)[['eventStrength', 
-                                                                          'contentId',
-                                                                          'title', 'url', 'lang']]
+        X = le.fit_transform(T[Col].fillna(''))
+    return X
+
+Encoder = 'OneHot'
+X_tp = getCatFeatures(T, 'teacher_prefix', Encoder)
+X_sc = getCatFeatures(T, 'school_state', Encoder)
+X_pgc = getCatFeatures(T, 'project_grade_category', Encoder)
+X_psc = getCatFeatures(T, 'project_subject_categories', Encoder)
+X_pssc = getCatFeatures(T, 'project_subject_subcategories', Encoder)
 
 
-# Here we see some articles I interacted in Deskdrop from train set. It can be easily observed that among my main interests are **machine learning**, **deep learning**, **artificial intelligence**, and **google cloud platform**.
+if Encoder=='OneHot':
+    X_cat = hstack((X_tp, X_sc, X_pgc, X_psc, X_pssc))
+else:
+    X_cat = pl.array((X_tp, X_sc, X_pgc, X_psc, X_pssc)).T
+
+del X_tp, X_sc, X_pgc, X_psc, X_pssc
+
+
+# **Text Features**
+# 
+# Finally, we do text analysis. For this section, I used both Tf-IDF and count vectorizer and interestingly, count vectorizer with binary features, showing only if a word is in the text, has the best performance in my experience. Other than that, since there are mis-spellings in the texts, it would have helped to check for spelling errors first. I found "TextBlob" and "autocorrect" modules for this purpose but, unfortunately, it was so slow and I didn't use it at last. Do you know any better way to do that?Also, I decided not using any stop words because some of them can actually be useful in this case and after all they are only a few words.
+# 
+# I tried using dimensionality reduction techniques to reduce the dimensions following the idea of Latent Semantic Analysis, but it didn't help the prediction as well.
+
+# In[12]:
+
+
+get_ipython().run_cell_magic('time', '', "# from nltk.stem.wordnet import WordNetLemmatizer\n# from autocorrect import spell  # as spell checker and corrector\n# L = WordNetLemmatizer()\np = PorterStemmer()\ndef wordPreProcess(sentence):\n    return ' '.join([p.stem(x.lower()) for x in re.split('\\W', sentence) if len(x) >= 1])\n# return ' '.join([p.stem(L.lemmatize(spell(x.lower()))) for x in re.split('\\W', sentence) if len(x) > 1])\n\n\ndef getTextFeatures(T, Col, max_features=10000, verbose=True):\n    if verbose:\n        print('processing: ', Col)\n    vectorizer = CountVectorizer(stop_words=None,\n                                 preprocessor=wordPreProcess,\n                                 max_features=max_features,\n                                 binary=True,\n                                 ngram_range=(1,2))\n#     vectorizer = TfidfVectorizer(stop_words=stopwords.words('english'),\n#                                  preprocessor=wordPreProcess,\n#                                  max_features=max_features)\n    X = vectorizer.fit_transform(T[Col])\n    return X, vectorizer.get_feature_names()\n\nn_es1, n_es2, n_prs, n_rd, n_pt = 3000, 8000, 2000, 3000, 1000\nX_es1, feat_es1 = getTextFeatures(T, 'project_essay_1', max_features=n_es1)\nX_es2, feat_es2 = getTextFeatures(T, 'project_essay_2', max_features=n_es2)\nX_prs, feat_prs = getTextFeatures(T, 'project_resource_summary', max_features=n_prs)\nX_rd, feat_rd = getTextFeatures(T, 'resource_description', max_features=n_rd)\nX_pt, feat_pt = getTextFeatures(T, 'project_title', max_features=n_pt)\n\nX_txt = hstack((X_es1, X_es2, X_prs, X_rd, X_pt))\ndel X_es1, X_es2, X_prs, X_rd, X_pt\n\n# \n# from sklearn.decomposition import TruncatedSVD\n# svd = TruncatedSVD(1000)\n# X_txt = svd.fit_transform(X_txt)")
+
+
+# Finally, let's make up the train and test matrices:
+# 
+# we should normalize the values if we want to use neural networks. Since my sparse features are 0s and 1s, I only apply it to numerical values.
+
+# In[16]:
+
+
+from sklearn.preprocessing import StandardScaler
+X = hstack((X_txt, X_cat, StandardScaler().fit_transform(T[numFeatures].fillna(0)))).tocsr()
+
+Xtr = X[pl.find(T.tr==1), :]
+Xts = X[pl.find(T.ts==1), :]
+Ttr_tar = T[T.tr==1][target].values
+Tts = T[T.ts==1][['id',target]]
+
+Yts = []
+del T
+del X
+gc.collect();
+
+
+# **Training Models**
+# 
+# Here I train XGB, LGB and NN models and stack them. I have two levels of stacking. First level on the results of learners by LinearRegression. The second level is by simple average over the results taken by different validation sets. In this version of the kernel I do it only for one validation set because of the time limit, but the result will be of course better if we stack more models. My NN model is inspired by [huiqin's kernel](https://www.kaggle.com/qinhui1999/deep-learning-is-all-you-need-lb-0-80x). Concisely, the structure of my network is like this:
+# 
+# ![NN structure](https://i.imgur.com/bkvRySn.jpg)
+
+# In[25]:
+
+
+from keras.layers import Input, Dense, Flatten, concatenate, Dropout, Embedding, SpatialDropout1D
+from keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+from keras.models import Model
+from keras import optimizers
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LinearRegression
+
+def breakInput(X1):
+    X2 = []
+    i = 0
+    for n in [n_es1, n_es2, n_prs, n_rd, n_pt, X_cat.shape[1], len(numFeatures)]:
+        X2.append(X1[:,i:i+n])
+        i += n
+    return X2
+
+def getModel(HLs, Drop=0.25, OP=optimizers.Adam()):
+    temp = []
+    inputs_txt = []
+    for n in [n_es1, n_es2, n_prs, n_rd, n_pt]:
+        input_txt = Input((n, ))
+        X_feat = Dropout(Drop)(input_txt)
+        X_feat = Dense(int(n/100), activation="linear")(X_feat)
+        X_feat = Dropout(Drop)(X_feat)
+        temp.append(X_feat)
+        inputs_txt.append(input_txt)
+
+    x_1 = concatenate(temp)
+    x_1 = Dense(20, activation="relu")(x_1)
+    x_1 = Dropout(Drop)(x_1)
+
+    input_cat = Input((X_cat.shape[1], ))
+#     x_2 = Dropout(Drop)(input_cat)
+    x_2 = Embedding(2, 10, input_length=X_cat.shape[1])(input_cat)
+    x_2 = SpatialDropout1D(Drop)(x_2)
+    x_2 = Flatten()(x_2)
+
+    input_num = Input((len(numFeatures), ))
+    x_3 = Dropout(Drop)(input_num)
+    
+    x = concatenate([x_1, x_2, x_3])
+
+    for HL in HLs:
+        x = Dense(HL, activation="relu")(x)
+        x = Dropout(Drop)(x)
+
+    output = Dense(1, activation="sigmoid")(x)
+
+    model = Model(inputs=inputs_txt+[input_cat, input_num], outputs=output)
+    model.compile(
+            optimizer=OP,
+            loss='binary_crossentropy',
+            metrics=['binary_accuracy'])
+    return model
+
+def trainNN(X_train, X_val, Tar_train, Tar_val, HL=[50], Drop=0.5, OP=optimizers.Adam()):
+    file_path='NN.h5'
+    checkpoint = ModelCheckpoint(file_path, monitor='val_loss', verbose=2, save_best_only=True, save_weights_only=True, mode='min')
+    early = EarlyStopping(monitor="val_loss", mode="min", patience=6)
+    lr_reduced = ReduceLROnPlateau(monitor='val_loss',
+                                   factor=0.5,
+                                   patience=2,
+                                   verbose=1,
+                                   epsilon=3e-4,
+                                   mode='min')
+
+    model = getModel(HL, Drop, OP)
+    model.fit(breakInput(X_train), Tar_train, validation_data=(breakInput(X_val), Tar_val),
+                        verbose=2, epochs=50, batch_size=1000, callbacks=[early, lr_reduced, checkpoint])
+    model.load_weights(file_path)
+    return model
+
+params_xgb = {
+        'eta': 0.05,
+        'max_depth': 4,
+        'subsample': 0.85,
+        'colsample_bytree': 0.25,
+        'min_child_weight': 3,
+        'objective': 'binary:logistic',
+        'eval_metric': 'auc',
+        'seed': 0,
+        'silent': 1,
+    }
+params_lgb = {
+        'boosting_type': 'dart',
+        'objective': 'binary',
+        'metric': 'auc',
+        'max_depth': 10,
+        'learning_rate': 0.05,
+        'feature_fraction': 0.25,
+        'bagging_fraction': 0.85,
+        'seed': 0,
+        'verbose': 0,
+    }
+nCV = 1 # should be ideally larger
+for i in range(nCV):
+    gc.collect()
+    X_train, X_val, Tar_train, Tar_val = train_test_split(Xtr, Ttr_tar, test_size=0.15, random_state=i, stratify=Ttr_tar)
+    # XGB
+    dtrain = xgb.DMatrix(X_train, label=Tar_train)
+    dval   = xgb.DMatrix(X_val, label=Tar_val)
+    watchlist = [(dtrain, 'train'), (dval, 'valid')]
+    model = xgb.train(params_xgb, dtrain, 5000,  watchlist, maximize=True, verbose_eval=200, early_stopping_rounds=200)
+    Yvl1 = model.predict(dval)
+    Yts1 = model.predict(xgb.DMatrix(Xts))
+    # LGB
+    dtrain = lgb.Dataset(X_train, Tar_train)
+    dval   = lgb.Dataset(X_val, Tar_val)
+    model = lgb.train(params_lgb, dtrain, num_boost_round=10000, valid_sets=[dtrain, dval], early_stopping_rounds=200, verbose_eval=200)
+    Yvl2 = model.predict(X_val)
+    Yts2 = model.predict(Xts)
+    # NN
+    model = trainNN(X_train, X_val, Tar_train, Tar_val, HL=[50], Drop=0.5, OP=optimizers.Adam())
+    Yvl3 = model.predict(breakInput(X_val)).squeeze()
+    Yts3 = model.predict(breakInput(Xts)).squeeze()
+    # stack
+    M = LinearRegression()
+    M.fit(pl.array([Yvl1, Yvl2, Yvl3]).T, Tar_val)
+    Yts.append(M.predict(pl.array([Yts1, Yts2, Yts3]).T))
+
+
+# **Output for Test Set**
+# 
+# At last, we make the stack of test set outputs by simple averaging, maybe rank average or median work better, I didn't try.
 
 # In[ ]:
 
 
-inspect_interactions(-1479311724257856983, test_set=False).head(20)
+from sklearn.preprocessing import MinMaxScaler
+Tts[target] = MinMaxScaler().fit_transform(pl.array(Yts).mean(0).reshape(-1,1))
+Tts[['id', target]].to_csv('text_cat_num_xgb_lgb_NN.csv', index=False)
 
 
-# **The recommendations really matches my interests, as I would read all of them!**
-
-# In[ ]:
-
-
-hybrid_recommender_model.recommend_items(-1479311724257856983, topn=20, verbose=True)
-
-
-# # Conclusion
-
-# In this notebook, we've explored and compared the main Recommender Systems techniques on [CI&T Deskdrop](https://www.kaggle.com/gspmoreira/articles-sharing-reading-from-cit-deskdrop) dataset. It could be observed that for articles recommendation, content-based filtering and a hybrid method performed better than Collaborative Filtering alone.  
+# **Further Possible Improvements**
 # 
-# There is large room for improvements of the results. Here are some tips:
-# - In this example, we've completely ignored the time, considering that all articles were available to be recommended to users at any time. A better approach would be to filter only articles that were available for users at a given time.
-# - You could leverage the available contextual information to model users preferences across time (period of day, day of week, month), location (country and state/district) and devices (browser, mobile native app).  
-# This contextual information can be easily incorporated in [Learn-to-Rank](https://en.wikipedia.org/wiki/Learning_to_rank) models (like XGBoost Gradient Boosting Decision Trees with ranking objective) or Logistic models (with categorical features [One-Hot encoded](http://scikit-learn.org/stable/modules/generated/sklearn.preprocessing.OneHotEncoder.html) or [Feature Hashed](https://en.wikipedia.org/wiki/Feature_hashing)). Take a look in the summary my solution shared for [Outbrain Click Prediction](https://www.kaggle.com/c/outbrain-click-prediction/discussion/27897#157215) competition. 
-# - Those basic techniques were used for didactic purposes. There are more advanced techniques in RecSys research community, specially advanced Matrix Factorization and Deep Learning models.  
+# * One obvious way to improve it is to play with the decision tree parameters, stacking more models, and perhaps stacking different kinds of learners
+# * Fluency and articulation of the texts can be an important factor if we could somehow measure it
+# * Checking for existence of special keywords that might attract or repel the reader -- if they are not already captured by the extracted n-grams
+# * Checking and correcting for the spell of the words, before stemming them can help. Also, maybe the existence of spell or grammatical errors influences the decision
+# * Checking for concurrency of the texts or required resources to special events that have occurred at that time might be useful. Maybe because of some events, some proposals are being accepted more easily, due to public awareness or hotness of some topics
 # 
-# You can know more about state-of-the-art methods published in Recommender Systems on [ACM RecSys conference](https://recsys.acm.org/).  
-# If you are more like practioner than researcher, you might try some Collaborative Filtering frameworks in this dataset, like [surprise](https://github.com/NicolasHug/Surprise), [mrec](https://github.com/Mendeley/mrec),  [python-recsys](https://github.com/ocelma/python-recsys) and [Spark ALS Matrix Factorization](https://spark.apache.org/docs/latest/mllib-collaborative-filtering.html) (distributed implementation for large datasets).  
-# Take a look in this [presentation](https://www.slideshare.net/gabrielspmoreira/discovering-users-topics-of-interest-in-recommender-systems-tdc-sp-2016) where I describe a production recommender system, focused on Content-Based Filtering and Topic Modeling techniques.
+# Thanks for staying so far! Hope it helps.
+# 
+# Let me know if you have any comments, or suggestions for improvement, or if you think I can do some parts more efficiently.

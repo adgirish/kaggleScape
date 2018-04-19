@@ -1,794 +1,586 @@
 
 # coding: utf-8
 
+# # Glass Type Classification with Machine Learning
+
+# Hey there and welcome to this kernel! My name is Elie. I'm a data science newbie and this is my first Kaggle notebook. I have been putting a lot of effort recently to start my journey in data science. I benefited a lot from the notebooks of other awesome kagglers and I hope you benefit this notebook and learn new stuff from it.
+# 
+# <hr >
+# 
+# # Contents
+# 
+# ## 1) Prepare Problem
+# 
+#  * Load libraries
+# 
+#  * Load and explore the shape of the dataset
+# 
+# ## 2) Summarize Data
+# 
+# * Descriptive statistics
+# 
+# * Data visualization
+# 
+# ## 3) Prepare Data
+# 
+# * Data Cleaning
+# 
+# * Split-out validation dataset
+# 
+# *  Data transformation  
+# 
+# ## 4) Evaluate Algorithms
+# 
+# * Dimensionality reduction
+# 
+# * Compare Algorithms
+# 
+# ## 5) Improve Accuracy
+# 
+# * Algorithm Tuning
+# 
+# ## 6) Diagnose the performance of the best algorithms
+# 
+# * Diagnose overfitting by plotting the learning and validation curves
+# * Further tuning
+# 
+# ## 7) Finalize Model
+# 
+# * Create standalone model on entire training dataset
+# 
+# * Predictions on test dataset
+# 
+# <hr />
+
+# ## 1. Prepare Problem
+
+# ### Loading the libraries 
+
+# Let us first begin by loading the libraries that we'll use in the notebook
+
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+import numpy as np  # linear algebra
+import pandas as pd  # read and wrangle dataframes
+import matplotlib.pyplot as plt # visualization
+import seaborn as sns # statistical visualizations and aesthetics
+from sklearn.base import TransformerMixin # To create new classes for transformations
+from sklearn.preprocessing import (FunctionTransformer, StandardScaler) # preprocessing 
+from sklearn.decomposition import PCA # dimensionality reduction
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis as LDA
+from scipy.stats import boxcox # data transform
+from sklearn.model_selection import (train_test_split, KFold , StratifiedKFold, 
+                                     cross_val_score, GridSearchCV, 
+                                     learning_curve, validation_curve) # model selection modules
+from sklearn.pipeline import Pipeline # streaming pipelines
+from sklearn.base import BaseEstimator, TransformerMixin # To create a box-cox transformation class
+from collections import Counter
+import warnings
+# load models
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.linear_model import LogisticRegression
+from xgboost import (XGBClassifier, plot_importance)
+from sklearn.svm import SVC
+from sklearn.ensemble import (RandomForestClassifier, AdaBoostClassifier, ExtraTreesClassifier, GradientBoostingClassifier)
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from time import time
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
-import seaborn as sns
-plt.style.use('fivethirtyeight')
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-
-# Any results you write to the current directory are saved as output.
+warnings.filterwarnings('ignore')
+sns.set_style('whitegrid')
 
 
-# ### What is [BigQuery](https://cloud.google.com/bigquery/what-is-bigquery)??
+# ### Loading and exploring the shape of the dataset
+
+# In[ ]:
+
+
+df = pd.read_csv('../input/glass.csv')
+features = df.columns[:-1].tolist()
+print(df.shape)
+
+
+# The dataset consists of 214 observations
+
+# In[ ]:
+
+
+df.head(15)
+
+
+# In[ ]:
+
+
+df.dtypes
+
+
+# ## 2. Summarize data
+
+# ### Descriptive statistics
+
+# Let's first summarize the distribution of the numerical variables.
+
+# In[ ]:
+
+
+df.describe()
+
+
+# The features are not on the same scale. For example Si has a mean of 72.65 while Fe has a mean value of 0.057. Features should be on the same scale for algorithms such as logistic regression (gradient descent) to converge smoothly. Let's go ahead and check the distribution of the glass types.
+
+# In[ ]:
+
+
+df['Type'].value_counts()
+
+
+# The dataset is pretty unbalanced. The instances of types 1 and 2 constitute more than 67 % of the glass types.
+
+# ###  Data Visualization
+
+# * **Univariate plots**
+
+# Let's go ahead an look at the distribution of the different features of this dataset.
+
+# In[ ]:
+
+
+for feat in features:
+    skew = df[feat].skew()
+    sns.distplot(df[feat], kde= False, label='Skew = %.3f' %(skew), bins=30)
+    plt.legend(loc='best')
+    plt.show()
+
+
+# None of the features is normally distributed. The features Fe, Ba, Ca and K exhibit the highest skew coefficients. Moreover, the distribution of potassium (K) and Barium (Ba) seem to contain many outliers.
+# Let's identify the indices of the observations containing outliers using [Turkey's method](http://datapigtechnologies.com/blog/index.php/highlighting-outliers-in-your-data-with-the-tukey-method/).
+
+# In[ ]:
+
+
+# Detect observations with more than one outlier
+
+def outlier_hunt(df):
+    """
+    Takes a dataframe df of features and returns a list of the indices
+    corresponding to the observations containing more than 2 outliers. 
+    """
+    outlier_indices = []
+    
+    # iterate over features(columns)
+    for col in df.columns.tolist():
+        # 1st quartile (25%)
+        Q1 = np.percentile(df[col], 25)
+        
+        # 3rd quartile (75%)
+        Q3 = np.percentile(df[col],75)
+        
+        # Interquartile rrange (IQR)
+        IQR = Q3 - Q1
+        
+        # outlier step
+        outlier_step = 1.5 * IQR
+        
+        # Determine a list of indices of outliers for feature col
+        outlier_list_col = df[(df[col] < Q1 - outlier_step) | (df[col] > Q3 + outlier_step )].index
+        
+        # append the found outlier indices for col to the list of outlier indices 
+        outlier_indices.extend(outlier_list_col)
+        
+    # select observations containing more than 2 outliers
+    outlier_indices = Counter(outlier_indices)        
+    multiple_outliers = list( k for k, v in outlier_indices.items() if v > 2 )
+    
+    return multiple_outliers   
+
+print('The dataset contains %d observations with more than 2 outliers' %(len(outlier_hunt(df[features]))))   
+
+
+# Aha! there exists some 14 observations with multiple outliers.  These  could harm the efficiency of our learning algorithms. We'll make sure to get rid of these in the next sections.
 # 
+# Let's examine the boxplots for the several distributions.
+
+# In[ ]:
+
+
+plt.figure(figsize=(8,6))
+sns.boxplot(df[features])
+plt.show()
+
+
+# Unsurprisingly, Silicon has a mean that is much superior to the other constituents as we already saw in the previous section. Well, that is normal since glass is mainly based on silica.
+
+# * **Multivariate plots**
+
+# Let's now proceed by drawing a pairplot to visually examine the correlation between the features.
+
+# In[ ]:
+
+
+plt.figure(figsize=(8,8))
+sns.pairplot(df[features],palette='coolwarm')
+plt.show()
+
+
+# Let's go ahead and examine a heatmap of the correlations.
+
+# In[ ]:
+
+
+corr = df[features].corr()
+plt.figure(figsize=(16,16))
+sns.heatmap(corr, cbar = True,  square = True, annot=True, fmt= '.2f',annot_kws={'size': 15},
+           xticklabels= features, yticklabels= features, alpha = 0.7,   cmap= 'coolwarm')
+plt.show()
+
+
+# There seems to be a strong positive correlation between RI and Ca. This could be a hint to perform Principal component analysis in order to decorrelate some of the input features.
+
+# ## 3. Prepare data
+
+# ### - Data cleaning 
+
+# In[ ]:
+
+
+df.info()
+
+
+# This dataset is clean; there aren't any missing values in it.
+
+# ### - Hunting and removing multiple outliers
 # 
-# Storing and querying massive datasets can be time consuming and expensive without the right hardware and infrastructure. Google BigQuery is an enterprise data warehouse that solves this problem by enabling super-fast SQL queries using the processing power of Google's infrastructure. Simply move your data into BigQuery and let us handle the hard work. You can control access to both the project and your data based on your business needs, such as giving others the ability to view or query your data.
+# Let's remove the observations containing multiple outliers with the function we created in the previous section.
+
+# In[ ]:
+
+
+outlier_indices = outlier_hunt(df[features])
+df = df.drop(outlier_indices).reset_index(drop=True)
+print(df.shape)
+
+
+# Removing observations with multiple outliers (more than 2) leaves us with 200 observations to learn from. Let's now see how our distributions look like.
+
+# In[ ]:
+
+
+for feat in features:
+    skew = df[feat].skew()
+    sns.distplot(df[feat], kde=False, label='Skew = %.3f' %(skew), bins=30)
+    plt.legend(loc='best')
+    plt.show()
+
+
+# In[ ]:
+
+
+df['Type'].value_counts()
+
+
+# Let's now plot a distribution of the Types.
+
+# In[ ]:
+
+
+sns.countplot(df['Type'])
+plt.show()
+
+
+# ### - Split-out validation dataset
+
+# In[ ]:
+
+
+# Define X as features and y as lablels
+X = df[features] 
+y = df['Type'] 
+# set a seed and a test size for splitting the dataset 
+seed = 7
+test_size = 0.2
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size = test_size , random_state = seed)
+
+
+# ### - Data transformation  
+
+# Let's examine if a Box-Cox transform can contribute to the normalization of some features. It should be emphasized that all transformations should only be done on the training set to avoid data snooping. Otherwise the test error estimation will be biased.
+
+# In[ ]:
+
+
+features_boxcox = []
+
+for feature in features:
+    bc_transformed, _ = boxcox(df[feature]+1)  # shift by 1 to avoid computing log of negative values
+    features_boxcox.append(bc_transformed)
+
+features_boxcox = np.column_stack(features_boxcox)
+df_bc = pd.DataFrame(data=features_boxcox, columns=features)
+df_bc['Type'] = df['Type']
+
+
+# In[ ]:
+
+
+df_bc.describe()
+
+
+# In[ ]:
+
+
+for feature in features:
+    fig, ax = plt.subplots(1,2,figsize=(7,3.5))    
+    ax[0].hist(df[feature], color='blue', bins=30, alpha=0.3, label='Skew = %s' %(str(round(df[feature].skew(),3))) )
+    ax[0].set_title(str(feature))   
+    ax[0].legend(loc=0)
+    ax[1].hist(df_bc[feature], color='red', bins=30, alpha=0.3, label='Skew = %s' %(str(round(df_bc[feature].skew(),3))) )
+    ax[1].set_title(str(feature)+' after a Box-Cox transformation')
+    ax[1].legend(loc=0)
+    plt.show()
+
+
+# In[ ]:
+
+
+# check if skew is closer to zero after a box-cox transform
+for feature in features:
+    delta = np.abs( df_bc[feature].skew() / df[feature].skew() )
+    if delta < 1.0 :
+        print('Feature %s is less skewed after a Box-Cox transform' %(feature))
+    else:
+        print('Feature %s is more skewed after a Box-Cox transform'  %(feature))
+
+
+# The Box-Cox transform seems to do a good job in reducing the skews of the different distributions of features.  However, it does not lead to the normalization of the feature distributions. Trial and error showed that it doesn't lead to an improvement of the performance of the used algorithms.  Next, let's explore dimensionality reduction techniques.
+
+# ## 4. Evaluate Algorithms
+
+# ### - Dimensionality reduction
+
+# * **XGBoost**
+
+# In[ ]:
+
+
+model_importances = XGBClassifier()
+start = time()
+model_importances.fit(X_train, y_train)
+print('Elapsed time to train XGBoost  %.3f seconds' %(time()-start))
+plot_importance(model_importances)
+plt.show()
+
+
+# It appears that no main features dominate the importance in the XGBoost modeling of the problem. 
+
+# * **PCA**
+
+# Let's go ahead and perform a PCA on the features to decorrelate the ones that are linearly dependent and then let's plot the cumulative explained variance.
+
+# In[ ]:
+
+
+pca = PCA(random_state = seed)
+pca.fit(X_train)
+var_exp = pca.explained_variance_ratio_
+cum_var_exp = np.cumsum(var_exp)
+plt.figure(figsize=(8,6))
+plt.bar(range(1,len(cum_var_exp)+1), var_exp, align= 'center', label= 'individual variance explained',        alpha = 0.7)
+plt.step(range(1,len(cum_var_exp)+1), cum_var_exp, where = 'mid' , label= 'cumulative variance explained',         color= 'red')
+plt.ylabel('Explained variance ratio')
+plt.xlabel('Principal components')
+plt.xticks(np.arange(1,len(var_exp)+1,1))
+plt.legend(loc='center right')
+plt.show()
+
+# Cumulative variance explained
+for i, sum in enumerate(cum_var_exp):
+    print("PC" + str(i+1), "Cumulative variance: %.3f% %" %(cum_var_exp[i]*100))
+
+
+# It appears that about 99 % of the variance can be explained with the first 5 principal components. However feeding the PCA features to the learning algorithms did not contribute to a better performance. This might be due to the non-linearites that PCA is not able to capture.
+
+# ### - Compare Algorithms
+
+# Now it's time to compare the performance of different machine learning algorithms. We'll use 10-folds cross-validation to assess the performance of each model with the metric being the classification accuracy. Pipelines encompassing Standarization and PCA are used in order to avoid data leakage. Standarization is not performed for tree-based methods.
+
+# In[ ]:
+
+
+n_components = 5
+pipelines = []
+n_estimators = 200
+
+#print(df.shape)
+pipelines.append( ('SVC',
+                   Pipeline([
+                              ('sc', StandardScaler()),
+#                               ('pca', PCA(n_components = n_components, random_state=seed ) ),
+                             ('SVC', SVC(random_state=seed))]) ) )
+
+
+pipelines.append(('KNN',
+                  Pipeline([ 
+                              ('sc', StandardScaler()),
+#                             ('pca', PCA(n_components = n_components, random_state=seed ) ),
+                            ('KNN', KNeighborsClassifier()) ])))
+pipelines.append( ('RF',
+                   Pipeline([
+                              ('sc', StandardScaler()),
+#                              ('pca', PCA(n_components = n_components, random_state=seed ) ), 
+                             ('RF', RandomForestClassifier(random_state=seed, n_estimators=n_estimators)) ]) ))
+
+
+pipelines.append( ('Ada',
+                   Pipeline([ 
+                              ('sc', StandardScaler()),
+#                              ('pca', PCA(n_components = n_components, random_state=seed ) ), 
+                    ('Ada', AdaBoostClassifier(random_state=seed,  n_estimators=n_estimators)) ]) ))
+
+pipelines.append( ('ET',
+                   Pipeline([
+                              ('sc', StandardScaler()),
+#                              ('pca', PCA(n_components = n_components, random_state=seed ) ), 
+                             ('ET', ExtraTreesClassifier(random_state=seed, n_estimators=n_estimators)) ]) ))
+pipelines.append( ('GB',
+                   Pipeline([ 
+                             ('sc', StandardScaler()),
+#                             ('pca', PCA(n_components = n_components, random_state=seed ) ), 
+                             ('GB', GradientBoostingClassifier(random_state=seed)) ]) ))
+
+pipelines.append( ('LR',
+                   Pipeline([
+                              ('sc', StandardScaler()),
+#                               ('pca', PCA(n_components = n_components, random_state=seed ) ), 
+                             ('LR', LogisticRegression(random_state=seed)) ]) ))
+
+results, names, times  = [], [] , []
+num_folds = 10
+scoring = 'accuracy'
+
+for name, model in pipelines:
+    start = time()
+    kfold = StratifiedKFold(n_splits=num_folds, random_state=seed)
+    cv_results = cross_val_score(model, X_train, y_train, cv=kfold, scoring = scoring,
+                                n_jobs=-1) 
+    t_elapsed = time() - start
+    results.append(cv_results)
+    names.append(name)
+    times.append(t_elapsed)
+    msg = "%s: %f (+/- %f) performed in %f seconds" % (name, 100*cv_results.mean(), 
+                                                       100*cv_results.std(), t_elapsed)
+    print(msg)
+
+
+fig = plt.figure(figsize=(12,8))    
+fig.suptitle("Algorithms comparison")
+ax = fig.add_subplot(1,1,1)
+plt.boxplot(results)
+ax.set_xticklabels(names)
+plt.show()
+
+
 # 
-# You can access BigQuery by using a [web UI ](https://bigquery.cloud.google.com/project/nice-particle-195309)or a [command-line tool](https://cloud.google.com/bigquery/bq-command-line-tool), or by making calls to the BigQuery REST API using a variety of client libraries such as Java, .NET, or Python. There are also a variety of third-party tools that you can use to interact with BigQuery, such as visualizing the data or loading the data.
-# Because the datasets on BigQuery can be very large, there are some restrictions on how much data you can access. 
+# **Observation:** The best performances are achieved by RF. However, RF also yields a wide distribution. It is worthy to continue our study by tuning RF. 
 # 
-# *But You dont need to go to Google, Since Kaggle kernels allows you to access TeraBytes of data from Google cloud with all saftey measures like not letting your query go above memory limits and helper APIs. Thanks to [Sohier](https://www.kaggle.com/sohier)'s [BigQuery helper module](https://github.com/SohierDane/BigQuery_Helper/blob/master/bq_helper.py).
-# Each Kaggle user can scan 5TB every 30 days for free.*
+# Logistic Regression performs badly. This might be due to the fact that the data is not normally distributed as these algorithms perform well when data that is normally distributed.
+
+# ## 5. Algorithm tuning
+
+# ### Tuning Random Forests
 # 
-# Let's first setup environment to run BigQueries in Kaggle Kernels.
-# 
-# ### Importing Kaggle's bq_helper package
+# For random forest, we can tune the number of grown trees (n_estimators), the trees' depth (max_depth), the criterion of splitting (gini or entropy) and so on.... Let's start tuning these.
 
 # In[ ]:
 
 
-import bq_helper 
+# Create a pipeline with a Random forest classifier
+pipe_rfc = Pipeline([ 
+                      ('scl', StandardScaler()), 
+                    ('rfc', RandomForestClassifier(random_state=seed, n_jobs=-1) )])
+
+# Set the grid parameters
+param_grid_rfc =  [ {
+    'rfc__n_estimators': [100, 200,300,400], # number of estimators
+    #'rfc__criterion': ['gini', 'entropy'],   # Splitting criterion
+    'rfc__max_features':[0.05 , 0.1], # maximum features used at each split
+    'rfc__max_depth': [None, 5], # Max depth of the trees
+    'rfc__min_samples_split': [0.005, 0.01], # mininal samples in leafs
+    }]
+# Use 10 fold CV
+kfold = StratifiedKFold(n_splits=num_folds, random_state= seed)
+grid_rfc = GridSearchCV(pipe_rfc, param_grid= param_grid_rfc, cv=kfold, scoring=scoring, verbose= 1, n_jobs=-1)
+
+#Fit the pipeline
+start = time()
+grid_rfc = grid_rfc.fit(X_train, y_train)
+end = time()
+
+print("RFC grid search took %.3f seconds" %(end-start))
+
+# Best score and best parameters
+print('-------Best score----------')
+print(grid_rfc.best_score_ * 100.0)
+print('-------Best params----------')
+print(grid_rfc.best_params_)
 
 
-# ### Creating a helper object for  bigquery dataset
-# 
-# The addresses of BigQuery datasets look like this![](https://i.imgur.com/l11gdKx.png)
-# 
-# for us dataset is **github_repos**
-# 
-# [Rachael](https://www.kaggle.com/rtatman) from Kaggle has ran a 5 days BigQuery Introductory challenge called SQL Scavenger Hunt. We will go through day 1 to 5 using Github Repos Dataset.
-# 
-# Image is taken from [SQL Scavenger Handbook](https://www.kaggle.com/rtatman/sql-scavenger-hunt-handbook)
+# ## 6) Diagnose the performance of the best algorithms
 
-# In[ ]:
-
-
-github_repos = bq_helper.BigQueryHelper(active_project= "bigquery-public-data", 
-                                       dataset_name = "github_repos")
-
-
-# ### Listing Tables
-
-# In[ ]:
-
-
-# print a list of all the tables in the github_repos dataset
-github_repos.list_tables()
-
-
-# ###  Printing Table Schema
-# 
-
-# In[ ]:
-
-
-# print information on all the columns in the "commits" table
-# in the github_repos dataset
-github_repos.table_schema("commits")
-
+# ### Diagnose overfitting by plotting the learning and validation curves
 
 # In[ ]:
 
 
-# preview the first couple lines of the "commits" table
-github_repos.head("commits")
+# Let's define some utility functions to plot the learning & validation curves
 
-
-# **[SQL Scavenger Hunt: Day 1](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-1)**
-# ### SELECT ... FROM ... WHERE
-# 
-# Or first query is going to be simple select a single column from a specific table. To do this, you need to tell SELECT which column to select and then specify what table that column is from using FROM.
-# 
-# When you're working with BigQuery datasets, you're almost always going to want to return only certain rows, usually based on the value of a different column. You can do this using the WHERE clause, which will only return the rows where the WHERE clause evaluates to true.
-# 
-# ### What are sizes of Github Repositories??
-# We will be using **contents** table.
-
-# In[ ]:
-
-
-github_repos.head("contents")
-
-
-# ### Checking the size of our query before we run it
-# Our Dataset is 3TBs so we can easily cross tha daily limit by running few queries. We should always estimate  how much data we need to scan for executing this query by **BigQueryHelper.estimate_query_size()** method.
-# 
-
-# In[ ]:
-
-
-query1= """SELECT size
-            FROM `bigquery-public-data.github_repos.contents`
-            WHERE binary = True
-            LIMIT 5000
-        """
-github_repos.estimate_query_size(query1)
-
-
-# Our query actually scanned 2.34 GB of data. By default any query scanning more than 1GB of data will get cancelled by kaggle kernel environment.
-# 
-# ### Running a query
-# 
-# There are 2 ways to do this:
-# 
-# 1. BigQueryHelper.query_to_pandas(query): This method takes a query and returns a Pandas dataframe.
-# 1. BigQueryHelper.query_to_pandas_safe(query, max_gb_scanned=1): This method takes a query and returns a Pandas dataframe only if the size of the query is less than the upperSizeLimit (1 gigabyte by default).
-# 
-# Here's an example of a query that is larger than the specified upper limit.
-
-# In[ ]:
-
-
-github_repo_sizes = github_repos.query_to_pandas_safe(query1, max_gb_scanned=2.34)
-github_repo_sizes.head()
-
-
-# Since this query has returned a pandasdataframe, we can work with it as we would any other dataframe. For example, we can get the min and max of the column size:
-# 
-# 
-
-# In[ ]:
-
-
-BYTES_PER_MB = 2**20
-print("Minimum git repo size is " , github_repo_sizes.min()/BYTES_PER_MB, " bytes")
-print("Maximum git repo size is " , github_repo_sizes.max()/BYTES_PER_MB, " bytes");
+def plot_learning_curve(train_sizes, train_scores, test_scores, title, alpha=0.1):
+    train_mean = np.mean(train_scores, axis=1)
+    train_std = np.std(train_scores, axis=1)
+    test_mean = np.mean(test_scores, axis=1)
+    test_std = np.std(test_scores, axis=1)
+    plt.plot(train_sizes, train_mean, label='train score', color='blue', marker='o')
+    plt.fill_between(train_sizes,train_mean + train_std,
+                    train_mean - train_std, color='blue', alpha=alpha)
+    plt.plot(train_sizes, test_mean, label='test score', color='red',marker='o')
+    plt.fill_between(train_sizes,test_mean + test_std, test_mean - test_std , color='red', alpha=alpha)
+    plt.title(title)
+    plt.xlabel('Number of training points')
+    plt.ylabel('Accuracy')
+    plt.grid(ls='--')
+    plt.legend(loc='best')
+    plt.show()    
+    
+def plot_validation_curve(param_range, train_scores, test_scores, title, alpha=0.1):
+    train_mean = np.mean(train_scores, axis=1)
+    train_std = np.std(train_scores, axis=1)
+    test_mean = np.mean(test_scores, axis=1)
+    test_std = np.std(test_scores, axis=1)
+    plt.plot(param_range, train_mean, label='train score', color='blue', marker='o')
+    plt.fill_between(param_range,train_mean + train_std,
+                    train_mean - train_std, color='blue', alpha=alpha)
+    plt.plot(param_range, test_mean, label='test score', color='red', marker='o')
+    plt.fill_between(param_range,test_mean + test_std, test_mean - test_std , color='red', alpha=alpha)
+    plt.title(title)
+    plt.grid(ls='--')
+    plt.xlabel('Parameter value')
+    plt.ylabel('Accuracy')
+    plt.legend(loc='best')
+    plt.show()    
 
 
 # In[ ]:
 
 
-plt.figure(figsize=(12,6))
-plt.plot(github_repo_sizes.divide(BYTES_PER_MB),color="black")
-plt.savefig('github-sizes-on-head-branch.png')
-plt.title("Sizes of Github Repos on Head Branch in MBs");
+plt.figure(figsize=(9,6))
 
+train_sizes, train_scores, test_scores = learning_curve(
+              estimator= grid_rfc.best_estimator_ , X= X_train, y = y_train, 
+                train_sizes=np.arange(0.1,1.1,0.1), cv= 10,  scoring='accuracy', n_jobs= - 1)
 
-# ### How many github repositories are in form of binary files?
-# A binary file is a file stored in binary format. A binary file is computer-readable but not human-readable. All executable programs are stored in binary files, as are most numeric data files.
+plot_learning_curve(train_sizes, train_scores, test_scores, title='Learning curve for RFC')
 
-# In[ ]:
 
-
-get_ipython().run_cell_magic('time', '', 'query2= """SELECT binary\n            FROM `bigquery-public-data.github_repos.contents`\n            LIMIT 50000\n        """\n\nbinary_files=github_repos.query_to_pandas_safe(query2)')
-
-
-# In[ ]:
-
-
-binary_files.head()
-sns.countplot(binary_files.binary)
-plt.savefig('github-binary-files.png')
-plt.title("Binary Vs. Text Files");
-
-
-# Looks like approximately 5% of the total files is dataset are binary files i.e executables rest all are normal text files.
-# 
-# ### Which are the Popular Languages in Github?
-
-# In[ ]:
-
-
-github_repos.head("languages")
-
-
-# In[ ]:
-
-
-#%%time
-query3= """SELECT language
-            FROM `bigquery-public-data.github_repos.languages`
-            LIMIT 5000
-        """
-github_repos.estimate_query_size(query3)
-
-
-# In[ ]:
-
-
-github_languages = github_repos.query_to_pandas_safe(query3)
-github_languages.head()
-
-
-# In[ ]:
-
-
-github_languages.language[0]
-languagesList=[]
-for lang in github_languages.language:
-    languagesList.extend(lang)
-languagesList[:5]
-
-
-# In[ ]:
-
-
-Languages_count={}
-for lang in languagesList:
-    if lang["name"] not in Languages_count:
-        Languages_count[lang["name"]]=0
-    Languages_count[lang["name"]]+=1
-#Languages_count
-
-
-# In[ ]:
-
-
-import operator
-sorted_Languages_counts = sorted(Languages_count.items(), key=operator.itemgetter(1),reverse=True)
-sorted_Languages_counts[:15]
-
-
-# In[ ]:
-
-
-language = list(zip(*sorted_Languages_counts[:15]))[0]
-count = list(zip(*sorted_Languages_counts[:15]))[1]
-x_pos = np.arange(len(language))
-
-
-# calculate slope and intercept for the linear trend line
-slope, intercept = np.polyfit(x_pos, count, 1)
-trendline = intercept + (slope * x_pos)
-plt.figure(figsize=(12,8))
-plt.plot(x_pos, trendline, color='black', linestyle='--')    
-plt.bar(x_pos, count,align='center',color=sns.color_palette("gist_rainbow",len(x_pos)))
-plt.xticks(x_pos, language,rotation=45) 
-plt.title('Language Popularity Score')
-plt.savefig('github-language-popularity.png');
-
-
-# My favourite being Python, I must say it's in top 5.
-# 
-# ### Which are the trending repositories on Github ??
-# 
-
-# In[ ]:
-
-
-github_repos.head("sample_repos")
-
-
-# In[ ]:
-
-
-query9 ="""
-        SELECT repo_name, watch_count
-        FROM `bigquery-public-data.github_repos.sample_repos`
-        ORDER BY watch_count DESC 
-        LIMIT 2000
-        """
-github_repos.estimate_query_size(query9)
-
-
-# In[ ]:
-
-
-github_repo_trending_repos = github_repos.query_to_pandas_safe(query9)
-github_repo_trending_repos.head(15)
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,8))
-g = sns.barplot(y="repo_name", x="watch_count", data=github_repo_trending_repos[:20], palette="winter")
-plt.title('Trending Github Repositories')
-plt.ylabel("Repository Name")
-plt.xlabel("Watch Count")
-plt.savefig('github-trending-repo-by-watch-count.png');
-
-
-# Wohoo my favourite **FreeCodeCamp** repo is at the top and much ahead of others.
-# 
-# 
-# ### Who are the authors with Highest number of repositories?
-# 
-# The author on github is the person who originally wrote the code. 
-# In other words, the author is the person who originally wrote the patch.
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'query4= """SELECT author\n            FROM `bigquery-public-data.github_repos.commits`\n            LIMIT 500000\n        """\ngithub_repos.query_to_pandas_safe(query4)')
-
-
-# In[ ]:
-
-
-github_repo_authors = github_repos.query_to_pandas_safe(query4, max_gb_scanned=17.5)
-github_repo_authors.head()
-
-
-# In[ ]:
-
-
-github_repo_authors.author[789]
-
-
-# In[ ]:
-
-
-authors_count={}
-for author in github_repo_authors.author.values:
-    if author["name"] not in authors_count:
-        authors_count[author["name"]]=0
-    authors_count[author["name"]]+=1
-#authors_count
-
-
-# In[ ]:
-
-
-import operator
-sorted_authors_counts = sorted(authors_count.items(), key=operator.itemgetter(1),reverse=True)
-sorted_authors_counts[:15]
-
-
-# In[ ]:
-
-
-authors = list(zip(*sorted_authors_counts[:15]))[0]
-count = list(zip(*sorted_authors_counts[:15]))[1]
-y_pos = np.arange(len(authors))
-plt.figure(figsize=(12,8))
-plt.barh(y_pos,count,align='center',color=sns.color_palette("viridis",len(x_pos)))
-plt.yticks(y_pos,authors,rotation=0) 
-plt.title('Authors and their total Repositories')
-plt.savefig('github-authors.png');
-
-
-# **Auto Pilot **running first here with more than 1600 repositories.
-# 
-# ## Who are the committers with highest commits?
-# 
-# The committer on github, is assumed to be the person who committed the code on behalf of the original author. 
-# Th commiter is who last applied the patch.
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'query5= """SELECT committer\n            FROM `bigquery-public-data.github_repos.commits`\n            LIMIT 50000\n        """\ngithub_repos.query_to_pandas_safe(query5)')
-
-
-# In[ ]:
-
-
-github_repo_committers = github_repos.query_to_pandas_safe(query5, max_gb_scanned=17.5)
-github_repo_committers.head()
-
-
-# In[ ]:
-
-
-committers_count={}
-for committer in github_repo_committers.committer.values:
-    if committer["name"] not in committers_count:
-        committers_count[committer["name"]]=0
-    committers_count[committer["name"]]+=1
-#committers_count
-
-
-# In[ ]:
-
-
-import operator
-sorted_committers_count = sorted(committers_count.items(), key=operator.itemgetter(1),reverse=True)
-sorted_committers_count[:15]
-
-
-# In[ ]:
-
-
-committers = list(zip(*sorted_committers_count[:15]))[0]
-count = list(zip(*sorted_committers_count[:15]))[1]
-y_pos = np.arange(len(committers))
-
-plt.figure(figsize=(12,8))
-plt.barh(y_pos,count,align='center',color=sns.color_palette("inferno",len(y_pos)))
-plt.yticks(y_pos,committers,rotation=0) 
-plt.title('Committers and their total Repositories')
-plt.savefig('github-committers.png');
-
-
-# Looks like by default commiter is github followed by Duane F. King.
-# 
-# ### How commit messages look like?
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'query6 = """\nSELECT message\nFROM `bigquery-public-data.github_repos.commits`\nWHERE LENGTH(message) > 10 AND LENGTH(message) <= 50\nLIMIT 500\n"""\ngithub_repos.query_to_pandas_safe(query6)')
-
-
-# In[ ]:
-
-
-github_repo_messages = github_repos.query_to_pandas_safe(query6, max_gb_scanned=17.6)
-github_repo_messages.head()
-
-
-# In[ ]:
-
-
-from wordcloud import WordCloud
-import random
-
-def grey_color_func(word, font_size, position, orientation, random_state=None, **kwargs):
-    return "hsl(0, 0%%, %d%%)" % random.randint(60, 100)
-
-commits = ' '.join(github_repo_messages.message).lower()
-# wordcloud for display address
-plt.figure(figsize=(12,6))
-wc = WordCloud(background_color='gold', max_font_size=200,
-                            width=1600,
-                            height=800,
-                            max_words=400,
-                            relative_scaling=.5).generate(commits)
-plt.imshow(wc.recolor(color_func=grey_color_func, random_state=3))
-#plt.imshow(wc)
-plt.title("Github Commit Messages", fontsize=20)
-plt.savefig('github-commit-messages-wordcloud.png')
-plt.axis("off");
-
-
-# ### Which Subject is most comman for Github Repositories??
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'query7 = """\nSELECT subject\nFROM `bigquery-public-data.github_repos.commits`\nWHERE LENGTH(subject) > 5 AND LENGTH(subject) <= 10\nLIMIT 500\n"""\ngithub_repos.query_to_pandas_safe(query7)')
-
-
-# In[ ]:
-
-
-github_repo_subject = github_repos.query_to_pandas_safe(query7, max_gb_scanned=8.8)
-github_repo_subject.head()
-
-
-# In[ ]:
-
-
-from wordcloud import WordCloud
-import random
-
-commits = ' '.join(github_repo_subject.subject).lower()
-# wordcloud for display address
-plt.figure(figsize=(12,6))
-wc = WordCloud(background_color="rgba(255, 255, 255, 0)", mode="RGBA"
-, max_font_size=200,
-                            width=1600,
-                            height=800,
-                            max_words=400,
-                            relative_scaling=.5).generate(commits)
-plt.imshow(wc)
-#plt.imshow(wc)
-plt.title("Github Subject", fontsize=20)
-plt.savefig('github-subject-wordcloud.png')
-plt.axis("off");
-
-
-# **[SQL Scavenger Hunt: Day 2](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-2)**
-# 
-# ### GROUP BY... HAVING and COUNT
-# Now we will be learning how to **GROUP** data **BY** particular column and **COUNT** common occurences.
-# And also **ORDER** results **BY** count in ascending or DESCending order..
-# 
-# 
-# ### Which are popular licenses?
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'query8 ="""\n        SELECT license, COUNT(*) AS count\n        FROM `bigquery-public-data.github_repos.licenses`\n        GROUP BY license\n        ORDER BY COUNT(*) DESC\n        """\ngithub_repos.query_to_pandas_safe(query8)')
-
-
-# In[ ]:
-
-
-github_repo_licenses = github_repos.query_to_pandas_safe(query8)
-github_repo_licenses.head()
-
-
-# In[ ]:
-
-
-github_repo_licenses.shape
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,9))
-sns.barplot(y="license", x="count", data=github_repo_licenses, palette="viridis")
-plt.title('Licenses in order of their popularity in Github Repositories')
-plt.savefig('github-licenses-popularity.png');
-
-
-# **[SQL Scavenger Hunt: Day 5](https://www.kaggle.com/rtatman/sql-scavenger-hunt-day-5)**
-# 
-# ### JOIN
-# Till now we were using only single table. To get broader view of real life scenario where we have to use **JOIN** to join 2 tables together based on some column.
-# 
-# ### How many files are covered by each license?
-# 
-
-# In[ ]:
-
-
-query10 = ("""
-        -- Select all the columns we want in our joined table
-        SELECT L.license, COUNT(sf.path) AS number_of_files
-        FROM `bigquery-public-data.github_repos.sample_files` as sf
-        -- Table to merge into sample_files
-        INNER JOIN `bigquery-public-data.github_repos.licenses` as L 
-            ON sf.repo_name = L.repo_name -- what columns should we join on?
-        GROUP BY L.license
-        ORDER BY number_of_files DESC
-        """)
-
-file_count_by_license = github_repos.query_to_pandas_safe(query10, max_gb_scanned=6)
-
-
-# In[ ]:
-
-
-file_count_by_license.head()
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,9))
-g = sns.barplot(y="license", x="number_of_files", data=file_count_by_license, palette="inferno")
-plt.title(' Number of Files covered by each License')
-plt.savefig('num-of-files-by-license.png')
-plt.xlabel("");
-
-
-# GNU General Public License v2.0	(gpl-2.0) Covered most of the files followed by MIT(mit) license.
-# 
-# ### How many commits have been made in repos written in the Python programming language?
-
-# In[ ]:
-
-
-query11 = """
-WITH python_repos AS (
-    SELECT DISTINCT repo_name -- Notice DISTINCT
-    FROM `bigquery-public-data.github_repos.sample_files`
-    WHERE path LIKE '%.py')
-SELECT commits.repo_name, COUNT(commit) AS num_commits
-FROM `bigquery-public-data.github_repos.sample_commits` AS commits
-JOIN python_repos
-    ON  python_repos.repo_name = commits.repo_name
-GROUP BY commits.repo_name
-ORDER BY num_commits DESC
-"""
-github_repo_num_commits_distinct = github_repos.query_to_pandas_safe(query11, max_gb_scanned=10)
-github_repo_num_commits_distinct
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,9))
-g = sns.barplot(y="repo_name", x="num_commits", data=github_repo_num_commits_distinct[:15], palette="inferno")
-plt.title(' Top Python Github Repositories by their commits Count')
-plt.savefig('python-by-commits.png')
-plt.xlabel("");
-
-
-# No doubt **LINUX Operating system**'s repo has been applied lot of patches .
-# 
-# ### Number of Python files in each repositories above
-# 
-
-# In[ ]:
-
-
-query12 = """
-SELECT repo_name, COUNT(path) AS num_python_files
-FROM `bigquery-public-data.github_repos.sample_files`
-WHERE repo_name IN ('torvalds/linux', 'apple/swift', 'Microsoft/vscode', 'facebook/react', 'tensorflow/tensorflow')
-    AND path LIKE '%.py'
-GROUP BY repo_name
-ORDER BY num_python_files DESC
-"""
-
-github_repo_num_python_files = github_repos.query_to_pandas_safe(query12, max_gb_scanned=10)
-github_repo_num_python_files
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,9))
-g = sns.barplot(y="repo_name", x="num_python_files", data=github_repo_num_python_files, palette="Spectral_r")
-plt.title(' Python Github Repositories by their files Count')
-plt.savefig('python-by-files-.png')
-plt.xlabel("");
-
-
-# Highest number of Python files are present in Tensorflow Deep Learning Library
-# 
-# On the similar lines we can find out
-# 
-# ### How many commits have been made in repos written in the Java programming language?
-
-# In[ ]:
-
-
-query13 = """
-WITH java_repos AS (
-    SELECT DISTINCT repo_name -- Notice DISTINCT
-    FROM `bigquery-public-data.github_repos.sample_files`
-    WHERE path LIKE '%.java')
-SELECT commits.repo_name, COUNT(commit) AS num_commits
-FROM `bigquery-public-data.github_repos.sample_commits` AS commits
-JOIN java_repos
-    ON  java_repos.repo_name = commits.repo_name
-GROUP BY commits.repo_name
-ORDER BY num_commits DESC
-"""
-github_repo_num_java_distinct = github_repos.query_to_pandas_safe(query13, max_gb_scanned=5.3)
-github_repo_num_java_distinct
-
-
-# In[ ]:
-
-
-plt.figure(figsize=(12,9))
-g = sns.barplot(y="repo_name", x="num_commits", data=github_repo_num_java_distinct, palette="PuBu")
-plt.title(' Top Java Github Repositories by their commits Count')
-plt.savefig('java-by_commits.png')
-plt.xlabel("");
-
-
-# ### How many times 'This should never happen' appears??
-# 
-# This query uses a smaller sample table to find how many times the comment "this should never happen" is present.
-
-# In[ ]:
-
-
-query14 ="""
-SELECT
-  SUM(copies)
-FROM
-  `bigquery-public-data.github_repos.sample_contents`
-WHERE
-  NOT binary
-  AND content like '%This should never happen%'
-LIMIT 500
-"""
-github_repos.estimate_query_size(query14)
-
-
-# In[ ]:
-
-
-this_should_never_happen_count=github_repos.query_to_pandas_safe(query14, max_gb_scanned=23.7)
-this_should_never_happen_count
-
-
-# HAHA . This has happened 68486 times.
-# 
-# ### How many GO files are there?
-
-# In[ ]:
-
-
-query15="""
-SELECT COUNT(*)
-FROM `bigquery-public-data.github_repos.sample_files`
-WHERE path LIKE '%.go'
-LIMIT 500
-"""
-github_repos.estimate_query_size(query15)
-
-
-# In[ ]:
-
-
-go_files_count=github_repos.query_to_pandas_safe(query15, max_gb_scanned=3.7)
-go_files_count
-
-
-# there are 629226 GO files.
-# 
-# ### How many Python files are there?
-
-# In[ ]:
-
-
-query16="""
-SELECT COUNT(*)
-FROM `bigquery-public-data.github_repos.sample_files`
-WHERE path LIKE '%.py'
-LIMIT 500
-"""
-github_repos.estimate_query_size(query16)
-
-
-# In[ ]:
-
-
-python_files_count=github_repos.query_to_pandas_safe(query16, max_gb_scanned=3.7)
-python_files_count
-
-
-# there are 1231972  python files.
-
-# In[ ]:
-
-
-query17="""
-SELECT a.id id, size, content, binary, copies,
-  sample_repo_name, sample_path
-FROM (
-  SELECT id
-    , ANY_VALUE(path) sample_path
-    , ANY_VALUE(repo_name) sample_repo_name
-  FROM `bigquery-public-data.github_repos.sample_files` a
-  WHERE PATH LIKE '%.sql'
-  GROUP BY 1
-) a
-JOIN `bigquery-public-data.github_repos.sample_contents` b
-ON a.id=b.id
-"""
-github_repos.estimate_query_size(query17)
-
-
-# In[ ]:
-
-
-q_tab_or_space = ('''
-#standardSQL
-WITH
-  lines AS (
-  SELECT
-    SPLIT(content, '\\n') AS line,
-    id
-  FROM
-    `bigquery-public-data.github_repos.sample_contents`
-  WHERE
-    sample_path LIKE "%.sql" )
-SELECT
-  Indentation,
-  COUNT(Indentation) AS number_of_occurence
-FROM (
-  SELECT
-    CASE
-        WHEN MIN(CHAR_LENGTH(REGEXP_EXTRACT(flatten_line, r',\s*$')))>=1 THEN 'trailing'
-        WHEN MIN(CHAR_LENGTH(REGEXP_EXTRACT(flatten_line, r"^ +")))>=1 THEN 'Space'
-        ELSE 'Other'
-    END AS Indentation
-  FROM
-    lines
-  CROSS JOIN
-    UNNEST(lines.line) AS flatten_line
-  WHERE
-    REGEXP_CONTAINS(flatten_line, r"^\s+")
-  GROUP BY
-    id )
-GROUP BY
-  Indentation
-ORDER BY
-  number_of_occurence DESC
-''')
-
+# The algorithm suffers from high variance.

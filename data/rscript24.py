@@ -1,177 +1,100 @@
-# This file minics the kagglegym api, including scoring.
-#
-# You can use it to run experiments locally on the sample training set..
-# To do this follow the following steps.
-#
-# Create the following directory structure
-# .
-# +--input
-# |  +- train.h5
-# +--Models
-#    +- kagglegym.py
-#    +- __init__.py
-#    +- test_gym.py
-#
-# Where
-#
-# - train.h5 contains the unzipped data for the competition.
-#
-# - kagglegym.py is this file
-#
-# - test_gym.py  is a file with the following content:
-#
-#    import kagglegym
-#
-#    env = kagglegym.make()
-#    observation = env.reset()
-#
-#    print(len(observation.target))
-#    print(len(observation.train))
-#
-#    n = 0
-#    rewards = []
-#    while True:
-#        target = observation.target
-#        target.loc[:, 'y'] = 0.01
-#        observation, reward, done, info = env.step(target)
-#        if done:
-#            break
-#        rewards.append(reward)
-#        n = n + 1
-#
-#    print(info)
-#    print(n)
-#    print(rewards[0:15])
-#
-# Running
-#    python test_gym.py
-#
-# Should result in:
-#
-#  968
-#  806298
-#  {'public_score': -0.42791846067884648}
-#  906
-# [-0.57244240701870674, -0.69602355761934143, -0.76969605094330085,
-# -0.88292556152797097, -0.77409471948462827, -0.62031952966389658,
-# -0.39146488525587475, -0.84779897534426341, -0.45051451441360757,
-# -0.56453402316570156, -0.89329857536073409, -0.81062686366326098,
-# -0.61593843763923251, -0.67321374079183682, -0.82632908490446888]
-#
-# Revision history:
-# 1. Minimal verion posted by Frans Slothouber on the forum.
-#    see link https://www.kaggle.com/c/two-sigma-financial-modeling/discussion/26044#148202
-# 2. Modification by Devin that add score
-#    Parent of this fork
-# 3. Bug fix for the scoring function, and documentation
-#    This fork
-# 4. Bug fix for computation of final score. Thanks to PeterBruhn and vgoklani
-# 5. Fix in reset function, thanks to Devin
-#
-
-import pandas as pd
 import numpy as np
-from sklearn.metrics import r2_score
+import pandas as pd
+from sklearn import *
+import tensorflow as tf
+from multiprocessing import *
 
+train = pd.read_csv('../input/train.csv')
+test = pd.read_csv('../input/test.csv')
+col = [c for c in train.columns if c not in ['id','target']]
+print(len(col))
+col = [c for c in col if not c.startswith('ps_calc_')]
+print(len(col))
 
-def r_score(y_true, y_pred, sample_weight=None, multioutput=None):
-    r2 = r2_score(y_true, y_pred, sample_weight=sample_weight,
-                  multioutput=multioutput)
-    r = (np.sign(r2)*np.sqrt(np.abs(r2)))
-    if r <= -1:
-        return -1
-    else:
-        return r
+train = train.replace(-1, np.NaN)
+d_median = train.median(axis=0)
+d_mean = train.mean(axis=0)
+train = train.fillna(-1)
+one_hot = {c: list(train[c].unique()) for c in train.columns if c not in ['id','target']}
 
+def transform_df(df):
+    df = pd.DataFrame(df)
+    dcol = [c for c in df.columns if c not in ['id','target']]
+    df['ps_car_13_x_ps_reg_03'] = df['ps_car_13'] * df['ps_reg_03']
+    df['negative_one_vals'] = np.sum((df[dcol]==-1).values, axis=1)
+    for c in dcol:
+        if '_bin' not in c: #standard arithmetic
+            df[c+str('_median_range')] = (df[c].values > d_median[c]).astype(np.int)
+            df[c+str('_mean_range')] = (df[c].values > d_mean[c]).astype(np.int)
+            #df[c+str('_sq')] = np.power(df[c].values,2).astype(np.float32)
+            #df[c+str('_sqr')] = np.square(df[c].values).astype(np.float32)
+            #df[c+str('_log')] = np.log(np.abs(df[c].values) + 1)
+            #df[c+str('_exp')] = np.exp(df[c].values) - 1
+    for c in one_hot:
+        if len(one_hot[c])>2 and len(one_hot[c]) < 7:
+            for val in one_hot[c]:
+                df[c+'_oh_' + str(val)] = (df[c].values == val).astype(np.int)
+    return df
 
-class Observation(object):
-    def __init__(self, train, target, features):
-        self.train = train
-        self.target = target
-        self.features = features
+def multi_transform(df):
+    print('Init Shape: ', df.shape)
+    p = Pool(cpu_count())
+    df = p.map(transform_df, np.array_split(df, cpu_count()))
+    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
+    p.close(); p.join()
+    print('After Shape: ', df.shape)
+    return df
 
+def gini(y, pred):
+    fpr, tpr, thr = metrics.roc_curve(y, pred, pos_label=1)
+    g = 2 * metrics.auc(fpr, tpr) -1
+    return g
 
-class Environment(object):
-    def __init__(self):
-        with pd.HDFStore("../input/train.h5", "r") as hfdata:
-            self.timestamp = 0
-            fullset = hfdata.get("train")
-            self.unique_timestamp = fullset["timestamp"].unique()
-            # Get a list of unique timestamps
-            # use the first half for training and
-            # the second half for the test set
-            n = len(self.unique_timestamp)
-            i = int(n/2)
-            timesplit = self.unique_timestamp[i]
-            self.n = n
-            self.unique_idx = i
-            self.train = fullset[fullset.timestamp < timesplit]
-            self.test = fullset[fullset.timestamp >= timesplit]
+def gini_tf(pred, y):
+    return gini(y, pred) / gini(y, y)
 
-            # Needed to compute final score
-            self.full = self.test.loc[:, ['timestamp', 'y']]
-            self.full['y_hat'] = 0.0
-            self.temp_test_y = None
+x1, x2, y1, y2 = model_selection.train_test_split(train, train['target'], test_size=0.25, random_state=99)
 
-    def reset(self):
-        timesplit = self.unique_timestamp[self.unique_idx]
+x1 = multi_transform(x1)
+x2 = multi_transform(x2)
+test = multi_transform(test)
 
-        self.unique_idx = int(self.n / 2)
-        self.unique_idx += 1
-        subset = self.test[self.test.timestamp == timesplit]
+col = [c for c in x1.columns if c not in ['id','target']]
+col = [c for c in col if not c.startswith('ps_calc_')]
+print(x1.values.shape, x2.values.shape)
 
-        # reset index to conform to how kagglegym works
-        target = subset.loc[:, ['id', 'y']].reset_index(drop=True)
-        self.temp_test_y = target['y']
+#remove duplicates just in case
+tdups = multi_transform(train)
+dups = tdups[tdups.duplicated(subset=col, keep=False)]
 
-        target.loc[:, 'y'] = 0.0  # set the prediction column to zero
+x1 = x1[~(x1['id'].isin(dups['id'].values))]
+x2 = x2[~(x2['id'].isin(dups['id'].values))]
+print(x1.values.shape, x2.values.shape)
 
-        # changed bounds to 0:110 from 1:111 to mimic the behavior
-        # of api for feature
-        features = subset.iloc[:, :110].reset_index(drop=True)
+y1 = x1['target']
+y2 = x2['target']
+x1 = x1[col]
+x2 = x2[col]
 
-        observation = Observation(self.train, target, features)
-        return observation
+#start tf reqs
+x1 = x1.values.astype(np.float32)
+x2 = x2.values.astype(np.float32)
+y1 = y1.values.astype(np.int)
+y2 = y2.values.astype(np.int)
+xtest = test[col].values.astype(np.float32)
 
-    def step(self, target):
-        timesplit = self.unique_timestamp[self.unique_idx-1]
-        # Since full and target have a different index we need
-        # to do a _values trick here to get the assignment working
-        y_hat = target.loc[:, ['y']]
-        self.full.loc[self.full.timestamp == timesplit, ['y_hat']] = y_hat._values
+col = [tf.feature_column.numeric_column('x', shape=x1.shape[1:])]
+clf = tf.estimator.DNNClassifier(feature_columns=col, hidden_units=[600, 1200, 600], n_classes=2)
+clf.train(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': x1}, y=y1, shuffle=False), steps=10000)
+auc = clf.evaluate(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': x2}, y=y2, num_epochs=1, shuffle=False))['auc']
+print('AUC: ', auc)
 
-        if self.unique_idx == self.n:
-            done = True
-            observation = None
-            reward = r_score(self.temp_test_y, target.loc[:, 'y'])
-            score = r_score(self.full['y'], self.full['y_hat'])
-            info = {'public_score': score}
-        else:
-            reward = r_score(self.temp_test_y, target.loc[:, 'y'])
-            done = False
-            info = {}
-            timesplit = self.unique_timestamp[self.unique_idx]
-            self.unique_idx += 1
-            subset = self.test[self.test.timestamp == timesplit]
+preds = clf.predict(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': x2}, num_epochs=1, shuffle=False))
+preds = [float(p["probabilities"][1]) for p in preds]
+print('Gini: ', gini_tf(preds, y2))
 
-            # reset index to conform to how kagglegym works
-            target = subset.loc[:, ['id', 'y']].reset_index(drop=True)
-            self.temp_test_y = target['y']
-
-            # set the prediction column to zero
-            target.loc[:, 'y'] = 0
-
-            # column bound change on the subset
-            # reset index to conform to how kagglegym works
-            features = subset.iloc[:, 0:110].reset_index(drop=True)
-
-            observation = Observation(self.train, target, features)
-
-        return observation, reward, done, info
-
-    def __str__(self):
-        return "Environment()"
-
-
-def make():
-    return Environment()
+preds = clf.predict(input_fn=tf.estimator.inputs.numpy_input_fn(x={'x': xtest}, num_epochs=1, shuffle=False))
+preds = [float(p["probabilities"][1]) for p in preds]
+test['target'] = preds
+test['target'] = (np.exp(test['target'].values) - 1.0).clip(0,1)
+test[['id','target']].to_csv('tf_submission.csv', index=False, float_format='%.5f')

@@ -1,333 +1,317 @@
 
 # coding: utf-8
 
-# In[ ]:
+# # Non-Negative Matrix Factorization 
+
+# I have been using matrix factorization and did not see a kernel running it, thought adding this would provide some interesting ideas. This kernel joins the data provided to get the order history of different users, creates an order counts matrix from that, and factors it into two lower dimension matrices. The new matrix could be used as additional feature columns and potentially improve LB scores. 
+
+# In[1]:
 
 
-import sklearn
+import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-import pandas
-from sklearn.cross_validation import train_test_split
-import numpy
+import seaborn as sns
+from scipy.sparse import csr_matrix
+from collections import Counter
+
+
+# In[2]:
+
+
+order_prior = pd.read_csv("../input/order_products__prior.csv")
+orders = pd.read_csv("../input/orders.csv")
+train = pd.read_csv("../input/order_products__train.csv")
+products = pd.read_csv("../input/products.csv")
+
+
+# In[3]:
+
+
+test = orders[orders['eval_set']=='test']
+prior = orders[orders['eval_set']=='prior']
+prior.tail()
+
+
+# Match user_id of the prior part of the same orders table. That will give you the order history by user.
+
+# In[4]:
+
+
+test = pd.merge(test, prior[['user_id', 'order_id', 'order_number']], how = 'left', on = 'user_id')
+print(test.shape)
+test.head()
+
+
+# Merging with order history from order_prior table, ran on 16gb memory, but timed out here on 8gb so I am running a subset of the data below.
+
+# In[5]:
+
+
+test = pd.merge(test, order_prior, left_on = 'order_id_y', right_on = 'order_id')
+test['new_order_id'] = test['order_id_x']
+test['prior_order_id'] = test['order_id_y']
+test = test.drop(['order_id_x', 'order_id_y'], axis = 1)
+del [orders, order_prior, train]
+
+
+# In[6]:
+
+
+lookup_aisles = test.product_id.map(products.set_index('product_id')['department_id'])
+test['aisles'] = lookup_aisles
+
+
+# In[7]:
+
+
+test.head()
+
+
+# Create the product list for each order with filtering in pandas. product_list represents reorders while all represents all items from an order.
+# 
+
+# In[8]:
+
+
+product_list = test[test['reordered']==1].groupby(['user_id', 'order_number_x', 'new_order_id']).agg({'product_id': lambda x: tuple(x),
+                                                                                                      'aisles': lambda x: tuple(x)})
+product_list = pd.DataFrame(product_list.reset_index())
+product_list['num_products_reordered'] = product_list.product_id.apply(len)
+product_list.head(15)
+
+
+#  The output below shows what one user's order history looks like.
+
+# In[9]:
+
+
+test[(test['user_id'] == 4)]
+
+
+# To create the users x products count table loop through the prodcut ids data to as a sparse matrix (much more memory efficient), column position contains the product ids with position listed in a dict.
+# 
+
+# In[10]:
+
+
+indptr = [0]
+indices = []
+data = []
+column_position = {}
+# input must be a list of lists
+for order in product_list['product_id']:
+    for product in order:
+        index = column_position.setdefault(product, len(column_position))
+        indices.append(index)
+        data.append(1)
+    indptr.append(len(indices))
+    
+prod_matrix = csr_matrix((data, indices, indptr), dtype=int)
+#del(test)
+
+
+# In[11]:
+
+
+prod_matrix.shape
+
+
+# The problem with using the sparse matrix is that it is gigantic,  there are a lot of users and a lot of products. Non-negative matrix decomposition is implemented in sklearn, use that to decompose the count matrix into two new matrices with considerably reduced dimensions. 
+
+# In[12]:
+
+
+from sklearn.decomposition import NMF
+from sklearn.preprocessing import normalize
+
+nmf = NMF(n_components = 50, random_state = 42)
+model = nmf.fit(prod_matrix)
+H = model.components_
+model.components_.shape
+
+
+# What can I do with the results? For one, I could pick a random user and find users that have similar purchasing behavior. 
+
+# In[13]:
+
+
+W = model.transform(prod_matrix)
+user_data = pd.DataFrame(normalize(W), index = product_list['user_id'])
+idx = user_data.dot(user_data.iloc[0]).nlargest(5).index
+user_data.dot(user_data.iloc[0]).nlargest(5)
+
+
+# In[14]:
+
+
+W.shape
+
+
+# In[15]:
+
+
+H.shape
+
+
+# In[16]:
+
+
+#tmp = np.dot(W[25], H).argmax()
+
+def return_item(index):
+    for key, value in column_position.items():
+        if value == index:
+            return(key)
+
+
+# In[17]:
+
+
+# is there a better way to return top values?
+top_10 = pd.Series(np.matmul(W[35], H)).sort_values(ascending=False)[0:10]
+top_10
+
+
+# In[18]:
+
+
+[return_item(idx) for idx in top_10.index]
+
+
+# In[19]:
+
+
+def prod_count(product_ids):
+
+    prod_count = {}
+    for item in product_ids:
+        if item not in prod_count.keys():
+            prod_count[item] = 1
+        elif item in prod_count.keys():
+            prod_count[item] += 1
+    return prod_count
+
+
+# In[20]:
+
+
+prod_count(product_list.product_id[35])
+
+
+# In[34]:
+
+
+prod_matrix.shape
+
+
+# In[119]:
+
+
+np.sum(prod_matrix.sum(axis=0)[0,:] > 3286)
 
 
 # In[ ]:
 
 
-Tweet= pandas.read_csv("../input/Tweets.csv")
-Tweet.head()
+import seaborn as sns
+sns.distplot(prod_matrix.sum(axis=0)[0,:], bins = 30000, kde=False)
+plt.xlim(0, 100)
 
-
-# In[ ]:
-
-
-(len(Tweet)-Tweet.count())/len(Tweet)
-
-
-# In[ ]:
-
-
-del Tweet['tweet_coord']
-del Tweet['airline_sentiment_gold']
-del Tweet['negativereason_gold']
-
-
-# In[ ]:
-
-
-Mood_count=Tweet['airline_sentiment'].value_counts()
-
-
-# In[ ]:
-
-
-Index = [1,2,3]
-plt.bar(Index,Mood_count)
-plt.xticks(Index,['negative','neutral','positive'],rotation=45)
-plt.ylabel('Mood Count')
-plt.xlabel('Mood')
-plt.title('Count of Moods')
-
-
-# In[ ]:
-
-
-Tweet['airline'].value_counts()
-
-
-# In[ ]:
-
-
-def plot_sub_sentiment(Airline):
-    df=Tweet[Tweet['airline']==Airline]
-    count=df['airline_sentiment'].value_counts()
-    Index = [1,2,3]
-    plt.bar(Index,count)
-    plt.xticks(Index,['negative','neutral','positive'])
-    plt.ylabel('Mood Count')
-    plt.xlabel('Mood')
-    plt.title('Count of Moods of '+Airline)
-plt.figure(1,figsize=(12, 12))
-plt.subplot(231)
-plot_sub_sentiment('US Airways')
-plt.subplot(232)
-plot_sub_sentiment('United')
-plt.subplot(233)
-plot_sub_sentiment('American')
-plt.subplot(234)
-plot_sub_sentiment('Southwest')
-plt.subplot(235)
-plot_sub_sentiment('Delta')
-plt.subplot(236)
-plot_sub_sentiment('Virgin America')
-
-
-# From the above plots one can find that the distribution of moods for the first three airlines are always skewed toward negative moods. On contrary, the moods are distributed more balanced with the later three airline companies. 
-
-# In[ ]:
-
-
-NR_Count=dict(Tweet['negativereason'].value_counts(sort=False))
-
-
-# In[ ]:
-
-
-def NR_Count(Airline):
-    if Airline=='All':
-        df=Tweet
-    else:
-        df=Tweet[Tweet['airline']==Airline]
-    count=dict(df['negativereason'].value_counts())
-    Unique_reason=list(Tweet['negativereason'].unique())
-    Unique_reason=[x for x in Unique_reason if str(x) != 'nan']
-    Reason_frame=pandas.DataFrame({'Reasons':Unique_reason})
-    Reason_frame['count']=Reason_frame['Reasons'].apply(lambda x: count[x])
-    return Reason_frame
-
-
-# In[ ]:
-
-
-def plot_reason(Airline):
-    df=NR_Count(Airline)
-    count=df['count']
-    Index = range(1,(len(df)+1))
-    plt.bar(Index,count)
-    plt.xticks(Index,df['Reasons'],rotation=90)
-    plt.ylabel('Count')
-    plt.xlabel('Reason')
-    plt.title('Count of Reasons for '+Airline)
-
-
-# In[ ]:
-
-
-plot_reason('All')
-
-
-# In[ ]:
-
-
-plot_reason('US Airways')
-
-
-# In[ ]:
-
-
-plot_reason('United')
-
-
-# In[ ]:
-
-
-plot_reason('American')
-
-
-# In[ ]:
-
-
-plot_reason('Southwest')
-
-
-# In[ ]:
-
-
-plot_reason('Delta')
-
-
-# In[ ]:
-
-
-plot_reason('Virgin America')
-
-
-# ### D: Word Cloud for the negative Tweets
-
-# In[ ]:
-
-
-from wordcloud import WordCloud,STOPWORDS
-
-
-# In[ ]:
-
-
-df=Tweet[Tweet['airline_sentiment']=='negative']
-words = ' '.join(df['text'])
-cleaned_word = " ".join([word for word in words.split()
-                            if 'http' not in word
-                                and not word.startswith('@')
-                                and word != 'RT'
-                            ])
-
-
-# In[ ]:
-
-
-wordcloud = WordCloud(stopwords=STOPWORDS,
-                      background_color='black',
-                      width=3000,
-                      height=2500
-                     ).generate(cleaned_word)
-
-
-# In[ ]:
-
-
-plt.figure(1,figsize=(12, 12))
-plt.imshow(wordcloud)
-plt.axis('off')
 plt.show()
 
 
-# **We can find that the Tweets with negative moods are frequently involved some words like cancelled, flight ,customer or hour. People might guess that customer tends to complain when they are waiting for the delayed flights.**
-
-# ### E: Preprocess data for classification
-
-# **Our data exploration ends up at here. The next step will be preprocess the data in order to make the learning process more smooth.**
-
-# In[ ]:
+# In[92]:
 
 
-import re
-import nltk
-from nltk.corpus import stopwords
+prod_matrix.sum(axis=0)[:,580]
 
 
-# In[ ]:
+# In[39]:
 
 
-def tweet_to_words(raw_tweet):
-    letters_only = re.sub("[^a-zA-Z]", " ",raw_tweet) 
-    words = letters_only.lower().split()                             
-    stops = set(stopwords.words("english"))                  
-    meaningful_words = [w for w in words if not w in stops] 
-    return( " ".join( meaningful_words )) 
+column_position[21386]
 
 
-# In[ ]:
+# In[21]:
 
 
-def clean_tweet_length(raw_tweet):
-    letters_only = re.sub("[^a-zA-Z]", " ",raw_tweet) 
-    words = letters_only.lower().split()                             
-    stops = set(stopwords.words("english"))                  
-    meaningful_words = [w for w in words if not w in stops] 
-    return(len(meaningful_words)) 
+similar_users = product_list[product_list.user_id.isin(idx)]
+similar_users
 
 
-# In[ ]:
+# In[22]:
 
 
-Tweet['sentiment']=Tweet['airline_sentiment'].apply(lambda x: 0 if x=='negative' else 1)
+overlap = set(similar_users.product_id.iloc[0]) & set(similar_users.product_id.iloc[2])
+overlap
 
 
-# In[ ]:
+# In[23]:
 
 
-Tweet['clean_tweet']=Tweet['text'].apply(lambda x: tweet_to_words(x))
-Tweet['Tweet_length']=Tweet['text'].apply(lambda x: clean_tweet_length(x))
-train,test = train_test_split(Tweet,test_size=0.2,random_state=42)
+counts = similar_users.product_id.apply(prod_count)
 
 
-# In[ ]:
+# Here are there order counts:
+
+# In[24]:
 
 
-train_clean_tweet=[]
-for tweet in train['clean_tweet']:
-    train_clean_tweet.append(tweet)
-test_clean_tweet=[]
-for tweet in test['clean_tweet']:
-    test_clean_tweet.append(tweet)
+def id_values(row, overlap):
+    for key, value in row.items():
+        if key in overlap:
+            print(key, value)
 
 
-# In[ ]:
+# In[25]:
 
 
-from sklearn.feature_extraction.text import CountVectorizer
-v = CountVectorizer(analyzer = "word")
-train_features= v.fit_transform(train_clean_tweet)
-test_features=v.transform(test_clean_tweet)
+id_values(counts.iloc[0], overlap)
 
 
-# In[ ]:
+# In[26]:
 
 
-from sklearn.linear_model import LogisticRegression
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.svm import SVC, LinearSVC, NuSVC
-from sklearn.tree import DecisionTreeClassifier
-from sklearn.ensemble import RandomForestClassifier, AdaBoostClassifier, GradientBoostingClassifier
-from sklearn.naive_bayes import GaussianNB
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
-from sklearn.metrics import accuracy_score
+id_values(counts.iloc[2], overlap)
 
 
-# In[ ]:
+# Another benefit is that the W matrix contains latent information regarding the amount of each item a user has ordered in the past, but has vastly reduced dimensions. In other words, it doesn't keep each product as a column of the original user x product count matrix. I have yet to test this in creating predictions, but it should be a helpful way to keep track of user order counts per product. 
+
+# In[27]:
 
 
-Classifiers = [
-    LogisticRegression(C=0.000000001,solver='liblinear',max_iter=200),
-    KNeighborsClassifier(3),
-    SVC(kernel="rbf", C=0.025, probability=True),
-    DecisionTreeClassifier(),
-    RandomForestClassifier(n_estimators=200),
-    AdaBoostClassifier(),
-    GaussianNB()]
+df = pd.concat([product_list.user_id, pd.DataFrame(W)], axis = 1)
+df = pd.merge(test[0:10000], df, how = 'left').drop('eval_set', axis = 1)
 
 
-# In[ ]:
+# Using multi-nomial logistic regression with aisles instead of products to see if the W matrix columns have an impact on purchasing a product from an aisle, many of the p-values are significant at a 1% level. I ran the function on aisles because it is a way to group products together reducing the number of classes to compare against while having a clear relationship to products being purchased. 
+
+# In[28]:
 
 
-dense_features=train_features.toarray()
-dense_test= test_features.toarray()
-Accuracy=[]
-Model=[]
-for classifier in Classifiers:
-    try:
-        fit = classifier.fit(train_features,train['sentiment'])
-        pred = fit.predict(test_features)
-    except Exception:
-        fit = classifier.fit(dense_features,train['sentiment'])
-        pred = fit.predict(dense_test)
-    accuracy = accuracy_score(pred,test['sentiment'])
-    Accuracy.append(accuracy)
-    Model.append(classifier.__class__.__name__)
-    print('Accuracy of '+classifier.__class__.__name__+'is '+str(accuracy))    
+df.iloc[1:10, 12]
 
 
-# ## Compare the model performances
-
-# In[ ]:
+# In[29]:
 
 
-Index = [1,2,3,4,5,6,7]
-plt.bar(Index,Accuracy)
-plt.xticks(Index, Model,rotation=45)
-plt.ylabel('Accuracy')
-plt.xlabel('Model')
-plt.title('Accuracies of Models')
+x = df.iloc[:, 12:]
+y = df.reordered.values
+#del test, df
+
+
+# In[30]:
+
+
+from statsmodels import api 
+x = api.add_constant(x, prepend = False)
+mn_log = api.MNLogit(y, x)
+model = mn_log.fit()
+
+
+# In[31]:
+
+
+model.summary()
 

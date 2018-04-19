@@ -1,85 +1,287 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
-# Check this gist for xgboost wrapper: https://gist.github.com/slaypni/b95cb69fd1c82ca4c2ff
- 
-import sys
-import math
- 
-import numpy as np
-from sklearn.grid_search import GridSearchCV
- 
-sys.path.append('xgboost/wrapper/')
-import xgboost as xgb
- 
- 
-class XGBoostClassifier():
-    def __init__(self, num_boost_round=10, **params):
-        self.clf = None
-        self.num_boost_round = num_boost_round
-        self.params = params
-        self.params.update({'objective': 'multi:softprob'})
- 
-    def fit(self, X, y, num_boost_round=None):
-        num_boost_round = num_boost_round or self.num_boost_round
-        self.label2num = {label: i for i, label in enumerate(sorted(set(y)))}
-        dtrain = xgb.DMatrix(X, label=[self.label2num[label] for label in y])
-        self.clf = xgb.train(params=self.params, dtrain=dtrain, num_boost_round=num_boost_round)
- 
-    def predict(self, X):
-        num2label = {i: label for label, i in self.label2num.items()}
-        Y = self.predict_proba(X)
-        y = np.argmax(Y, axis=1)
-        return np.array([num2label[i] for i in y])
- 
-    def predict_proba(self, X):
-        dtest = xgb.DMatrix(X)
-        return self.clf.predict(dtest)
- 
-    def score(self, X, y):
-        Y = self.predict_proba(X)
-        return 1 / logloss(y, Y)
- 
-    def get_params(self, deep=True):
-        return self.params
- 
-    def set_params(self, **params):
-        if 'num_boost_round' in params:
-            self.num_boost_round = params.pop('num_boost_round')
-        if 'objective' in params:
-            del params['objective']
-        self.params.update(params)
-        return self
-    
-    
-def logloss(y_true, Y_pred):
-    label2num = dict((name, i) for i, name in enumerate(sorted(set(y_true))))
-    return -1 * sum(math.log(y[label2num[label]]) if y[label2num[label]] > 0 else -np.inf for y, label in zip(Y_pred, y_true)) / len(Y_pred)
+#############################################################################################################
+#classic tinrtgu's code
+#https://www.kaggle.com/c/avazu-ctr-prediction/forums/t/10927/beat-the-benchmark-with-less-than-1mb-of-memory
+#modified by rcarson
+#https://www.kaggle.com/jiweiliu
+#############################################################################################################
 
 
-def main():
-    clf = XGBoostClassifier(
-        eval_metric = 'auc',
-        num_class = 2,
-        nthread = 4,
-        silent = 1,
-        )
-    parameters = {
-        'num_boost_round': [100, 250, 500],
-        'eta': [0.05, 0.1, 0.3],
-        'max_depth': [6, 9, 12],
-        'subsample': [0.9, 1.0],
-        'colsample_bytree': [0.9, 1.0],
-    }
-    clf = GridSearchCV(clf, parameters, n_jobs=1, cv=2)
-    
-    clf.fit([[1,2], [3,4], [2,1], [4,3], [1,0], [4,5]], ['a', 'b', 'a', 'b', 'a', 'b'])
-    best_parameters, score, _ = max(clf.grid_scores_, key=lambda x: x[1])
-    print('score:', score)
-    for param_name in sorted(best_parameters.keys()):
-        print("%s: %r" % (param_name, best_parameters[param_name]))
-    print('predicted:', clf.predict([[1,1]]))
+from datetime import datetime
+from csv import DictReader
+from math import exp, log, sqrt
+from random import random
+import pickle
+
+# TL; DR, the main training process starts on line: 250,
+# you may want to start reading the code from there
 
 
-if __name__ == '__main__':
-    main()
+##############################################################################
+# parameters #################################################################
+##############################################################################
+
+# A, paths
+train='../input/train.csv'
+test='../input/test.csv'#'vali_100.tsv'
+submission = 'ftrl1sub.csv'  # path of to be outputted submission file
+
+# B, model
+alpha = .005  # learning rate
+beta = 1.   # smoothing parameter for adaptive learning rate
+L1 = 0.     # L1 regularization, larger value means more regularized
+L2 = 1.     # L2 regularization, larger value means more regularized
+
+# C, feature/hash trick
+D = 2 ** 24             # number of weights to use
+interaction = False     # whether to enable poly2 feature interactions
+
+# D, training/validation
+epoch = 1       # learn training data for N passes
+holdafter = 9   # data after date N (exclusive) are used as validation
+holdout = None  # use every N training instance for holdout validation
+
+
+##############################################################################
+# class, function, generator definitions #####################################
+##############################################################################
+
+class ftrl_proximal(object):
+    ''' Our main algorithm: Follow the regularized leader - proximal
+
+        In short,
+        this is an adaptive-learning-rate sparse logistic-regression with
+        efficient L1-L2-regularization
+
+        Reference:
+        http://www.eecs.tufts.edu/~dsculley/papers/ad-click-prediction.pdf
+    '''
+
+    def __init__(self, alpha, beta, L1, L2, D, interaction):
+        # parameters
+        self.alpha = alpha
+        self.beta = beta
+        self.L1 = L1
+        self.L2 = L2
+
+        # feature related parameters
+        self.D = D
+        self.interaction = interaction
+
+        # model
+        # n: squared sum of past gradients
+        # z: weights
+        # w: lazy weights
+        self.n = [0.] * D
+        self.z = [random() for k in range(D)]#[0.] * D
+        self.w = {}
+
+    def _indices(self, x):
+        ''' A helper generator that yields the indices in x
+
+            The purpose of this generator is to make the following
+            code a bit cleaner when doing feature interaction.
+        '''
+
+        # first yield index of the bias term
+        yield 0
+
+        # then yield the normal indices
+        for index in x:
+            yield index
+
+        # now yield interactions (if applicable)
+        if self.interaction:
+            D = self.D
+            L = len(x)
+
+            x = sorted(x)
+            for i in xrange(L):
+                for j in xrange(i+1, L):
+                    # one-hot encode interactions with hash trick
+                    yield abs(hash(str(x[i]) + '_' + str(x[j]))) % D
+
+    def predict(self, x):
+        ''' Get probability estimation on x
+
+            INPUT:
+                x: features
+
+            OUTPUT:
+                probability of p(y = 1 | x; w)
+        '''
+
+        # parameters
+        alpha = self.alpha
+        beta = self.beta
+        L1 = self.L1
+        L2 = self.L2
+
+        # model
+        n = self.n
+        z = self.z
+        w = {}
+
+        # wTx is the inner product of w and x
+        wTx = 0.
+        for i in self._indices(x):
+            sign = -1. if z[i] < 0 else 1.  # get sign of z[i]
+
+            # build w on the fly using z and n, hence the name - lazy weights
+            # we are doing this at prediction instead of update time is because
+            # this allows us for not storing the complete w
+            if sign * z[i] <= L1:
+                # w[i] vanishes due to L1 regularization
+                w[i] = 0.
+            else:
+                # apply prediction time L1, L2 regularization to z and get w
+                w[i] = (sign * L1 - z[i]) / ((beta + sqrt(n[i])) / alpha + L2)
+
+            wTx += w[i]
+
+        # cache the current w for update stage
+        self.w = w
+
+        # bounded sigmoid function, this is the probability estimation
+        return 1. / (1. + exp(-max(min(wTx, 35.), -35.)))
+
+    def update(self, x, p, y):
+        ''' Update model using x, p, y
+
+            INPUT:
+                x: feature, a list of indices
+                p: click probability prediction of our model
+                y: answer
+
+            MODIFIES:
+                self.n: increase by squared gradient
+                self.z: weights
+        '''
+
+        # parameter
+        alpha = self.alpha
+
+        # model
+        n = self.n
+        z = self.z
+        w = self.w
+
+        # gradient under logloss
+        g = p - y
+
+        # update z and n
+        for i in self._indices(x):
+            sigma = (sqrt(n[i] + g * g) - sqrt(n[i])) / alpha
+            z[i] += g - sigma * w[i]
+            n[i] += g * g
+
+
+def logloss(p, y):
+    ''' FUNCTION: Bounded logloss
+
+        INPUT:
+            p: our prediction
+            y: real answer
+
+        OUTPUT:
+            logarithmic loss of p given y
+    '''
+
+    p = max(min(p, 1. - 10e-15), 10e-15)
+    return -log(p) if y == 1. else -log(1. - p)
+
+
+def data(path, D):
+    ''' GENERATOR: Apply hash-trick to the original csv row
+                   and for simplicity, we one-hot-encode everything
+
+        INPUT:
+            path: path to training or testing file
+            D: the max index that we can hash to
+
+        YIELDS:
+            ID: id of the instance, mainly useless
+            x: a list of hashed and one-hot-encoded 'indices'
+               we only need the index since all values are either 0 or 1
+            y: y = 1 if we have a click, else we have y = 0
+    '''
+
+    for t, row in enumerate(DictReader(open(path), delimiter=',')):
+        # process id
+        #print row
+        
+        try:
+            ID=row['ID']
+            del row['ID']
+        except:
+            pass
+        # process clicks
+        y = 0.
+        target='target'#'IsClick' 
+        if target in row:
+            if row[target] == '1':
+                y = 1.
+            del row[target]
+
+        # extract date
+
+        # turn hour really into hour, it was originally YYMMDDHH
+
+        # build x
+        x = []
+        for key in row:
+            value = row[key]
+
+            # one-hot encode everything with hash trick
+            index = abs(hash(key + '_' + value)) % D
+            x.append(index)
+
+        yield ID,  x, y
+
+
+##############################################################################
+# start training #############################################################
+##############################################################################
+
+start = datetime.now()
+
+# initialize ourselves a learner
+learner = ftrl_proximal(alpha, beta, L1, L2, D, interaction)
+
+# start training
+for e in range(epoch):
+    loss = 0.
+    count = 0
+    for t,  x, y in data(train, D):  # data is a generator
+
+        p = learner.predict(x)
+        loss += logloss(p, y)
+        learner.update(x, p, y)
+        count+=1
+        if count%1000==0:
+            #print count,loss/count
+            print('%s\tencountered: %d\tcurrent logloss: %f' % (
+                datetime.now(), count, loss/count))
+        if count>10000: # comment this out when you run it locally.
+            break
+
+
+count=0
+loss=0
+#import pickle
+#pickle.dump(learner,open('ftrl3.p','w'))
+print ('write result')
+##############################################################################
+# start testing, and build Kaggle's submission file ##########################
+##############################################################################
+with open(submission, 'w') as outfile:
+    outfile.write('ID,target\n')
+    for  ID, x, y in data(test, D):
+        count+=1
+        p = learner.predict(x)
+        loss += logloss(p, y)
+
+        outfile.write('%s,%s\n' % (ID, str(p)))
+        if count%1000==0:
+            #print count,loss/count
+            print('%s\tencountered: %d\tcurrent logloss: %f' % (
+                datetime.now(), count, loss/count))

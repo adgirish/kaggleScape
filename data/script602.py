@@ -1,325 +1,230 @@
 
 # coding: utf-8
 
-# Hi, Kagglers!
+# # Fast benchmark: Pillow vs OpenCV
 # 
-# Hereafter I will try to publish **some basic approaches to climb up the Leaderboard**
+# *Background: when we deal with images in image-based problems and deploy a deep learning solution, it is better to have a fast image reading and transforming library. Let's compare Pillow and OpenCV python libraries on image loading and some basic transformations on source images from Carvana competition.*
 # 
-# **Competition goal**
+# [OpenCV](https://github.com/opencv/opencv): C++, python-wrapper
 # 
-# In this competition, Daimler is challenging Kagglers to tackle the curse of dimensionality and reduce the time that cars spend on the test bench.
-# <br>Competitors will work with a dataset representing different permutations of Mercedes-Benz car features to predict the time it takes to pass testing. <br>Winning algorithms will contribute to speedier testing, resulting in lower carbon dioxide emissions without reducing Daimler’s standards. 
+# [Pillow](https://github.com/python-pillow/Pillow): Python, C
 # 
-# **The Notebook offers basic Keras skeleton to start with**
+# `
+# `
 # 
-# ### Stay tuned, this notebook will be updated on a regular basis
-# **P.s. Upvotes and comments would let me update it faster and in a more smart way :)**
+# Intuition says that Opencv should be a little faster, let's see this by examples
+# 
+# `
+# `
+# 
+# *This question I asked myself after reading the PyTorch [documentation on image transformation](http://pytorch.org/docs/0.2.0/_modules/torchvision/transforms.html). Most of transformations take as input a PIL image.*
+# 
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import PIL
+import cv2
 
-# preprocessing/decomposition
-from sklearn.preprocessing import LabelEncoder, StandardScaler, OneHotEncoder
-from sklearn.decomposition import PCA, FastICA, FactorAnalysis, KernelPCA
 
-# keras 
-from keras.models import Sequential, load_model
-from keras.layers import Dense, Dropout, BatchNormalization, Activation
-from keras.wrappers.scikit_learn import KerasRegressor
-from keras.callbacks import EarlyStopping, ModelCheckpoint
+# At first, let's get packages versions, specs and some info on the machine
 
-# model evaluation
-from sklearn.model_selection import cross_val_score, KFold, train_test_split
-from sklearn.metrics import r2_score, mean_squared_error
+# In[ ]:
 
-# supportive models
-from sklearn.ensemble import GradientBoostingRegressor
-# feature selection (from supportive model)
-from sklearn.feature_selection import SelectFromModel
 
-# to make results reproducible
-seed = 42 # was 42
+print(cv2.__version__, cv2.__spec__)
+print(cv2.getBuildInformation())
 
 
 # In[ ]:
 
 
-# Read datasets
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-
-# save IDs for submission
-id_test = test['ID'].copy()
-
-# glue datasets together
-total = pd.concat([train, test], axis=0)
-print('initial shape: {}'.format(total.shape))
-
-# binary indexes for train/test set split
-is_train = ~total.y.isnull()
-
-# find all categorical features
-cf = total.select_dtypes(include=['object']).columns
-
-# make one-hot-encoding convenient way - pandas.get_dummies(df) function
-dummies = pd.get_dummies(
-    total[cf],
-    drop_first=False # you can set it = True to ommit multicollinearity (crucial for linear models)
-)
-
-print('oh-encoded shape: {}'.format(dummies.shape))
-
-# get rid of old columns and append them encoded
-total = pd.concat(
-    [
-        total.drop(cf, axis=1), # drop old
-        dummies # append them one-hot-encoded
-    ],
-    axis=1 # column-wise
-)
-
-print('appended-encoded shape: {}'.format(total.shape))
-
-# recreate train/test again, now with dropped ID column
-train, test = total[is_train].drop(['ID'], axis=1), total[~is_train].drop(['ID', 'y'], axis=1)
-
-# drop redundant objects
-del total
-
-# check shape
-print('\nTrain shape: {}\nTest shape: {}'.format(train.shape, test.shape))
+PIL.__version__, PIL.__spec__
 
 
 # In[ ]:
 
 
-# Calculate additional features: dimensionality reduction components
-n_comp=10 # was 10
+get_ipython().system('cat /proc/cpuinfo | egrep "model name"')
 
-# uncomment to scale data before applying decompositions
-# however, all features are binary (in [0,1] interval), i don't know if it's worth something
-train_scaled = train.drop('y', axis=1).copy()
-test_scaled = test.copy()
-'''
-ss = StandardScaler()
-ss.fit(train.drop('y', axis=1))
 
-train_scaled = ss.transform(train.drop('y', axis=1).copy())
-test_scaled = ss.transform(test.copy())
-'''
-
-# PCA
-pca = PCA(n_components=n_comp, random_state=seed)
-pca2_results_train = pca.fit_transform(train_scaled)
-pca2_results_test = pca.transform(test_scaled)
-
-# ICA
-ica = FastICA(n_components=n_comp, random_state=42)
-ica2_results_train = ica.fit_transform(train_scaled)
-ica2_results_test = ica.transform(test_scaled)
-
-# Append it to dataframes
-for i in range(1, n_comp+1):
-    train['pca_' + str(i)] = pca2_results_train[:,i-1]
-    test['pca_' + str(i)] = pca2_results_test[:, i-1]
-    
-    train['ica_' + str(i)] = ica2_results_train[:,i-1]
-    test['ica_' + str(i)] = ica2_results_test[:, i-1]
-   
-
+# Data storage info: `ROTA 1` means rotational device
 
 # In[ ]:
 
 
-# create augmentation by feature importances as additional features
-t = train['y']
-tr = train.drop(['y'], axis=1)
-
-# Tree-based estimators can be used to compute feature importances
-clf = GradientBoostingRegressor(
-                max_depth=4, 
-                learning_rate=0.005, 
-                random_state=seed, 
-                subsample=0.95, 
-                n_estimators=200
-)
-
-# fit regressor
-clf.fit(tr, t)
-
-# df to hold feature importances
-features = pd.DataFrame()
-features['feature'] = tr.columns
-features['importance'] = clf.feature_importances_
-features.sort_values(by=['importance'], ascending=True, inplace=True)
-features.set_index('feature', inplace=True)
-
-# select best features
-model = SelectFromModel(clf, prefit=True)
-train_reduced = model.transform(tr)
+get_ipython().system('lsblk -o name,rota,type,mountpoint')
 
 
-test_reduced = model.transform(test.copy())
-
-# dataset augmentation
-train = pd.concat([train, pd.DataFrame(train_reduced)], axis=1)
-test = pd.concat([test, pd.DataFrame(test_reduced)], axis=1)
-
-# check new shape
-print('\nTrain shape: {}\nTest shape: {}'.format(train.shape, test.shape))
-
+# Now let's setup the input data
 
 # In[ ]:
 
 
-# define custom R2 metrics for Keras backend
-from keras import backend as K
-
-def r2_keras(y_true, y_pred):
-    SS_res =  K.sum(K.square( y_true - y_pred )) 
-    SS_tot = K.sum(K.square( y_true - K.mean(y_true) ) ) 
-    return ( 1 - SS_res/(SS_tot + K.epsilon()) )
-
-
-# In[ ]:
-
-
-# base model architecture definition
-def model():
-    model = Sequential()
-    #input layer
-    model.add(Dense(input_dims, input_dim=input_dims))
-    model.add(BatchNormalization())
-    model.add(Activation('relu'))
-    model.add(Dropout(0.3))
-    # hidden layers
-    model.add(Dense(input_dims))
-    model.add(BatchNormalization())
-    model.add(Activation(act_func))
-    model.add(Dropout(0.3))
-    
-    model.add(Dense(input_dims//2))
-    model.add(BatchNormalization())
-    model.add(Activation(act_func))
-    model.add(Dropout(0.3))
-    
-    model.add(Dense(input_dims//4, activation=act_func))
-    
-    # output layer (y_pred)
-    model.add(Dense(1, activation='linear'))
-    
-    # compile this model
-    model.compile(loss='mean_squared_error', # one may use 'mean_absolute_error' as alternative
-                  optimizer='adam',
-                  metrics=[r2_keras] # you can add several if needed
-                 )
-    
-    # Visualize NN architecture
-    print(model.summary())
-    return model
-
-
-# In[ ]:
-
-
-# initialize input dimension
-input_dims = train.shape[1]-1
-
-#activation functions for hidden layers
-act_func = 'tanh' # could be 'relu', 'sigmoid', ...
-
-# make np.seed fixed
-np.random.seed(seed)
-
-# initialize estimator, wrap model in KerasRegressor
-estimator = KerasRegressor(
-    build_fn=model, 
-    nb_epoch=100, 
-    batch_size=20,
-    verbose=1
-)
-
-
-# In[ ]:
-
-
-# X, y preparation
-X, y = train.drop('y', axis=1).values, train.y.values
-print(X.shape)
-
-# X_test preparation
-X_test = test
-print(X_test.shape)
-
-# train/validation split
-X_tr, X_val, y_tr, y_val = train_test_split(
-    X, 
-    y, 
-    test_size=0.2, 
-    random_state=seed
-)
-
-
-# In[ ]:
-
-
-# define path to save model
 import os
-model_path = 'keras_model.h5'
+this_path = os.path.dirname('.')
 
-# prepare callbacks
-callbacks = [
-    EarlyStopping(
-        monitor='val_loss', 
-        patience=10, # was 10
-        verbose=1),
-    
-    ModelCheckpoint(
-        model_path, 
-        monitor='val_loss', 
-        save_best_only=True, 
-        verbose=0)
-]
-
-# fit estimator
-estimator.fit(
-    X_tr, 
-    y_tr, 
-    epochs=10, # increase it to 20-100 to get better results
-    validation_data=(X_val, y_val),
-    verbose=2,
-    callbacks=callbacks,
-    shuffle=True
-)
+INPUT_PATH = os.path.abspath(os.path.join(this_path, '..', 'input'))
+TRAIN_DATA = os.path.join(INPUT_PATH, "train")
+from glob import glob
+filenames = glob(os.path.join(TRAIN_DATA, "*.jpg"))
+len(filenames)
 
 
 # In[ ]:
 
 
-# if best iteration's model was saved then load and use it
-if os.path.isfile(model_path):
-    estimator = load_model(model_path, custom_objects={'r2_keras': r2_keras})
+import matplotlib.pylab as plt
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-# check performance on train set
-print('MSE train: {}'.format(mean_squared_error(y_tr, estimator.predict(X_tr))**0.5)) # mse train
-print('R^2 train: {}'.format(r2_score(y_tr, estimator.predict(X_tr)))) # R^2 train
 
-# check performance on validation set
-print('MSE val: {}'.format(mean_squared_error(y_val, estimator.predict(X_val))**0.5)) # mse val
-print('R^2 val: {}'.format(r2_score(y_val, estimator.predict(X_val)))) # R^2 val
-pass
+# ## 1 stage: 100 images, load image + blur + flip
+
+# In[ ]:
+
+
+import numpy as np
+from PIL import Image, ImageOps
+
+def stage_1_PIL(filename):
+    img_pil = Image.open(filename)
+    img_pil = ImageOps.box_blur(img_pil, radius=1)
+    img_pil = img_pil.transpose(Image.FLIP_LEFT_RIGHT)
+    return np.asarray(img_pil)
+
+def stage_1_cv2(filename):
+    img = cv2.imread(filename)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    img = cv2.blur(img, ksize=(3, 3))
+    img = cv2.flip(img, flipCode=1)
+    return img
+
+
+# Let's compare briefly results of transformations on the first image. Results are not perfectly the same, but it is not important for the benchmark  
+
+# In[ ]:
+
+
+f = filenames[0]
+r1 = stage_1_PIL(f) 
+r2 = stage_1_cv2(f)
+
+plt.figure(figsize=(16, 16))
+plt.subplot(131)
+plt.imshow(r1)
+plt.subplot(132)
+plt.imshow(r2)
+plt.subplot(133)
+plt.imshow(np.abs(r1 - r2))
 
 
 # In[ ]:
 
 
-# predict results
-res = estimator.predict(X_test.values).ravel()
+get_ipython().run_line_magic('timeit', '-n5 -r3 [stage_1_PIL(f) for f in filenames[:100]]')
 
-# create df and convert it to csv
-output = pd.DataFrame({'id': id_test, 'y': res})
-output.to_csv('keras-baseline.csv', index=False)
+
+# In[ ]:
+
+
+get_ipython().run_line_magic('timeit', '-n5 -r3 [stage_1_cv2(f) for f in filenames[:100]]')
+
+
+# ## 1b stage: 100 images, blur + flip
+
+# In[ ]:
+
+
+def stage_1b_PIL(img_pil):
+    img_pil = ImageOps.box_blur(img_pil, radius=1)
+    img_pil = img_pil.transpose(Image.FLIP_LEFT_RIGHT)
+    return np.asarray(img_pil)
+
+def stage_1b_cv2(img):    
+    img = cv2.blur(img, ksize=(3, 3))
+    img = cv2.flip(img, flipCode=1)
+    return img
+
+
+# In[ ]:
+
+
+imgs_PIL = [Image.open(filename) for filename in filenames[:100]]
+
+
+# In[ ]:
+
+
+def cv2_open(filename):
+    img = cv2.imread(filename)
+    return cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+
+imgs_cv2 = [cv2_open(filename) for filename in filenames[:100]]
+
+
+# In[ ]:
+
+
+get_ipython().run_line_magic('timeit', '-n5 -r3 [stage_1b_PIL(img_pil) for img_pil in imgs_PIL]')
+
+
+# In[ ]:
+
+
+get_ipython().run_line_magic('timeit', '-n5 -r3 [stage_1b_cv2(img) for img in imgs_cv2]')
+
+
+# ## 2 stage: 500 images, load image + resize + 2 flips
+
+# In[ ]:
+
+
+import numpy as np
+from PIL import Image, ImageOps
+
+
+def stage_2_PIL(filename):
+    img_pil = Image.open(filename)
+    img_pil = img_pil.resize((512, 512), Image.CUBIC)
+    img_pil = img_pil.transpose(Image.FLIP_LEFT_RIGHT)
+    img_pil = img_pil.transpose(Image.FLIP_TOP_BOTTOM)
+    return np.asarray(img_pil)
+
+def stage_2_cv2(filename):
+    img = cv2.imread(filename)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)    
+    img = cv2.resize(img, dsize=(512, 512), interpolation=cv2.INTER_CUBIC)
+    img = cv2.flip(img, flipCode=1)
+    img = cv2.flip(img, flipCode=0)
+    return img
+
+
+# Again let's compare briefly results of transformations on the first image:
+
+# In[ ]:
+
+
+f = filenames[0]
+r1 = stage_2_PIL(f) 
+r2 = stage_2_cv2(f)
+
+plt.figure(figsize=(16, 16))
+plt.subplot(131)
+plt.imshow(r1)
+plt.subplot(132)
+plt.imshow(r2)
+plt.subplot(133)
+plt.imshow(np.abs(r1 - r2))
+
+
+# In[ ]:
+
+
+get_ipython().run_line_magic('timeit', '-n5 -r3 [stage_2_PIL(f) for f in filenames[:200]]')
+
+
+# In[ ]:
+
+
+get_ipython().run_line_magic('timeit', '-n5 -r3 [stage_2_cv2(f) for f in filenames[:200]]')
 

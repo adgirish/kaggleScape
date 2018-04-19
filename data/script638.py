@@ -1,365 +1,224 @@
 
 # coding: utf-8
 
-# # CLEANING DATA OFF 
-
-# IN THIS NOTEBOOK WE ARE GETTING RID OFF ERROR AND NOISE BY CLEANING OUT INCONSISTENCIES, DETECTING MISPLACED VALUES AND PUTTING THEM INTO THE RIGHT CELLS.
-
-# #### DEALING WITH THE FOLLOWING FEATURES
-# * ---------------------------------------------------------------
-# * price_doc: sale price (this is the target variable)
-# * id: transaction id
-# * timestamp: date of transaction
-# * full_sq: total area in square meters, including loggias, balconies and other non-residential areas
-# * life_sq: living area in square meters, excluding loggias, balconies and other non-residential areas
-# * floor: for apartments, floor of the building
-# * max_floor: number of floors in the building
-# * material: wall material
-# * build_year: year built
-# * num_room: number of living rooms
-# * kitch_sq: kitchen area
-# * state: apartment condition
-# * product_type: owner-occupier purchase or investment
-# * sub_area: name of the district
-
-# In[ ]:
-
-
-import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'nbagg')
-import xgboost as xgb
-import seaborn as sns
-
-
-# In[ ]:
-
-
-train = pd.read_csv("../input/train.csv", encoding= "utf_8")
-test = pd.read_csv("../input/test.csv", encoding= "utf_8")
-
-
-# # IMPORTANT NOTES ABOUT FEATURES
-# THESE ARE SOME OF THE SUMMARY NOTES GAINED FROM KAGGLE DISCUSSIONS, QUESTIONS AND ANSWERS FROM SBERBANK
+# Hi, Kagglers!
 # 
-# * CHECK LIFE SQ, FULL SQ, KITCH SQ FOR CONSISTENCY (DONE)
-# * BUILD YEAR CAN BE IN FUTURE - PRE INVESTMENT TYPE (DONE)
-# * BUILD YEAR 0 AND 1 ARE MISTAKES (DONE)
-# * CHECK TRAIN AND TEST PRODUCT TYPES (DONE)
-# * CHECK NUM OF ROOMS FOR CONSISTENCY (DONE)
-# * MATERIAL EXPLAINED: 1 - panel, 2 - brick, 3 - wood, 4 - mass concrete, 5 - breezeblock, 6 - mass concrete plus brick
-# * STATE EXPLAINED: 4 BEST 1 WORST
-# * KITCHEN INCLUDED IN LIFE SQ CHECK INCONSISTENCY (DONE)
-# * FULL SQ > LIFE SQ (MOST PROBABLY) (DONE)
-# * KM DISTANCES ARE AIRLINE DISTANCES
-# * RAION POPUL AND FULL ALL ARE SAME CALC FROM DIFF SOURCES
-
-# ### FIRST SET OF FEATURES
+# Hereafter I will try to create **some baselines for your submissions to start from.**
+# <br> This Kernel touches **submission part mostly AND ONE WELL-KNOWN FILM :)**
+# <br/>For more details about Dataset - please check my **[Data Exploration Kernel](https://www.kaggle.com/frednavruzov/instacart-exploratory-data-analysis/)**
+# 
+# **Brief description**
+# 
+# The Dataset is an anonymized sample of over 3,000,000 grocery orders from more than 200,000 Instacart users. 
+# <br>The goal of a competition is to predict which previously purchased products will be in a user’s next order. 
+# 
+# ### Stay tuned, this notebook will be updated on a regular basis
+# **P.s. Upvotes and comments would let me update it faster and in a more smart way :)**
 
 # In[ ]:
 
 
-first_feat = ["id","timestamp","price_doc", "full_sq", "life_sq",
-"floor", "max_floor", "material", "build_year", "num_room",
-"kitch_sq", "state", "product_type", "sub_area"]
+import pandas as pd # dataframes
+import numpy as np # algebra & calculus
+import nltk # text preprocessing & manipulation
+# from textblob import TextBlob
+import matplotlib.pyplot as plt # plotting
+import seaborn as sns # plotting
 
+from functools import partial # to reduce df memory consumption by applying to_numeric
 
-# In[ ]:
-
-
-first_feat = ["id","timestamp", "full_sq", "life_sq",
-"floor", "max_floor", "material", "build_year", "num_room",
-"kitch_sq", "state", "product_type", "sub_area"]
-
-
-# #### CORRECTIONS RULES FOR FULL_SQ AND LIFE_SQ (APPLY TO TRAIN AND TEST):
-#  * IF LIFE SQ >= FULL SQ MAKE LIFE SQ NP.NAN
-#  * IF LIFE SQ < 5 NP.NAN
-#  * IF FULL SQ < 5 NP.NAN 
-#  * KITCH SQ < LIFE SQ
-#  * IF KITCH SQ == 0 OR 1 NP.NAN
-#  * CHECK FOR OUTLIERS IN LIFE SQ, FULL SQ AND KITCH SQ
-#  * LIFE SQ / FULL SQ MUST BE CONSISTENCY (0.3 IS A CONSERVATIVE RATIO)
-
-# In[ ]:
-
-
-bad_index = train[train.life_sq > train.full_sq].index
-train.ix[bad_index, "life_sq"] = np.NaN
+color = sns.color_palette() # adjusting plotting style
+import warnings
+warnings.filterwarnings('ignore') # silence annoying warnings
 
 
 # In[ ]:
 
 
-equal_index = [601,1896,2791]
-test.ix[equal_index, "life_sq"] = test.ix[equal_index, "full_sq"]
+# aisles
+aisles = pd.read_csv('../input/aisles.csv', engine='c')
+print('Total aisles: {}'.format(aisles.shape[0]))
+aisles.head()
 
 
 # In[ ]:
 
 
-bad_index = test[test.life_sq > test.full_sq].index
-test.ix[bad_index, "life_sq"] = np.NaN
+# departments
+departments = pd.read_csv('../input/departments.csv', engine='c')
+print('Total departments: {}'.format(departments.shape[0]))
+departments.head()
 
 
 # In[ ]:
 
 
-bad_index = train[train.life_sq < 5].index
-train.ix[bad_index, "life_sq"] = np.NaN
+# products
+products = pd.read_csv('../input/products.csv', engine='c')
+print('Total products: {}'.format(products.shape[0]))
+products.head(5)
 
 
 # In[ ]:
 
 
-bad_index = test[test.life_sq < 5].index
-test.ix[bad_index, "life_sq"] = np.NaN
+# combine aisles, departments and products (left joined to products)
+goods = pd.merge(left=pd.merge(left=products, right=departments, how='left'), right=aisles, how='left')
+# to retain '-' and make product names more "standard"
+goods.product_name = goods.product_name.str.replace(' ', '_').str.lower() 
+print(goods.info())
+
+goods.head()
 
 
 # In[ ]:
 
 
-bad_index = train[train.full_sq < 5].index
-train.ix[bad_index, "full_sq"] = np.NaN
+# load datasets
+
+# train dataset
+op_train = pd.read_csv('../input/order_products__train.csv', engine='c', 
+                       dtype={'order_id': np.int32, 'product_id': np.int32, 
+                              'add_to_cart_order': np.int16, 'reordered': np.int8})
+print('Total ordered products(train): {}'.format(op_train.shape[0]))
+op_train.head(10)
 
 
 # In[ ]:
 
 
-bad_index = test[test.full_sq < 5].index
-test.ix[bad_index, "full_sq"] = np.NaN
+# test dataset (submission)
+test = pd.read_csv('../input/sample_submission.csv', engine='c')
+print('Total orders(test): {}'.format(test.shape[0]))
+test.head()
 
 
 # In[ ]:
 
 
-kitch_is_build_year = [13117]
-train.ix[kitch_is_build_year, "build_year"] = train.ix[kitch_is_build_year, "kitch_sq"]
+#prior dataset
+op_prior = pd.read_csv('../input/order_products__prior.csv', engine='c', 
+                       dtype={'order_id': np.int32, 
+                              'product_id': np.int32, 
+                              'add_to_cart_order': np.int16, 
+                              'reordered': np.int8})
+
+print('Total ordered products(prior): {}'.format(op_prior.shape[0]))
+op_prior.head()
 
 
 # In[ ]:
 
 
-bad_index = train[train.kitch_sq >= train.life_sq].index
-train.ix[bad_index, "kitch_sq"] = np.NaN
+# orders
+orders = pd.read_csv('../input/orders.csv', engine='c', dtype={'order_id': np.int32, 
+                                                           'user_id': np.int32, 
+                                                           'order_number': np.int32, 
+                                                           'order_dow': np.int8, 
+                                                           'order_hour_of_day': np.int8, 
+                                                           'days_since_prior_order': np.float16})
+print('Total orders: {}'.format(orders.shape[0]))
+print(orders.info())
+orders.head()
+
+
+# ### Combine (orders, order details, product hierarchy) into 1 dataframe order_details 
+# **(be careful, high memory consumption, about 3GB RAM itself)**
+
+# In[ ]:
+
+
+from functools import partial
+
+# merge train and prior together iteratively, to fit into 8GB kernel RAM
+# split df indexes into parts
+indexes = np.linspace(0, len(op_prior), num=10, dtype=np.int32)
+
+# initialize it with train dataset
+order_details = pd.merge(
+                left=op_train,
+                 right=orders, 
+                 how='left', 
+                 on='order_id'
+        ).apply(partial(pd.to_numeric, errors='ignore', downcast='integer'))
+
+# add order hierarchy
+order_details = pd.merge(
+                left=order_details,
+                right=goods[['product_id', 
+                             'aisle_id', 
+                             'department_id']].apply(partial(pd.to_numeric, 
+                                                             errors='ignore', 
+                                                             downcast='integer')),
+                how='left',
+                on='product_id'
+)
+
+print(order_details.shape, op_train.shape)
+
+# delete (redundant now) dataframes
+del op_train
+
+order_details.head()
 
 
 # In[ ]:
 
 
-bad_index = test[test.kitch_sq >= test.life_sq].index
-test.ix[bad_index, "kitch_sq"] = np.NaN
+get_ipython().run_cell_magic('time', '', "# update by small portions\nfor i in range(len(indexes)-1):\n    order_details = pd.concat(\n        [   \n            order_details,\n            pd.merge(left=pd.merge(\n                            left=op_prior.loc[indexes[i]:indexes[i+1], :],\n                            right=goods[['product_id', \n                                         'aisle_id', \n                                         'department_id' ]].apply(partial(pd.to_numeric, \n                                                                          errors='ignore', \n                                                                          downcast='integer')),\n                            how='left',\n                            on='product_id'\n                            ),\n                     right=orders, \n                     how='left', \n                     on='order_id'\n                ) #.apply(partial(pd.to_numeric, errors='ignore', downcast='integer'))\n        ]\n    )\n        \nprint('Datafame length: {}'.format(order_details.shape[0]))\nprint('Memory consumption: {:.2f} Mb'.format(sum(order_details.memory_usage(index=True, \n                                                                         deep=True) / 2**20)))\n# check dtypes to see if we use memory effectively\nprint(order_details.dtypes)\n\n# make sure we didn't forget to retain test dataset :D\ntest_orders = orders[orders.eval_set == 'test']\n\n# delete (redundant now) dataframes\ndel op_prior, orders")
 
 
-# In[ ]:
-
-
-bad_index = train[(train.kitch_sq == 0).values + (train.kitch_sq == 1).values].index
-train.ix[bad_index, "kitch_sq"] = np.NaN
-
+# ### 1. Greedy Dumb Submission :) <br>(0.2164845 Public LB Score)
+# ![Lloyd level, still better than banana baseline][1]
+# 
+# 
+#   [1]: http://www.punchnels.com/wp-content/uploads/Jim_Carrey_Dumb-and-Dumber-Inside.jpg
 
 # In[ ]:
 
 
-bad_index = test[(test.kitch_sq == 0).values + (test.kitch_sq == 1).values].index
-test.ix[bad_index, "kitch_sq"] = np.NaN
+get_ipython().run_cell_magic('time', '', "# dumb submission\ntest_history = order_details[(order_details.user_id.isin(test_orders.user_id))]\\\n.groupby('user_id')['product_id'].apply(lambda x: ' '.join([str(e) for e in set(x)])).reset_index()\ntest_history.columns = ['user_id', 'products']\n\ntest_history = pd.merge(left=test_history, \n                        right=test_orders, \n                        how='right', \n                        on='user_id')[['order_id', 'products']]\n\ntest_history.to_csv('dumb_submission.csv', encoding='utf-8', index=False)")
 
 
-# In[ ]:
-
-
-bad_index = train[(train.full_sq > 210) * (train.life_sq / train.full_sq < 0.3)].index
-train.ix[bad_index, "full_sq"] = np.NaN
-
+# ### Still Greedy But Smarter (Customer Will Take All Reordered) <br>(0.2996690 Public LB Score)
+# ![Lloyd appreciates this][1]
+# 
+# 
+#   [1]: https://i.ytimg.com/vi/CHCmLxqTPOs/hqdefault.jpg
 
 # In[ ]:
 
 
-bad_index = test[(test.full_sq > 150) * (test.life_sq / test.full_sq < 0.3)].index
-test.ix[bad_index, "full_sq"] = np.NaN
+get_ipython().run_cell_magic('time', '', "# dumb submission\ntest_history = order_details[(order_details.user_id.isin(test_orders.user_id)) \n                             & (order_details.reordered == 1)]\\\n.groupby('user_id')['product_id'].apply(lambda x: ' '.join([str(e) for e in set(x)])).reset_index()\ntest_history.columns = ['user_id', 'products']\n\ntest_history = pd.merge(left=test_history, \n                        right=test_orders, \n                        how='right', \n                        on='user_id')[['order_id', 'products']]\n\ntest_history.to_csv('dumb2_subm.csv', encoding='utf-8', index=False)")
 
 
-# In[ ]:
-
-
-bad_index = train[train.life_sq > 300].index
-train.ix[bad_index, ["life_sq", "full_sq"]] = np.NaN
-
+# ### Less Dumb - Repeat Last Order<br>(0.3276746 Public LB Score)
+# ![Lloyd appreciates this][1]
+# 
+# 
+#   [1]: https://www.spin1038.com/content/000/images/000052/54551_60_news_hub_multi_630x0.png
 
 # In[ ]:
 
 
-bad_index = test[test.life_sq > 200].index
-test.ix[bad_index, ["life_sq", "full_sq"]] = np.NaN
+get_ipython().run_cell_magic('time', '', "test_history = order_details[(order_details.user_id.isin(test_orders.user_id))]\nlast_orders = test_history.groupby('user_id')['order_number'].max()\n\ndef get_last_orders():\n    t = pd.merge(\n            left=pd.merge(\n                    left=last_orders.reset_index(),\n                    right=test_history,\n                    how='inner',\n                    on=['user_id', 'order_number']\n                )[['user_id', 'product_id']],\n            right=test_orders[['user_id', 'order_id']],\n            how='left',\n            on='user_id'\n        ).groupby('order_id')['product_id'].apply(lambda x: ' '.join([str(e) for e in set(x)])).reset_index()\n    t.columns = ['order_id', 'products']\n    return t\n\n# save submission\nget_last_orders().to_csv('less_dumb_subm_last_order.csv', encoding='utf-8', index=False)")
 
 
-# #### BUILDYEAR CAN BE IN FUTURE (TYPE OF PRODUCTS)
-# * CHECK BUILD YEAR FOR EACH PRODUCT TYPE
-# * CHECK BUILD YEAR FOR CONSISTENCY (IF BUILD YEAR < 1500)
-
-# In[ ]:
-
-
-train.product_type.value_counts(normalize= True)
-
+# ### Less Dumb - Repeat Last Order (Reordered Products Only)<br>(0.3276826 Public LB Score)
+# ![America is great again!][1]
+# 
+# 
+#   [1]: http://www.totalprosports.com/wp-content/uploads/2016/11/lloyd-and-harry-dumb-and-dumber.jpg
 
 # In[ ]:
 
 
-test.product_type.value_counts(normalize= True)
+get_ipython().run_cell_magic('time', '', "test_history = order_details[(order_details.user_id.isin(test_orders.user_id))]\nlast_orders = test_history.groupby('user_id')['order_number'].max()\n\ndef get_last_orders_reordered():\n    t = pd.merge(\n            left=pd.merge(\n                    left=last_orders.reset_index(),\n                    right=test_history[test_history.reordered == 1],\n                    how='left',\n                    on=['user_id', 'order_number']\n                )[['user_id', 'product_id']],\n            right=test_orders[['user_id', 'order_id']],\n            how='left',\n            on='user_id'\n        ).fillna(-1).groupby('order_id')['product_id'].apply(lambda x: ' '.join([str(int(e)) for e in set(x)]) \n                                                  ).reset_index().replace(to_replace='-1', \n                                                                          value='None')\n    t.columns = ['order_id', 'products']\n    return t\n\n# save submission\nget_last_orders_reordered().to_csv('less_dumb_subm_last_order_reordered_only.csv', \n                         encoding='utf-8', \n                         index=False)")
 
 
-# In[ ]:
+# ### To be continued... 
+# 
+# **(TODO: more creative baselines)**
 
-
-bad_index = train[train.build_year < 1500].index
-train.ix[bad_index, "build_year"] = np.NaN
-
-
-# In[ ]:
-
-
-bad_index = test[test.build_year < 1500].index
-test.ix[bad_index, "build_year"] = np.NaN
-
-
-# #### CHECK NUM OF ROOMS
-# * IS THERE A OUTLIER ?
-# * A VERY SMALL OR LARGE NUMBER ?
-# * LIFE SQ / ROOM > MIN ROOM SQ (LET'S SAY 5 SQ FOR A ROOM MIGHT BE OK)
-# * IF NUM ROOM == 0 SET TO NP.NAN
-# * DETECT ABNORMAL NUM ROOMS GIVEN LIFE AND FULL SQ
-
-# In[ ]:
-
-
-bad_index = train[train.num_room == 0].index 
-train.ix[bad_index, "num_room"] = np.NaN
-
-
-# In[ ]:
-
-
-bad_index = test[test.num_room == 0].index 
-test.ix[bad_index, "num_room"] = np.NaN
-
-
-# In[ ]:
-
-
-bad_index = [10076, 11621, 17764, 19390, 24007, 26713, 29172]
-train.ix[bad_index, "num_room"] = np.NaN
-
-
-# In[ ]:
-
-
-bad_index = [3174, 7313]
-test.ix[bad_index, "num_room"] = np.NaN
-
-
-# #### CHECK FLOOR AND MAX FLOOR 
-# * FLOOR == 0 AND MAX FLOOR == 0 POSSIBLE ??? WE DON'T HAVE IT IN TEST SO NP.NAN
-# * FLOOR == 0 0R MAX FLOOR == 0 ??? WE DON'T HAVE IT IN TEST SO NP.NAN (NP.NAN IF MAX FLOOR == 0 FOR BOTH TEST TRAIN)
-# * CHECK FLOOR < MAX FLOOR (IF FLOOR > MAX FLOOR -> MAX FLOOR NP.NAN)
-# * CHECK FOR OUTLIERS
-
-# In[ ]:
-
-
-bad_index = train[(train.floor == 0).values * (train.max_floor == 0).values].index
-train.ix[bad_index, ["max_floor", "floor"]] = np.NaN
-
-
-# In[ ]:
-
-
-bad_index = train[train.floor == 0].index
-train.ix[bad_index, "floor"] = np.NaN
-
-
-# In[ ]:
-
-
-bad_index = train[train.max_floor == 0].index
-train.ix[bad_index, "max_floor"] = np.NaN
-
-
-# In[ ]:
-
-
-bad_index = test[test.max_floor == 0].index
-test.ix[bad_index, "max_floor"] = np.NaN
-
-
-# In[ ]:
-
-
-bad_index = train[train.floor > train.max_floor].index
-train.ix[bad_index, "max_floor"] = np.NaN
-
-
-# In[ ]:
-
-
-bad_index = test[test.floor > test.max_floor].index
-test.ix[bad_index, "max_floor"] = np.NaN
-
-
-# In[ ]:
-
-
-train.floor.describe(percentiles= [0.9999])
-
-
-# In[ ]:
-
-
-bad_index = [23584]
-train.ix[bad_index, "floor"] = np.NaN
-
-
-# CHECK MATERIAL
-
-# In[ ]:
-
-
-train.material.value_counts()
-
-
-# In[ ]:
-
-
-test.material.value_counts()
-
-
-# CHECK STATE
-
-# In[ ]:
-
-
-train.state.value_counts()
-
-
-# In[ ]:
-
-
-bad_index = train[train.state == 33].index
-train.ix[bad_index, "state"] = np.NaN
-
-
-# In[ ]:
-
-
-test.state.value_counts()
-
-
-# ### SAVE TEST AND TRAIN AS CLEAN
-
-# In[ ]:
-
-
-test.to_csv("test_clean.csv", index= False, encoding= "utf_8")
-train.to_csv("train_clean.csv", index = False, encoding= "utf_8")
-
+# ### Stay tuned, this notebook will be updated on a regular basis
+# **P.s. Upvotes and comments would let me update it faster and in a more smart way :)**

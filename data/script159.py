@@ -1,209 +1,176 @@
 
 # coding: utf-8
 
-# ### All days of the challange:
-# 
-# * [Day 1: Handling missing values](https://www.kaggle.com/rtatman/data-cleaning-challenge-handling-missing-values)
-# * [Day 2: Scaling and normalization](https://www.kaggle.com/rtatman/data-cleaning-challenge-scale-and-normalize-data)
-# * [Day 3: Parsing dates](https://www.kaggle.com/rtatman/data-cleaning-challenge-parsing-dates/)
-# * [Day 4: Character encodings](https://www.kaggle.com/rtatman/data-cleaning-challenge-character-encodings/)
-# * [Day 5: Inconsistent Data Entry](https://www.kaggle.com/rtatman/data-cleaning-challenge-inconsistent-data-entry/)
-# ___
-# Welcome to day 3 of the 5-Day Data Challenge! Today, we're going to work with dates. To get started, click the blue "Fork Notebook" button in the upper, right hand corner. This will create a private copy of this notebook that you can edit and play with. Once you're finished with the exercises, you can choose to make your notebook public to share with others. :)
-# 
-# > **Your turn!** As we work through this notebook, you'll see some notebook cells (a block of either code or text) that has "Your Turn!" written in it. These are exercises for you to do to help cement your understanding of the concepts we're talking about. Once you've written the code to answer a specific question, you can run the code by clicking inside the cell (box with code in it) with the code you want to run and then hit CTRL + ENTER (CMD + ENTER on a Mac). You can also click in a cell and then click on the right "play" arrow to the left of the code. If you want to run all the code in your notebook, you can use the double, "fast forward" arrows at the bottom of the notebook editor.
-# 
-# Here's what we're going to do today:
-# 
-# * [Get our environment set up](#Get-our-environment-set-up)
-# * [Check the data type of our date column](#Check-the-data-type-of-our-date-column)
-# * [Convert our date columns to datetime](#Convert-our-date-columns-to-datetime)
-# * [Select just the day of the month from our column](#Select-just-the-day-of-the-month-from-our-column)
-# * [Plot the day of the month to check the date parsing](#Plot-the-day-of-the-month-to-the-date-parsing)
-# 
-# Let's get started!
-
-# # Get our environment set up
-# ________
-# 
-# The first thing we'll need to do is load in the libraries and datasets we'll be using. For today, we'll be working with two datasets: one containing information on earthquakes that occured between 1965 and 2016, and another that contains information on landslides that occured between 2007 and 2016.
-# 
-# > **Important!** Make sure you run this cell yourself or the rest of your code won't work!
+# ## A proxy for $/sqft and the interest on 1/2-baths
 
 # In[ ]:
 
 
-# modules we'll use
-import pandas as pd
+get_ipython().run_line_magic('matplotlib', 'inline')
+import matplotlib.pylab as plt
 import numpy as np
-import seaborn as sns
-import datetime
+import pandas as pd
+import statsmodels.api as sm
+import statsmodels.formula.api as smf
+from scipy import stats
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.model_selection import StratifiedKFold
+import itertools as itertools
+from sklearn.metrics import log_loss
 
-# read in our data
-earthquakes = pd.read_csv("../input/earthquake-database/database.csv")
-landslides = pd.read_csv("../input/landslide-events/catalog.csv")
-volcanos = pd.read_csv("../input/volcanic-eruptions/database.csv")
-
-# set seed for reproducibility
-np.random.seed(0)
-
-
-# Now we're ready to look at some dates! (If you like, you can take this opportunity to take a look at some of the data.)
-
-# # Check the data type of our date column
-# ___
-# 
-# For this part of the challenge, I'll be working with the `date` column from the `landslides` dataframe. The very first thing I'm going to do is take a peek at the first few rows to make sure it actually looks like it contains dates.
-
-# In[ ]:
-
-
-# print the first few rows of the date column
-print(landslides['date'].head())
+def get_skf_indexes(df, target, kfold=4):
+    X = df.values
+    y = df[target].values
+    skf = StratifiedKFold(n_splits=4);
+    skf.get_n_splits(X, y);
+    indexes = [[],[]]
+    for train_index, test_index in skf.split(X, y):
+        indexes[0].append(train_index) # Training indexes
+        indexes[1].append(test_index) # test indexes
+    return indexes
 
 
-# Yep, those are dates! But just because I, a human, can tell that these are dates doesn't mean that Python knows that they're dates. Notice that the at the bottom of the output of `head()`, you can see that it says that the data type of this  column is "object". 
-# 
-# > Pandas uses the "object" dtype for storing various types of data types, but most often when you see a column with the dtype "object" it will have strings in it. 
-# 
-# If you check the pandas dtype documentation [here](http://pandas.pydata.org/pandas-docs/stable/basics.html#dtypes), you'll notice that there's also a specific `datetime64` dtypes. Because the dtype of our column is `object` rather than `datetime64`, we can tell that Python doesn't know that this column contains dates.
-# 
-# We can also look at just the dtype of your column without printing the first few rows if we like:
+def get_lr_perf(df_train, df_test, feature='__to_check', target='response', n_quantile=20):
+    results = {}
+    # Inputs
+    xtrain = df_train[feature].values.reshape(-1,1)
+    ytrain = df_train[target].values
+    xtest = df_test[feature].values.reshape(-1,1)
+    ytest = df_test[target].values
+    # Evaluation as a single feature
+    lr = LogisticRegression()
+    lr.fit(xtrain, ytrain);
+    yptrain = lr.predict_proba(xtrain)
+    yptest = lr.predict_proba(xtest)
+    results['train.num'] = np.round(log_loss(ytrain, yptrain), 6)
+    results['test.num'] = np.round(log_loss(ytest, yptest), 6)
+    # Evaluation as a categorical feature using quantile buckets
+    bins = np.unique(np.percentile(xtrain, np.arange(n_quantile, 100, n_quantile)))
+    xtrainq = np.digitize(xtrain, bins)
+    xtestq = np.digitize(xtest, bins)
+    lb = LabelBinarizer()
+    x1 = lb.fit_transform(xtrainq)
+    x2 = lb.transform(xtestq)
+    lr.fit(x1, ytrain);
+    yptrain = lr.predict_proba(x1)
+    yptest = lr.predict_proba(x2)
+    results['train.cat'] = np.round(log_loss(ytrain, yptrain), 6)
+    results['test.cat'] = np.round(log_loss(ytest, yptest), 6)
+    return results
 
-# In[ ]:
 
-
-# check the data type of our date column
-landslides['date'].dtype
-
-
-# You may have to check the [numpy documentation](https://docs.scipy.org/doc/numpy-1.12.0/reference/generated/numpy.dtype.kind.html#numpy.dtype.kind) to match the letter code to the dtype of the object. "O" is the code for "object", so we can see that these two methods give us the same information.
-
-# In[ ]:
-
-
-# Your turn! Check the data type of the Date column in the earthquakes dataframe
-# (note the capital 'D' in date!)
-
-
-# # Convert our date columns to datetime
-# ___
-# 
-# Now that we know that our date column isn't being recognized as a date, it's time to convert it so that it *is* recognized as a date. This is called "parsing dates" because we're taking in a string and identifying its component parts.
-# 
-# We can pandas what the format of our dates are with a guide called as ["strftime directive", which you can find more information on at this link](http://strftime.org/). The basic idea is that you need to point out which parts of the date are where and what punctuation is between them. There are [lots of possible parts of a date](http://strftime.org/), but the most common are `%d` for day, `%m` for month, `%y` for a two-digit year and `%Y` for a four digit year.
-# 
-# Some examples:
-# 
-#  * 1/17/07 has the format "%m/%d/%y"
-#  * 17-1-2007 has the format "%d-%m-%Y"
-#  
-#  Looking back up at the head of the `date` column in the landslides dataset, we can see that it's in the format "month/day/two-digit year", so we can use the same syntax as the first example to parse in our dates: 
+# ### 1) Price/sqft proxy using price, and number of bedrooms/bathrooms:
 
 # In[ ]:
 
 
-# create a new column, date_parsed, with the parsed dates
-landslides['date_parsed'] = pd.to_datetime(landslides['date'], format = "%m/%d/%y")
+df = pd.read_json('../input/train.json')
+df['response'] = "0"
+df.loc[df.interest_level=='medium', 'response'] = "1"
+df.loc[df.interest_level=='high', 'response'] = "2"
 
 
-# Now when I check the first few rows of the new column, I can see that the dtype is `datetime64`. I can also see that my dates have been slightly rearranged so that they fit the default order datetime objects (year-month-day).
+# In this first approach the aim is to parametrize the set of parameters of the following equation that miniminize log-loss from an "univariant" point of view:
+# 
+# $$\frac{Price}{A + N_{bedrooms}\vert _{C_1}^{C_2} + B·N_{bathrooms}\vert _{D_1}^{D_2}}$$
+# 
+# - A baseline value (A) is set to avoid 0 divisions and to set the relative weight of the number of rooms regarding to the price.
+# - The relative weights of the number of bedrooms and bathrooms are adjusted using parameter B.
+# - Bedrooms and bathrooms are clipped using C and D respectively.
+# 
+# For each set of parameters I'll output two performance measures using a stratified 4-fold CV approach:
+# 
+# - log-loss of the logistic classifier using as input the computed feature ('train.num' and 'test.num')
+# - Since most of the classifiers will use a "tree-based" method, I'll perform bucketization (5% percentiles) of the computed feature and dummification. The resulting set of 20 features will be used as the input for a logistic classifier.
 
 # In[ ]:
 
 
-# print the first few rows
-landslides['date_parsed'].head()
-
-
-# Now that our dates are parsed correctly, we can interact with them in useful ways.
-# 
-# ___
-# * **What if I run into an error with multiple date formats?** While we're specifying the date format here, sometimes you'll run into an error when there are multiple date formats in a single column. If that happens, you have have pandas try to infer what the right date format should be. You can do that like so:
-# 
-# `landslides['date_parsed'] = pd.to_datetime(landslides['Date'], infer_datetime_format=True)`
-# 
-# * **Why don't you always use `infer_datetime_format = True?`** There are two big reasons not to always have pandas guess the time format. The first is that pandas won't always been able to figure out the correct date format, especially if someone has gotten creative with data entry. The second is that it's much slower than specifying the exact format of the dates.
-# ____
-
-# In[ ]:
-
-
-# Your turn! Create a new column, date_parsed, in the earthquakes
-# dataset that has correctly parsed dates in it. (Don't forget to 
-# double-check that the dtype is correct!)
-
-
-# # Select just the day of the month from our column
-# ___
-# 
-# "Ok, Rachael," you may be saying at this point, "This messing around with data types is fine, I guess, but what's the *point*?" To answer your question, let's try to get information on the day of the month that a landslide occured on from the original "date" column, which has an "object" dtype: 
-
-# In[ ]:
-
-
-# try to get the day of the month from the date column
-day_of_month_landslides = landslides['date'].dt.day
-
-
-# We got an error! The important part to look at here is the part at the very end that says `AttributeError: Can only use .dt accessor with datetimelike values`. We're getting this error because the dt.day() function doesn't know how to deal with a column with the dtype "object". Even though our dataframe has dates in it, because they haven't been parsed we can't interact with them in a useful way.
-# 
-# Luckily, we have a column that we parsed earlier , and that lets us get the day of the month out no problem:
-
-# In[ ]:
-
-
-# get the day of the month from the date_parsed column
-day_of_month_landslides = landslides['date_parsed'].dt.day
+# Parameters to check
+AA = (0.1, 0.5, 1, 2)
+CC = ((0, 4), (0, 3), (1, 4), (1, 3), (0, 2))
+DD = ((0, 3), (0, 2), (1, 3), (1, 2))
+BB = (0, 0.25, 0.5, 1, 2)
+# Reduced set of parameters to run here
+AA = (0.5, 1, 2)
+CC = ((0, 4), (0, 3), (1, 4), (1, 3))
+DD = ((0, 3), (0, 2))
+BB = (0.25, 0.5, 1)
+# Stratified kfold
+idx_train, idx_test = get_skf_indexes(df, 'response', kfold=2) # kfold=4, set to 2 to quickly run here
+# Get results
+Y = pd.DataFrame()
+for iper, (i_train, i_test) in enumerate(zip(idx_train, idx_test)):
+    print(iper)
+    df_train = df.iloc[i_train, :].copy()
+    df_test = df.iloc[i_test, :].copy()
+    # For each parameter combination
+    for A, C, D, B in itertools.product(AA, CC, DD, BB):
+        df_train['__to_check'] = (df_train.price / (A + df_train.bedrooms.clip(C[0], C[1]) + B*df_train.bathrooms.clip(D[0], D[1]))).values
+        df_test['__to_check'] = (df_test.price / (A + df_test.bedrooms.clip(C[0], C[1]) + B*df_test.bathrooms.clip(D[0], D[1]))).values
+        results = get_lr_perf(df_train, df_test, feature='__to_check', target='response', n_quantile=20)
+        results.update({'fold': iper, 'params': {'A':A, 'B': B, 'C': C, 'D':D}})
+        Y =  Y.append(pd.DataFrame(pd.Series(results)).transpose())
+for i in ['train.cat', 'train.num', 'test.cat', 'test.num']:
+    Y[i] = Y[i].astype(float)
 
 
 # In[ ]:
 
 
-# Your turn! get the day of the month from the date_parsed column
+Y.sort_values('test.cat')
 
 
-# # Plot the day of the month to check the date parsing
-# ___
+# From these results we can conclude than the best proxy for price/sqft using price, bedrooms and bathrooms is:
+# $$\frac{Price}{1 + N_{bedrooms}\vert _{1}^{4} + 0.5·N_{bathrooms}\vert _{0}^{2}}$$
+
+# ### 2) Uninteresting half bathrooms
 # 
-# One of the biggest dangers in parsing dates is mixing up the months and days. The to_datetime() function does have very helpful error messages, but it doesn't hurt to double-check that the days of the month we've extracted make sense. 
+# You'll have noticed that half bathrooms show mean interests far above the mean interest level.
 # 
-# To do this, let's plot a histogram of the days of the month. We expect it to have values between 1 and 31 and, since there's no reason to suppose the landslides are more common on some days of the month than others, a relatively even distribution. (With a dip on 31 because not all months have 31 days.) Let's see if that's the case:
+# Let's compute a boolean feature for half-bathrooms and clip the number of bathrooms to [0, 4]:
 
 # In[ ]:
 
 
-# remove na's
-day_of_month_landslides = day_of_month_landslides.dropna()
-
-# plot the day of the month
-sns.distplot(day_of_month_landslides, kde=False, bins=31)
+df['half_bathrooms'] = ((np.round(df.bathrooms) - df.bathrooms)!=0).astype(float) # Half bathrooms? 1.5, 2.5, 3.5...
+df['bathrooms'] = df.bathrooms.clip(0,4) # Reduce outlier effects
 
 
-# Yep, it looks like we did parse our dates correctly & this graph makes good sense to me. Why don't you take a turn checking the dates you parsed earlier?
+# Let's demonstrate the half bathrooms unininterest from a statistical point of view. We'll fit two models with and without using the half bathrooms boolean variable. I'll use a likelihood ratio test to demonstrate that the model including the feature has better fit:
 
 # In[ ]:
 
 
-# Your turn! Plot the days of the month from your
-# earthquake dataset and make sure they make sense.
+# Build two models with and without 'half_bathrooms' feature
+formula1 = 'response ~ bathrooms'
+formula2 = 'response ~ bathrooms + half_bathrooms'
+model1 = smf.glm(formula=formula1, data=df, family=sm.families.Binomial())
+model2 = smf.glm(formula=formula2, data=df, family=sm.families.Binomial())
+result1 = model1.fit()
+result2 = model2.fit()
+# Likelihood ratio test
+llf_1 = result1.llf
+llf_2 = result2.llf
+df_1 = result1.df_resid 
+df_2 = result2.df_resid 
+lrdf = (df_1 - df_2)
+lrstat = -2*(llf_1 - llf_2)
+lr_pvalue = stats.chi2.sf(lrstat, df=lrdf)
+# Print results
+print(formula1)
+print(result1.summary())
+print(formula2)
+print(result2.summary())
+print('Likelihood ratio test', lr_pvalue)
 
 
-# And that's it for today! If you have any questions, be sure to post them in the comments below or [on the forums](https://www.kaggle.com/questions-and-answers). 
-# 
-# Remember that your notebook is private by default, and in order to share it with other people or ask for help with it, you'll need to make it public. First, you'll need to save a version of your notebook that shows your current work by hitting the "Commit & Run" button. (Your work is saved automatically, but versioning your work lets you go back and look at what it was like at the point you saved it. It also lets you share a nice compiled notebook instead of just the raw code.) Then, once your notebook is finished running, you can go to the Settings tab in the panel to the left (you may have to expand it by hitting the [<] button next to the "Commit & Run" button) and setting the "Visibility" dropdown to "Public".
-# 
-# # More practice!
-# ___
-# 
-# If you're interested in graphing time series, [check out this Learn tutorial](https://www.kaggle.com/residentmario/time-series-plotting-optional).
-# 
-# You can also look into passing columns that you know have dates in them  the `parse_dates` argument in `read_csv`. (The documention [is here](https://pandas.pydata.org/pandas-docs/stable/generated/pandas.read_csv.html).) Do note that this method can be very slow, but depending on your needs it may sometimes be handy to use.
-# 
-# For an extra challenge, you can try try parsing the column `Last Known Eruption` from the `volcanos` dataframe. This column contains a mixture of text ("Unknown") and years both before the common era (BCE, also known as BC) and in the common era (CE, also known as AD).
+# These results can also be noticed by using a barplot showing the interest frequencies depending on the number of bathrooms:
 
 # In[ ]:
 
 
-volcanos['Last Known Eruption'].sample(5)
+x = pd.crosstab(df.bathrooms, df.interest_level)[['low', 'medium', 'high']]
+x.div(x.sum(1), 0).plot(kind='bar', color=['red', 'yellow', 'green'], stacked=True);
 

@@ -1,313 +1,216 @@
 
 # coding: utf-8
 
+# To get a feel for the data beyond [this analysis](https://www.kaggle.com/headsortails/be-my-guest-recruit-restaurant-eda), we'll plot some data for several random restaurants individually.
+
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
+import numpy as np
 
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler, StandardScaler
-from sklearn.cross_validation import train_test_split
+AIR_RESERVE = 'air_reserve'
+AIR_STORE_INFO = 'air_store_info'
+AIR_VISIT_DATA = 'air_visit_data'
+DATE_INFO = 'date_info'
+HPG_RESERVE = 'hpg_reserve'
+HPG_STORE_INFO = 'hpg_store_info'
+STORE_ID_RELATION = 'store_id_relation'
+SAMPLE_SUBMISSION = 'sample_submission'
 
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-import math
-
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-
-# In[ ]:
-
-
-def rmsle(y, y_pred):
-    assert len(y) == len(y_pred)
-    to_sum = [(math.log(y_pred[i] + 1) - math.log(y[i] + 1)) ** 2.0 for i,pred in enumerate(y_pred)]
-    return (sum(to_sum) * (1.0/len(y))) ** 0.5
-#Source: https://www.kaggle.com/marknagelberg/rmsle-function
-
-
-# In[ ]:
-
-
-#LOAD DATA
-print("Loading data...")
-train = pd.read_table("../input/train.tsv")
-test = pd.read_table("../input/test.tsv")
-print(train.shape)
-print(test.shape)
+data = {
+    AIR_VISIT_DATA: pd.read_csv('../input/air_visit_data.csv'),
+    AIR_STORE_INFO: pd.read_csv('../input/air_store_info.csv'),
+    HPG_STORE_INFO: pd.read_csv('../input/hpg_store_info.csv'),
+    AIR_RESERVE: pd.read_csv('../input/air_reserve.csv'),
+    HPG_RESERVE: pd.read_csv('../input/hpg_reserve.csv'),
+    STORE_ID_RELATION: pd.read_csv('../input/store_id_relation.csv'),
+    SAMPLE_SUBMISSION: pd.read_csv('../input/sample_submission.csv'),
+    DATE_INFO: pd.read_csv('../input/date_info.csv').rename(columns={'calendar_date': 'visit_date'})
+}
 
 
 # In[ ]:
 
 
-#HANDLE MISSING VALUES
-print("Handling missing values...")
-def handle_missing(dataset):
-    dataset.category_name.fillna(value="missing", inplace=True)
-    dataset.brand_name.fillna(value="missing", inplace=True)
-    dataset.item_description.fillna(value="missing", inplace=True)
-    return (dataset)
+def plot_number_of_visitors_to_one_resaturant(daat, air_visit_data, air_id):
+  """Plots the number of visitors to this restaurant over time."""
+  x = air_visit_data['visit_date']
+  y = air_visit_data['visitors'] 
 
-train = handle_missing(train)
-test = handle_missing(test)
-print(train.shape)
-print(test.shape)
+  traces = []
+  traces.append(go.Scatter(x=x, y=y, mode='markers'))
+  rolling_mean = y.rolling(window=10, min_periods=1, center=True).mean()
+  traces.append(go.Scatter(x=x, y=rolling_mean, mode='lines'))
 
-
-# In[ ]:
-
-
-train.head(3)
+  layout = go.Layout(
+    title='Visitors to resaurant ' + air_id,
+    yaxis=dict(title='# Visitors')
+  )
+  iplot(go.Figure(data=traces, layout=layout))
 
 
 # In[ ]:
 
 
-#PROCESS CATEGORICAL DATA
-print("Handling categorical variables...")
-le = LabelEncoder()
+def plot_visitors_on_days_of_week_for_one_restaurant(data, air_visit_data, air_id):
+  air_visit_and_date_info = pd.merge(data[DATE_INFO], air_visit_data, how='inner', on='visit_date', copy=True)
 
-le.fit(np.hstack([train.category_name, test.category_name]))
-train.category_name = le.transform(train.category_name)
-test.category_name = le.transform(test.category_name)
+  # Rainbow-ranked by median visitor over all restaurants.
+  COLORS = {
+    'Saturday': 'red',
+    'Sunday': 'orange',
+    'Friday': 'green',
+    'Thursday': 'blue',
+    'Wednesday': 'purple',
+    'Tuesday': 'brown',
+    'Monday': 'black',
+  }
 
-le.fit(np.hstack([train.brand_name, test.brand_name]))
-train.brand_name = le.transform(train.brand_name)
-test.brand_name = le.transform(test.brand_name)
-del le
+  traces = []
+  for day_of_week in COLORS:
+    # Plots the number of visitors to this restaurant over time.
+    x = air_visit_and_date_info['visit_date']
+    y = air_visit_and_date_info.loc[air_visit_and_date_info['day_of_week'] == day_of_week]['visitors']
+    # Adds points to the plot.
+    traces.append(go.Scatter(
+      x=x,
+      y=y,
+      mode='markers',
+      name=day_of_week,
+      line=dict(color=COLORS[day_of_week]),
+    ))
+    # Adds a rolling mean line.
+    traces.append(go.Scatter(
+      x=x,
+      y=y.rolling(7, min_periods=1, center=True).mean(),
+      mode='lines',
+      name=day_of_week,
+      line=dict(color=COLORS[day_of_week]),
+    ))
 
-train.head(3)
-
-
-# In[ ]:
-
-
-#PROCESS TEXT: RAW
-print("Text to seq process...")
-from keras.preprocessing.text import Tokenizer
-raw_text = np.hstack([train.item_description.str.lower(), train.name.str.lower()])
-
-print("   Fitting tokenizer...")
-tok_raw = Tokenizer()
-tok_raw.fit_on_texts(raw_text)
-print("   Transforming text to seq...")
-
-train["seq_item_description"] = tok_raw.texts_to_sequences(train.item_description.str.lower())
-test["seq_item_description"] = tok_raw.texts_to_sequences(test.item_description.str.lower())
-train["seq_name"] = tok_raw.texts_to_sequences(train.name.str.lower())
-test["seq_name"] = tok_raw.texts_to_sequences(test.name.str.lower())
-train.head(3)
-
-
-# In[ ]:
-
-
-#SEQUENCES VARIABLES ANALYSIS
-max_name_seq = np.max([np.max(train.seq_name.apply(lambda x: len(x))), np.max(test.seq_name.apply(lambda x: len(x)))])
-max_seq_item_description = np.max([np.max(train.seq_item_description.apply(lambda x: len(x)))
-                                   , np.max(test.seq_item_description.apply(lambda x: len(x)))])
-print("max name seq "+str(max_name_seq))
-print("max item desc seq "+str(max_seq_item_description))
+  layout = go.Layout(
+    title='Visitors to resaurant ' + air_id + ' by day of week, with rolling averages',
+    yaxis=dict(title='# Visitors')
+  )
+  iplot(go.Figure(data=traces, layout=layout))
 
 
 # In[ ]:
 
 
-train.seq_name.apply(lambda x: len(x)).hist()
+from scipy import stats
 
+def plot_reservations_vs_visitors_for_one_restaurant(data, air_visit_data, air_id):
+  air_reserve = data[AIR_RESERVE][data[AIR_RESERVE]['air_store_id'] == air_id]
+  # Some test restaurants have no AIR reservation data.
+  if air_reserve.shape[0] == 0:
+    print('There\'s no reservation data for ' + air_id + '.')
+  else:
+    df = air_reserve.copy()
+    # Converts datetimes to days. Also converts to np.datetime64 because the air_visit_data's date type np.datetime64[ns].
+    df['visit_date'] = df['visit_datetime'].map(lambda dt: np.datetime64(dt.date()))
+    # Groups reservations by visit day, and sums the # seats reserved
+    reserved_seats = df.groupby('visit_date')['reserve_visitors'].sum()
+    reserved_seats = reserved_seats.reset_index()  # Before the index consisted of dates. reset_index makes the index positions, and makes the dates a column
+    reserved_seats_and_visitors = pd.merge(reserved_seats, air_visit_data, how='inner', on='visit_date')
 
-# In[ ]:
+    # Plots the number of visitors to this restaurant over time.
+    x = reserved_seats_and_visitors['reserve_visitors']
+    y = reserved_seats_and_visitors['visitors'] 
 
+    layout = go.Layout(
+      title='Visitors vs seats reserved for resaurant ' + air_id,
+      xaxis=dict(title='# Reserve Visitors'),
+      yaxis=dict(title='# Visitors')
+    )
 
-train.seq_item_description.apply(lambda x: len(x)).hist()
+    traces = []
+    traces.append(go.Scatter(x=x, y=y, text=reserved_seats_and_visitors['visit_date'], mode='markers'))
+    # TODO: Size the point based on the average size of the requested reservation.
+    # Color the point based on how early the reservations for that day were ploced.
 
-
-# In[ ]:
-
-
-#EMBEDDINGS MAX VALUE
-#Base on the histograms, we select the next lengths
-MAX_NAME_SEQ = 10
-MAX_ITEM_DESC_SEQ = 75
-MAX_TEXT = np.max([np.max(train.seq_name.max())
-                   , np.max(test.seq_name.max())
-                  , np.max(train.seq_item_description.max())
-                  , np.max(test.seq_item_description.max())])+2
-MAX_CATEGORY = np.max([train.category_name.max(), test.category_name.max()])+1
-MAX_BRAND = np.max([train.brand_name.max(), test.brand_name.max()])+1
-MAX_CONDITION = np.max([train.item_condition_id.max(), test.item_condition_id.max()])+1
-
-
-# In[ ]:
-
-
-#SCALE target variable
-train["target"] = np.log(train.price+1)
-target_scaler = MinMaxScaler(feature_range=(-1, 1))
-train["target"] = target_scaler.fit_transform(train.target.reshape(-1,1))
-pd.DataFrame(train.target).hist()
-
-
-# In[ ]:
-
-
-#EXTRACT DEVELOPTMENT TEST
-dtrain, dvalid = train_test_split(train, random_state=123, train_size=0.99)
-print(dtrain.shape)
-print(dvalid.shape)
-
-
-# In[ ]:
-
-
-#KERAS DATA DEFINITION
-from keras.preprocessing.sequence import pad_sequences
-
-def get_keras_data(dataset):
-    X = {
-        'name': pad_sequences(dataset.seq_name, maxlen=MAX_NAME_SEQ)
-        ,'item_desc': pad_sequences(dataset.seq_item_description, maxlen=MAX_ITEM_DESC_SEQ)
-        ,'brand_name': np.array(dataset.brand_name)
-        ,'category_name': np.array(dataset.category_name)
-        ,'item_condition': np.array(dataset.item_condition_id)
-        ,'num_vars': np.array(dataset[["shipping"]])
-    }
-    return X
-
-X_train = get_keras_data(dtrain)
-X_valid = get_keras_data(dvalid)
-X_test = get_keras_data(test)
-
-
-# In[ ]:
-
-
-#KERAS MODEL DEFINITION
-from keras.layers import Input, Dropout, Dense, BatchNormalization, Activation, concatenate, GRU, Embedding, Flatten, BatchNormalization
-from keras.models import Model
-from keras.callbacks import ModelCheckpoint, Callback, EarlyStopping
-from keras import backend as K
-
-def get_callbacks(filepath, patience=2):
-    es = EarlyStopping('val_loss', patience=patience, mode="min")
-    msave = ModelCheckpoint(filepath, save_best_only=True)
-    return [es, msave]
-
-def rmsle_cust(y_true, y_pred):
-    first_log = K.log(K.clip(y_pred, K.epsilon(), None) + 1.)
-    second_log = K.log(K.clip(y_true, K.epsilon(), None) + 1.)
-    return K.sqrt(K.mean(K.square(first_log - second_log), axis=-1))
-
-def get_model():
-    #params
-    dr_r = 0.1
+    # Overlays the linear trend line of reserved seats vs visitors.
+    slope, intercept, r_value, p_value, std_err = stats.linregress(x, y)
+    line = slope * x + intercept
+    traces.append(go.Scatter(x=x, y=line, mode='lines'))
     
-    #Inputs
-    name = Input(shape=[X_train["name"].shape[1]], name="name")
-    item_desc = Input(shape=[X_train["item_desc"].shape[1]], name="item_desc")
-    brand_name = Input(shape=[1], name="brand_name")
-    category_name = Input(shape=[1], name="category_name")
-    item_condition = Input(shape=[1], name="item_condition")
-    num_vars = Input(shape=[X_train["num_vars"].shape[1]], name="num_vars")
+    fig = go.Figure(data=traces, layout=layout)
+    iplot(fig)  
     
-    #Embeddings layers
-    emb_name = Embedding(MAX_TEXT, 50)(name)
-    emb_item_desc = Embedding(MAX_TEXT, 50)(item_desc)
-    emb_brand_name = Embedding(MAX_BRAND, 10)(brand_name)
-    emb_category_name = Embedding(MAX_CATEGORY, 10)(category_name)
-    emb_item_condition = Embedding(MAX_CONDITION, 5)(item_condition)
-    
-    #rnn layer
-    rnn_layer1 = GRU(16) (emb_item_desc)
-    rnn_layer2 = GRU(8) (emb_name)
-    
-    #main layer
-    main_l = concatenate([
-        Flatten() (emb_brand_name)
-        , Flatten() (emb_category_name)
-        , Flatten() (emb_item_condition)
-        , rnn_layer1
-        , rnn_layer2
-        , num_vars
-    ])
-    main_l = Dropout(dr_r) (Dense(128) (main_l))
-    main_l = Dropout(dr_r) (Dense(64) (main_l))
-    
-    #output
-    output = Dense(1, activation="linear") (main_l)
-    
-    #model
-    model = Model([name, item_desc, brand_name
-                   , category_name, item_condition, num_vars], output)
-    model.compile(loss="mse", optimizer="adam", metrics=["mae", rmsle_cust])
-    
-    return model
-
-    
-model = get_model()
-model.summary()
-    
+  if hpg_id:
+    # TODO: plot HPG reservation data.
+    pass
 
 
 # In[ ]:
 
 
-#FITTING THE MODEL
-BATCH_SIZE = 20000
-epochs = 5
+def plot_median_visitors_per_day_of_week_on_holiday_vs_non_holiday(data, air_visit_data, air_id):
+  air_visit_and_dates = pd.merge(data[DATE_INFO], air_visit_data, how='inner', on='visit_date')
+  days_of_week = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+  air_visits_on_holidays = air_visit_and_dates[air_visit_and_dates['holiday_flg'] == 1]
+  air_visits_on_non_holidays = air_visit_and_dates[air_visit_and_dates['holiday_flg'] == 0]
+  holiday_data = {}
+  non_holiday_data = {}
+  for day in days_of_week:
+    holiday_data[day] = air_visits_on_holidays[air_visits_on_holidays['day_of_week'] == day]['visitors'].median()
+    non_holiday_data[day] = air_visits_on_non_holidays[air_visits_on_non_holidays['day_of_week'] == day]['visitors'].median()
 
-model = get_model()
-model.fit(X_train, dtrain.target, epochs=epochs, batch_size=BATCH_SIZE
-          , validation_data=(X_valid, dvalid.target)
-          , verbose=1)
-
-
-# In[ ]:
-
-
-#EVLUEATE THE MODEL ON DEV TEST: What is it doing?
-val_preds = model.predict(X_valid)
-val_preds = target_scaler.inverse_transform(val_preds)
-val_preds = np.exp(val_preds)+1
-
-#mean_absolute_error, mean_squared_log_error
-y_true = np.array(dvalid.price.values)
-y_pred = val_preds[:,0]
-v_rmsle = rmsle(y_true, y_pred)
-print(" RMSLE error on dev test: "+str(v_rmsle))
-
-
-# In[ ]:
-
-
-#CREATE PREDICTIONS
-preds = model.predict(X_test, batch_size=BATCH_SIZE)
-preds = target_scaler.inverse_transform(preds)
-preds = np.exp(preds)-1
-
-submission = test[["test_id"]]
-submission["price"] = preds
+  traces = []
+  traces.append(go.Bar(
+    x=days_of_week,
+    y=[holiday_data[day] for day in days_of_week],
+    name='On a holiday',
+  ))
+  traces.append(go.Bar(
+    x=days_of_week,
+    y=[non_holiday_data[day] for day in days_of_week],
+    name='On a non-holiday',
+  ))
+  layout = go.Layout(
+    title='Median visitors to ' + air_id + ' on holidays and non-holidays',
+    yaxis=dict(title='Median # Visitors')
+  )
+  iplot(go.Figure(data=traces, layout=layout))
 
 
 # In[ ]:
 
 
-submission.to_csv("./myNNsubmission.csv", index=False)
-submission.price.hist()
+# Plots data for several random restaurants.
+NUM_RESTAURANTS = 7
 
+# We're using Plotly in offline mode
+# because it appears plotly the credentials on our GCE VM.
+from plotly.offline import init_notebook_mode, iplot
+import plotly.graph_objs as go
+import random
 
-# This was just an example how nn can solve this problems. Potencial improvements of the kernel:
-#     - Increase the embeddings factos
-#     - Decrease the batch size
-#     - Add Batch Normalization
-#     - Try LSTM, Bidirectional RNN, stack RNN
-#     - Try with more dense layers or more rnn outputs
-#     -  etc. Or even try a new architecture!
-#     
-# Any comment will be welcome. Thanks!
-#  
-#     
+init_notebook_mode(connected=True)
+
+# Converts date strings to datetime objects.
+data[AIR_VISIT_DATA]['visit_date'] = pd.to_datetime(data[AIR_VISIT_DATA]['visit_date'])
+data[DATE_INFO]['visit_date'] = pd.to_datetime(data[DATE_INFO]['visit_date'])
+data[AIR_RESERVE]['visit_datetime'] = pd.to_datetime(data[AIR_RESERVE]['visit_datetime'])
+data[AIR_RESERVE]['reserve_datetime'] = pd.to_datetime(data[AIR_RESERVE]['reserve_datetime'])
+
+for i in range(NUM_RESTAURANTS):
+  random_index = random.randint(0, data[SAMPLE_SUBMISSION].shape[0])
+  air_id = data[SAMPLE_SUBMISSION]['id'][random_index][:len('air_00a91d42b08b08d9')]
+  
+  # Plots the number of visitors to this restaurant over time.
+  air_visit_data = data[AIR_VISIT_DATA][data[AIR_VISIT_DATA]['air_store_id'] == air_id]
+  
+  # The given air store may or may not be represented in the hgp store data.
+  air_ids = data[STORE_ID_RELATION]['air_store_id']
+  idx = air_ids[air_ids == air_id].index
+  hpg_id = ''
+  if len(idx) > 0:
+    hpg_id = data[STORE_ID_RELATION]['hpg_store_id'][idx[0]]
+
+  plot_number_of_visitors_to_one_resaturant(data, air_visit_data, air_id)
+  plot_visitors_on_days_of_week_for_one_restaurant(data, air_visit_data, air_id)
+  plot_reservations_vs_visitors_for_one_restaurant(data, air_visit_data, air_id)
+  plot_median_visitors_per_day_of_week_on_holiday_vs_non_holiday(data, air_visit_data, air_id)
+

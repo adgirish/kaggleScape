@@ -1,34 +1,14 @@
 
 # coding: utf-8
 
-# [<img src='https://lh3.googleusercontent.com/-tNe1vwwd_w4/VZ_m9E44C7I/AAAAAAAAABM/5yqhpSyYcCUzwHi-ti13MwovCb_AUD_zgCJkCGAYYCw/w256-h86-n-no/Submarineering.png'>](https://twitter.com/submarineering?lang=en)
+# An introduction for using scikit learn pipeline and plot metrics for creating the best model which is tuned hyper parameters. 
 # 
-
-# **The main purpose of this Notebook is to apply image processing technics in order to provide some additional engineering features to help on the improvement of the classifier accuracy. ** 
+# Topic
 # 
-# I highly recommend to read and see some examples about image processing : 
-# 
-# http://scikit-image.org/
-# 
-# And my Notebook '**Submarineering.Size matters**' :
-# 
-# https://www.kaggle.com/submarineering/submarineering-size-matters
-# 
-# What can you learn? 
-# 
-# -An easy way to compare graphically the influency of differents attributes.
-# 
-# -Undertanding  that the cleaning of data is fundamental for the classifier, as the learning process is automatic, unnecessary data will confuse to the algorithm. 
-# 
-# -Doesn't  matter which classifier or different algorithm you are going to use. This is always important.
-# 
-# -In this case I am focusing on the isolation of the object. 
-# 
-# -The info provides by the water is irrelevant.
-# 
-# -**As a bonus, at the end, I explain how to generate useful features as result of the morphological analysis. ** 
-# 
-# 
+# * Cross Validation
+# * Learning Curve
+# * Validation Curve
+# * Grid Search
 
 # In[ ]:
 
@@ -39,13 +19,10 @@
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-from scipy.ndimage import gaussian_filter
-from skimage import img_as_float
-from skimage.morphology import reconstruction
+
 # Input data files are available in the "../input/" directory.
 # For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-train = pd.read_json('../input/train.json')
+
 from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
 
@@ -55,158 +32,264 @@ print(check_output(["ls", "../input"]).decode("utf8"))
 # In[ ]:
 
 
-# load the training dataset.
-train = pd.read_json('../input/train.json')
+df = pd.read_csv('../input/voice.csv')
+df.head()
 
 
 # In[ ]:
 
 
-# Isolation function.
-def iso(arr):
-    image = img_as_float(np.reshape(np.array(arr), [75,75]))
-    image = gaussian_filter(image,2)
-    seed = np.copy(image)
-    seed[1:-1, 1:-1] = image.min()
-    mask = image 
-    dilated = reconstruction(seed, mask, method='dilation')
-    return image-dilated
+print("Total number of samples: {}".format(df.shape[0]))
+print("Number of male: {}".format(df[df.label == 'male'].shape[0]))
+print("Number of female: {}".format(df[df.label == 'female'].shape[0]))
 
+
+# The target label of this classification is in "label" column and others are features.
+# These two categories ("male", "female") are just half and half. It seems no skew in this data set.
+# First we confirm to there is any missing values in this data sets. This is a common case a dataset in real world has missing values.
 
 # In[ ]:
 
 
-# Plotting to compare
-arr = train.band_1[12]
-dilated = iso(arr)
-fig, (ax0, ax1) = plt.subplots(nrows=1,
-                                    ncols=2,
-                                    figsize=(16, 5),
-                                    sharex=True,
-                                    sharey=True)
-
-ax0.imshow(np.reshape(np.array(arr), [75,75]))
-ax0.set_title('original image')
-ax0.axis('off')
-ax0.set_adjustable('box-forced')
-
-ax1.imshow(dilated, cmap='gray')
-ax1.set_title('dilated')
-ax1.axis('off')
-ax1.set_adjustable('box-forced')
+df.isnull().sum()
 
 
-# In[ ]:
-
-
-# Plotting to compare
-arr = train.band_1[8]
-dilated = iso(arr)
-fig, (ax0, ax1) = plt.subplots(nrows=1,
-                                    ncols=2,
-                                    figsize=(16, 5),
-                                    sharex=True,
-                                    sharey=True)
-
-ax0.imshow(np.reshape(np.array(arr), [75,75]))
-ax0.set_title('original image')
-ax0.axis('off')
-ax0.set_adjustable('box-forced')
-
-ax1.imshow(dilated, cmap='gray')
-ax1.set_title('dilated')
-ax1.axis('off')
-ax1.set_adjustable('box-forced')
-
-
-# In[ ]:
-
-
-# Feature engineering iso1 and iso2.
-train['iso1'] = train.iloc[:, 0].apply(iso)
-train['iso2'] = train.iloc[:, 1].apply(iso)
-
-
-# In[ ]:
-
-
-# Indexes for ships or icebergs.
-index_ship=np.where(train['is_iceberg']==0)
-index_ice=np.where(train['is_iceberg']==1)
-
-
-# In[ ]:
-
-
-# For ploting
-def plots(band,index,title):
-    plt.figure(figsize=(12,10))
-    for i in range(12):
-        plt.subplot(3,4,i+1)
-        plt.xticks(())
-        plt.yticks(())
-        plt.xlabel((title))
-        plt.imshow(np.reshape(train[band][index[0][i]], (75,75)),cmap='gist_heat')
-    plt.show()  
-
-
-# In[ ]:
-
-
-plots('band_1',index_ship,'band1 ship')
-
-
-# In[ ]:
-
-
-plots('band_1',index_ice,'band1 iceberg')
-
-
-# In[ ]:
-
-
-plots('iso1',index_ship,'iso1 ship')
-
-
-# In[ ]:
-
-
-plots('iso1',index_ice,'iso1 iceberg')
-
-
-# In[ ]:
-
-
-# Additional features from the morphological analysis and how is working on discrimination.
-train[train.is_iceberg==1]['iso1'].apply(np.max).plot(alpha=0.4)
-train[train.is_iceberg==0]['iso1'].apply(np.max).plot(alpha=0.4)
-
-
-# In[ ]:
-
-
-# Additional features from the morphological analysis and how is working on discrimination.
-train[train.is_iceberg==1]['iso2'].apply(np.max).plot(alpha=0.4)
-train[train.is_iceberg==0]['iso2'].apply(np.max).plot(alpha=0.4)
-
-
-# **NOTE :** It looks like images with incidence angles having less than or equal to 4 decimal are the naturally captured images, and those with greater precision are machine generated, as 'brassmonkey' describes very well. 
-# In the data description of the competition is also refered as : 
-# "Please note that we have included machine-generated images in the test set to prevent hand labeling. They are excluded in scoring."
-# This is an important point to be in mind. 
+# Okay we confirm there is not any missing values in any columns. Before creating learning pipeline it is not a bad idea to visualize overview and the relationship with each features. 
 # 
 
-# **Conclusion.** As described in my Notebook **'Submarineering.Size matters**', that I highly recommed :
+# In[ ]:
+
+
+import warnings
+warnings.filterwarnings("ignore")
+import seaborn
+df.head()
+df.plot(kind='scatter', x='meanfreq', y='dfrange')
+df.plot(kind='kde', y='meanfreq')
+#seaborn.pairplot(df['meanfreq', 'sd', 'skew'], hue='label', size=2)
+
+
+# You can also do this easily with seaborn for visializing multiple feature relations.
+
+# In[ ]:
+
+
+seaborn.pairplot(df[['meanfreq', 'Q25', 'Q75', 'skew', 'centroid', 'label']], 
+                 hue='label', size=2)
+
+
+# These information sometimes can be useful to select features to be used for training model.
+# So now is the time to create training logic. Data set first should be separated with training data and test data for evaluating trained model.
+
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import LabelEncoder
+
+X, y = df.iloc[:, :-1].values, df.iloc[:, -1].values
+
+# Encode label category
+# male -> 1
+# female -> 0
+
+gender_encoder = LabelEncoder()
+y = gender_encoder.fit_transform(y)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=1)
+
+
+# Since scikit-learn provide Pipeline API which enables us to create preprocessing and machine learning model at once. 
+
+# In[ ]:
+
+
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+from sklearn.svm import SVC
+from sklearn.pipeline import Pipeline
+
+pipe_svc = Pipeline([('std_scl', StandardScaler()), 
+                    ('pca', PCA(n_components=10)),
+                    ('svc', SVC(random_state=1))])
+
+pipe_svc.fit(X_train, y_train)
+
+print('Test Accuracy: %.3f' % pipe_svc.score(X_test, y_test))
+
+
+# At first grance we already gained pretty good accuracy which is over 97%.
+# But we might have a room for improvements. Now we evaluate this model from various type of metrics.
 # 
-# https://www.kaggle.com/submarineering/submarineering-size-matters
+# # Cross Validation
 # 
-# the size can be used from multiple points of view.  Also the shape of the object to detect can give us a rich information about his class. Additional features can be obtain from these morphological properties.
+# cross validation can provide more general metric of this model and it can enables us to reduce variance of the model.
+
+# In[ ]:
+
+
+from sklearn.model_selection import cross_val_score
+
+scores = cross_val_score(estimator=pipe_svc,
+                        X=X_train,
+                        y=y_train,
+                        cv=10,
+                        n_jobs=1)
+
+print('Cross validation scores: %s' % scores)
+
+import matplotlib.pyplot as plt
+plt.title('Cross validation scores')
+plt.scatter(np.arange(len(scores)), scores)
+plt.axhline(y=np.mean(scores), color='g') # Mean value of cross validation scores
+plt.show()
+
+
+# # Learning Curve
 # 
-# These features could be improved :
+# Learning curve enables us decide a model is over fitting to given training data and training under appropriate bias and variance balance. Now we try to plot learning curve of this model.
+
+# In[ ]:
+
+
+from sklearn.model_selection import learning_curve
+
+train_sizes, train_scores, test_scores = learning_curve(estimator=pipe_svc,
+                                                       X=X_train,
+                                                       y=y_train,
+                                                       train_sizes=np.linspace(0.1, 1.0, 10),
+                                                       cv=10)
+
+# Mean value of accuracy against training data
+train_mean = np.mean(train_scores, axis=1)
+
+# Standard deviation of training accuracy per number of training samples
+train_std = np.std(train_scores, axis=1)
+
+# Same as above for test data
+test_mean = np.mean(test_scores, axis=1)
+test_std = np.std(test_scores, axis=1)
+
+# Plot training accuracies 
+plt.plot(train_sizes, train_mean, color='red', marker='o', label='Training Accuracy')
+# Plot the variance of training accuracies
+plt.fill_between(train_sizes,
+                train_mean + train_std,
+                train_mean - train_std,
+                alpha=0.15, color='red')
+
+# Plot for test data as training data
+plt.plot(train_sizes, test_mean, color='blue', linestyle='--', marker='s', 
+        label='Test Accuracy')
+plt.fill_between(train_sizes,
+                test_mean + test_std,
+                test_mean - test_std,
+                alpha=0.15, color='blue')
+
+plt.xlabel('Number of training samples')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
+
+
+# Although the variance of score against test data is somewhat higher, we cannot see the trend of over fitting  notably because test scores also improved along with training samples.
 # 
-# -The size can be categorized in order to help on the accuracy of the Classifier.
+# In addition, we can validation score along with a parameter. So next we try to plot validation curve.
 # 
-# -Taking the max of the dilated images also help to discretize between classes.
+# # Validation Curve
+
+# In[ ]:
+
+
+from sklearn.model_selection import validation_curve
+
+param_range = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
+train_scores, test_scores = validation_curve(estimator=pipe_svc,
+                                             X=X_train,
+                                             y=y_train,
+                                             param_name='svc__C',
+                                             param_range=param_range,
+                                             cv=10)
+
+# Mean value of accuracy against training data
+train_mean = np.mean(train_scores, axis=1)
+
+# Standard deviation of training accuracy per number of training samples
+train_std = np.std(train_scores, axis=1)
+
+# Same as above for test data
+test_mean = np.mean(test_scores, axis=1)
+test_std = np.std(test_scores, axis=1)
+
+# Plot training accuracies 
+plt.plot(param_range, train_mean, color='red', marker='o', label='Training Accuracy')
+# Plot the variance of training accuracies
+plt.fill_between(param_range,
+                train_mean + train_std,
+                train_mean - train_std,
+                alpha=0.15, color='red')
+
+# Plot for test data as training data
+plt.plot(param_range, test_mean, color='blue', linestyle='--', marker='s', 
+        label='Test Accuracy')
+plt.fill_between(param_range,
+                test_mean + test_std,
+                test_mean - test_std,
+                alpha=0.15, color='blue')
+
+plt.xscale('log')
+plt.xlabel('Regularization parameter C')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.show()
+
+
+# So we can estimate the best value of C can be 1 if C is over 1 test accuracy is decreasing.
+# It can cause overfitting of this model.
+
+# So how can we decide the best hyper parameter of this model without checking learning_curve and validation curve one by one? Grid search can be an option to do this.
 # 
-# I hope these lines be useful for your. **Please vote up**.
+# # Grid Search
 # 
+# Grid search enables us to search all parameter combination of give hyper parameter space and evaluate models. After grid search you can obtain the best hyper parameter set.
+
+# In[ ]:
+
+
+from sklearn.model_selection import GridSearchCV
+
+param_range = [0.001, 0.01, 0.1, 1.0, 10.0, 100.0]
+param_grid = [{'svc__C': param_range, 'svc__kernel': ['linear']},
+              {'svc__C': param_range, 'svc__gamma': param_range, 
+               'svc__kernel': ['rbf']}]
+
+gs = GridSearchCV(estimator=pipe_svc,
+                  param_grid=param_grid,
+                  scoring='accuracy',
+                  cv=10)
+
+# Training and searching hyper parameter space and evaluating model
+# by using cross validation logic folded into 10
+gs = gs.fit(X_train, y_train)
+
+print(gs.best_score_)
+print(gs.best_params_)
+
+
+# Last but not least, you can check test accuracy with the best model again.
+
+# In[ ]:
+
+
+best_model = gs.best_estimator_
+best_model.fit(X_train, y_train)
+print('Test Accuracy: %.3f' % best_model.score(X_test, y_test))
+
+
+# # Recap
+# 
+# I introduced how to create hyper parameter tuned model with checking necessary metrics 
+# such as learning curve and validation curve.
+# 
+# Although we cannot see any improvement by using grid search here 
+# (because the default parameter often provides good performance), I hope this is a good material how to use scikit learn pipeline and plot metrics. 

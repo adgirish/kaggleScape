@@ -1,285 +1,323 @@
 
 # coding: utf-8
 
-# UFO Reports in United States
-# ----------------------------
-#  &nbsp;...by [Latitude/Longitude][1]<br>
-#  &nbsp;...by [Year][2]<br>
-#  &nbsp;...by [State][3]<br>
-#  &nbsp;...per [Capita][4]<br>
-#  &nbsp;...by [Area][5]
+# You may visit gist for better rendering results:
 # 
-# [1]: https://www.kaggle.io/svf/467568/f1648392162180ebab13a806a8d8b328/__results__.html#UFO-Reports-by-Latitude/Longitude
-# [2]: https://www.kaggle.io/svf/467568/f1648392162180ebab13a806a8d8b328/__results__.html#UFO-Reports-by-Year
-# [3]: https://www.kaggle.io/svf/467568/f1648392162180ebab13a806a8d8b328/__results__.html#UFO-Reports-by-State
-# [4]: https://www.kaggle.io/svf/467568/f1648392162180ebab13a806a8d8b328/__results__.html#UFO-Reports-per-Capita
-# [5]: https://www.kaggle.io/svf/467568/f1648392162180ebab13a806a8d8b328/__results__.html#UFO-Reports-per-Area
+# https://gist.github.com/chenyuntc/554876374e4ccf70fe2d3fe7bec98743
 
-# Data Import
-# -----------------
-
-# In[ ]:
+# In[1]:
 
 
+import os
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+from tqdm import tqdm
 
-import plotly.plotly as py
-import plotly.graph_objs as go
-from plotly import tools
-from plotly.offline import iplot, init_notebook_mode
-init_notebook_mode()
+import torch as t
+from torch.utils import data
+from torchvision import transforms as tsf
 
-ufo_data = pd.read_csv('../input/scrubbed.csv', usecols=[0, 1, 2, 9, 10], low_memory=False)
-ufo_data['datetime'] = pd.to_datetime(ufo_data['datetime'], errors='coerce')
-ufo_data.insert(1, 'year', ufo_data['datetime'].dt.year)
-ufo_data['year'] = ufo_data['year'].fillna(0).astype(int)
-ufo_data['city'] = ufo_data['city'].str.title()
-ufo_data['state'] = ufo_data['state'].str.upper()
-ufo_data['latitude'] = pd.to_numeric(ufo_data['latitude'], errors='coerce')
-ufo_data = ufo_data.rename(columns={'longitude ':'longitude'})
-
-us_states = np.asarray(['AK', 'AL', 'AR', 'AZ', 'CA', 'CO', 'CT', 'DC', 'DE', 'FL', 'GA',
-                        'HI', 'IA', 'ID', 'IL', 'IN', 'KS', 'KY', 'LA', 'MA', 'MD', 'ME',
-                        'MI', 'MN', 'MO', 'MS', 'MT', 'NC', 'ND', 'NE', 'NH', 'NJ', 'NM',
-                        'NV', 'NY', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC', 'SD', 'TN', 'TX',
-                        'UT', 'VA', 'VT', 'WA', 'WI', 'WV', 'WY'])
-
-# UFO sightings in United States only (70,805 rows)
-ufo_data = ufo_data[ufo_data['state'].isin(us_states)].sort_values('year')
-ufo_data = ufo_data[(ufo_data.latitude > 15) & (ufo_data.longitude < -65)]
-ufo_data = ufo_data[(ufo_data.latitude > 50) & (ufo_data.longitude > -125) == False]
-ufo_data = ufo_data[ufo_data['city'].str.contains('\(Canada\)|\(Mexico\)') == False]
+TRAIN_PATH = './train.pth'
+TEST_PATH = './test.tph'
+get_ipython().run_line_magic('matplotlib', 'inline')
 
 
-# UFO Reports by Latitude/Longitude
-# ----------------------------
+# ## Data Preprocessing
+# Preprocess data and save it to disk
 
-# In[ ]:
+# In[3]:
 
 
-ufo_data['text'] = ufo_data[ufo_data.year > 0]['datetime'].dt.strftime('%B %-d, %Y')
+import os
+from pathlib import Path
+from PIL import Image
+from skimage import io
+import numpy as np
+from tqdm import tqdm
+import torch as t
 
-data = [dict(
-        type = 'scattergeo',
-        locationmode = 'USA-states',
-        lon = ufo_data[ufo_data.year > 0]['longitude'],
-        lat = ufo_data[ufo_data.year > 0]['latitude'],
-        text = ufo_data[ufo_data.year > 0]['text'],
-        mode = 'markers',
-        marker = dict(
-            size = 5.5,
-            opacity = 0.75,
-            color = 'rgb(0, 163, 81)',
-            line = dict(color = 'rgb(255, 255, 255)', width = 1))
-        )]
 
-layout = dict(
-         title = 'UFO Reports by Latitude/Longitude in United States (1910-2014)',
-         geo = dict(
-             scope = 'usa',
-             projection = dict(type = 'albers usa'),
-             showland = True,
-             landcolor = 'rgb(250, 250, 250)',
-             subunitwidth = 1,
-             subunitcolor = 'rgb(217, 217, 217)',
-             countrywidth = 1,
-             countrycolor = 'rgb(217, 217, 217)',
-             showlakes = True,
-             lakecolor = 'rgb(255, 255, 255)')
+def process(file_path, has_mask=True):
+    file_path = Path(file_path)
+    files = sorted(list(Path(file_path).iterdir()))
+    datas = []
+
+    for file in tqdm(files):
+        item = {}
+        imgs = []
+        for image in (file/'images').iterdir():
+            img = io.imread(image)
+            imgs.append(img)
+        assert len(imgs)==1
+        if img.shape[2]>3:
+            assert(img[:,:,3]!=255).sum()==0
+        img = img[:,:,:3]
+
+        if has_mask:
+            mask_files = list((file/'masks').iterdir())
+            masks = None
+            for ii,mask in enumerate(mask_files):
+                mask = io.imread(mask)
+                assert (mask[(mask!=0)]==255).all()
+                if masks is None:
+                    H,W = mask.shape
+                    masks = np.zeros((len(mask_files),H,W))
+                masks[ii] = mask
+            tmp_mask = masks.sum(0)
+            assert (tmp_mask[tmp_mask!=0] == 255).all()
+            for ii,mask in enumerate(masks):
+                masks[ii] = mask/255 * (ii+1)
+            mask = masks.sum(0)
+            item['mask'] = t.from_numpy(mask)
+        item['name'] = str(file).split('/')[-1]
+        item['img'] = t.from_numpy(img)
+        datas.append(item)
+    return datas
+
+# You can skip this if you have alreadly done it.
+test = process('../input/stage1_test/',False)
+t.save(test, TEST_PATH)
+train_data = process('../input/stage1_train/')
+# t.save(train_data, TRAIN_PATH)
+
+
+# ## Data Loader
+# Wrap it with pytorch `Dataset` and `DataLoader` 
+
+# In[10]:
+
+
+import PIL
+class Dataset():
+    def __init__(self,data,source_transform,target_transform):
+        self.datas = data
+#         self.datas = train_data
+        self.s_transform = source_transform
+        self.t_transform = target_transform
+    def __getitem__(self, index):
+        data = self.datas[index]
+        img = data['img'].numpy()
+        mask = data['mask'][:,:,None].byte().numpy()
+        img = self.s_transform(img)
+        mask = self.t_transform(mask)
+        return img, mask
+    def __len__(self):
+        return len(self.datas)
+s_trans = tsf.Compose([
+    tsf.ToPILImage(),
+    tsf.Resize((128,128)),
+    tsf.ToTensor(),
+    tsf.Normalize(mean = [0.5,0.5,0.5],std = [0.5,0.5,0.5])
+]
+)
+t_trans = tsf.Compose([
+    tsf.ToPILImage(),
+    tsf.Resize((128,128),interpolation=PIL.Image.NEAREST),
+    tsf.ToTensor(),]
+)
+dataset = Dataset(train_data,s_trans,t_trans)
+dataloader = t.utils.data.DataLoader(dataset,num_workers=2,batch_size=4)
+
+
+# In[5]:
+
+
+img,mask = dataset[12]
+plt.subplot(121)
+plt.imshow(img.permute(1,2,0).numpy()*0.5+0.5)
+plt.subplot(122)
+plt.imshow(mask[0].numpy())
+
+
+# ## Model: UNet
+
+# In[6]:
+
+
+# sub-parts of the U-Net model
+
+from torch import nn
+import torch.nn.functional as F
+
+
+class double_conv(nn.Module):
+    '''(conv => BN => ReLU) * 2'''
+    def __init__(self, in_ch, out_ch):
+        super(double_conv, self).__init__()
+        self.conv = nn.Sequential(
+            nn.Conv2d(in_ch, out_ch, 3, padding=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(out_ch, out_ch, 3, padding=1),
+            nn.BatchNorm2d(out_ch),
+            nn.ReLU(inplace=True)
         )
 
-figure = dict(data = data, layout = layout)
-iplot(figure)
+    def forward(self, x):
+        x = self.conv(x)
+        return x
 
 
-# UFO Reports by Year
-# -------------------
-# Have reports of UFO sightings increased, decreased, or remained constant in the past century?
+class inconv(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(inconv, self).__init__()
+        self.conv = double_conv(in_ch, out_ch)
 
-# In[ ]:
-
-
-# UFO sightings per year
-ufo_peryear = np.asarray(ufo_data[ufo_data.year > 0].groupby('year').year.count())
-# UFO sightings in 2014 estimated, data published in June 2014
-ufo_peryear[-1] = ufo_peryear[-1] * 3
-
-ufo_years = np.asarray(ufo_data[ufo_data.year > 0].year.unique())
-
-trace = [go.Scatter(
-         x = ufo_years,
-         y = ufo_peryear,
-         mode = 'lines',
-         line = dict(
-             color = 'rgb(0, 163, 81)',
-             width = 3)
-         )]
-
-layout = go.Layout(
-         title = 'UFO Reports by Year in United States (1910-2014)',
-         xaxis = dict(
-             rangeslider = dict(thickness = 0.05),
-             showline = True,
-             showgrid = False
-         ),
-         yaxis = dict(
-             range = [0, 7000],
-             showline = True,
-             showgrid = False)
-         )
-
-figure = dict(data = trace, layout = layout)
-iplot(figure)
+    def forward(self, x):
+        x = self.conv(x)
+        return x
 
 
-# Reports of UFO sightings have skyrocketed in the past twenty years — rising from less than 1,000 in 1995 to more than 6,000 in 2012, 2013, and 2014 (estimated). Have more UFOs been sighted or have more UFO sightings been reported?
-# 
-# The NUFORC has collected UFO data from a phone hotline since 1974 and an online form since 1998. Could the availability of an online form be related to the dramatic increase in reported UFO sightings?
-
-# UFO Reports by State
-# -----------------------
-# Which states have reported the most UFO sightings in the past century?
-
-# In[ ]:
-
-
-# UFO sightings per state
-ufo_perstate = np.asarray(ufo_data.groupby('state').state.count())
-
-ufo_scale = [[0, 'rgb(229, 249, 239)'], [1, 'rgb(0, 163, 81)']]
-
-data = [dict(
-        type = 'choropleth',
-        autocolorscale = False,
-        colorscale = ufo_scale,
-        showscale = False,
-        locations = us_states,
-        locationmode = 'USA-states',
-        z = ufo_perstate,
-        marker = dict(
-            line = dict(
-                color = 'rgb(255, 255, 255)',
-                width = 2)
-            )
-        )]
-
-layout = dict(
-         title = 'UFO Reports by State in United States (1910-2014)',
-         geo = dict(
-             scope = 'usa',
-             projection = dict(type = 'albers usa'),
-             countrycolor = 'rgb(255, 255, 255)',
-             showlakes = True,
-             lakecolor = 'rgb(255, 255, 255)')
+class down(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(down, self).__init__()
+        self.mpconv = nn.Sequential(
+            nn.MaxPool2d(2),
+            double_conv(in_ch, out_ch)
         )
 
-figure = dict(data = data, layout = layout)
-iplot(figure)
+    def forward(self, x):
+        x = self.mpconv(x)
+        return x
 
 
-# The states with the highest populations — California, Texas, and Florida — reported the most UFO sightings.
+class up(nn.Module):
+    def __init__(self, in_ch, out_ch, bilinear=True):
+        super(up, self).__init__()
 
-# UFO Reports per Capita
-# ----------------------
-# Which states have reported the most UFO sightings given their population?
+        #  would be a nice idea if the upsampling could be learned too,
+        #  but my machine do not have enough memory to handle all those weights
+        if bilinear:
+            self.up = nn.Upsample(scale_factor=2)
+        else:
+            self.up = nn.ConvTranspose2d(in_ch, out_ch, 2, stride=2)
 
-# In[ ]:
+        self.conv = double_conv(in_ch, out_ch)
 
-
-# state population estimates for July 2015 from US Census Bureau
-state_population = np.asarray([738432, 4858979, 2978204, 6828065, 39144818, 5456574,
-                               3590886, 672228, 945934, 20271272, 10214860, 1431603,
-                               3123899, 1654930, 12859995, 6619680, 2911641, 4425092,
-                               4670724, 6794422, 6006401, 1329328, 9922576, 5489594,
-                               6083672, 2992333, 1032949, 10042802, 756927, 1896190,
-                               1330608, 8958013, 2085109, 2890845, 19795791, 11613423,
-                               3911338, 4028977, 12802503, 1056298, 4896146, 858469,
-                               6600299, 27469114, 2995919, 8382993, 626042, 7170351,
-                               5771337, 1844128, 586107])
-
-# UFO sightings per 100,000 people in state
-ufo_percapita = np.round(ufo_perstate / state_population * 100000, 2)
-
-data = [dict(
-        type = 'choropleth',
-        autocolorscale = False,
-        colorscale = ufo_scale,
-        showscale = False,
-        locations = us_states,
-        locationmode = 'USA-states',
-        z = ufo_percapita,
-        marker = dict(
-            line = dict(
-                color = 'rgb(255, 255, 255)',
-                width = 2)
-            )
-        )]
-
-layout = dict(
-         title = 'UFO Reports per 100,000 People in United States (1910-2014)',
-         geo = dict(
-             scope = 'usa',
-             projection = dict(type = 'albers usa'),
-             countrycolor = 'rgb(255, 255, 255)',
-             showlakes = True,
-             lakecolor = 'rgb(255, 255, 255)')
-        )
-
-figure = dict(data = data, layout = layout)
-iplot(figure)
+    def forward(self, x1, x2):
+        x1 = self.up(x1)
+        diffX = x1.size()[2] - x2.size()[2]
+        diffY = x1.size()[3] - x2.size()[3]
+        x2 = F.pad(x2, (diffX // 2, int(diffX / 2),
+                        diffY // 2, int(diffY / 2)))
+        x = t.cat([x2, x1], dim=1)
+        x = self.conv(x)
+        return x
 
 
-# Why have states in the Northeast and West on the border with Canada reported the most UFO sightings per person?
+class outconv(nn.Module):
+    def __init__(self, in_ch, out_ch):
+        super(outconv, self).__init__()
+        self.conv = nn.Conv2d(in_ch, out_ch, 1)
 
-# UFO Reports by Area
-# --------------------
-# Which states have reported the most UFO sightings given their size?
-
-# In[ ]:
-
-
-# state land areas in square kilometeres from US Census Bureau
-state_area = np.asarray([1477953, 131171, 134771, 294207, 403466, 268431, 12542, 158,
-                         5047, 138887, 148959, 16635, 144669, 214045, 143793, 92789, 
-                         211754, 102269, 111898, 20202, 25142, 79883, 146435, 206232,
-                         178040, 121531, 376962, 125920, 178711, 198974, 23187, 19047,
-                         314161, 284332, 122057, 105829, 177660, 248608, 115883, 2678,
-                         77857, 196350, 106798, 676587, 212818, 102279, 23871, 172119,
-                         140268, 62259, 251470])
-
-# UFO sightings per 1,000 square kilometers in state
-ufo_perarea = np.round(ufo_perstate / state_area * 1000, 2)
-# District of Columbia outlier (1 UFO sighting per square kilometer) adjusted
-ufo_perarea[7] = round(ufo_perarea[7] / 6, 2)
-
-data = [dict(
-        type = 'choropleth',
-        autocolorscale = False,
-        colorscale = ufo_scale,
-        showscale = False,
-        locations = us_states,
-        locationmode = 'USA-states',
-        z = ufo_perarea,
-        marker = dict(
-            line = dict(
-                color = 'rgb(255, 255, 255)',
-                width = 2)
-            )
-        )]
-
-layout = dict(
-         title = 'UFO Reports per 1,000 Square Kilometers in United States (1910-2014)',
-         geo = dict(
-             scope = 'usa',
-             projection = dict(type = 'albers usa'),
-             countrycolor = 'rgb(255, 255, 255)',
-             showlakes = True,
-             lakecolor = 'rgb(255, 255, 255)')
-        )
-
-figure = dict(data = data, layout = layout)
-iplot(figure)
+    def forward(self, x):
+        x = self.conv(x)
+        return x
 
 
-# The states with the highest population densities — New Jersey, Massachusetts, Connecticut, and Rhode Island — reported the most UFO sightings per square kilometer.
+class UNet(nn.Module):
+    def __init__(self, n_channels, n_classes):
+        super(UNet, self).__init__()
+        self.inc = inconv(n_channels, 64)
+        self.down1 = down(64, 128)
+        self.down2 = down(128, 256)
+        self.down3 = down(256, 512)
+        self.down4 = down(512, 512)
+        self.up1 = up(1024, 256)
+        self.up2 = up(512, 128)
+        self.up3 = up(256, 64)
+        self.up4 = up(128, 64)
+        self.outc = outconv(64, n_classes)
+
+    def forward(self, x):
+        x1 = self.inc(x)
+        x2 = self.down1(x1)
+        x3 = self.down2(x2)
+        x4 = self.down3(x3)
+        x5 = self.down4(x4)
+        x = self.up1(x5, x4)
+        x = self.up2(x, x3)
+        x = self.up3(x, x2)
+        x = self.up4(x, x1)
+        x = self.outc(x)
+        x = t.nn.functional.sigmoid(x)
+        return x
+
+
+# ## Loss definition
+# Use Soft Dice Loss
+
+# In[7]:
+
+
+def soft_dice_loss(inputs, targets):
+        num = targets.size(0)
+        m1  = inputs.view(num,-1)
+        m2  = targets.view(num,-1)
+        intersection = (m1 * m2)
+        score = 2. * (intersection.sum(1)+1) / (m1.sum(1) + m2.sum(1)+1)
+        score = 1 - score.sum()/num
+        return score
+
+
+# ## Train
+# Train it within **1 minutes** with GPU
+
+# In[11]:
+
+
+model = UNet(3,1)#.cuda()
+optimizer = t.optim.Adam(model.parameters(),lr = 1e-3)
+
+for epoch in range(2):
+    for x_train, y_train  in tqdm(dataloader):
+        x_train = t.autograd.Variable(x_train)#.cuda())
+        y_train = t.autograd.Variable(y_train)#.cuda())
+        optimizer.zero_grad()
+        o = model(x_train)
+        loss = soft_dice_loss(o, y_train)
+        loss.backward()
+        optimizer.step()
+
+
+# ## Test
+
+# In[16]:
+
+
+class TestDataset():
+    def __init__(self,path,source_transform):
+        self.datas = t.load(path)
+        self.s_transform = source_transform
+    def __getitem__(self, index):
+        data = self.datas[index]
+        img = data['img'].numpy()
+        img = self.s_transform(img)
+        return img
+    def __len__(self):
+        return len(self.datas)
+
+testset = TestDataset(TEST_PATH, s_trans)
+testdataloader = t.utils.data.DataLoader(testset,num_workers=2,batch_size=2)
+
+
+# In[17]:
+
+
+model = model.eval()
+for data in testdataloader:
+    data = t.autograd.Variable(data, volatile=True)#.cuda())
+    o = model(data)
+    break
+
+
+# In[18]:
+
+
+tm=o[1][0].data.cpu().numpy()
+plt.subplot(121)
+plt.imshow(data[1].data.cpu().permute(1,2,0).numpy()*0.5+0.5)
+plt.subplot(122)
+plt.imshow(tm)
+

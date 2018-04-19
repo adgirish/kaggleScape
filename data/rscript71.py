@@ -1,121 +1,289 @@
-import mxnet as mx
-import xgboost as xgb
+# Starter code for multiple regressors implemented by Leandro dos Santos Coelho
+# Source code based on Forecasting Favorites, 1owl
+# https://www.kaggle.com/the1owl/forecasting-favorites , version 10
+
+
 import numpy as np
-import cv2
-from multiprocessing import Pool
-import os
-from sklearn import cross_validation
-import joblib
+import pandas as pd
+from sklearn import preprocessing, linear_model, metrics
+import gc; gc.enable()
+import random
+
+# classical tree approach
+from sklearn.tree import DecisionTreeRegressor
+
+# ensemble approaches
+from sklearn.ensemble import ExtraTreesRegressor
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.ensemble import GradientBoostingRegressor
+
+# linear approaches
+from sklearn.linear_model import ElasticNetCV, LassoLarsCV
+from sklearn.linear_model import Ridge, HuberRegressor
+
+import time
+
+np.random.seed(757)
+
+# store the total processing time
+start_time = time.time()
+tcurrent   = start_time
+
+print('Multiple regressors\n')
+print('Datasets reading')
 
 
-def get_extractor():
-    model = mx.model.FeedForward.load('InceptionBN/Inception', 9, ctx=mx.cpu(),
-                                      numpy_batch_size=1)
-
-    internals = model.symbol.get_internals()
-    fea_symbol = internals["global_pool_output"]
-
-    # if you have GPU, then change ctx=mx.gpu()
-    feature_extractor = mx.model.FeedForward(ctx=mx.cpu(), symbol=fea_symbol,
-                                             numpy_batch_size=4,
-                                             arg_params=model.arg_params, aux_params=model.aux_params,
-                                             allow_extra_params=True)
-
-    return feature_extractor
+# read datasets
+dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8', 'onpromotion':str}
+data = {
+    'tra': pd.read_csv('../input/train.csv', dtype=dtypes, parse_dates=['date']),
+    'tes': pd.read_csv('../input/test.csv', dtype=dtypes, parse_dates=['date']),
+    'ite': pd.read_csv('../input/items.csv'),
+    'sto': pd.read_csv('../input/stores.csv'),
+    'trn': pd.read_csv('../input/transactions.csv', parse_dates=['date']),
+    'hol': pd.read_csv('../input/holidays_events.csv', dtype={'transferred':str}, parse_dates=['date']),
+    'oil': pd.read_csv('../input/oil.csv', parse_dates=['date']),
+    }
 
 
-def preprocess_image(path):
-    img = cv2.imread(path)
-    if img is None:
-        return np.zeros((1, 3, 224, 224))
-    img = img[:, :, [2, 1, 0]]
+# dataset processing
+print('Datasets processing')
 
-    short_egde = min(img.shape[:2])
-    yy = int((img.shape[0] - short_egde) / 2)
-    xx = int((img.shape[1] - short_egde) / 2)
-    img = img[yy: yy + short_egde, xx: xx + short_egde]
+train = data['tra'][(data['tra']['date'].dt.month == 8) & (data['tra']['date'].dt.day > 15)]
+del data['tra']; gc.collect();
+target = train['unit_sales'].values
+target[target < 0.] = 0.001
+train['unit_sales'] = np.log1p(target)
 
-    img = cv2.resize(img, (224, 224))
+def df_lbl_enc(df):
+    for c in df.columns:
+        if df[c].dtype == 'object':
+            lbl = preprocessing.LabelEncoder()
+            df[c] = lbl.fit_transform(df[c])
+            print(c)
+    return df
 
-    img = np.swapaxes(img, 0, 2)
-    img = np.swapaxes(img, 1, 2).astype(np.float32)
+def df_transform(df):
+    df['date'] = pd.to_datetime(df['date'])
+    df['yea'] = df['date'].dt.year
+    df['mon'] = df['date'].dt.month
+    df['day'] = df['date'].dt.day
+    df['date'] = df['date'].dt.dayofweek
+    df['onpromotion'] = df['onpromotion'].map({'False': 0, 'True': 1})
+    df['perishable'] = df['perishable'].map({0:1.0, 1:1.25})
+    df = df.fillna(-1)
+    return df
 
-    img -= 117
-    return img.reshape([1, 3, 224, 224])
+data['ite'] = df_lbl_enc(data['ite'])
+train = pd.merge(train, data['ite'], how='left', on=['item_nbr'])
+test = pd.merge(data['tes'], data['ite'], how='left', on=['item_nbr'])
+del data['tes']; gc.collect();
+del data['ite']; gc.collect();
+
+train = pd.merge(train, data['trn'], how='left', on=['date','store_nbr'])
+test = pd.merge(test, data['trn'], how='left', on=['date','store_nbr'])
+del data['trn']; gc.collect();
+target = train['transactions'].values
+target[target < 0.] = 0.001
+train['transactions'] = np.log1p(target)
+
+data['sto'] = df_lbl_enc(data['sto'])
+train = pd.merge(train, data['sto'], how='left', on=['store_nbr'])
+test = pd.merge(test, data['sto'], how='left', on=['store_nbr'])
+del data['sto']; gc.collect();
+
+data['hol'] = data['hol'][data['hol']['locale'] == 'National'][['date','transferred']]
+data['hol']['transferred'] = data['hol']['transferred'].map({'False': 0, 'True': 1})
+train = pd.merge(train, data['hol'], how='left', on=['date'])
+test = pd.merge(test, data['hol'], how='left', on=['date'])
+del data['hol']; gc.collect();
+
+train = pd.merge(train, data['oil'], how='left', on=['date'])
+test = pd.merge(test, data['oil'], how='left', on=['date'])
+del data['oil']; gc.collect();
+
+train = df_transform(train)
+test = df_transform(test)
+col = [c for c in train if c not in ['id', 'unit_sales','perishable','transactions']]
+
+x1 = train[(train['yea'] != 2016)]
+x2 = train[(train['yea'] == 2016)]
+del train; gc.collect();
+
+y1 = x1['transactions'].values
+y2 = x2['transactions'].values
+
+def NWRMSLE(y, pred, w):
+    return metrics.mean_squared_error(y, pred, sample_weight=w)**0.5
 
 
-def extract_features():
-    os.mkdir('feats')
-    folders = sorted(os.listdir('train'))
+#------------------- forecasting based on multiple regressors (r) models
     
-    print(folders)
-    for n, dir in enumerate(folders):
-        folder = os.path.join('train', dir)
-        paths = sorted([os.path.join(folder, fn) for fn in os.listdir(folder)])
+print('\nRunning the basic regressors ...')    
 
-        pool = Pool(20)
-        img_samples = pool.map(preprocess_image, paths)
-        samples = np.vstack(img_samples)
+number_regressors_to_test = 12
 
-        model = get_extractor()
-        global_pooling_feature = model.predict(samples)
-        np.save(os.path.join('feats', 'feats%s' % n), global_pooling_feature)
+for method in range(1, number_regressors_to_test+1):
+    
+    # set the seed to generate random numbers
+    ra1 = round(method + 32*method + 92*method) 
+    np.random.seed(ra1)
+    
+    
+    print('\nmethod = ', method)
+    
+    if (method==1):
+        print('Linear model (classical)')
+        str_method = 'Linear model'    
+        r = linear_model.LinearRegression(n_jobs=-1)
+
+    if (method==2):
+        print('Extra trees 01')
+        str_method = 'ExtraTrees01'
+        r = ExtraTreesRegressor(n_estimators=105, max_depth=6, n_jobs=-1, 
+                                 random_state=ra1, verbose=0, warm_start=True)
+
+    if (method==3):
+        print('Extra trees 02')
+        str_method = 'ExtraTrees02'
+        r = ExtraTreesRegressor(n_estimators=80, max_depth=3, n_jobs=-1, 
+                                 random_state=ra1, verbose=0, warm_start=True)
+
+    if (method==4):
+        print('Random forest 01')
+        str_method = 'RandomForest01'
+        r = RandomForestRegressor(n_estimators=80 , max_depth=5, n_jobs=-1, 
+                                   random_state=ra1, verbose=0, warm_start=True)
+
+    if (method==5):
+        print('Random forest 02')
+        str_method = 'RandomForest02'
+        r = RandomForestRegressor(n_estimators=90, max_depth=4, n_jobs=-1, 
+                                   random_state=ra1, verbose=0, warm_start=True)
+        
+    if (method==6):
+        print('ElasticNet')
+        str_method = 'Elastic Net'
+        r = ElasticNetCV()
+        
+    if (method==7):
+        print('GradientBoosting 01')
+        str_method = 'GradientBoosting01'
+        r = GradientBoostingRegressor(n_estimators=80, max_depth=5, learning_rate = 0.05, 
+                                       random_state=ra1, verbose=0, warm_start=True,
+                                       subsample= 0.6, max_features = 0.6)
+    if (method==8):
+        print('GradientBoosting 02')
+        str_method = 'GradientBoosting02'
+        r = GradientBoostingRegressor(n_estimators=90, max_depth=4, learning_rate = 0.05, 
+                                       random_state=ra1, verbose=0, warm_start=True,
+                                       subsample= 0.8, max_features = 0.5)        
+                                       
+    if (method==9):
+        print('GradientBoosting 03')
+        str_method = 'GradientBoosting03'
+        r = GradientBoostingRegressor(n_estimators=110, max_depth=3, learning_rate = 0.05, 
+                                       random_state=ra1, verbose=0, warm_start=True,
+                                       subsample= 0.85, max_features = 0.74)   
+                                       
+    if (method==10):
+        print('Decision Tree')
+        str_method = 'DecisionTree'
+        r = DecisionTreeRegressor(max_depth=3)
+
+    if (method==11):
+        print('Ridge')
+        str_method = 'Ridge'
+        r = Ridge()
+        
+    if (method==12):
+        print('Huber')
+        str_method = 'Huber'
+        r = HuberRegressor(fit_intercept=True, alpha=0.065, max_iter=160, epsilon=1.2)
+        
+        
+    r.fit(x1[col], y1)
 
 
-def train_xgb():
-    x, y = [], []
-    for i in range(8):
-        feats = np.load('feats/feats%s.npy' % i)
-        print(feats.shape)
-        feats = feats.reshape((feats.shape[0], 1024))
-        x.append(feats)
-        y += [i] * feats.shape[0]
+    a1 = NWRMSLE(y2, r.predict(x2[col]), x2['perishable'])
+    # part of the output file name
+    N1 = str(a1)
+    
+    test['transactions'] = r.predict(test[col])
+    test['transactions'] = test['transactions'].clip(lower=0.+1e-15)
 
-    x = np.vstack(x)
-    y = np.array(y)
-
-    print(x.shape, y.shape)
-    x_train, x_test, y_train, y_test = cross_validation.train_test_split(x, y, random_state=42, stratify=y,
-                                                                         test_size=0.20)
-
-    clf = xgb.XGBClassifier(max_depth=5,
-                            n_estimators=500,
-                            learning_rate=0.1,
-                            nthread=-1,
-                            objective='multi:softmax',
-                            seed=42)
-
-    clf.fit(x_train, y_train, early_stopping_rounds=30, eval_metric="mlogloss",
-            eval_set=[(x_test, y_test)])
-
-    joblib.dump(clf, "xgb_model")
+    col = [c for c in x1 if c not in ['id', 'unit_sales','perishable']]
+    y1 = x1['unit_sales'].values
+    y2 = x2['unit_sales'].values
 
 
-def predict():
-    feats = np.load('feats/feats%s.npy' % 8)
-    feats = feats.reshape((feats.shape[0], 1024))
+    # set a new seed to generate random numbers
+    ra2 = round(method + 57*method + 182*method) 
+    np.random.seed(ra2)
 
-    clf = joblib.load("xgb_model")
-    pred = clf.predict_proba(feats)
+    if (method==1):
+        r = linear_model.LinearRegression(n_jobs=-1)
+ 
+    if (method==2):
+        r = ExtraTreesRegressor(n_estimators=60, max_depth=6, n_jobs=-1, 
+                                 random_state=ra2, verbose=0, warm_start=True)
 
-    print(pred.shape)
+    if (method==3):
+        r = ExtraTreesRegressor(n_estimators=90, max_depth=2, n_jobs=-1, 
+                                 random_state=ra2, verbose=0, warm_start=True)
 
-    np.save('preds', pred)
+    if (method==4):
+        r = RandomForestRegressor(n_estimators=80, max_depth=3, n_jobs=-1, 
+                                   random_state=ra2, verbose=0, warm_start=True)
+
+    if (method==5):
+        r = RandomForestRegressor(n_estimators=80, max_depth=5, n_jobs=-1, 
+                                   random_state=ra2, verbose=0, warm_start=True)
+
+    if (method==6):
+        r = ElasticNetCV()
+        
+    if (method==7):
+        r = GradientBoostingRegressor(n_estimators=90, max_depth=3, learning_rate = 0.05, 
+                                       random_state=ra2, verbose=0, warm_start=True,
+                                       subsample= 0.6, max_features = 0.2)
+    if (method==8):
+        r = GradientBoostingRegressor(n_estimators=90, max_depth=4, learning_rate = 0.055, 
+                                       random_state=ra2, verbose=0, warm_start=True,
+                                       subsample= 0.8, max_features = 0.3)
+                                       
+    if (method==9):
+        r = GradientBoostingRegressor(n_estimators=110, max_depth=2, learning_rate = 0.05, 
+                                       random_state=ra2, verbose=0, warm_start=True,
+                                       subsample= 0.7, max_features = 0.5)    
+                        
+    if (method==10):
+        r = DecisionTreeRegressor(max_depth=4)
+        
+    if (method==11):
+        r = Ridge() 
+        
+    if (method==12):
+        r = HuberRegressor(fit_intercept=True, alpha=0.075, max_iter=100, epsilon=1.3)
+        
+
+    r.fit(x1[col], y1)
+    
+    a2 = NWRMSLE(y2, r.predict(x2[col]), x2['perishable'])
+    # part of the output file name
+    N2 = str(a2)
+
+    print('Performance: NWRMSLE(1) = ',a1,'NWRMSLE(2) = ',a2)
+
+    test['unit_sales'] = r.predict(test[col])
+    cut = 0.+1e-13 # 0.+1e-15
+    test['unit_sales'] = (np.exp(test['unit_sales']) - 1).clip(lower=cut)
+
+    output_file = 'sub v12 ' + str(str_method) + ' method ' + str(method) + N1 + ' - ' + N2 + '.csv'
+ 
+    test[['id','unit_sales']].to_csv(output_file, index=False, float_format='%.2f')
 
 
-def make_submite():
-    preds = np.load('preds.npy')
-    paths = sorted([fn for fn in os.listdir('train/test')])
-
-    fw_out = open('submission_0.csv', 'w')
-    fw_out.write('image,ALB,BET,DOL,LAG,NoF,OTHER,SHARK,YFT\n')
-    for i, img in enumerate(paths):
-        pred = ['%.6f' % p for p in preds[i, :]]
-        fw_out.write('%s,%s\n' % (img, ','.join(pred)))
-
-
-if __name__ == '__main__':
-    extract_features()
-    train_xgb()
-    predict()
-    make_submite()
+print( "\nFinished ...")
+nm=(time.time() - start_time)/60
+print ("Total time %s min" % nm)

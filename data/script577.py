@@ -1,602 +1,1156 @@
 
 # coding: utf-8
 
-# ###Airbnb New User Bookings Competition
-# *Author*: **Sandro Vega Pons** (sv.pons@gmail.com)
+# Thank you for opening this script!
 # 
-# The main 3 points of this notebook are:
+# I have made all efforts to document each and every step involved in the prediction process so that this notebook acts as a good starting point for new Kagglers and new machine learning enthusiasts.
 # 
-#  1. Source code of the ensemble techniques I used in my solution.
-#  2. Example of how to use them in a 3-layer learning architecture.
-#  3. Analysis of the performance of the methods on problems with different number of classes. 
-#     Comparison with stack generalization based on LogisticRegression (sklearn implementation) and GradientBoosting (XGBoost implementation).
-
-# # 1- Ensemble techniques based on scipy.optimize package. 
+# Please **upvote** this kernel so that it reaches the top of the chart and is easily locatable by new users. Your comments on how we can improve this kernel is welcome. Thanks.
 # 
-# ## Source code of the two ensemble techniques I used in my solution (EN_optA and EN_optB). 
-# Given a set of predictions (e.g. predictions obtained with different or the same classifier with different parameters values),
-# the two ensemblers define two different linear problems and find the optimal coefficients that minimize an objective function 
-# (in this case the multi-class logloss).
+# My other exploratory studies can be accessed here :
+# https://www.kaggle.com/sharmasanthosh/kernels
+# ***
+# ## Data statistics
+# * Shape
+# * Peek
+# * Description
+# * Skew
 # 
-# Useful ideas were taken from this [discussion](https://www.kaggle.com/c/otto-group-product-classification-challenge/forums/t/13868/ensamble-weights) 
-# on the *Otto Group Product Classification Challenge* forum. 
-
-# In[ ]:
-
-
-import numpy as  np
-from sklearn.metrics import log_loss
-from sklearn.base import BaseEstimator
-from scipy.optimize import minimize
-
-
-# ## First ensemble technique (EN_optA)
-# Given a set of predictions $X_1, X_2, ..., X_n$,  it computes the optimal set of weights
-# $w_1, w_2, ..., w_n$; such that minimizes $log\_loss(y_T, y_E)$, 
-# where $y_E = X_1*w_1 + X_2*w_2 +...+ X_n*w_n$ and $y_T$ is the true solution.
-
-# In[ ]:
-
-
-def objf_ens_optA(w, Xs, y, n_class=12):
-    """
-    Function to be minimized in the EN_optA ensembler.
-    
-    Parameters:
-    ----------
-    w: array-like, shape=(n_preds)
-       Candidate solution to the optimization problem (vector of weights).
-    Xs: list of predictions to combine
-       Each prediction is the solution of an individual classifier and has a
-       shape=(n_samples, n_classes).
-    y: array-like sahpe=(n_samples,)
-       Class labels
-    n_class: int
-       Number of classes in the problem (12 in Airbnb competition)
-    
-    Return:
-    ------
-    score: Score of the candidate solution.
-    """
-    w = np.abs(w)
-    sol = np.zeros(Xs[0].shape)
-    for i in range(len(w)):
-        sol += Xs[i] * w[i]
-    #Using log-loss as objective function (different objective functions can be used here). 
-    score = log_loss(y, sol)   
-    return score
-        
-
-class EN_optA(BaseEstimator):
-    """
-    Given a set of predictions $X_1, X_2, ..., X_n$,  it computes the optimal set of weights
-    $w_1, w_2, ..., w_n$; such that minimizes $log\_loss(y_T, y_E)$, 
-    where $y_E = X_1*w_1 + X_2*w_2 +...+ X_n*w_n$ and $y_T$ is the true solution.
-    """
-    def __init__(self, n_class=12):
-        super(EN_optA, self).__init__()
-        self.n_class = n_class
-        
-    def fit(self, X, y):
-        """
-        Learn the optimal weights by solving an optimization problem.
-        
-        Parameters:
-        ----------
-        Xs: list of predictions to be ensembled
-           Each prediction is the solution of an individual classifier and has 
-           shape=(n_samples, n_classes).
-        y: array-like
-           Class labels
-        """
-        Xs = np.hsplit(X, X.shape[1]/self.n_class)
-        #Initial solution has equal weight for all individual predictions.
-        x0 = np.ones(len(Xs)) / float(len(Xs)) 
-        #Weights must be bounded in [0, 1]
-        bounds = [(0,1)]*len(x0)   
-        #All weights must sum to 1
-        cons = ({'type':'eq','fun':lambda w: 1-sum(w)})
-        #Calling the solver
-        res = minimize(objf_ens_optA, x0, args=(Xs, y, self.n_class), 
-                       method='SLSQP', 
-                       bounds=bounds,
-                       constraints=cons
-                       )
-        self.w = res.x
-        return self
-    
-    def predict_proba(self, X):
-        """
-        Use the weights learned in training to predict class probabilities.
-        
-        Parameters:
-        ----------
-        Xs: list of predictions to be blended.
-            Each prediction is the solution of an individual classifier and has 
-            shape=(n_samples, n_classes).
-            
-        Return:
-        ------
-        y_pred: array_like, shape=(n_samples, n_class)
-                The blended prediction.
-        """
-        Xs = np.hsplit(X, X.shape[1]/self.n_class)
-        y_pred = np.zeros(Xs[0].shape)
-        for i in range(len(self.w)):
-            y_pred += Xs[i] * self.w[i] 
-        return y_pred  
-
-
-# ## Second ensemble technique (EN_optB)
-# Given a set of predictions $X_1, X_2, ..., X_n$, where each $X_i$ has
-# $m=12$ clases, i.e. $X_i = X_{i1}, X_{i2},...,X_{im}$. The algorithm finds the optimal 
-# set of weights $w_{11}, w_{12}, ..., w_{nm}$; such that minimizes 
-# $log\_loss(y_T, y_E)$, where $y_E = X_{11}*w_{11} +... + X_{21}*w_{21} + ... + X_{nm}*w_{nm}$ 
-# and and $y_T$ is the true solution.
-
-# In[ ]:
-
-
-def objf_ens_optB(w, Xs, y, n_class=12):
-    """
-    Function to be minimized in the EN_optB ensembler.
-    
-    Parameters:
-    ----------
-    w: array-like, shape=(n_preds)
-       Candidate solution to the optimization problem (vector of weights).
-    Xs: list of predictions to combine
-       Each prediction is the solution of an individual classifier and has a
-       shape=(n_samples, n_classes).
-    y: array-like sahpe=(n_samples,)
-       Class labels
-    n_class: int
-       Number of classes in the problem, i.e. = 12
-    
-    Return:
-    ------
-    score: Score of the candidate solution.
-    """
-    #Constraining the weights for each class to sum up to 1.
-    #This constraint can be defined in the scipy.minimize function, but doing 
-    #it here gives more flexibility to the scipy.minimize function 
-    #(e.g. more solvers are allowed).
-    w_range = np.arange(len(w))%n_class 
-    for i in range(n_class): 
-        w[w_range==i] = w[w_range==i] / np.sum(w[w_range==i])
-        
-    sol = np.zeros(Xs[0].shape)
-    for i in range(len(w)):
-        sol[:, i % n_class] += Xs[int(i / n_class)][:, i % n_class] * w[i] 
-        
-    #Using log-loss as objective function (different objective functions can be used here). 
-    score = log_loss(y, sol)   
-    return score
-    
-
-class EN_optB(BaseEstimator):
-    """
-    Given a set of predictions $X_1, X_2, ..., X_n$, where each $X_i$ has
-    $m=12$ clases, i.e. $X_i = X_{i1}, X_{i2},...,X_{im}$. The algorithm finds the optimal 
-    set of weights $w_{11}, w_{12}, ..., w_{nm}$; such that minimizes 
-    $log\_loss(y_T, y_E)$, where $y_E = X_{11}*w_{11} +... + X_{21}*w_{21} + ... 
-    + X_{nm}*w_{nm}$ and and $y_T$ is the true solution.
-    """
-    def __init__(self, n_class=12):
-        super(EN_optB, self).__init__()
-        self.n_class = n_class
-        
-    def fit(self, X, y):
-        """
-        Learn the optimal weights by solving an optimization problem.
-        
-        Parameters:
-        ----------
-        Xs: list of predictions to be ensembled
-           Each prediction is the solution of an individual classifier and has 
-           shape=(n_samples, n_classes).
-        y: array-like
-           Class labels
-        """
-        Xs = np.hsplit(X, X.shape[1]/self.n_class)
-        #Initial solution has equal weight for all individual predictions.
-        x0 = np.ones(self.n_class * len(Xs)) / float(len(Xs)) 
-        #Weights must be bounded in [0, 1]
-        bounds = [(0,1)]*len(x0)   
-        #Calling the solver (constraints are directly defined in the objective
-        #function)
-        res = minimize(objf_ens_optB, x0, args=(Xs, y, self.n_class), 
-                       method='L-BFGS-B', 
-                       bounds=bounds, 
-                       )
-        self.w = res.x
-        return self
-    
-    def predict_proba(self, X):
-        """
-        Use the weights learned in training to predict class probabilities.
-        
-        Parameters:
-        ----------
-        Xs: list of predictions to be ensembled
-            Each prediction is the solution of an individual classifier and has 
-            shape=(n_samples, n_classes).
-            
-        Return:
-        ------
-        y_pred: array_like, shape=(n_samples, n_class)
-                The ensembled prediction.
-        """
-        Xs = np.hsplit(X, X.shape[1]/self.n_class)
-        y_pred = np.zeros(Xs[0].shape)
-        for i in range(len(self.w)):
-            y_pred[:, i % self.n_class] +=                    Xs[int(i / self.n_class)][:, i % self.n_class] * self.w[i]  
-        return y_pred      
-
-
-# # 2- How to use EN_optA and EN_optB in a 3-layers classification architecture.
+# ## Transformation
+# * Correction of skew
 # 
-# Somehow similar 3-layers architectures have been previously used in Kaggle competitions
-# (e.g. [here](https://www.kaggle.com/c/otto-group-product-classification-challenge/forums/t/14335/1st-place-winner-solution-gilberto-titericz-stanislav-semenov))
+# ## Data Interaction
+# * Correlation
+# * Scatter plot
 # 
-# ### Data
-# For simplicity I am using here synthetic data instead of the original data from Airbnb competition. 
-# All the feature engineering step is avoided and it is also easier to play with the number of classes.
-# Moreover, it is easier to change the parameters of the data generation function to study the performance of 
-# the algorithms on different types of data.
+# ## Data Visualization
+# * Box and density plots
+# * Grouping of one hot encoded attributes
 # 
-# Once the data is generated it is splitted into:
+# ## Data Preparation
+# * One hot encoding of categorical data
+# * Test-train split
 # 
-# - training set: (X_train, y_train)
-# - validation set: (X_valid, y_valid)
-# - test set: (X_test, y_test)
+# ## Evaluation, prediction, and analysis
+# * Linear Regression (Linear algo)
+# * Ridge Regression (Linear algo)
+# * LASSO Linear Regression (Linear algo)
+# * Elastic Net Regression (Linear algo)
+# * KNN (non-linear algo)
+# * CART (non-linear algo)
+# * SVM (Non-linear algo)
+# * Bagged Decision Trees (Bagging)
+# * Random Forest (Bagging)
+# * Extra Trees (Bagging)
+# * AdaBoost (Boosting)
+# * Stochastic Gradient Boosting (Boosting)
+# * MLP (Deep Learning)
+# * XGBoost
 # 
-# ### Learning architecture
+# ## Make Predictions
+# ***
+
+# ## Load raw data:
 # 
-#  * First layer: I am using 6 classifiers from scikit-learn (Support_Vector_Machines, Logistic_Regression, 
-#    Random_Forest, Gradient_Boosting, Extra_Trees_Classifier, K_Nearest_Neighbors). All classifiers are used with 
-#    (almost) default parameters. At this level, many other classifiers can be used. 
-#    All classifiers are applied twice:
-#      1. Classifiers are trained on (X_train, y_train) and used to predict the class probabilities of (X_valid).
-#      2. Classifiers are trained on (X = (X_train + X_valid), y = (y_train + y_valid)) and used to predict 
-#         the class probabilities of (X_test)
-#  * Second layer: The predictions from the previous layer on X_valid are concatenated and used to create a new 
-#    training set (XV, y_valid). The predictions on X_test are concatenated to create a new test set (XT, y_test). 
-#    The two proposed ensemble methods (EN_optA and EN_optB) and their calibrated versions are trained on 
-#    (XV, y_valid) and used to predict the class probabilites of (XT).
-#  * Third layer: The four prediction from the previous layer are linearly combined using fixed weights.
-
-# In[ ]:
-
-
-from sklearn.datasets import make_classification
-from sklearn.linear_model import LogisticRegression
-from sklearn.ensemble import RandomForestClassifier, GradientBoostingClassifier, ExtraTreesClassifier
-from sklearn.svm import SVC
-from sklearn.neighbors import KNeighborsClassifier
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn.cross_validation import train_test_split
-from sklearn.linear_model import LogisticRegressionCV
-from xgboost.sklearn import XGBClassifier
-
-#fixing random state
-random_state=1
-
-
-# ## Generating dataset
-#     
-# Parameters can be changed to explore different types of synthetic data.
-
-# In[ ]:
-
-
-n_classes = 12  # Same number of classes as in Airbnb competition.
-data, labels = make_classification(n_samples=2000, n_features=100, 
-                                   n_informative=50, n_classes=n_classes, 
-                                   random_state=random_state)
-
-#Spliting data into train and test sets.
-X, X_test, y, y_test = train_test_split(data, labels, test_size=0.2, 
-                                        random_state=random_state)
-    
-#Spliting train data into training and validation sets.
-X_train, X_valid, y_train, y_valid = train_test_split(X, y, test_size=0.25, 
-                                                      random_state=random_state)
-
-print('Data shape:')
-print('X_train: %s, X_valid: %s, X_test: %s \n' %(X_train.shape, X_valid.shape, 
-                                                  X_test.shape))
-    
-
-
-# ## First layer (individual classifiers)
-# All classifiers are applied twice:
+# Information about all the attributes can be found here:
 # 
-#  - Training on (X_train, y_train) and predicting on (X_valid)
-#  - Training on (X, y) and predicting on (X_test)
-#     
-# You can add / remove classifiers or change parameter values to see the effect on final results.
+# https://www.kaggle.com/c/allstate-claims-severity/data
+# 
+# Learning: 
+# We need to predict the 'loss' based on the other attributes. Hence, this is a regression problem.
 
 # In[ ]:
 
 
-#Defining the classifiers
-clfs = {'LR'  : LogisticRegression(random_state=random_state), 
-        'SVM' : SVC(probability=True, random_state=random_state), 
-        'RF'  : RandomForestClassifier(n_estimators=100, n_jobs=-1, 
-                                       random_state=random_state), 
-        'GBM' : GradientBoostingClassifier(n_estimators=50, 
-                                           random_state=random_state), 
-        'ETC' : ExtraTreesClassifier(n_estimators=100, n_jobs=-1, 
-                                     random_state=random_state),
-        'KNN' : KNeighborsClassifier(n_neighbors=30)}
-    
-#predictions on the validation and test sets
-p_valid = []
-p_test = []
-   
-print('Performance of individual classifiers (1st layer) on X_test')   
-print('------------------------------------------------------------')
-   
-for nm, clf in clfs.items():
-    #First run. Training on (X_train, y_train) and predicting on X_valid.
-    clf.fit(X_train, y_train)
-    yv = clf.predict_proba(X_valid)
-    p_valid.append(yv)
-        
-    #Second run. Training on (X, y) and predicting on X_test.
-    clf.fit(X, y)
-    yt = clf.predict_proba(X_test)
-    p_test.append(yt)
-       
-    #Printing out the performance of the classifier
-    print('{:10s} {:2s} {:1.7f}'.format('%s: ' %(nm), 'logloss  =>', log_loss(y_test, yt)))
-print('')
+# Supress unnecessary warnings so that presentation looks clean
+import warnings
+warnings.filterwarnings('ignore')
+
+# Read raw data from the file
+
+import pandas #provides data structures to quickly analyze data
+#Since this code runs on Kaggle server, data can be accessed directly in the 'input' folder
+#Read the train dataset
+dataset = pandas.read_csv("../input/train.csv") 
+
+#Read test dataset
+dataset_test = pandas.read_csv("../input/test.csv")
+#Save the id's for submission file
+ID = dataset_test['id']
+#Drop unnecessary columns
+dataset_test.drop('id',axis=1,inplace=True)
+
+#Print all rows and columns. Dont hide any
+pandas.set_option('display.max_rows', None)
+pandas.set_option('display.max_columns', None)
+
+#Display the first five rows to get a feel of the data
+print(dataset.head(5))
+
+#Learning : cat1 to cat116 contain alphabets
 
 
-# ## Second layer (optimization based ensembles)
-# Predictions on X_valid are used as training set (XV) and predictions on X_test are used as test set (XT). 
-# EN_optA, EN_optB and their calibrated versions are applied.
+# ## Data statistics
+# * Shape
 
 # In[ ]:
 
 
-print('Performance of optimization based ensemblers (2nd layer) on X_test')   
-print('------------------------------------------------------------')
-    
-#Creating the data for the 2nd layer.
-XV = np.hstack(p_valid)
-XT = np.hstack(p_test)  
-        
-#EN_optA
-enA = EN_optA(n_classes)
-enA.fit(XV, y_valid)
-w_enA = enA.w
-y_enA = enA.predict_proba(XT)
-print('{:20s} {:2s} {:1.7f}'.format('EN_optA:', 'logloss  =>', log_loss(y_test, y_enA)))
-    
-#Calibrated version of EN_optA 
-cc_optA = CalibratedClassifierCV(enA, method='isotonic')
-cc_optA.fit(XV, y_valid)
-y_ccA = cc_optA.predict_proba(XT)
-print('{:20s} {:2s} {:1.7f}'.format('Calibrated_EN_optA:', 'logloss  =>', log_loss(y_test, y_ccA)))
-        
-#EN_optB
-enB = EN_optB(n_classes) 
-enB.fit(XV, y_valid)
-w_enB = enB.w
-y_enB = enB.predict_proba(XT)
-print('{:20s} {:2s} {:1.7f}'.format('EN_optB:', 'logloss  =>', log_loss(y_test, y_enB)))
+# Size of the dataframe
 
-#Calibrated version of EN_optB
-cc_optB = CalibratedClassifierCV(enB, method='isotonic')
-cc_optB.fit(XV, y_valid)
-y_ccB = cc_optB.predict_proba(XT)  
-print('{:20s} {:2s} {:1.7f}'.format('Calibrated_EN_optB:', 'logloss  =>', log_loss(y_test, y_ccB)))
-print('')
+print(dataset.shape)
+
+# We can see that there are 188318 instances having 132 attributes
+
+#Drop the first column 'id' since it just has serial numbers. Not useful in the prediction process.
+dataset = dataset.iloc[:,1:]
+
+#Learning : Data is loaded successfully as dimensions match the data description
 
 
-# ## Third layer (weighted average)
-# Simple weighted average of the previous 4 predictions.
+# ## Data statistics
+# * Description
 
 # In[ ]:
 
 
-y_3l = (y_enA * 4./9.) + (y_ccA * 2./9.) + (y_enB * 2./9.) + (y_ccB * 1./9.)
-print('{:20s} {:2s} {:1.7f}'.format('3rd_layer:', 'logloss  =>', log_loss(y_test, y_3l)))
+# Statistical description
+
+print(dataset.describe())
+
+# Learning :
+# No attribute in continuous columns is missing as count is 188318 for all, all rows can be used
+# No negative values are present. Tests such as chi2 can be used
+# Statistics not displayed for categorical data
 
 
-# ### Plotting the weights of each ensemble
-# In the case of EN_optA, there is a weight for each prediction and in the case of EN_optB there is 
-# a weight for each class for each prediction.
-
-# In[ ]:
-
-
-from tabulate import tabulate
-print('               Weights of EN_optA:')
-print('|---------------------------------------------|')
-wA = np.round(w_enA, decimals=2).reshape(1,-1)
-print(tabulate(wA, headers=clfs.keys(), tablefmt="orgtbl"))
-print('')
-print('                                    Weights of EN_optB:')
-print('|-------------------------------------------------------------------------------------------|')
-wB = np.round(w_enB.reshape((-1,n_classes)), decimals=2)
-wB = np.hstack((np.array(list(clfs.keys()), dtype=str).reshape(-1,1), wB))
-print(tabulate(wB, headers=['y%s'%(i) for i in range(n_classes)], tablefmt="orgtbl"))
-
-
-# ### Comparing our ensemble results with sklearn LogisticRegression based stacking of classifiers.
-# Both techniques *EN_optA* and *EN_optB* optimizes an objective function. In this experiment I am using the multi-class 
-# logloss as objective function. Therefore, the two proposed methods basically become implementations of LogisticRegression.
-# The following code allows to compare the results of sklearn implementation of LogisticRegression with the proposed ensembles.
+# ## Data statistics
+# * Skew
 
 # In[ ]:
 
 
-#By default the best C parameter is obtained with a cross-validation approach, doing grid search with
-#10 values defined in a logarithmic scale between 1e-4 and 1e4.
-#Change parameters to see how they affect the final results.
-lr = LogisticRegressionCV(Cs=10, dual=False, fit_intercept=True, 
-                          intercept_scaling=1.0, max_iter=100,
-                          multi_class='ovr', n_jobs=1, penalty='l2', 
-                          random_state=random_state,
-                          solver='lbfgs', tol=0.0001)
+# Skewness of the distribution
 
-lr.fit(XV, y_valid)
-y_lr = lr.predict_proba(XT)
-print('{:20s} {:2s} {:1.7f}'.format('Log_Reg:', 'logloss  =>', log_loss(y_test, y_lr)))
+print(dataset.skew())
+
+# Values close to 0 show less ske
+# loss shows the highest skew. Let us visualize it
 
 
-# ### Is there any parameters configuration for LogisticRegression that produces better results than the proposed ensemble techniques?
-# I wasn't able to find such parameter configuration for a problem with 12 number of classes.
-
-# # 3- Comparison of the ensemble techniques on problems with different number of classes
-# Let's explore how the different ensemble techniques perform according to the number of classes in the problem.
-# We generate different dataset with different number of classes (e.g. from 3 to 15 classes) and compare the result of 
-# the different ensembling methods.
+# ## Data Visualization
+# * Box and density plots
 
 # In[ ]:
 
 
-#For each value in classes, a dataset with that number of classes will be created. 
-classes = range(3, 15)
+# We will visualize all the continuous attributes using Violin Plot - a combination of box and density plots
 
-ll_sc = []  #to store logloss of individual classifiers
-ll_eA = []  #to store logloss of EN_optA ensembler
-ll_eB = []  #to store logloss of EN_optB ensembler
-ll_e3 = []  #to store logloss of the third-layer ensembler (method used for submission in the competition).
-ll_lr = []  #to store logloss of LogisticRegression as 2nd layer ensembler.
-ll_gb = []  #to store logloss of GradientBoosting as 2nd layer ensembler.
+import numpy
 
-#Same code as above for generating the dataset, applying the 3-layer learning architecture and copmparing with  
-#LogisticRegression and GradientBoosting based ensembles. 
-#The code is applied to each independent problem/dataset (each dataset with a different number of classes).
-for i in classes:
-    print('Working on dataset with n_classes: %s' %(i))
-    n_classes=i
-    
-    #Generating the data
-    data, labels = make_classification(n_samples=2000, n_features=100, 
-                                       n_informative=50, n_classes=n_classes,
-                                       random_state=random_state)
-    X, X_test, y, y_test = train_test_split(data, labels, test_size=0.2, 
-                                            random_state=random_state)
-    X_train, X_valid, y_train, y_valid = train_test_split(X, y, 
-                                              test_size=0.25, 
-                                              random_state=random_state)
-    
-    #First layer
-    clfs = [LogisticRegression(random_state=random_state), 
-            SVC(probability=True, random_state=random_state), 
-            RandomForestClassifier(n_estimators=100, n_jobs=-1, 
-                                   random_state=random_state), 
-            GradientBoostingClassifier(n_estimators=50, 
-                                       random_state=random_state), 
-            ExtraTreesClassifier(n_estimators=100, n_jobs=-1, 
-                                 random_state=random_state), 
-            KNeighborsClassifier(n_neighbors=30, n_jobs=-1)]
-    p_valid = []
-    p_test = []
-    for clf in clfs:
-        #First run
-        clf.fit(X_train, y_train)
-        yv = clf.predict_proba(X_valid)
-        p_valid.append(yv)
-        #Second run
-        clf.fit(X, y)
-        yt = clf.predict_proba(X_test)
-        p_test.append(yt)
-        #Saving the logloss score
-        ll_sc.append(log_loss(y_test, yt))
+#import plotting libraries
+import seaborn as sns
+import matplotlib.pyplot as plt
 
-    #Second layer
-    XV = np.hstack(p_valid)
-    XT = np.hstack(p_test)  
-    
-    enA = EN_optA(n_classes)   #EN_optA
-    enA.fit(XV, y_valid)
-    y_enA = enA.predict_proba(XT)    
-    ll_eA.append(log_loss(y_test, y_enA))  #Saving the logloss score
-    
-    cc_optA = CalibratedClassifierCV(enA, method='isotonic') #Calibrated version of EN_optA 
-    cc_optA.fit(XV, y_valid)
-    y_ccA = cc_optA.predict_proba(XT)
-    
-    enB = EN_optB(n_classes)   #EN_optB
-    enB.fit(XV, y_valid)
-    y_enB = enB.predict_proba(XT)   #Saving the logloss score
-    ll_eB.append(log_loss(y_test, y_enB))
-    
-    cc_optB = CalibratedClassifierCV(enB, method='isotonic') #Calibrated version of EN_optB 
-    cc_optB.fit(XV, y_valid)
-    y_ccB = cc_optB.predict_proba(XT) 
-    
-    #Third layer
-    y_3l = (y_enA * 4./9.) + (y_ccA * 2./9.) + (y_enB * 2./9.) + (y_ccB * 1./9.)
-    ll_e3.append(log_loss(y_test, y_3l))   #Saving the logloss score
-    
-    #Logistic regresson
-    lr = LogisticRegressionCV(Cs=10, dual=False, fit_intercept=True,
-                              intercept_scaling=1.0, max_iter=100,
-                              multi_class='ovr', n_jobs=1, penalty='l2',
-                              random_state=random_state,
-                              solver='lbfgs', tol=0.0001)
-    lr.fit(XV, y_valid)
-    y_lr = lr.predict_proba(XT)
-    ll_lr.append(log_loss(y_test, y_lr))   #Saving the logloss score
-    
-    #Gradient boosting
-    xgb = XGBClassifier(max_depth=5, learning_rate=0.1, 
-                        n_estimators=10000, objective='multi:softprob', 
-                        seed=random_state)
-    #Computing best number of iterations on an internal validation set
-    XV_train, XV_valid, yv_train, yv_valid = train_test_split(XV, y_valid,
-                                             test_size=0.15, random_state=random_state)
-    xgb.fit(XV_train, yv_train, eval_set=[(XV_valid, yv_valid)], 
-            eval_metric='mlogloss', 
-            early_stopping_rounds=15, verbose=False)
-    xgb.n_estimators = xgb.best_iteration
-    
-    xgb.fit(XV, y_valid)
-    y_gb = xgb.predict_proba(XT)
-    ll_gb.append(log_loss(y_test, y_gb)) #Saving the logloss score 
+#range of features considered
+split = 116 
 
-ll_sc = np.array(ll_sc).reshape(-1, len(clfs)).T 
-ll_eA = np.array(ll_eA) 
-ll_eB = np.array(ll_eB) 
-ll_e3 = np.array(ll_e3)
-ll_lr = np.array(ll_lr) 
-ll_gb = np.array(ll_gb)
+#number of features considered
+size = 15
+
+#create a dataframe with only continuous features
+data=dataset.iloc[:,split:] 
+
+#get the names of all the columns
+cols=data.columns 
+
+#Plot violin for all attributes in a 7x2 grid
+n_cols = 2
+n_rows = 7
+
+for i in range(n_rows):
+    fg,ax = plt.subplots(nrows=1,ncols=n_cols,figsize=(12, 8))
+    for j in range(n_cols):
+        sns.violinplot(y=cols[i*n_cols+j], data=dataset, ax=ax[j])
 
 
-# ## Plotting the results
-# Notice that sklearn LogisticRegression and XGBoost produce better results for problems with few classes, but as the number of classes increases
-# the proposed ensembling methods outperform LogisticRegression and XGBoost. Again the question here is whether it is possible to fine-tune
-# LogisticRegression (or XGBoost) to produce better (or comparable) results than the ones produced by EN_optA, EN_optB on problems with high number of clases.
-# It can also be noticed that the *3rd-layer* ensemble always produces better results than the 2nd-layer ensemblers
-# (e.g. EN_optA, EN_optB).
+#cont1 has many values close to 0.5
+#cont2 has a pattern where there a several spikes at specific points
+#cont5 has many values near 0.3
+#cont14 has a distinct pattern. 0.22 and 0.82 have a lot of concentration
+#loss distribution must be converted to normal
+
+
+# ## Data Transformation
+# * Skew correction
 
 # In[ ]:
 
 
-import matplotlib.pylab as plt
-plt.figure(figsize=(10,7))
-
-plt.plot(classes, ll_sc[0], color='black', label='Single_Classifiers')
-for i in range(1, 6):
-    plt.plot(classes, ll_sc[i], color='black')
-    
-plt.plot(classes, ll_lr, 'bo-', label='EN_LogisticRegression')
-plt.plot(classes, ll_gb, 'mo-', label='EN_XGBoost')
-plt.plot(classes, ll_eA, 'yo-', label='EN_optA')
-plt.plot(classes, ll_eB, 'go-', label='EN_optB')
-plt.plot(classes, ll_e3, 'ro-', label='EN_3rd_layer')
-
-plt.title('Log-loss of the different models for different number of classes.')
-plt.xlabel('Number of classes')
-plt.ylabel('Log-loss')
-plt.grid(True)
-plt.legend(loc=4)
+#log1p function applies log(1+x) to all elements of the column
+dataset["loss"] = numpy.log1p(dataset["loss"])
+#visualize the transformed column
+sns.violinplot(data=dataset,y="loss")  
 plt.show()
+
+#Plot shows that skew is corrected to a large extent
+
+
+# ## Data Interaction
+# * Correlation
+
+# In[ ]:
+
+
+# Correlation tells relation between two attributes.
+# Correlation requires continous data. Hence, ignore categorical data
+
+# Calculates pearson co-efficient for all combinations
+data_corr = data.corr()
+
+# Set the threshold to select only highly correlated attributes
+threshold = 0.5
+
+# List of pairs along with correlation above threshold
+corr_list = []
+
+#Search for the highly correlated pairs
+for i in range(0,size): #for 'size' features
+    for j in range(i+1,size): #avoid repetition
+        if (data_corr.iloc[i,j] >= threshold and data_corr.iloc[i,j] < 1) or (data_corr.iloc[i,j] < 0 and data_corr.iloc[i,j] <= -threshold):
+            corr_list.append([data_corr.iloc[i,j],i,j]) #store correlation and columns index
+
+#Sort to show higher ones first            
+s_corr_list = sorted(corr_list,key=lambda x: -abs(x[0]))
+
+#Print correlations and column names
+for v,i,j in s_corr_list:
+    print ("%s and %s = %.2f" % (cols[i],cols[j],v))
+
+# Strong correlation is observed between the following pairs
+# This represents an opportunity to reduce the feature set through transformations such as PCA
+
+
+# ## Data Interaction
+# * Scatter plot
+
+# In[ ]:
+
+
+# Scatter plot of only the highly correlated pairs
+for v,i,j in s_corr_list:
+    sns.pairplot(dataset, size=6, x_vars=cols[i],y_vars=cols[j] )
+    plt.show()
+
+#cont11 and cont12 give an almost linear pattern...one must be removed
+#cont1 and cont9 are highly correlated ...either of them could be safely removed 
+#cont6 and cont10 show very good correlation too
+
+
+# ## Data Visualization
+# * Categorical attributes
+
+# In[ ]:
+
+
+# Count of each label in each category
+
+#names of all the columns
+cols = dataset.columns
+
+#Plot count plot for all attributes in a 29x4 grid
+n_cols = 4
+n_rows = 29
+for i in range(n_rows):
+    fg,ax = plt.subplots(nrows=1,ncols=n_cols,sharey=True,figsize=(12, 8))
+    for j in range(n_cols):
+        sns.countplot(x=cols[i*n_cols+j], data=dataset, ax=ax[j])
+
+#cat1 to cat72 have only two labels A and B. In most of the cases, B has very few entries
+#cat73 to cat 108 have more than two labels
+#cat109 to cat116 have many labels
+
+
+# ##Data Preparation
+# * One Hot Encoding of categorical data
+
+# In[ ]:
+
+
+import pandas
+
+#cat1 to cat116 have strings. The ML algorithms we are going to study require numberical data
+#One-hot encoding converts an attribute to a binary vector
+
+#Variable to hold the list of variables for an attribute in the train and test data
+labels = []
+
+for i in range(0,split):
+    train = dataset[cols[i]].unique()
+    test = dataset_test[cols[i]].unique()
+    labels.append(list(set(train) | set(test)))    
+
+del dataset_test
+
+#Import OneHotEncoder
+from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import OneHotEncoder
+
+#One hot encode all categorical attributes
+cats = []
+for i in range(0, split):
+    #Label encode
+    label_encoder = LabelEncoder()
+    label_encoder.fit(labels[i])
+    feature = label_encoder.transform(dataset.iloc[:,i])
+    feature = feature.reshape(dataset.shape[0], 1)
+    #One hot encode
+    onehot_encoder = OneHotEncoder(sparse=False,n_values=len(labels[i]))
+    feature = onehot_encoder.fit_transform(feature)
+    cats.append(feature)
+
+# Make a 2D array from a list of 1D arrays
+encoded_cats = numpy.column_stack(cats)
+
+# Print the shape of the encoded data
+print(encoded_cats.shape)
+
+#Concatenate encoded attributes with continuous attributes
+dataset_encoded = numpy.concatenate((encoded_cats,dataset.iloc[:,split:].values),axis=1)
+del cats
+del feature
+del dataset
+del encoded_cats
+print(dataset_encoded.shape)
+
+
+# ##Data Preparation
+# * Split into train and validation
+
+# In[ ]:
+
+
+#get the number of rows and columns
+r, c = dataset_encoded.shape
+
+#create an array which has indexes of columns
+i_cols = []
+for i in range(0,c-1):
+    i_cols.append(i)
+
+#Y is the target column, X has the rest
+X = dataset_encoded[:,0:(c-1)]
+Y = dataset_encoded[:,(c-1)]
+del dataset_encoded
+
+#Validation chunk size
+val_size = 0.1
+
+#Use a common seed in all experiments so that same chunk is used for validation
+seed = 0
+
+#Split the data into chunks
+from sklearn import cross_validation
+X_train, X_val, Y_train, Y_val = cross_validation.train_test_split(X, Y, test_size=val_size, random_state=seed)
+del X
+del Y
+
+#All features
+X_all = []
+
+#List of combinations
+comb = []
+
+#Dictionary to store the MAE for all algorithms 
+mae = []
+
+#Scoring parameter
+from sklearn.metrics import mean_absolute_error
+
+#Add this version of X to the list 
+n = "All"
+#X_all.append([n, X_train,X_val,i_cols])
+X_all.append([n, i_cols])
+
+
+# ## Evaluation, prediction, and analysis
+# * Linear Regression (Linear algo)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of LinearRegression
+
+#Import the library
+from sklearn.linear_model import LinearRegression
+
+#uncomment the below lines if you want to run the algo
+##Set the base model
+#model = LinearRegression(n_jobs=-1)
+#algo = "LR"
+#
+##Accuracy of the model using all features
+#for name,i_cols_list in X_all:
+#    model.fit(X_train[:,i_cols_list],Y_train)
+#    result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+#    mae.append(result)
+#    print(name + " %s" % result)
+#comb.append(algo)
+
+#Result obtained after running the algo. Comment the below two lines if you want to run the algo
+mae.append(1278)
+comb.append("LR" )    
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#MAE achieved is 1278
+
+
+# ## Evaluation, prediction, and analysis
+# * Ridge Regression (Linear algo)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of Ridge LinearRegression
+
+#Import the library
+from sklearn.linear_model import Ridge
+
+#Add the alpha value to the below list if you want to run the algo
+a_list = numpy.array([])
+
+for alpha in a_list:
+    #Set the base model
+    model = Ridge(alpha=alpha,random_state=seed)
+    
+    algo = "Ridge"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % alpha )
+
+#Result obtained by running the algo for alpha=1.0    
+if (len(a_list)==0):
+    mae.append(1267.5)
+    comb.append("Ridge" + " %s" % 1.0 )    
+    
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#Best estimated performance is 1267 with alpha=1
+
+
+# ## Evaluation, prediction, and analysis
+# * LASSO Linear Regression (Linear algo)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of Lasso LinearRegression
+
+#Import the library
+from sklearn.linear_model import Lasso
+
+#Add the alpha value to the below list if you want to run the algo
+a_list = numpy.array([])
+
+for alpha in a_list:
+    #Set the base model
+    model = Lasso(alpha=alpha,random_state=seed)
+    
+    algo = "Lasso"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % alpha )
+
+#Result obtained by running the algo for alpha=0.001    
+if (len(a_list)==0):
+    mae.append(1262.5)
+    comb.append("Lasso" + " %s" % 0.001 )
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#High computation time
+#Best estimated performance is 1262.5 for alpha = 0.001
+
+
+# ## Evaluation, prediction, and analysis
+# * Elastic Net Regression (Linear algo)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of ElasticNet LinearRegression
+
+#Import the library
+from sklearn.linear_model import ElasticNet
+
+#Add the alpha value to the below list if you want to run the algo
+a_list = numpy.array([])
+
+for alpha in a_list:
+    #Set the base model
+    model = ElasticNet(alpha=alpha,random_state=seed)
+    
+    algo = "Elastic"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % alpha )
+
+if (len(a_list)==0):
+    mae.append(1260)
+    comb.append("Elastic" + " %s" % 0.001 )
+    
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#High computation time
+#Best estimated performance is 1260 for alpha = 0.001
+
+
+# ## Evaluation, prediction, and analysis
+# * KNN (non-linear algo)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of KNN
+
+#Import the library
+from sklearn.neighbors import KNeighborsRegressor
+
+#Add the N value to the below list if you want to run the algo
+n_list = numpy.array([])
+
+for n_neighbors in n_list:
+    #Set the base model
+    model = KNeighborsRegressor(n_neighbors=n_neighbors,n_jobs=-1)
+    
+    algo = "KNN"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % n_neighbors )
+
+if (len(n_list)==0):
+    mae.append(1745)
+    comb.append("KNN" + " %s" % 1 )
+    
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#Very high computation time
+#Best estimated performance is 1745 for n=1
+
+
+# ## Evaluation, prediction, and analysis
+# * CART (non-linear algo)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of CART
+
+#Import the library
+from sklearn.tree import DecisionTreeRegressor
+
+#Add the max_depth value to the below list if you want to run the algo
+d_list = numpy.array([])
+
+for max_depth in d_list:
+    #Set the base model
+    model = DecisionTreeRegressor(max_depth=max_depth,random_state=seed)
+    
+    algo = "CART"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % max_depth )
+
+if (len(a_list)==0):
+    mae.append(1741)
+    comb.append("CART" + " %s" % 5 )    
+    
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#High computation time
+#Best estimated performance is 1741 for depth=5
+
+
+# ## Evaluation, prediction, and analysis
+# * SVM (Non-linear algo)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of SVM
+
+#Import the library
+from sklearn.svm import SVR
+
+#Add the C value to the below list if you want to run the algo
+c_list = numpy.array([])
+
+for C in c_list:
+    #Set the base model
+    model = SVR(C=C)
+    
+    algo = "SVM"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % C )
+
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#very very high computation time
+
+
+# ## Evaluation, prediction, and analysis
+# * Bagged Decision Trees (Bagging)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of Bagged Decision Trees
+
+#Import the library
+from sklearn.ensemble import BaggingRegressor
+from sklearn.tree import DecisionTreeRegressor
+
+#Add the n_estimators value to the below list if you want to run the algo
+n_list = numpy.array([])
+
+for n_estimators in n_list:
+    #Set the base model
+    model = BaggingRegressor(n_jobs=-1,n_estimators=n_estimators)
+    
+    algo = "Bag"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % n_estimators )
+
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#very high computation time
+
+
+# ## Evaluation, prediction, and analysis
+# * Random Forest (Bagging)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of RandomForest
+
+#Import the library
+from sklearn.ensemble import RandomForestRegressor
+
+#Add the n_estimators value to the below list if you want to run the algo
+n_list = numpy.array([])
+
+for n_estimators in n_list:
+    #Set the base model
+    model = RandomForestRegressor(n_jobs=-1,n_estimators=n_estimators,random_state=seed)
+    
+    algo = "RF"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % n_estimators )
+
+if (len(n_list)==0):
+    mae.append(1213)
+    comb.append("RF" + " %s" % 50 )    
+    
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#Best estimated performance is 1213 when the number of estimators is 50
+
+
+# ## Evaluation, prediction, and analysis
+# * Extra Trees (Bagging)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of ExtraTrees
+
+#Import the library
+from sklearn.ensemble import ExtraTreesRegressor
+
+#Add the n_estimators value to the below list if you want to run the algo
+n_list = numpy.array([])
+
+for n_estimators in n_list:
+    #Set the base model
+    model = ExtraTreesRegressor(n_jobs=-1,n_estimators=n_estimators,random_state=seed)
+    
+    algo = "ET"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % n_estimators )
+
+if (len(n_list)==0):
+    mae.append(1254)
+    comb.append("ET" + " %s" % 100 )    
+    
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#Best estimated performance is 1254 for 100 estimators
+
+
+# ## Evaluation, prediction, and analysis
+# * AdaBoost (Boosting)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of AdaBoost
+
+#Import the library
+from sklearn.ensemble import AdaBoostRegressor
+
+#Add the n_estimators value to the below list if you want to run the algo
+n_list = numpy.array([])
+
+for n_estimators in n_list:
+    #Set the base model
+    model = AdaBoostRegressor(n_estimators=n_estimators,random_state=seed)
+    
+    algo = "Ada"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % n_estimators )
+
+if (len(n_list)==0):
+    mae.append(1678)
+    comb.append("Ada" + " %s" % 100 )    
+    
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#Best estimated performance is 1678 with n=100
+
+
+# ## Evaluation, prediction, and analysis
+# * Stochastic Gradient Boosting (Boosting)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of SGB
+
+#Import the library
+from sklearn.ensemble import GradientBoostingRegressor
+
+#Add the n_estimators value to the below list if you want to run the algo
+n_list = numpy.array([])
+
+for n_estimators in n_list:
+    #Set the base model
+    model = GradientBoostingRegressor(n_estimators=n_estimators,random_state=seed)
+    
+    algo = "SGB"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % n_estimators )
+
+if (len(n_list)==0):
+    mae.append(1278)
+    comb.append("SGB" + " %s" % 50 )    
+    
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#Best estimated performance is ?
+
+
+# ## Evaluation, prediction, and analysis
+# * XGBoost
+
+# In[ ]:
+
+
+#Evaluation of various combinations of XGB
+
+#Import the library
+from xgboost import XGBRegressor
+
+#Add the n_estimators value to the below list if you want to run the algo
+n_list = numpy.array([])
+
+for n_estimators in n_list:
+    #Set the base model
+    model = XGBRegressor(n_estimators=n_estimators,seed=seed)
+    
+    algo = "XGB"
+
+    #Accuracy of the model using all features
+    for name,i_cols_list in X_all:
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo + " %s" % n_estimators )
+
+if (len(n_list)==0):
+    mae.append(1169)
+    comb.append("XGB" + " %s" % 1000 )    
+    
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+##Plot the MAE of all combinations
+#fig, ax = plt.subplots()
+#plt.plot(mae)
+##Set the tick names to names of combinations
+#ax.set_xticks(range(len(comb)))
+#ax.set_xticklabels(comb,rotation='vertical')
+##Plot the accuracy for all combinations
+#plt.show()    
+
+#Best estimated performance is 1169 with n=1000
+
+
+# ## Evaluation, prediction, and analysis
+# * MLP (Deep Learning)
+
+# In[ ]:
+
+
+#Evaluation of various combinations of multi-layer perceptrons
+
+#Import libraries for deep learning
+from keras.wrappers.scikit_learn import KerasRegressor
+from keras.models import Sequential
+from keras.layers import Dense
+
+# define baseline model
+def baseline(v):
+     # create model
+     model = Sequential()
+     model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu'))
+     model.add(Dense(1, init='normal'))
+     # Compile model
+     model.compile(loss='mean_absolute_error', optimizer='adam')
+     return model
+
+# define smaller model
+def smaller(v):
+     # create model
+     model = Sequential()
+     model.add(Dense(v*(c-1)/2, input_dim=v*(c-1), init='normal', activation='relu'))
+     model.add(Dense(1, init='normal', activation='relu'))
+     # Compile model
+     model.compile(loss='mean_absolute_error', optimizer='adam')
+     return model
+
+# define deeper model
+def deeper(v):
+ # create model
+ model = Sequential()
+ model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu'))
+ model.add(Dense(v*(c-1)/2, init='normal', activation='relu'))
+ model.add(Dense(1, init='normal', activation='relu'))
+ # Compile model
+ model.compile(loss='mean_absolute_error', optimizer='adam')
+ return model
+
+# Optimize using dropout and decay
+from keras.optimizers import SGD
+from keras.layers import Dropout
+from keras.constraints import maxnorm
+
+def dropout(v):
+    #create model
+    model = Sequential()
+    model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu',W_constraint=maxnorm(3)))
+    model.add(Dropout(0.2))
+    model.add(Dense(v*(c-1)/2, init='normal', activation='relu', W_constraint=maxnorm(3)))
+    model.add(Dropout(0.2))
+    model.add(Dense(1, init='normal', activation='relu'))
+    # Compile model
+    sgd = SGD(lr=0.1,momentum=0.9,decay=0.0,nesterov=False)
+    model.compile(loss='mean_absolute_error', optimizer=sgd)
+    return model
+
+# define decay model
+def decay(v):
+    # create model
+    model = Sequential()
+    model.add(Dense(v*(c-1), input_dim=v*(c-1), init='normal', activation='relu'))
+    model.add(Dense(1, init='normal', activation='relu'))
+    # Compile model
+    sgd = SGD(lr=0.1,momentum=0.8,decay=0.01,nesterov=False)
+    model.compile(loss='mean_absolute_error', optimizer=sgd)
+    return model
+
+est_list = []
+#uncomment the below if you want to run the algo
+#est_list = [('MLP',baseline),('smaller',smaller),('deeper',deeper),('dropout',dropout),('decay',decay)]
+
+for name, est in est_list:
+ 
+    algo = name
+
+    #Accuracy of the model using all features
+    for m,i_cols_list in X_all:
+        model = KerasRegressor(build_fn=est, v=1, nb_epoch=10, verbose=0)
+        model.fit(X_train[:,i_cols_list],Y_train)
+        result = mean_absolute_error(numpy.expm1(Y_val), numpy.expm1(model.predict(X_val[:,i_cols_list])))
+        mae.append(result)
+        print(name + " %s" % result)
+        
+    comb.append(algo )
+
+if (len(est_list)==0):
+    mae.append(1168)
+    comb.append("MLP" + " baseline" )    
+    
+##Set figure size
+#plt.rc("figure", figsize=(25, 10))
+
+#Plot the MAE of all combinations
+fig, ax = plt.subplots()
+plt.plot(mae)
+#Set the tick names to names of combinations
+ax.set_xticks(range(len(comb)))
+ax.set_xticklabels(comb,rotation='vertical')
+#Plot the accuracy for all combinations
+plt.show()    
+
+#Best estimated performance is MLP=1168
+
+
+# ## Make Predictions
+
+# In[ ]:
+
+
+# Make predictions using XGB as it gave the best estimated performance        
+
+X = numpy.concatenate((X_train,X_val),axis=0)
+del X_train
+del X_val
+Y = numpy.concatenate((Y_train,Y_val),axis=0)
+del Y_train
+del Y_val
+
+n_estimators = 1000
+
+#Best model definition
+best_model = XGBRegressor(n_estimators=n_estimators,seed=seed)
+best_model.fit(X,Y)
+del X
+del Y
+#Read test dataset
+dataset_test = pandas.read_csv("../input/test.csv")
+#Drop unnecessary columns
+ID = dataset_test['id']
+dataset_test.drop('id',axis=1,inplace=True)
+
+#One hot encode all categorical attributes
+cats = []
+for i in range(0, split):
+    #Label encode
+    label_encoder = LabelEncoder()
+    label_encoder.fit(labels[i])
+    feature = label_encoder.transform(dataset_test.iloc[:,i])
+    feature = feature.reshape(dataset_test.shape[0], 1)
+    #One hot encode
+    onehot_encoder = OneHotEncoder(sparse=False,n_values=len(labels[i]))
+    feature = onehot_encoder.fit_transform(feature)
+    cats.append(feature)
+
+# Make a 2D array from a list of 1D arrays
+encoded_cats = numpy.column_stack(cats)
+
+del cats
+
+#Concatenate encoded attributes with continuous attributes
+X_test = numpy.concatenate((encoded_cats,dataset_test.iloc[:,split:].values),axis=1)
+
+del encoded_cats
+del dataset_test
+
+#Make predictions using the best model
+predictions = numpy.expm1(best_model.predict(X_test))
+del X_test
+# Write submissions to output file in the correct format
+with open("submission.csv", "w") as subfile:
+    subfile.write("id,loss\n")
+    for i, pred in enumerate(list(predictions)):
+        subfile.write("%s,%s\n"%(ID[i],pred))
 

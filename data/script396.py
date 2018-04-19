@@ -1,343 +1,377 @@
 
 # coding: utf-8
 
-# Colorspace
-# ==========
+# # Type 1 clustering
+# 
+# I want to understand what kind of images we have acording to the standard procedure, for example described [here](http://www.gfmer.ch/ccdc/pdf/module5.pdf). Namely,
+# do we have images :
+# 
+# - native cervix
+# - acetic acid
+# - lugol iodine
+# 
+# of the same patient ?
+#  
+# **Edit**: Clustering method updated
+# 
 
 # In[ ]:
 
 
-from PIL import Image, ImageDraw, ImageFilter
-import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-import nltk
-import glob
-
-plt.rcParams['figure.figsize'] = (10.0, 10.0)
-images = sorted(glob.glob('../input/images_sample/**/**.jpg'))
-for im in images:
-    im = Image.open(im)
-    h, w = im.size
-    qu = im.quantize(colors=8, kmeans=4)
-    crgb = qu.convert('RGB')
-    col_rank = sorted(crgb.getcolors(h*w), reverse=True)
-    print(col_rank) #legend
-    draw = ImageDraw.Draw(im)
-    i = 0
-    for cnt, rgb in col_rank:
-        draw.rectangle([(10, i*40+10),(40, i*40+30)], fill=(rgb[0],rgb[1],rgb[2]), outline=(0,0,0))
-        draw.text((10, i*40+30), str(cnt), fill=(0,0,0))
-        i += 1
-    del draw
-    plt.imshow(im); plt.axis('off')
-    break
-
-
-# Image Statistics
-# ================
-
-# In[ ]:
-
-
-from PIL import ImageStat
-for im in images:
-    img = Image.open(im)
-    stats = ImageStat.Stat(img, mask=None)
-    print(stats.extrema)
-    print(stats.count)
-    print(stats.sum)
-    print(stats.sum2)
-    print(stats.mean)
-    print(stats.median)
-    print(stats.rms)
-    print(stats.var)
-    print(stats.stddev)
-    plt.imshow(img); plt.axis('off')
-    break
-
-
-# OCR Watermarks or Floor Plans for features
-# ==========================================
-
-# In[ ]:
-
-
-from PIL import Image
-#import pytesseract #sudo apt-get install tesseract-ocr or submit pull request to Kaggle Docker
-import glob
-
-#images = glob.glob('../input/images_sample/**/**.jpg')
-#for im in images:
-#    img = Image.open(im) #rotate images 90 degrees
-#    t = pytesseract.image_to_string(img)
-#    if len(t)>0:
-#        print(im, '\n', t)
-
-"""
-../input/images_sample/6812223/6812223_906d2825311544e3ef052c315f4dddb7.jpg 
- HABITATS
-../input/images_sample/6811964/6811964_552eab2b6974e995b419654faecc1cd8.jpg 
- BALCONY
-
-Greenhouse ubwa
-a! m Mlnnv
-
-LIVING ROOM
-I2‘-5'n I9‘-2"
-
-EEDROOM
-I! an IE Lo"
-../input/images_sample/6811974/6811974_39be7f428f80beda5163e909ea05a95a.jpg 
- MLLEJRE
-../input/images_sample/6811974/6811974_197bb9515b3d7929c2848e61a050ad1a.jpg 
- U
-BALCONY
-UV‘NG/DININE
-H M' X Wl'
-m
-m x m- E
-r ..
-KIT NT ll:
-L D
-—H Vi-
-AIH STURAE
-"""
-print('OCR..')
-
-
-# Image Exif Tags
-# ===============
-
-# In[ ]:
-
-
-from PIL import Image, ExifTags
-
-img = Image.open('../input/images_sample/6811960/6811960_3685d3542328b820980642535d8ccb72.jpg')
-ex = img._getexif()
-if ex != None:
-    for (k,v) in img._getexif().items():
-            print (ExifTags.TAGS.get(k), v)
-
-
-# Image Hash (Duplicate Images)
-# ===============
-
-# In[ ]:
-
+import os
+from glob import glob
 
 import numpy as np
-import imagehash, hashlib
-import random
 
-images = glob.glob('../input/images_sample/6812098/**.jpg') #just comparing two folders for demo
-images += glob.glob('../input/images_sample/6812035/**.jpg')
+TRAIN_DATA = "../input/train"
+type_1_files = glob(os.path.join(TRAIN_DATA, "Type_1", "*.jpg"))
+type_1_ids = np.array([s[len(os.path.join(TRAIN_DATA, "Type_1"))+1:-4] for s in type_1_files])
+type_2_files = glob(os.path.join(TRAIN_DATA, "Type_2", "*.jpg"))
+type_2_ids = np.array([s[len(os.path.join(TRAIN_DATA, "Type_2"))+1:-4] for s in type_2_files])
+type_3_files = glob(os.path.join(TRAIN_DATA, "Type_3", "*.jpg"))
+type_3_ids = np.array([s[len(os.path.join(TRAIN_DATA, "Type_3"))+1:-4] for s in type_3_files])
 
-for im in range(100):
-    im1 = random.choice(images)
-    im2 = random.choice(images)
-    h1 = imagehash.dhash(Image.open(im1))
-    h2 = imagehash.dhash(Image.open(im2))
-    feature = h1 - h2
-    if feature < 7 and im1 != im2:
-        print(feature, im1, im2)
-        imgx = np.concatenate((Image.open(im1).resize((400, 400), Image.ANTIALIAS), Image.open(im2).resize((400, 400), Image.ANTIALIAS)), axis=1)
-        plt.imshow(imgx); plt.axis('off')
-        break
+print("Train data")
+print(len(type_1_files), len(type_2_files), len(type_3_files))
+print("Type 1", type_1_ids[:10])
+print("Type 2", type_2_ids[:10])
+print("Type 3", type_3_ids[:10])
 
+ADDITIONAL_DATA = "../input/additional"
+additional_type_1_files = glob(os.path.join(ADDITIONAL_DATA, "Type_1", "*.jpg"))
+additional_type_1_ids = np.array([s[len(os.path.join(ADDITIONAL_DATA, "Type_1"))+1:-4] for s in additional_type_1_files])
+additional_type_2_files = glob(os.path.join(ADDITIONAL_DATA, "Type_2", "*.jpg"))
+additional_type_2_ids = np.array([s[len(os.path.join(ADDITIONAL_DATA, "Type_2"))+1:-4] for s in additional_type_2_files])
+additional_type_3_files = glob(os.path.join(ADDITIONAL_DATA, "Type_3", "*.jpg"))
+additional_type_3_ids = np.array([s[len(os.path.join(ADDITIONAL_DATA, "Type_3"))+1:-4] for s in additional_type_3_files])
 
-# Image and Folder Timestamps
-# ===========================
-
-# In[ ]:
-
-
-import glob, os
-from datetime import datetime as dt
-
-folders = glob.glob('../input/images_sample/*')
-s = os.stat(folders[0])
-print(folders[0],s)
-print(os.path.getatime(folders[0]), os.path.getmtime(folders[0]), os.path.getctime(folders[0]))
-print(dt.fromtimestamp(os.path.getatime(folders[0])))
-print('-'*60)
-images = glob.glob('../input/images_sample/**/**.jpg')
-s = os.stat(images[0])
-print(images[0],s)
-print(os.path.getatime(images[0]), os.path.getmtime(images[0]), os.path.getctime(images[0]))
-print(dt.fromtimestamp(os.path.getatime(images[0])))
+print("Additional data")
+print(len(additional_type_1_files), len(additional_type_2_files), len(additional_type_2_files))
+print("Type 1", additional_type_1_ids[:10])
+print("Type 2", additional_type_2_ids[:10])
+print("Type 3", additional_type_3_ids[:10])
 
 
-# Model Example
-# =============
 
-# In[ ]:
-
-
-import time; start_time = time.time()
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn import model_selection, preprocessing
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.decomposition import TruncatedSVD
-from sklearn.pipeline import FeatureUnion
-from sklearn.metrics import log_loss
-from sklearn import pipeline
-import pandas as pd
-import numpy as np
-from nltk.stem.porter import *
-stemmer = PorterStemmer()
-from bs4 import BeautifulSoup
-import random; random.seed(7)
-import xgboost as xgb
-import datetime as dt
-
-train = pd.read_json(open("../input/train.json", "r"))[:100] #limit
-y = train.interest_level.values
-n = len(train)
-
-test = pd.read_json(open("../input/test.json", "r"))[:100] #limit
-listing_id = test.listing_id.values
-
-col = [x for x in train.columns if x not in ['listing_id','interest_level','street_address']]
-print(col)
-print(len(train),len(test))
-
-def str_stem(s): 
-    if isinstance(s, str):
-        s = s.lower()
-        s = s.replace("  "," ")
-        b = BeautifulSoup(s, "lxml")
-        s = b.get_text(" ").strip()
-        s = (" ").join([z for z in s.split(" ")])
-        s = (" ").join([stemmer.stem(z) for z in s.split(" ")])
-        s = s.lower().strip()
-        return s
+def get_filename(image_id, image_type):
+    """
+    Method to get image file path from its id and type   
+    """
+    if image_type == "Type_1" or         image_type == "Type_2" or         image_type == "Type_3":
+        data_path = os.path.join(TRAIN_DATA, image_type)
+    elif image_type == "Test":
+        data_path = TEST_DATA
+    elif image_type == "AType_1" or           image_type == "AType_2" or           image_type == "AType_3":
+        data_path = os.path.join(ADDITIONAL_DATA, image_type[1:])
     else:
-        return ""
+        raise Exception("Image type '%s' is not recognized" % image_type)
 
-class cust_regression_vals(BaseEstimator, TransformerMixin):
-    def fit(self, x, y=None):
-        return self
-    def transform(self, df):
-        d_col_drops=['xdescription', 'ydescription']
-        df = df.drop(d_col_drops, axis=1).values
-        return df
+    ext = 'jpg'
+    return os.path.join(data_path, "{}.{}".format(image_id, ext))
 
-class cust_txt_col(BaseEstimator, TransformerMixin):
-    def __init__(self, key):
-        self.key = key
-    def fit(self, x, y=None):
-        return self
-    def transform(self, data_dict):
-        return data_dict[self.key].apply(str)
+
+def get_image_data(image_id, image_type):
+    """
+    Method to get image data as np.array specifying image id and type
+    """
+    fname = get_filename(image_id, image_type)
+    img = cv2.imread(fname)
+    assert img is not None, "Failed to read image : %s, %s" % (image_id, image_type)
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    return img
+
+
+import matplotlib.pylab as plt
+
+def plt_st(l1,l2):
+    plt.figure(figsize=(l1,l2))
+
+
+# Idea is to use clustering on images of one type to group data
+
+# In[ ]:
+
+
+def compute_histogram(img, hist_size=100):
+    hist = cv2.calcHist([img], [0], mask=None, histSize=[hist_size], ranges=(0, 255))
+    hist = cv2.normalize(hist, dst=hist)
+    return hist
+
+
+# In[ ]:
+
+
+type_ids=(type_1_ids, additional_type_1_ids)
+image_types = ["Type_1", "AType_1"]
+ll = [int(len(ids)) for ids in type_ids]
+
+id_type_list = []
+for ids, image_type in zip(type_ids, image_types):
+    for image_id in ids:
+        id_type_list.append((image_id, image_type))
+
+
+# In[ ]:
+
+
+print("Total number of images: ", len(id_type_list))
+# Find empty images:
+empty_images = []
+for image_id, image_type in id_type_list:
+    size = os.path.getsize(get_filename(image_id, image_type))
+    if size == 0:
+        empty_images.append((image_id, image_type))
+print("Number of empty images: ", len(empty_images))
+
+
+# In[ ]:
+
+
+# Remove empty images from id_type_list
+for image_id, image_type in empty_images:
+    id_type_list.remove((image_id, image_type))
+
+
+# In[ ]:
+
+
+import cv2
+
+
+# In[ ]:
+
+
+RESIZED_IMAGES = {}
+
+
+# In[ ]:
+
+
+image_size = (256, 256)
+center = (image_size[0]//2, image_size[1]//2)
+hist_size = 30
+
+crop_size = 30
+
+n_features = 3 * hist_size
+X = np.zeros((len(id_type_list), n_features), dtype=np.float32)
+for i, (image_id, image_type) in enumerate(id_type_list):
     
-df_all = pd.concat((train[col], test[col]), axis=0, ignore_index=True)
-train = []
-test = []
-
-df_all['photos'] = df_all.photos.apply(len)
-
-df_all["price_be"] = df_all["price"]/df_all["bedrooms"]
-df_all["price_ba"] = df_all["price"]/df_all["bathrooms"]
-
-df_all["created"] = pd.to_datetime(df_all["created"])
-df_all["created_year"] = df_all["created"].dt.year
-df_all["created_month"] = df_all["created"].dt.month
-df_all["created_day"] = df_all["created"].dt.day
-df_all['created_hour'] = df_all["created"].dt.hour
-df_all['created_weekday'] = df_all['created'].dt.weekday
-df_all['created_week'] = df_all['created'].dt.week
-df_all['created_quarter'] = df_all['created'].dt.quarter
-df_all['created_weekend'] = ((df_all['created_weekday'] == 5) & (df_all['created_weekday'] == 6))
-df_all['created_wd'] = ((df_all['created_weekday'] != 5) & (df_all['created_weekday'] != 6))
-df_all['created'] = df_all['created'].map(lambda x: float((x - dt.datetime(1899, 12, 30)).days) + (float((x - dt.datetime(1899, 12, 30)).seconds) / 86400))
-
-df_all['x5'] = df_all['latitude'].map(lambda x : round(x,5))
-df_all['y5'] = df_all['longitude'].map(lambda x : round(x,5))
-df_all['x4'] = df_all['latitude'].map(lambda x : round(x,4))
-df_all['y4'] = df_all['longitude'].map(lambda x : round(x,4))
-df_all['x3'] = df_all['latitude'].map(lambda x : round(x,3))
-df_all['y3'] = df_all['longitude'].map(lambda x : round(x,3))
-df_all['x2'] = df_all['latitude'].map(lambda x : round(x,2))
-df_all['y2'] = df_all['longitude'].map(lambda x : round(x,2))
-
-dummies = df_all['features'].str.join(sep=',').str.lower().str.get_dummies(sep=',')
-df_all = pd.concat([df_all, dummies], axis=1)
-dummies = []
-df_all['features'] = df_all.features.apply(len)
-
-cat = ['building_id',  'description', 'display_address', 'manager_id']
-lbl = preprocessing.LabelEncoder()
-for c in cat:
-    if c in ['description']:
-        df_all['x'+c] = df_all[c].map(lambda x:str_stem(x))
-        df_all['y'+c] = df_all[c].values
-    df_all['words_of_'+c] = df_all[c].map(lambda x:len(x.strip().split(' ')))
-    df_all['len_of_'+c] = df_all[c].map(lambda x:len(x.strip()))
-    df_all[c] = lbl.fit_transform(list(df_all[c].values))
-    print(c, len(lbl.classes_))
-
-train = df_all.iloc[:n]
-test = df_all.iloc[n:]
-#df_all = []
-
-tfidf = TfidfVectorizer(stop_words ='english', max_df=0.9)
-tsvd = TruncatedSVD(n_components=25, random_state = 7)
-clf = pipeline.Pipeline([
-        ('union', FeatureUnion(
-                    transformer_list = [
-                        ('cst',  cust_regression_vals()),
-                        ('txt1', pipeline.Pipeline([('s1', cust_txt_col(key='xdescription')), ('tfidf1', tfidf), ('tsvd1', tsvd)])),
-                        ('txt2', pipeline.Pipeline([('s2', cust_txt_col(key='ydescription')), ('tfidf2', tfidf), ('tsvd2', tsvd)]))
-                        ],
-                    transformer_weights = {
-                        'cst': 1.0,
-                        'txt1': 1.0,
-                        'txt2': 1.0
-                        },
-                n_jobs = -1
-                ))])
-
-y_val = lbl.fit_transform(y)
-xtrain = pd.DataFrame(clf.fit_transform(train)).apply(pd.to_numeric)
-xtrain = xgb.DMatrix(xtrain.values, y_val)
-xtest = pd.DataFrame(clf.transform(test)).apply(pd.to_numeric)
-xtest = xgb.DMatrix(xtest.values)
-
-param = {}
-param['objective'] = 'multi:softprob'
-param['eta'] = 0.1
-#param['max_depth'] = 4
-param['silent'] = True
-param['num_class'] = 3
-param['eval_metric'] = "mlogloss"
-param['min_child_weight'] = 1
-param['subsample'] = 0.7
-param['colsample_bytree'] = 0.7
-param['seed'] = 7
-plst = list(param.items())
-nfolds = 5
-nrounds = 100
-
-model = xgb.cv(plst, xtrain, nrounds, nfolds, early_stopping_rounds=20, verbose_eval=25)
-best_rounds = np.argmin(model['test-mlogloss-mean'])
-model = xgb.train(plst, xtrain, best_rounds)
-print(log_loss(y_val, model.predict(xtrain)))
-preds = model.predict(xtest)
-out_df = pd.DataFrame(preds)
-out_df.columns = lbl.inverse_transform(out_df.columns)
-out_df["listing_id"] = listing_id
-out_df.to_csv("z09submission01.csv", index=False)
-print('Done...',(time.time()-start_time)/60)
+    key = (image_id, image_type)
+    if key in RESIZED_IMAGES:
+        img = RESIZED_IMAGES[key]
+    else:
+        img = get_image_data(image_id, image_type)
+        img = cv2.resize(img, dsize=image_size[::-1])    
+        RESIZED_IMAGES[key] = img
+    
+    # crop 
+    proc = img[center[1]-crop_size:center[1]+crop_size,center[0]-crop_size:center[0]+crop_size,:]
+    # Blur 
+    proc = cv2.GaussianBlur(proc, (7, 7), 0)
+    hsv = cv2.cvtColor(proc, cv2.COLOR_RGB2HSV)
+    hue = hsv[:,:,0]
+    sat = hsv[:,:,1]
+    val = hsv[:,:,2]
+    hist_hue = compute_histogram(hue, hist_size)
+    hist_sat = compute_histogram(sat, hist_size)    
+    hist_val = compute_histogram(val, hist_size)    
+    X[i, 0:hist_size] = hist_hue[:,0]
+    X[i, hist_size:2*hist_size] = hist_sat[:,0]
+    X[i, 2*hist_size:] = hist_val[:,0]
 
 
-# Future Review
-# =============
-# - Can appliances be identified
-# - Can room be measured
-# - What kind of flooring
-# - Can windows and their view be ranked
-# - Can defects be identified
-# - Is it furnished, someone living there
-# - Has picture been photoshopped (altered)
-# - Add your own to the list on comments and fork to suggest/showcase additional features
+# In[ ]:
+
+
+n_classes = 10
+
+from sklearn.cluster import KMeans
+kmeans = KMeans(n_clusters=n_classes)
+kmeans.fit(X)
+y_classes = kmeans.predict(X)
+_ = plt.hist(y_classes)
+
+
+# In[ ]:
+
+
+all_classes_images = []
+
+for class_index in range(n_classes):    
+    class_indices = np.where(y_classes == class_index)[0]
+    n = 10    
+    m = int(np.ceil(len(class_indices) / n)) 
+    one_class_image = np.zeros((m*(image_size[0]+2), n*(image_size[1]+2), 3), dtype=np.uint8)    
+    
+    counter = 0
+    for i in range(m):
+        ys = i*(image_size[1] + 2)
+        ye = ys + image_size[1]
+        for j in range(n):
+            xs = j*(image_size[0] + 2)
+            xe = xs + image_size[0]
+            if counter == len(class_indices):
+                break
+            image_id, image_type = id_type_list[class_indices[counter]]; counter+=1
+            key = (image_id, image_type)
+            assert key in RESIZED_IMAGES, "WTF"
+            img = RESIZED_IMAGES[key]                
+            img = cv2.putText(img, image_id + ' | ' + str(image_type) + ' | ' + str(class_index), (5,img.shape[0] - 5), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), thickness=2)
+            one_class_image[ys:ye, xs:xe, :] = img[:,:,:]
+
+        if counter == len(class_indices):
+            break
+    
+    all_classes_images.append(one_class_image)
+
+
+# In[ ]:
+
+
+class_index = 0
+
+m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
+n = int(np.ceil(m / 15.0))
+for i in range(n):
+    plt_st(20, 20)
+    ys = i*(image_size[0] + 2)*15
+    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
+    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
+    plt.title("Class %i, part %i" % (class_index, i))
+
+
+# In[ ]:
+
+
+class_index = 1
+
+m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
+n = int(np.ceil(m / 15.0))
+for i in range(n):
+    plt_st(20, 20)
+    ys = i*(image_size[0] + 2)*15
+    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
+    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
+    plt.title("Class %i, part %i" % (class_index, i))
+
+
+# In[ ]:
+
+
+class_index = 2
+
+m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
+n = int(np.ceil(m / 15.0))
+for i in range(n):
+    plt_st(20, 20)
+    ys = i*(image_size[0] + 2)*15
+    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
+    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
+    plt.title("Class %i, part %i" % (class_index, i))
+
+
+# In[ ]:
+
+
+class_index = 3
+
+m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
+n = int(np.ceil(m / 15.0))
+for i in range(n):
+    plt_st(20, 20)
+    ys = i*(image_size[0] + 2)*15
+    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
+    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
+    plt.title("Class %i, part %i" % (class_index, i))
+
+
+# In[ ]:
+
+
+class_index = 4
+
+m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
+n = int(np.ceil(m / 15.0))
+for i in range(n):
+    plt_st(20, 20)
+    ys = i*(image_size[0] + 2)*15
+    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
+    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
+    plt.title("Class %i, part %i" % (class_index, i))
+
+
+# In[ ]:
+
+
+class_index = 5
+
+m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
+n = int(np.ceil(m / 15.0))
+for i in range(n):
+    plt_st(20, 20)
+    ys = i*(image_size[0] + 2)*15
+    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
+    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
+    plt.title("Class %i, part %i" % (class_index, i))
+
+
+# In[ ]:
+
+
+class_index = 6
+
+m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
+n = int(np.ceil(m / 15.0))
+for i in range(n):
+    plt_st(20, 20)
+    ys = i*(image_size[0] + 2)*15
+    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
+    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
+    plt.title("Class %i, part %i" % (class_index, i))
+
+
+# In[ ]:
+
+
+class_index = 7
+
+m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
+n = int(np.ceil(m / 15.0))
+for i in range(n):
+    plt_st(20, 20)
+    ys = i*(image_size[0] + 2)*15
+    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
+    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
+    plt.title("Class %i, part %i" % (class_index, i))
+
+
+# In[ ]:
+
+
+class_index = 8
+
+m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
+n = int(np.ceil(m / 15.0))
+for i in range(n):
+    plt_st(20, 20)
+    ys = i*(image_size[0] + 2)*15
+    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
+    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
+    plt.title("Class %i, part %i" % (class_index, i))
+
+
+# In[ ]:
+
+
+class_index = 9
+
+m = all_classes_images[class_index].shape[0] / (image_size[0] + 2)
+n = int(np.ceil(m / 15.0))
+for i in range(n):
+    plt_st(20, 20)
+    ys = i*(image_size[0] + 2)*15
+    ye = min((i+1)*(image_size[0] + 2)*15, all_classes_images[class_index].shape[0])
+    plt.imshow(all_classes_images[class_index][ys:ye,:,:])
+    plt.title("Class %i, part %i" % (class_index, i))
+

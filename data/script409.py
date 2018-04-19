@@ -1,162 +1,265 @@
 
 # coding: utf-8
 
-# # Introduction
-# 
-# Thank you all for your support and time. My goal with this kernel is to provide a broad first look at the weather stations.
-# 
-# If you want a more exhaustive and detailed look at the data and how to use it, please check out my new kernel here: https://www.kaggle.com/huntermcgushion/exhaustive-weather-eda-file-overview
-# <br>
-# I would love to hear your thoughts on both this kernel and the one linked above. Thanks again for your time!
-
-# In[9]:
+# In[ ]:
 
 
-import numpy as np
+import os, sys, email
+import numpy as np 
 import pandas as pd
-import seaborn as sns
+# Plotting
 import matplotlib.pyplot as plt
-import os
+get_ipython().run_line_magic('matplotlib', 'inline')
+import seaborn as sns; sns.set_style('whitegrid')
+#import plotly
+#plotly.offline.init_notebook_mode()
+#import plotly.graph_objs as go
+import wordcloud
+
+# Network analysis
+import networkx as nx
+# NLP
+from nltk.tokenize.regexp import RegexpTokenizer
+
 from subprocess import check_output
-from IPython.display import display
-from IPython.core.display import HTML
-import plotly
-import plotly.offline as py
-
-py.init_notebook_mode(connected=False)
-sns.set_style('whitegrid')
-
-# Because the weather data directory is compressed, you can find it like this:
-weather_dir = '../input/rrv-weather-data'
-
-print('##### ../input/ Contents:')
-print(os.listdir("../input"))
-
-print('\n##### {} Contents:'.format(weather_dir))
-print(os.listdir(weather_dir))
-# Note that the contents of the below dir consist of another dir of the same name  
-print('\n##### {} Contents:'.format('{}/1-1-16_5-31-17_Weather'.format(weather_dir)))
-print(os.listdir('{}/1-1-16_5-31-17_Weather'.format(weather_dir)))
-print('\n##### {} Contents:'.format('{}/1-1-16_5-31-17_Weather/1-1-16_5-31-17_Weather'.format(weather_dir)))
-print(len(os.listdir('{}/1-1-16_5-31-17_Weather/1-1-16_5-31-17_Weather'.format(weather_dir))))
+print(check_output(["ls", "../input"]).decode("utf8"))
 
 
-# In[10]:
+# # 1. Loading and cleaning data
+
+# In[ ]:
 
 
-# air_store_info = pd.read_csv('{}/air_store_info_with_nearest_active_station.csv', index_col=False)
-air_store_info = pd.read_csv('{}/air_store_info_with_nearest_active_station.csv'.format(weather_dir))
-# hpg_store_info = pd.read_csv('../input/rrv-weather-data/hpg_store_info_with_nearest_active_station.csv', index_col=False)
-hpg_store_info = pd.read_csv('{}/hpg_store_info_with_nearest_active_station.csv'.format(weather_dir))
-
-air_store_info['coordinate_count'] = air_store_info.groupby(
-    ['latitude', 'longitude']
-).latitude.transform('count').astype(int)
-hpg_store_info['coordinate_count'] = hpg_store_info.groupby(
-    ['latitude', 'longitude']
-).latitude.transform('count').astype(int)
+# Read the data into a DataFrame
+emails_df = pd.read_csv('../input/emails.csv')
+print(emails_df.shape)
+emails_df.head()
 
 
-# In[11]:
+# In[ ]:
 
 
-display(air_store_info.head())
-display(hpg_store_info.head())
+# A single message looks like this
+print(emails_df['message'][0])
 
 
-# In[12]:
+# In[ ]:
 
 
-sns.distplot(air_store_info['station_vincenty'], rug=True, kde=True)
-plt.title('AIR - Distances (km) to Stations Distribution')
-plt.show()
+## Helper functions
+def get_text_from_email(msg):
+    '''To get the content from email objects'''
+    parts = []
+    for part in msg.walk():
+        if part.get_content_type() == 'text/plain':
+            parts.append( part.get_payload() )
+    return ''.join(parts)
 
-# NOTE: This one might take a minute to show up
-sns.distplot(hpg_store_info['station_vincenty'], rug=True, kde=True)
-plt.title('HPG - Distances (km) to Stations Distribution')
-plt.show()
-
-
-# The above distibution plots help visualizing the distances between our stores and nearest stations, but we can do better. 
-# <br>
-# Below, we're looking at joint plots with scatter plot overlays for both the AIR and HPG stores.
-# <br>
-# They give a clearer picture of just how many stores (at unique coordinates) are a given distance away from their closest station.
-
-# In[13]:
-
-
-p = sns.jointplot(x='station_vincenty', y='coordinate_count', data=air_store_info, kind='kde')
-plt.title('AIR KDE Joint Plot', loc='left')
-p.plot_joint(plt.scatter, c='w', s=30, linewidth=1, marker='x')
-plt.show()
-
-p = sns.jointplot(x='station_vincenty', y='coordinate_count', data=hpg_store_info, kind='kde')
-plt.title('HPG KDE Joint Plot', loc='left')
-p.plot_joint(plt.scatter, c='w', s=30, linewidth=1, marker='x')
-plt.show()
+def split_email_addresses(line):
+    '''To separate multiple email addresses'''
+    if line:
+        addrs = line.split(',')
+        addrs = frozenset(map(lambda x: x.strip(), addrs))
+    else:
+        addrs = None
+    return addrs
 
 
-# **What Are We Looking At?**
+# In[ ]:
+
+
+# Parse the emails into a list email objects
+messages = list(map(email.message_from_string, emails_df['message']))
+emails_df.drop('message', axis=1, inplace=True)
+# Get fields from parsed email objects
+keys = messages[0].keys()
+for key in keys:
+    emails_df[key] = [doc[key] for doc in messages]
+# Parse content from emails
+emails_df['content'] = list(map(get_text_from_email, messages))
+# Split multiple email addresses
+emails_df['From'] = emails_df['From'].map(split_email_addresses)
+emails_df['To'] = emails_df['To'].map(split_email_addresses)
+
+# Extract the root of 'file' as 'user'
+emails_df['user'] = emails_df['file'].map(lambda x:x.split('/')[0])
+del messages
+
+emails_df.head()
+
+
+# In[ ]:
+
+
+print('shape of the dataframe:', emails_df.shape)
+# Find number of unique values in each columns
+for col in emails_df.columns:
+    print(col, emails_df[col].nunique())
+
+
+# In[ ]:
+
+
+# Set index and drop columns with two few values
+emails_df = emails_df.set_index('Message-ID')    .drop(['file', 'Mime-Version', 'Content-Type', 'Content-Transfer-Encoding'], axis=1)
+# Parse datetime
+emails_df['Date'] = pd.to_datetime(emails_df['Date'], infer_datetime_format=True)
+emails_df.dtypes
+
+
+# # 2. Exploratory analyses
+# ## When do people send emails?
+
+# In[ ]:
+
+
+ax = emails_df.groupby(emails_df['Date'].dt.year)['content'].count().plot()
+ax.set_xlabel('Year', fontsize=18)
+ax.set_ylabel('N emails', fontsize=18)
+
+
+# In[ ]:
+
+
+ax = emails_df.groupby(emails_df['Date'].dt.dayofweek)['content'].count().plot()
+ax.set_xlabel('Day of week', fontsize=18)
+ax.set_ylabel('N emails', fontsize=18)
+
+
+# In[ ]:
+
+
+ax = emails_df.groupby(emails_df['Date'].dt.hour)['content'].count().plot()
+ax.set_xlabel('Hour', fontsize=18)
+ax.set_ylabel('N emails', fontsize=18)
+
+
+# ## Who sends most emails?
+
+# In[ ]:
+
+
+# Count words in Subjects and content
+tokenizer = RegexpTokenizer(r'(?u)\b\w\w+\b')
+emails_df['subject_wc'] = emails_df['Subject'].map(lambda x: len(tokenizer.tokenize(x)))
+emails_df['content_wc'] = emails_df['content'].map(lambda x: len(tokenizer.tokenize(x)))
+
+
+# In[ ]:
+
+
+grouped_by_people = emails_df.groupby('user').agg({
+        'content': 'count', 
+        'subject_wc': 'mean',
+        'content_wc': 'mean',
+    })
+grouped_by_people.rename(columns={'content': 'N emails', 
+                                  'subject_wc': 'Subject word count', 
+                                  'content_wc': 'Content word count'}, inplace=True)
+grouped_by_people.sort('N emails', ascending=False).head()
+
+
+# In[ ]:
+
+
+sns.pairplot(grouped_by_people.reset_index(), hue='user')
+
+
+# ## Social network analyses of email senders and recipients
+# ### Let's see who sends the most emails to whom
+# First we'll only look at emails sent to single email address, which may be more important personal communications
+
+# In[ ]:
+
+
+sub_df = emails_df[['From', 'To', 'Date']].dropna()
+print(sub_df.shape)
+# drop emails sending to multiple addresses
+sub_df = sub_df.loc[sub_df['To'].map(len) == 1]
+print(sub_df.shape)
+
+
+# In[ ]:
+
+
+sub_df = sub_df.groupby(['From', 'To']).count().reset_index()
+# Unpack frozensets
+sub_df['From'] = sub_df['From'].map(lambda x: next(iter(x)))
+sub_df['To'] = sub_df['To'].map(lambda x: next(iter(x)))
+# rename column
+sub_df.rename(columns={'Date': 'count'}, inplace=True)
+sub_df.sort('count', ascending=False).head(10)
+
+
+# Apparently some people send a lot of emails to themselves. It maybe very interesting to look at the differences between emails sent to selves and to others.
+
+# In[ ]:
+
+
+# Make a network of email sender and receipients
+G = nx.from_pandas_dataframe(sub_df, 'From', 'To', edge_attr='count', create_using=nx.DiGraph())
+print('Number of nodes: %d, Number of edges: %d' % (G.number_of_nodes(), G.number_of_edges()))
+
+
+# In[ ]:
+
+
+fig, (ax1, ax2) = plt.subplots(1,2, figsize=(12, 8))
+ax1.hist(list(G.in_degree(weight='count').values()), log=True, bins=20)
+ax1.set_xlabel('In-degrees', fontsize=18)
+
+ax2.hist(list(G.out_degree(weight='count').values()), log=True, bins=20)
+ax2.set_xlabel('Out-degrees', fontsize=18)
+
+
+# Looks like scale-free degree distribution
 # 
-# As we can see from the joint plots, most of the closest weather stations are within about 8 km of the store we are looking at.
+# ---
+# ### Examine connected components in the network
 # 
-# The AIR outliers are: 3 unique store coordinates whose nearest stations are between 10 and 12 km away.
-# <br>
-# The coordinate_count values seem low, so there are probably under 20 AIR stores that are more than 10 km away from a station.
+
+# In[ ]:
+
+
+n_nodes_in_cc = []
+for nodes in nx.connected_components(G.to_undirected()):
+    n_nodes_in_cc.append(len(nodes))
+
+plt.hist(n_nodes_in_cc, bins=20, log=True)
+plt.xlabel('# Nodes in connected components', fontsize=18)
+plt.ylim([.1,1e4])
+
+
+# ## What do the emails say?
 # 
-# The HPG outliers are more numerous and confusing, largely because there are 4,690 HPG stores, compared to AIR's 829.
-# <br>
-# They seem to be: a little over 100 stores (4 unique coordinates) that are between 12 and 15 km from their nearest station, along with about 10 more that are a whopping 17.5 km away.
-# 
-# But that's not really specific enough. Let's check the actual data...
+# ### In the subjects:
 
-# In[14]:
+# In[ ]:
 
 
-def view_distances(df, distance, cols=['station_vincenty', 'coordinate_count']):
-    return df[cols].groupby(cols).filter(
-         lambda _: _[cols[0]].mean() > distance
-    ).drop_duplicates().sort_values(by=cols).reset_index(drop=True)
+from sklearn.feature_extraction.stop_words import ENGLISH_STOP_WORDS
 
-display(view_distances(air_store_info, 8))
-
-
-# For the AIR stores, there are 16 stores (3 unique coordinates) that are between 8 and 8.5 km away from their closest station.
-# <br>
-# There are also 13 stores (3 unique coordinates) that are more than 10 km away from a station.
-# <br>
-# The furthest an AIR store is from an active weather station is 11.48 km.
-
-# In[15]:
+subjects = ' '.join(emails_df['Subject'])
+fig, ax = plt.subplots(figsize=(16, 12))
+wc = wordcloud.WordCloud(width=800, 
+                         height=600, 
+                         max_words=200,
+                         stopwords=ENGLISH_STOP_WORDS).generate(subjects)
+ax.imshow(wc)
+ax.axis("off")
 
 
-display(view_distances(hpg_store_info, 10))
+# ### In the contents:
+
+# In[ ]:
 
 
-# For the HPG stores, we see 116 stores (6 unique coordinates) between 10 and 13.14 km away from a station.
-# <br>
-# Then, there are 14 stores (1 unique coordinate pair) located 17.18 km from a station.
-# 
-# # Maps
-# Below are a couple maps showing the locations of all AIR and HPG stores, as well as all active and terminated weather stations.
-# The maps were originally created using Plot.ly, with MapBox, which made some beautiful maps that very clearly showed the positions of our stores and weather stations. Unfortunately, MapBox requires the use of an access token, which isn't supposed to be made public. So I had to jump through a few hoops to show the plot below without explicitly declaring my MapBox access token, and I'm still not very confident in its security... Nonetheless, I wanted you to see these:
+contents = ' '.join(emails_df.sample(1000)['content'])
+fig, ax = plt.subplots(figsize=(16, 12))
+wc = wordcloud.WordCloud(width=800, 
+                         height=600, 
+                         max_words=200,
+                         stopwords=ENGLISH_STOP_WORDS).generate(contents)
+ax.imshow(wc)
+ax.axis("off")
 
-# In[16]:
-
-
-display(HTML("""<div>
-    <a href="https://plot.ly/~hmcgushion/4/?share_key=pArkblYSXlgzZWvBrvqeFH" target="_blank" title="AllStoresAndStations_Plot" style="display: block; text-align: center;"><img src="https://plot.ly/~hmcgushion/4.png?share_key=pArkblYSXlgzZWvBrvqeFH" alt="AllStoresAndStations_Plot" style="max-width: 100%;width: 1000px;"  width="1000" onerror="this.onerror=null;this.src='https://plot.ly/404.png';" /></a>
-    <script data-plotly="hmcgushion:4" sharekey-plotly="pArkblYSXlgzZWvBrvqeFH" src="https://plot.ly/embed.js" async></script>
-</div>"""))
-
-
-# Above, we have all of the AIR store locations in red, and all of the HPG locations in blue.
-# <br>
-# We also have all of the active weather stations in green, and all of the terminated station in black.
-# <br>
-# You can zoom and pan and hover over any point to see its latidude, longitude coordinates, and the area (for stores), or the station_id for weather stations.
-# 
-# The next ScatterMapBox will show all of the stores, with only the nearest weather stations.
-# <br>
-# Additionally, it shows the distance from each store to its nearest station, along with a line between the store and station to better visualize the distance.

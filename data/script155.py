@@ -1,1177 +1,578 @@
 
 # coding: utf-8
 
-# # Cricket Exploration  -  IPL Analysis
-# ### - Ashwin
-
-# Anybody who is a cricket Fan should surely try to analyse this dataset as it would help you in learning with a fun factor. I have tried my best to keep this notebook as simple as possible so that even a beginner can understand it easily. At the same time I have made efforts to analyse the dataset in different aspects effectively. I will keep updating the notebook as and when I come up with new things. Hope you like it!!!
+# # Terrorist Activities Around The World
+#  
+# According to a survey, about 218 million people are affected by calamities, natural and man-made, per annum and about 68000 people loose their lives every year. The frequency of natural disasters like earthquakes, volcanoes, etc have remained broadly constant, but the number of terrorist activities have grown over the period.
 # 
-# The notebook contains:
-#  - Basic Analysis like Teams with maximum matches, wins,etc
-#  - Batsman Analysis
-#  - Bowler Analysis
-#  - 200+ scores analysis
+# The aim of this notebook is to explore the terrorist events around the world. Interactive Plots and Animations are used in this notebook, for making the exploration easy and more informative. This is my first try on **Folium**, which is a wrapper over the Leaflet.js API.Some things that we will explore are the trends in terrorism over the year, the terrorism prone areas, etc. Since it is a geographic dataset, you will see a lot of geomaps.
 # 
-# If you like the notebook, **Please Upvote** as it will keep me motivated in doing great things ahead. Thanks!!
+# If you like this notebook, **Please Upvote**, as it keeps me motivated in doing better.
 # 
-# I have used the following packages for visualisations:
+# **Note: I have only used first 5000 rows for folium maps. The reason is the notebook or script crashes a lot and it kills the kernel due to long execution time.**
 # 
-#  1. Matplotlib
-#  2. Seaborn
-#  3. Plotly
-# 
-# Not all the visuals are interactive as Plotly is not useful everywhere. I have mentioned **INTERACTIVE** at places where the visuals are inteactive.
-# 
-# Following is a **Tableau Dashboard**. DO have a look at it.
-
-# ## Tableau Dashboard
+# **Below is a Simple Tableau Dashboard, do have a look
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('HTML', '', "\n<div class='tableauPlaceholder' id='viz1512062244547' style='position: relative'><noscript><a href='#'><img alt='Dashboard 1 ' src='https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;IP&#47;IPLDashboard_0&#47;Dashboard1&#47;1_rss.png' style='border: none' /></a></noscript><object class='tableauViz'  style='display:none;'><param name='host_url' value='https%3A%2F%2Fpublic.tableau.com%2F' /> <param name='embed_code_version' value='3' /> <param name='site_root' value='' /><param name='name' value='IPLDashboard_0&#47;Dashboard1' /><param name='tabs' value='no' /><param name='toolbar' value='yes' /><param name='static_image' value='https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;IP&#47;IPLDashboard_0&#47;Dashboard1&#47;1.png' /> <param name='animate_transition' value='yes' /><param name='display_static_image' value='yes' /><param name='display_spinner' value='yes' /><param name='display_overlay' value='yes' /><param name='display_count' value='yes' /></object></div>                <script type='text/javascript'>                    var divElement = document.getElementById('viz1512062244547');                    var vizElement = divElement.getElementsByTagName('object')[0];                    vizElement.style.width='1520px';vizElement.style.height='1787px';                    var scriptElement = document.createElement('script');                    scriptElement.src = 'https://public.tableau.com/javascripts/api/viz_v1.js';                    vizElement.parentNode.insertBefore(scriptElement, vizElement);                </script>")
+get_ipython().run_cell_magic('HTML', '', "<div class='tableauPlaceholder' id='viz1512233423027' style='position: relative'><noscript><a href='#'><img alt='Dashboard 1 ' src='https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;RD&#47;RDGKRRHB7&#47;1_rss.png' style='border: none' /></a></noscript><object class='tableauViz'  style='display:none;'><param name='host_url' value='https%3A%2F%2Fpublic.tableau.com%2F' /> <param name='embed_code_version' value='3' /> <param name='path' value='shared&#47;RDGKRRHB7' /> <param name='toolbar' value='yes' /><param name='static_image' value='https:&#47;&#47;public.tableau.com&#47;static&#47;images&#47;RD&#47;RDGKRRHB7&#47;1.png' /> <param name='animate_transition' value='yes' /><param name='display_static_image' value='yes' /><param name='display_spinner' value='yes' /><param name='display_overlay' value='yes' /><param name='display_count' value='yes' /></object></div>                <script type='text/javascript'>                    var divElement = document.getElementById('viz1512233423027');                    var vizElement = divElement.getElementsByTagName('object')[0];                    vizElement.style.width='1020px';vizElement.style.minHeight='687px';vizElement.style.maxHeight='1587px';vizElement.style.height=(divElement.offsetWidth*0.75)+'px';                    var scriptElement = document.createElement('script');                    scriptElement.src = 'https://public.tableau.com/javascripts/api/viz_v1.js';                    vizElement.parentNode.insertBefore(scriptElement, vizElement);                </script>")
 
+
+# **Contents in the Notebook**
+# 
+# - <a href='#Part2'> Terrorism Around The World</a>
+#   - <a href='#Getting Data Ready2'> 1.1 Getting Data Ready</a>
+#   - <a href='#Some Basic Analysis2'> 1.2 Some Basic Analysis</a>
+#   - <a href='#Global Attacks'>1.3 Global Terror Attacks</a>
+#   - <a href='#Region'>1.4 Terrorism By Region</a>
+#   - <a href='#Notorious'>1.5 Most Notorious Groups</a>
+#   - <a href='#India'>1.6 Terror Activities in India</a>
+#   - <a href='#USA'>1.7 Terror Activities in USA</a>
+#   - <a href='#Motive'>1.8 Motive Behind Attacks</a>
+#   - <a href='#Animate'>1.9 World Terrorism Spread(Animation)</a>
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as mlt
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
 import seaborn as sns
-mlt.style.use('fivethirtyeight')
+import numpy as np
+plt.style.use('fivethirtyeight')
 import plotly.offline as py
 py.init_notebook_mode(connected=True)
 import plotly.graph_objs as go
 import plotly.tools as tls
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
+from mpl_toolkits.basemap import Basemap
+import folium
+import folium.plugins
+from matplotlib import animation,rc
+import io
+import base64
+from IPython.display import HTML, display
+import warnings
+warnings.filterwarnings('ignore')
+from scipy.misc import imread
+import codecs
 from subprocess import check_output
 print(check_output(["ls", "../input"]).decode("utf8"))
 
-# Any results you write to the current directory are saved as output.
+
+# # <a id='Part2'>Terrorism Around The World</a>
+
+# ![](https://www.iaspaper.net/wp-content/uploads/2017/08/Terrorism-Word-Cloud.jpg)
+
+# The Year 2017 has witnessed about 1045 terror attacks till now, which has claimed 6000+ lives. According to a survey, there is atleast 1 terrorist attack taking place each day somewhere around the world. One such noxious attack took place at Las Vegas on 1st October 2017, claiming 59 lives and injuring 500+ people.
+# 
+# Terrorism implies the use of violence to terrorise a population or government for certain political, religious or ideological purpose. The threat of terrorism has become a worldwide concern with several parts of the world reeling under frequent terrorist strikes. With little concern for human lives, terrorists continue to strike with impunity, leaving a trail of death and destruction, wherever they choose to inflict their blows. 
+# 
+# In this dataset, we will be exploring the terror attacks over the world from 1970-2016, finding the most affected countries, the most notorious groups, their motives,etc.
+
+# ### <a id='Getting Data Ready2'>1.1 Getting Data Ready</a>
+
+# In[ ]:
+
+
+terror=pd.read_csv('../input/globalterrorismdb_0617dist.csv',encoding='ISO-8859-1')
+terror.rename(columns={'iyear':'Year','imonth':'Month','iday':'Day','country_txt':'Country','region_txt':'Region','attacktype1_txt':'AttackType','target1':'Target','nkill':'Killed','nwound':'Wounded','summary':'Summary','gname':'Group','targtype1_txt':'Target_type','weaptype1_txt':'Weapon_type','motive':'Motive'},inplace=True)
+terror=terror[['Year','Month','Day','Country','Region','city','latitude','longitude','AttackType','Killed','Wounded','Target','Summary','Group','Target_type','Weapon_type','Motive']]
+terror['casualities']=terror['Killed']+terror['Wounded']
+terror.head(3)
 
 
 # In[ ]:
 
 
-matches=pd.read_csv('../input/matches.csv')   
-delivery=pd.read_csv('../input/deliveries.csv')
-matches.head(2)
+terror.isnull().sum()
+
+
+# ### <a id='Some Basic Analysis2'>1.2 Some Basic Analysis</a>
+
+# In[ ]:
+
+
+print('Country with Highest Terrorist Attacks:',terror['Country'].value_counts().index[0])
+print('Regions with Highest Terrorist Attacks:',terror['Region'].value_counts().index[0])
+print('Maximum people killed in an attack are:',terror['Killed'].max(),'that took place in',terror.loc[terror['Killed'].idxmax()].Country)
 
 
 # In[ ]:
 
 
-delivery.head(2)
+plt.subplots(figsize=(15,6))
+sns.countplot('Year',data=terror,palette='RdYlGn_r',edgecolor=sns.color_palette('dark',7))
+plt.xticks(rotation=90)
+plt.title('Number Of Terrorist Activities Each Year')
+plt.show()
 
 
-# ## Some Cleaning And Transformation
-
-# In[ ]:
-
-
-matches.drop(['umpire3'],axis=1,inplace=True)  #since all the values are NaN
-delivery.fillna(0,inplace=True)     #filling all the NaN values with 0
-
+# Clearly the number of terrorist activities have gone up sharply after 2000.
 
 # In[ ]:
 
 
-matches['team1'].unique()
-
-
-# In[ ]:
-
-
-#Replacing the Team Names with their abbreviations
-
-matches.replace(['Mumbai Indians','Kolkata Knight Riders','Royal Challengers Bangalore','Deccan Chargers','Chennai Super Kings',
-                 'Rajasthan Royals','Delhi Daredevils','Gujarat Lions','Kings XI Punjab',
-                 'Sunrisers Hyderabad','Rising Pune Supergiants','Kochi Tuskers Kerala','Pune Warriors','Rising Pune Supergiant']
-                ,['MI','KKR','RCB','DC','CSK','RR','DD','GL','KXIP','SRH','RPS','KTK','PW','RPS'],inplace=True)
-
-delivery.replace(['Mumbai Indians','Kolkata Knight Riders','Royal Challengers Bangalore','Deccan Chargers','Chennai Super Kings',
-                 'Rajasthan Royals','Delhi Daredevils','Gujarat Lions','Kings XI Punjab',
-                 'Sunrisers Hyderabad','Rising Pune Supergiants','Kochi Tuskers Kerala','Pune Warriors','Rising Pune Supergiant']
-                ,['MI','KKR','RCB','DC','CSK','RR','DD','GL','KXIP','SRH','RPS','KTK','PW','RPS'],inplace=True)
-
-
-# ## Some Basic Analysis
-
-# In[ ]:
-
-
-print('Total Matches Played:',matches.shape[0])
-print(' \n Venues Played At:',matches['city'].unique())     
-print(' \n Teams :',matches['team1'].unique())
+plt.subplots(figsize=(15,6))
+sns.countplot('AttackType',data=terror,palette='inferno',order=terror['AttackType'].value_counts().index)
+plt.xticks(rotation=90)
+plt.title('Attacking Methods by Terrorists')
+plt.show()
 
 
 # In[ ]:
 
 
-print('Total venues played at:',matches['city'].nunique())
-print('\nTotal umpires ',matches['umpire1'].nunique())
+plt.subplots(figsize=(15,6))
+sns.countplot(terror['Target_type'],palette='inferno',order=terror['Target_type'].value_counts().index)
+plt.xticks(rotation=90)
+plt.title('Favorite Targets')
+plt.show()
 
 
-# In[ ]:
-
-
-print((matches['player_of_match'].value_counts()).idxmax(),' : has most man of the match awards')
-print(((matches['winner']).value_counts()).idxmax(),': has the highest number of match wins')
-
+# ### <a id='Global Attacks'>1.3 Global Terror Attacks</a>
 
 # In[ ]:
 
 
-df=matches.iloc[[matches['win_by_runs'].idxmax()]]
-df[['season','team1','team2','winner','win_by_runs']]
-
-
-# Mumbai Indians(MI) defeated Delhi Daredevils(DD) with the highest run difference
-
-# In[ ]:
-
-
-df=matches.iloc[[matches['win_by_wickets'].idxmax()]]
-df[['season','team1','team2','winner','win_by_wickets']]
-
-
-# Kolkata Knight Riders(KKR) defeated Gujrat Lions(GL) with the highest wins by wickets
-
-# ## Toss Decisions
-
-# In[ ]:
-
-
-print('Toss Decisions in %\n',((matches['toss_decision']).value_counts())/577*100)
-
-
-# ### Toss Decisions across Seasons
-
-# In[ ]:
-
-
-mlt.subplots(figsize=(10,6))
-sns.countplot(x='season',hue='toss_decision',data=matches)
-mlt.show()
-
-
-# The decision for batting or fielding varies largely across the seasons. In some seasons, the probablity that toss winners opt for batting is high, while it is not the case in other seasons. In 2016 though, the majority of toss winners opted for batting. 
-
-# ### Maximum Toss Winners
-
-# In[ ]:
-
-
-mlt.subplots(figsize=(10,6))
-ax=matches['toss_winner'].value_counts().plot.bar(width=0.8)
-for p in ax.patches:
-    ax.annotate(format(p.get_height()), (p.get_x()+0.15, p.get_height()+1))
-mlt.show()
-
-
-# Mumbai Indians seem to be very lucky having the higest win in tosses follwed by Kolkata Knight Riders. Pune Supergiants have the lowest wins as they have played the lowest matches also. This does not show the higher chances of winning the toss as the number of matches played by each team is uneven.
-
-# ### Total Matches vs Wins for Teams (INTERACTIVE)
-
-# In[ ]:
-
-
-matches_played_byteams=pd.concat([matches['team1'],matches['team2']])
-matches_played_byteams=matches_played_byteams.value_counts().reset_index()
-matches_played_byteams.columns=['Team','Total Matches']
-matches_played_byteams['wins']=matches['winner'].value_counts().reset_index()['winner']
-matches_played_byteams.set_index('Team',inplace=True)
-
-trace1 = go.Bar(
-    x=matches_played_byteams.index,
-    y=matches_played_byteams['Total Matches'],
-    name='Total Matches'
-)
-trace2 = go.Bar(
-    x=matches_played_byteams.index,
-    y=matches_played_byteams['wins'],
-    name='Matches Won'
-)
-
-data = [trace1, trace2]
-layout = go.Layout(
-    barmode='stack'
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='stacked-bar')
-
-
-# ### Is Toss Winner Also the Match Winner?
-
-# In[ ]:
-
-
-df=matches[matches['toss_winner']==matches['winner']]
-slices=[len(df),(577-len(df))]
-labels=['yes','no']
-mlt.pie(slices,labels=labels,startangle=90,shadow=True,explode=(0,0),autopct='%1.1f%%',colors=['r','g'])
-fig = mlt.gcf()
-fig.set_size_inches(6,6)
-mlt.show()
-
-
-# Thus the toss winner is not necessarily the match winner. The match winning probablity for toss winnong team is about 50%-50%
-
-# ##  Matches played across each season
-
-# In[ ]:
-
-
-mlt.subplots(figsize=(10,6))
-sns.countplot(x='season',data=matches,palette="Set1")  #countplot automatically counts the frequency of an item
-mlt.show()
-
-
-# ### Runs Across the Seasons
-
-# In[ ]:
-
-
-mlt.subplots(figsize=(10,6))
-batsmen = matches[['id','season']].merge(delivery, left_on = 'id', right_on = 'match_id', how = 'left').drop('id', axis = 1)
-#merging the matches and delivery dataframe by referencing the id and match_id columns respectively
-season=batsmen.groupby(['season'])['total_runs'].sum().reset_index()
-season['total_runs'].plot(marker='o')
-mlt.show()
-
-
-# There was a decline in total runs from 2008 to 2009.But there after there was a substantial increase in runs in every season until 2013, but from next season there was a slump in the total runs. But the number of matches are not equal in all seasons. We should check the average runs per match in each season
-
-# ### Average runs per match in each Season
-
-# In[ ]:
-
-
-mlt.subplots(figsize=(10,6))
-avgruns_each_season=matches.groupby(['season']).count().id.reset_index()
-avgruns_each_season.rename(columns={'id':'matches'},inplace=1)
-avgruns_each_season['total_runs']=season['total_runs']
-avgruns_each_season['average_runs_per_match']=avgruns_each_season['total_runs']/avgruns_each_season['matches']
-avgruns_each_season['average_runs_per_match'].plot(marker='o')
-mlt.show()
-
-
-# ### Sixes and Fours Across the Season
-
-# In[ ]:
-
-
-Season_boundaries=batsmen.groupby("season")["batsman_runs"].agg(lambda x: (x==6).sum()).reset_index()
-a=batsmen.groupby("season")["batsman_runs"].agg(lambda x: (x==4).sum()).reset_index()
-Season_boundaries=Season_boundaries.merge(a,left_on='season',right_on='season',how='left')
-Season_boundaries=Season_boundaries.rename(columns={'batsman_runs_x':'6"s','batsman_runs_y':'4"s'})
-Season_boundaries[['6"s','4"s']].plot(marker='o')
-fig=mlt.gcf()
+m3 = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c',lat_0=True,lat_1=True)
+lat_100=list(terror[terror['casualities']>=75].latitude)
+long_100=list(terror[terror['casualities']>=75].longitude)
+x_100,y_100=m3(long_100,lat_100)
+m3.plot(x_100, y_100,'go',markersize=5,color = 'r')
+lat_=list(terror[terror['casualities']<75].latitude)
+long_=list(terror[terror['casualities']<75].longitude)
+x_,y_=m3(long_,lat_)
+m3.plot(x_, y_,'go',markersize=2,color = 'b',alpha=0.4)
+m3.drawcoastlines()
+m3.drawcountries()
+m3.fillcontinents(lake_color='aqua')
+m3.drawmapboundary(fill_color='aqua')
+fig=plt.gcf()
 fig.set_size_inches(10,6)
-mlt.show()
+plt.title('Global Terrorist Attacks')
+plt.legend(loc='lower left',handles=[mpatches.Patch(color='b', label = "< 75 casualities"),
+                    mpatches.Patch(color='red',label='> 75 casualities')])
+plt.show()
 
 
-# ### Runs Per Over By Teams Across Seasons
-
-# In[ ]:
-
-
-runs_per_over = delivery.pivot_table(index=['over'],columns='batting_team',values='total_runs',aggfunc=sum)
-runs_per_over[(matches_played_byteams[matches_played_byteams['Total Matches']>50].index)].plot(color=["b", "r", "#Ffb6b2", "g",'brown','y','#6666ff','black','#FFA500']) #plotting graphs for teams that have played more than 100 matches
-x=[1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20]
-mlt.xticks(x)
-mlt.ylabel('total runs scored')
-fig=mlt.gcf()
-fig.set_size_inches(16,8)
-mlt.show()
-
-
-# Maximum runs are being scored in the last 5 overs of the match. MI and RCB have shown a incresing trend in the runs scored throughout the match. 
-
-# ### Favorite Grounds
+# The above basemap shows the places of attacks. The red circles are those that had more than 75 casualities(wounded+killed). Lets make an interactive map with Folium and get more information for each location.
 
 # In[ ]:
 
 
-mlt.subplots(figsize=(10,15))
-ax = matches['venue'].value_counts().sort_values(ascending=True).plot.barh(width=.9)
-ax.set_xlabel('Grounds')
-ax.set_ylabel('count')
-mlt.show()
+terror_fol=terror.copy()
+terror_fol.dropna(subset=['latitude','longitude'],inplace=True)
+location_fol=terror_fol[['latitude','longitude']][:5000]
+country_fol=terror_fol['Country'][:5000]
+city_fol=terror_fol['city'][:5000]
+killed_fol=terror_fol['Killed'][:5000]
+wound_fol=terror_fol['Wounded'][:5000]
+def color_point(x):
+    if x>=30:
+        color='red'
+    elif ((x>0 and x<30)):
+        color='blue'
+    else:
+        color='green'
+    return color   
+def point_size(x):
+    if (x>30 and x<100):
+        size=2
+    elif (x>=100 and x<500):
+        size=8
+    elif x>=500:
+        size=16
+    else:
+        size=0.5
+    return size   
+map2 = folium.Map(location=[30,0],tiles='CartoDB dark_matter',zoom_start=2)
+for point in location_fol.index:
+    info='<b>Country: </b>'+str(country_fol[point])+'<br><b>City: </b>: '+str(city_fol[point])+'<br><b>Killed </b>: '+str(killed_fol[point])+'<br><b>Wounded</b> : '+str(wound_fol[point])
+    iframe = folium.IFrame(html=info, width=200, height=200)
+    folium.CircleMarker(list(location_fol.loc[point].values),popup=folium.Popup(iframe),radius=point_size(killed_fol[point]),color=color_point(killed_fol[point])).add_to(map2)
+map2
 
 
-# ## Maximum Man Of Matches
+# The color and size of each point is according to the number of people killed in the attack. Click on each point to get more information about the attack.
 
-# In[ ]:
-
-
-mlt.subplots(figsize=(10,6))
-#the code used is very basic but gets the job done easily
-ax = matches['player_of_match'].value_counts().head(10).plot.bar(width=.8, color='R')  #counts the values corresponding 
-# to each batsman and then filters out the top 10 batsman and then plots a bargraph 
-ax.set_xlabel('player_of_match') 
-ax.set_ylabel('count')
-for p in ax.patches:
-    ax.annotate(format(p.get_height()), (p.get_x()+0.15, p.get_height()+0.25))
-mlt.show()
-
-
-# ## Winners by Year
-
-# In[ ]:
-
-
-for i in range(2008,2017):
-    df=((matches[matches['season']==i]).iloc[-1]) 
-    print(df[[1,10]])
-#getting the last match in every season since the last match will be the final match for the season
-
-
-# ### Super Over!
-
-# In[ ]:
-
-
-print('\n Total Matches with Super Overs:',delivery[delivery['is_super_over']==1].match_id.nunique())
-
+# ### <a id='Region'>1.4 Terrorism By Region</a>
 
 # In[ ]:
 
 
-teams=['MI','KKR','RCB','DC','CSK','RR','DD','GL','KXIP','SRH','RPS','KTK','PW']
-play=delivery[delivery['is_super_over']==1].batting_team.unique()
-play=list(play)
-print('Teams who haven"t ever played a super over are:' ,list(set(teams)-set(play)))
+plt.subplots(figsize=(15,6))
+sns.countplot('Region',data=terror,palette='RdYlGn',edgecolor=sns.color_palette('dark',7),order=terror['Region'].value_counts().index)
+plt.xticks(rotation=90)
+plt.title('Number Of Terrorist Activities By Region')
+plt.show()
 
 
-# ### Favorite Umpires
+# Middle East and North Africa are the most terrorism prone regions followed by South Asia. The Australian Region have experienced very few terrorist events. Collectively we can say that The African and Asian Continent experience the highest terrorist attacks. But why are these regions prone to terrorism? Does this have any relation to the mindset of the people? or any other reason??
 
-# In[ ]:
-
-
-mlt.subplots(figsize=(10,6))
-ump=pd.concat([matches['umpire1'],matches['umpire2']]) 
-ax=ump.value_counts().head(10).plot.bar(width=0.8,color='Y')
-for p in ax.patches:
-    ax.annotate(format(p.get_height()), (p.get_x()+0.15, p.get_height()+0.25))
-mlt.show()
-
-
-# ## Team1 vs Team2
-# 
-# Here we will check the matches played between 2 teams and which had won more matches each year
-
-# ### MI vs KKR
+# #### Trend in Terrorist Activities
 
 # In[ ]:
 
 
-def team1_vs_team2(team1,team2):
-    mt1=matches[((matches['team1']==team1)|(matches['team2']==team1))&((matches['team1']==team2)|(matches['team2']==team2))]
-    sns.countplot(x='season', hue='winner',data=mt1,palette='Set3')
-    mlt.xticks(rotation='vertical')
-    leg = mlt.legend( loc = 'upper center')
-    fig=mlt.gcf()
-    fig.set_size_inches(10,6)
-    mlt.show()
-team1_vs_team2('KKR','MI')
-
-
-# MI have defeated KKR in 13 out of 18 matches played between them.Only in the year 2014, KKR won both the matches.Thus in a MI vs KKR match, we know on whom should we bet upon. Similar comparisions can be done between any two teams, we just need to change the team names. 
-# 
-# One thing to notice is that MI and KKR have never played against each other in any qualifiers or finals as both of them have played only 2 matches every year, those being the group stage matches.
-
-# ### MI vs CSK
-
-# In[ ]:
-
-
-team1_vs_team2('CSK','MI')
-
-
-# Here se can see that MI and CSK have played against each other in more than 2 matches in some seasons i.e they have played qualifiers too.
-
-# ### Matches Won By A Team Against Other Teams
-
-# Now we will be checking the number of times a Team has won against other teams. This will give us an idea as which team has an upper hand over the others when they play head-to-head.
-
-# In[ ]:
-
-
-def comparator(team1):
-    teams=['MI','KKR','RCB','DC','CSK','RR','DD','GL','KXIP','SRH','RPS','KTK','PW']
-    teams.remove(team1)
-    opponents=teams.copy()
-    mt1=matches[((matches['team1']==team1)|(matches['team2']==team1))]
-    for i in opponents:
-        mask = (((mt1['team1']==i)|(mt1['team2']==i)))&((mt1['team1']==team1)|(mt1['team2']==team1))
-        mt2 = mt1.loc[mask, 'winner'].value_counts().to_frame().T
-        print(mt2)
-    
-comparator('MI')
-
-
-# ### Score Distribution For Teams by Innings
-
-# In[ ]:
-
-
-mlt.subplots(figsize=(12,6))
-xyz=delivery.groupby(['match_id','inning','batting_team'])['total_runs'].sum().reset_index()
-xyz.drop('match_id',axis=1,inplace=True)
-xyz=xyz.sort_values(by=['batting_team','total_runs'],ascending=True)
-score_1_inning=xyz[xyz['inning']==1]
-score_2_inning=xyz[xyz['inning']==2]
-sns.boxplot(x='batting_team',y='total_runs',data=score_1_inning).set_title('1st Innings')
-mlt.show()
-sns.boxplot(x='batting_team',y='total_runs',data=score_2_inning).set_title('2nd Innings')
-fig=mlt.gcf()
-fig.set_size_inches(12,6)
-
-
-# According to Graph 1 the batting by CSK in innings 1 looks to be the best.  Graph 2 also conveys the same story.
-# 
-# In Graph 2 we see a point near 0 which may seem to be outlier. But it is so because the match was disrupted. 
-
-# ## 200+ Scores
-
-# In[ ]:
-
-
-high_scores=delivery.groupby(['match_id', 'inning','batting_team','bowling_team'])['total_runs'].sum().reset_index() 
-#reset_index() converts the obtained series into a dataframe
-high_scores=high_scores[high_scores['total_runs']>=200]
-#nlargest is used to sort the given column
-high_scores.nlargest(10,'total_runs')
-
-
-# In[ ]:
-
-
-fig, ax =mlt.subplots(1,2)
-sns.countplot(high_scores['batting_team'],ax=ax[0])
-sns.countplot(high_scores['bowling_team'],ax=ax[1])
-mlt.xticks(rotation=90)
-fig=mlt.gcf()
+terror_region=pd.crosstab(terror.Year,terror.Region)
+terror_region.plot(color=sns.color_palette('Set2',12))
+fig=plt.gcf()
 fig.set_size_inches(18,6)
-mlt.show()
+plt.show()
 
 
-# The graph on the left shows the number of times a team has scored above 200 runs. The graph on the right shows the number of times a bowling team has conceeded above 200 runs. 
+# As seen already, Middle-East,North Africa,South Asia have seen a shoot in the number of terrorist activities over the years.
 
-# In[ ]:
-
-
-print('Teams who have"nt ever scored 200 runs',list(set(teams)-set(high_scores['batting_team'])))
-print('Teams who haven"t conceeded over 200 while bowling',list(set(teams)-set(high_scores['bowling_team'])))
-
+# #### AttackType vs Region
 
 # In[ ]:
 
 
-high=delivery.groupby(['match_id', 'inning','batting_team','bowling_team'])['total_runs'].sum().reset_index()
-high.set_index(['match_id'],inplace=True)
-high['total_runs'].max()
-high.columns
-high=high.rename(columns={'total_runs':'count'})
-high=high[high['count']>=200].groupby(['inning','batting_team','bowling_team']).count()
-high
+pd.crosstab(terror.Region,terror.AttackType).plot.barh(stacked=True,width=1,color=sns.color_palette('RdYlGn',9))
+fig=plt.gcf()
+fig.set_size_inches(12,8)
+plt.show()
 
 
-# The above dataframe shows the number of times a team has scored above 200 runs against another team. Clearly MI has scored 200+ againt DD 3 times and similarly RCB has scored 200+ againt KXIP 3 times. Also the number of 200+ runs are higher in the 1st innings.
+# Bombing and Armed assaults, as seen above are the most prominent types of Attack irrespective of Regions.
 
-# In[ ]:
-
-
-high_scores=delivery.groupby(['match_id', 'inning','batting_team','bowling_team'])['total_runs'].sum().reset_index()
-high_scores1=high_scores[high_scores['inning']==1]
-high_scores2=high_scores[high_scores['inning']==2]
-high_scores1=high_scores1.merge(high_scores2[['match_id','inning', 'total_runs']], on='match_id')
-high_scores1.rename(columns={'inning_x':'inning_1','inning_y':'inning_2','total_runs_x':'inning1_runs','total_runs_y':'inning2_runs'},inplace=True)
-high_scores1=high_scores1[high_scores1['inning1_runs']>=200]
-high_scores1['is_score_chased']=1
-high_scores1['is_score_chased'] = np.where(high_scores1['inning1_runs']<=high_scores1['inning2_runs'], 
-                                           'yes', 'no')
-high_scores1.head()
-
-
-# ### Chances of chasing 200+ target
+# ### <a id='Country'>1.5 Terrorism By Country</a>
 
 # In[ ]:
 
 
-slices=high_scores1['is_score_chased'].value_counts().reset_index().is_score_chased
-list(slices)
-labels=['target not chased','target chased']
-mlt.pie(slices,labels=labels,colors=['#1f2ff3', '#0fff00'],startangle=90,shadow=True,explode=(0,0.1),autopct='%1.1f%%')
-fig = mlt.gcf()
-fig.set_size_inches(6,6)
-mlt.show()
+plt.subplots(figsize=(18,6))
+sns.barplot(terror['Country'].value_counts()[:15].index,terror['Country'].value_counts()[:15].values,palette='inferno')
+plt.title('Top Affected Countries')
+plt.show()
 
 
-# It seems to be clear that team batting first and scoring 200+ runs, has a very high probablity of winning the match.
+# Iraq has witnessed a very large number of terrorist activities followed by Pakistan. One thing to note is the countries with highest attacks, are mostly densely populated countries, thus it will eventually claim many lives. Let's check 
 
-# ## Batsman Comparator
-
-# I have created a function that compares 2 batsman based on their respective stats like runs or strike rate etc. First lets create a dataframe from where we will be taking all that values for comparison.
+# #### Attacks vs Killed
 
 # In[ ]:
 
 
-balls=delivery.groupby(['batsman'])['ball'].count().reset_index()
-runs=delivery.groupby(['batsman'])['batsman_runs'].sum().reset_index()
-balls=balls.merge(runs,left_on='batsman',right_on='batsman',how='outer')
-balls.columns=[['batsman','ball_x','ball_y']]
-sixes=delivery.groupby('batsman')['batsman_runs'].agg(lambda x: (x==4).sum()).reset_index()
-fours=delivery.groupby(['batsman'])['batsman_runs'].agg(lambda x: (x==6).sum()).reset_index()
-balls['strike_rate']=balls['ball_y']/balls['ball_x']*100
-balls=balls.merge(sixes,left_on='batsman',right_on='batsman',how='outer')
-balls=balls.merge(fours,left_on='batsman',right_on='batsman',how='outer')
-compare=delivery.groupby(["match_id", "batsman","batting_team"])["batsman_runs"].sum().reset_index()
-compare=compare.groupby(['batsman','batting_team'])['batsman_runs'].max().reset_index()
-balls=balls.merge(compare,left_on='batsman',right_on='batsman',how='outer')
-balls.columns=[['batsman','balls','runs','strike_rate',"6's","4's",'Team','Highest_score']]
-balls.head()
+coun_terror=terror['Country'].value_counts()[:15].to_frame()
+coun_terror.columns=['Attacks']
+coun_kill=terror.groupby('Country')['Killed'].sum().to_frame()
+coun_terror.merge(coun_kill,left_index=True,right_index=True,how='left').plot.bar(width=0.9)
+fig=plt.gcf()
+fig.set_size_inches(18,6)
+plt.show()
 
 
-# Now using this dataframe, we can compare stats like the strike rate, or the number of 6's for 4's etc. We will be passing the names of 2 batsmen and two comparing measures for the comparision.
+# Damn!! Look at the **killed** bar for Iraq. The number of killed is almost 3 folds more than attacks for Iraq. Thus the densely populated theory holds good.
+
+# #### Total Terrorist Activites By Country
 
 # In[ ]:
 
 
-def batsman_comparator(stat1,stat2,batsman1,batsman2):
-    sns.FacetGrid(balls,hue='Team',size=8).map(mlt.scatter, stat1,stat2, alpha=0.5).add_legend()
-    bats1=balls[balls['batsman'].str.contains(batsman1)].sort_values(by=stat1,ascending=False)
-    bats2=balls[balls['batsman'].str.contains(batsman2)].sort_values(by=stat1,ascending=False)
-    mlt.scatter(bats1[stat1],bats1[stat2]-1,s=75,c='#55ff33')
-    mlt.text(x=bats1[stat1].values[0],y=bats1[stat2].values[0],s=batsman1,
-            fontsize=10, weight='bold', color='#f46d43')
-    mlt.scatter(bats2[stat1],bats2[stat2],s=75,c='#f73545')
-    mlt.text(x=bats2[stat1].values[0],y=bats2[stat2].values[0]+1,s=batsman2, 
-            fontsize=10, weight='bold', color='#ff58fd')
-    fig=mlt.gcf()
-    fig.set_size_inches(15,10)
-    mlt.title('Batsman Comparator',size=25)
-    mlt.show()
-
-batsman_comparator("6's","4's",'Gayle','Villiers') #comparing gayle and de-villiers based on their respective boundaries
-
-
-# ### Dhoni Vs Kohli
-
-# In[ ]:
-
-
-batsman_comparator("runs","strike_rate",'Dhoni','V Kohli')
-
-
-# ## Top Batsmen
-
-# ### Top 10 Batsman 
-
-# In[ ]:
+l1=list(['Afghanistan', 'Albania', 'Algeria', 'American Samoa', 'Andorra','Angola', 'Anguilla', 'Antigua and Barbuda', 'Argentina', 'Armenia','Aruba', 'Australia', 'Austria', 'Azerbaijan', 'Bahamas, The',
+'Bahrain', 'Bangladesh', 'Barbados', 'Belarus', 'Belgium', 'Belize','Benin', 'Bermuda', 'Bhutan', 'Bolivia', 'Bosnia and Herzegovina',
+'Botswana', 'Brazil', 'British Virgin Islands', 'Brunei','Bulgaria', 'Burkina Faso', 'Burma', 'Burundi', 'Cabo Verde','Cambodia', 'Cameroon', 'Canada', 'Cayman Islands',
+'Central African Republic', 'Chad', 'Chile', 'China', 'Colombia','Comoros', 'Congo, Democratic Republic of the','Congo, Republic of the', 'Cook Islands', 'Costa Rica',"Cote d'Ivoire", 'Croatia', 'Cuba', 'Curacao', 'Cyprus','Czech Republic', 'Denmark', 'Djibouti', 'Dominica','Dominican Republic', 'Ecuador', 'Egypt', 'El Salvador',
+'Equatorial Guinea', 'Eritrea', 'Estonia', 'Ethiopia','Falkland Islands (Islas Malvinas)', 'Faroe Islands', 'Fiji','Finland', 'France', 'French Polynesia', 'Gabon', 'Gambia, The',
+'Georgia', 'Germany', 'Ghana', 'Gibraltar', 'Greece', 'Greenland','Grenada', 'Guam', 'Guatemala', 'Guernsey', 'Guinea-Bissau','Guinea', 'Guyana', 'Haiti', 'Honduras', 'Hong Kong', 'Hungary','Iceland', 'India', 'Indonesia', 'Iran', 'Iraq', 'Ireland','Isle of Man', 'Israel', 'Italy', 'Jamaica', 'Japan', 'Jersey','Jordan', 'Kazakhstan', 'Kenya', 'Kiribati', 'Korea, North',
+'Korea, South', 'Kosovo', 'Kuwait', 'Kyrgyzstan', 'Laos', 'Latvia','Lebanon', 'Lesotho', 'Liberia', 'Libya', 'Liechtenstein',
+'Lithuania', 'Luxembourg', 'Macau', 'Macedonia', 'Madagascar','Malawi', 'Malaysia', 'Maldives', 'Mali', 'Malta','Marshall Islands', 'Mauritania', 'Mauritius', 'Mexico','Micronesia, Federated States of', 'Moldova', 'Monaco', 'Mongolia',
+'Montenegro', 'Morocco', 'Mozambique', 'Namibia', 'Nepal','Netherlands', 'New Caledonia', 'New Zealand', 'Nicaragua','Nigeria', 'Niger', 'Niue', 'Northern Mariana Islands', 'Norway',
+'Oman', 'Pakistan', 'Palau', 'Panama', 'Papua New Guinea','Paraguay', 'Peru', 'Philippines', 'Poland', 'Portugal','Puerto Rico', 'Qatar', 'Romania', 'Russia', 'Rwanda','Saint Kitts and Nevis', 'Saint Lucia', 'Saint Martin','Saint Pierre and Miquelon', 'Saint Vincent and the Grenadines',
+'Samoa', 'San Marino', 'Sao Tome and Principe', 'Saudi Arabia','Senegal', 'Serbia', 'Seychelles', 'Sierra Leone', 'Singapore','Sint Maarten', 'Slovakia', 'Slovenia', 'Solomon Islands',
+'Somalia', 'South Africa', 'South Sudan', 'Spain', 'Sri Lanka','Sudan', 'Suriname', 'Swaziland', 'Sweden', 'Switzerland', 'Syria','Taiwan', 'Tajikistan', 'Tanzania', 'Thailand', 'Timor-Leste',
+'Togo', 'Tonga', 'Trinidad and Tobago', 'Tunisia', 'Turkey','Turkmenistan', 'Tuvalu', 'Uganda', 'Ukraine','United Arab Emirates', 'United Kingdom', 'United States','Uruguay', 'Uzbekistan', 'Vanuatu', 'Venezuela', 'Vietnam',
+'Virgin Islands', 'West Bank', 'Yemen', 'Zambia', 'Zimbabwe']) #Country names
+l2=list(['AFG', 'ALB', 'DZA', 'ASM', 'AND', 'AGO', 'AIA', 'ATG', 'ARG','ARM', 'ABW', 'AUS', 'AUT', 'AZE', 'BHM', 'BHR', 'BGD', 'BRB',
+'BLR', 'BEL', 'BLZ', 'BEN', 'BMU', 'BTN', 'BOL', 'BIH', 'BWA','BRA', 'VGB', 'BRN', 'BGR', 'BFA', 'MMR', 'BDI', 'CPV', 'KHM',
+'CMR', 'CAN', 'CYM', 'CAF', 'TCD', 'CHL', 'CHN', 'COL', 'COM','COD', 'COG', 'COK', 'CRI', 'CIV', 'HRV', 'CUB', 'CUW', 'CYP','CZE', 'DNK', 'DJI', 'DMA', 'DOM', 'ECU', 'EGY', 'SLV', 'GNQ',
+'ERI', 'EST', 'ETH', 'FLK', 'FRO', 'FJI', 'FIN', 'FRA', 'PYF','GAB', 'GMB', 'GEO', 'DEU', 'GHA', 'GIB', 'GRC', 'GRL', 'GRD','GUM', 'GTM', 'GGY', 'GNB', 'GIN', 'GUY', 'HTI', 'HND', 'HKG',
+'HUN', 'ISL', 'IND', 'IDN', 'IRN', 'IRQ', 'IRL', 'IMN', 'ISR','ITA', 'JAM', 'JPN', 'JEY', 'JOR', 'KAZ', 'KEN', 'KIR', 'KOR',
+'PRK', 'KSV', 'KWT', 'KGZ', 'LAO', 'LVA', 'LBN', 'LSO', 'LBR','LBY', 'LIE', 'LTU', 'LUX', 'MAC', 'MKD', 'MDG', 'MWI', 'MYS','MDV', 'MLI', 'MLT', 'MHL', 'MRT', 'MUS', 'MEX', 'FSM', 'MDA',
+'MCO', 'MNG', 'MNE', 'MAR', 'MOZ', 'NAM', 'NPL', 'NLD', 'NCL','NZL', 'NIC', 'NGA', 'NER', 'NIU', 'MNP', 'NOR', 'OMN', 'PAK','PLW', 'PAN', 'PNG', 'PRY', 'PER', 'PHL', 'POL', 'PRT', 'PRI','QAT', 'ROU', 'RUS', 'RWA', 'KNA', 'LCA', 'MAF', 'SPM', 'VCT','WSM', 'SMR', 'STP', 'SAU', 'SEN', 'SRB', 'SYC', 'SLE', 'SGP',
+'SXM', 'SVK', 'SVN', 'SLB', 'SOM', 'ZAF', 'SSD', 'ESP', 'LKA','SDN', 'SUR', 'SWZ', 'SWE', 'CHE', 'SYR', 'TWN', 'TJK', 'TZA',
+'THA', 'TLS', 'TGO', 'TON', 'TTO', 'TUN', 'TUR', 'TKM', 'TUV','UGA', 'UKR', 'ARE', 'GBR', 'USA', 'URY', 'UZB', 'VUT', 'VEN',
+'VNM', 'VGB', 'WBG', 'YEM', 'ZMB', 'ZWE']) #Country Codes
 
 
-mlt.subplots(figsize=(10,6))
-max_runs=delivery.groupby(['batsman'])['batsman_runs'].sum()
-ax=max_runs.sort_values(ascending=False)[:10].plot.bar(width=0.8,color='R')
-for p in ax.patches:
-    ax.annotate(format(p.get_height()), (p.get_x()+0.1, p.get_height()+1),fontsize=13)
-mlt.show()
 
-
-# Virat Kohli has highest total runs across all seasons. Raina is just few runs behind with the second spot
-
-# ### Top Batsman's with 1's, 2's, 3's, 4's 
+# ### <a id='Notorious'> 1.5 Most Notorious Groups</a>
 
 # In[ ]:
 
 
-toppers=delivery.groupby(['batsman','batsman_runs'])['total_runs'].count().reset_index()
-toppers=toppers.pivot('batsman','batsman_runs','total_runs')
-fig,ax=mlt.subplots(2,2,figsize=(18,12))
-toppers[1].sort_values(ascending=False)[:5].plot(kind='barh',ax=ax[0,0],color='#45ff45',width=0.8)
-ax[0,0].set_title("Most 1's")
-ax[0,0].set_ylabel('')
-toppers[2].sort_values(ascending=False)[:5].plot(kind='barh',ax=ax[0,1],color='#df6dfd',width=0.8)
-ax[0,1].set_title("Most 2's")
-ax[0,1].set_ylabel('')
-toppers[4].sort_values(ascending=False)[:5].plot(kind='barh',ax=ax[1,0],color='#fbca5f',width=0.8)
-ax[1,0].set_title("Most 4's")
-ax[1,0].set_ylabel('')
-toppers[6].sort_values(ascending=False)[:5].plot(kind='barh',ax=ax[1,1],color='#ffff00',width=0.8)
-ax[1,1].set_title("Most 6's")
-ax[1,1].set_ylabel('')
-mlt.show()
+sns.barplot(terror['Group'].value_counts()[1:15].values,terror['Group'].value_counts()[1:15].index,palette=('inferno'))
+plt.xticks(rotation=90)
+fig=plt.gcf()
+fig.set_size_inches(10,8)
+plt.title('Terrorist Groups with Highest Terror Attacks')
+plt.show()
 
 
-# **Observations:**
+# #### Activity of Top Terrorist Groups
+
+# In[ ]:
+
+
+top_groups10=terror[terror['Group'].isin(terror['Group'].value_counts()[1:11].index)]
+pd.crosstab(top_groups10.Year,top_groups10.Group).plot(color=sns.color_palette('Paired',10))
+fig=plt.gcf()
+fig.set_size_inches(18,6)
+plt.show()
+
+
+# The Irish Republican Army(IRA), is the oldest terrorist group started back in the 1960-1970, maybe after the World War 2 due to the mass killing. However, it has probably stopped its activities in the late 90's. Some of the groups that have started lately in 2000's like the ISIL and Taliban, have shown a shoot in the number of attacks in the past years. 
+
+# #### Regions Attacked By Terrorist Groups
+
+# In[ ]:
+
+
+top_groups=terror[terror['Group'].isin(terror['Group'].value_counts()[:14].index)]
+m4 = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c',lat_0=True,lat_1=True)
+m4.drawcoastlines()
+m4.drawcountries()
+m4.fillcontinents(lake_color='aqua')
+m4.drawmapboundary(fill_color='aqua')
+fig=plt.gcf()
+fig.set_size_inches(22,10)
+colors=['r','g','b','y','#800000','#ff1100','#8202fa','#20fad9','#ff5733','#fa02c6',"#f99504",'#b3b6b7','#8e44ad','#1a2b3c']
+group=list(top_groups['Group'].unique())
+def group_point(group,color,label):
+    lat_group=list(top_groups[top_groups['Group']==group].latitude)
+    long_group=list(top_groups[top_groups['Group']==group].longitude)
+    x_group,y_group=m4(long_group,lat_group)
+    m4.plot(x_group,y_group,'go',markersize=3,color=j,label=i)
+for i,j in zip(group,colors):
+    group_point(i,j,i)
+legend=plt.legend(loc='lower left',frameon=True,prop={'size':10})
+frame=legend.get_frame()
+frame.set_facecolor('white')
+plt.title('Regional Activities of Terrorist Groups')
+plt.show()
+
+
+# The basemap clearly shows the regions of activity by the groups. ISIL is looks to be the notorious group in Iran and Iraq or broadly Middle-East. Similarly Taliban is concentrated in Afghanistan and Pakistan.
 # 
-#  1. Kohli has scored the maximum 1's
-#  2. Dhoni has the maximum 2's . Those Strong Legs :p
-#  3. Gambhir has the maximum 4's.
-#  4. C Gayle has the maximum 6's  and he leads by a big margin.
+# The Unknown markers, are maybe due to be an individual attack due to any resentment or personal grudges or any non-famous groups.
 
-# ### Top Individual Scores
+# ### <a id='India'>1.6  Terror Activities in India</a>
 
 # In[ ]:
 
 
-top_scores = delivery.groupby(["match_id", "batsman","batting_team"])["batsman_runs"].sum().reset_index()
-#top_scores=top_scores[top_scores['batsman_runs']>100]
-top_scores.sort_values('batsman_runs', ascending=0).head(10)
-top_scores.nlargest(10,'batsman_runs')
+terror_india=terror[terror['Country']=='India']
+terror_india_fol=terror_india.copy()
+terror_india_fol.dropna(subset=['latitude','longitude'],inplace=True)
+location_ind=terror_india_fol[['latitude','longitude']][:5000]
+city_ind=terror_india_fol['city'][:5000]
+killed_ind=terror_india_fol['Killed'][:5000]
+wound_ind=terror_india_fol['Wounded'][:5000]
+target_ind=terror_india_fol['Target_type'][:5000]
+
+map4 = folium.Map(location=[20.59, 78.96],tiles='CartoDB dark_matter',zoom_start=4.5)
+for point in location_ind.index:
+    folium.CircleMarker(list(location_ind.loc[point].values),popup='<b>City: </b>'+str(city_ind[point])+'<br><b>Killed: </b>'+str(killed_ind[point])+                        '<br><b>Injured: </b>'+str(wound_ind[point])+'<br><b>Target: </b>'+str(target_ind[point]),radius=point_size(killed_ind[point]),color=color_point(killed_ind[point]),fill_color=color_point(killed_ind[point])).add_to(map4)
+map4
 
 
-# Here too the Jamaican leads the table. Not only Gayle but there are many RCB players on the top scores list. Looks like RCB is a very formidable batting side.
-
-# ### Individual Scores By Top Batsman each Inning
-
-# In[ ]:
-
-
-swarm=['CH Gayle','V Kohli','G Gambhir','SK Raina','YK Pathan','MS Dhoni','AB de Villiers','DA Warner']
-scores = delivery.groupby(["match_id", "batsman","batting_team"])["batsman_runs"].sum().reset_index()
-scores=scores[top_scores['batsman'].isin(swarm)]
-sns.swarmplot(x='batsman',y='batsman_runs',data=scores,hue='batting_team',palette='Set1')
-fig=mlt.gcf()
-fig.set_size_inches(14,8)
-mlt.ylim(-10,200)
-mlt.show()
-
-
-# **Observations:**
+# Click on markers for more information.
 # 
-#  1. **Chris Gayle** has the highest Individual Score of **175** and Highest Number of Centuries i.e **5**
-#  2. **MS Dhoni** and **Gautam Gambhir** have never scored a Century.
-#  3. **V Kohli** has played only for 1 IPL Team in all seasons i.e RCB
-
-# ### Runs Scored By Batsman Across Seasons
+# #### Most Notorious Groups in India and Favorite Attack Types
 
 # In[ ]:
 
 
-a=batsmen.groupby(['season','batsman'])['batsman_runs'].sum().reset_index()
-a=a.groupby(['season','batsman'])['batsman_runs'].sum().unstack().T
-a['Total']=a.sum(axis=1)
-a=a.sort_values(by='Total',ascending=0)[:5]
-a.drop('Total',axis=1,inplace=True)
-a.T.plot(color=['red','blue','#772272','green','#f0ff00'],marker='o')
-fig=mlt.gcf()
-fig.set_size_inches(12,6)
-mlt.show()
+f,ax=plt.subplots(1,2,figsize=(25,12))
+ind_groups=terror_india['Group'].value_counts()[1:11].index
+ind_groups=terror_india[terror_india['Group'].isin(ind_groups)]
+sns.countplot(y='Group',data=ind_groups,ax=ax[0])
+ax[0].set_title('Top Terrorist Groups')
+sns.countplot(y='AttackType',data=terror_india,ax=ax[1])
+ax[1].set_title('Favorite Attack Types')
+plt.subplots_adjust(hspace=0.3,wspace=0.6)
+ax[0].tick_params(labelsize=15)
+ax[1].tick_params(labelsize=15)
+plt.show()
 
 
-# David Warner's form looks to be improving season by season. There has been a sharp decline in Kohli's Runs in the last season.
-
-# ### How do the top batsmen score? (INTERACTIVE)
-
-# In[ ]:
-
-
-a=batsmen.groupby(['batsman','batsman_runs'])['total_runs'].count().reset_index()
-b=max_runs.sort_values(ascending=False)[:10].reset_index()
-c=b.merge(a,left_on='batsman',right_on='batsman',how='left')
-c.drop('batsman_runs_x',axis=1,inplace=True)
-c.set_index('batsman',inplace=True)
-c.columns=['type','count']
-c=c[(c['type']==1)|(c['type']==2)|(c['type']==4)|(c['type']==6)]
-cols=['type','count']
-c.reset_index(inplace=True)
-c=c.pivot('batsman','type','count')
-
-trace1 = go.Bar(
-    y=c.index, x=c[6],
-    name="6's",
-    orientation = 'h',
-    marker = dict(color = 'rgba(178, 78, 139, 0.6)',
-        line = dict(color = 'rgba(178, 78, 139, 1.0)',
-            width = 3)
-    )
-)
-trace2 = go.Bar(
-    y=c.index, x=c[4],
-    name="4's",
-    orientation = 'h',
-    marker = dict(color = 'rgba(58, 71, 80, 0.6)',
-        line = dict(color = 'rgba(58, 71, 80, 1.0)',
-            width = 3)
-    )
-)
-
-trace3 = go.Bar(
-    y=c.index, x=c[2],
-    name="2's",
-    orientation = 'h',
-    marker = dict(color = 'rgba(101, 178, 139, 0.6)',
-        line = dict(color = 'rgba(101, 178, 139, 1.0)',
-            width = 3)
-    )
-)
-trace4 = go.Bar(
-    y=c.index, x=c[1],
-    name="1's",
-    orientation = 'h',
-    marker = dict(color = 'rgba(208, 105, 80, 0.6)',
-        line = dict(color = 'rgba(208, 105, 80, 1.0)',
-            width = 3)
-    )
-)
-
-data = [trace1, trace2,trace3,trace4]
-layout = go.Layout(
-    barmode='stack'
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='marker-h-bar')
-
-
-# ### Who Has Taken Most Wickets Of The Top Batsman
+# #### How did terrorism spread in India(Animation)
 
 # In[ ]:
 
 
-
-gayle=delivery[delivery['batsman']=='CH Gayle']
-gayle=gayle[gayle['dismissal_kind'].isin(['caught','lbw','bowled','stumped','caught and bowled',"hit wicket"])]
-gayle=gayle.groupby('bowler').count().sort_values(by='dismissal_kind',ascending=0).dismissal_kind[:1].reset_index()
-gayle['batsman']='CH Gayle'
-
-kohli=delivery[delivery['batsman']=='V Kohli']
-kohli=kohli[kohli['dismissal_kind'].isin(['caught','lbw','bowled','stumped','caught and bowled',"hit wicket"])]
-kohli=kohli.groupby('bowler').count().sort_values(by='dismissal_kind',ascending=0).dismissal_kind[:1].reset_index()
-kohli['batsman']='V Kohli'
-
-
-raina=delivery[delivery['batsman']=='SK Raina']
-raina=raina[raina['dismissal_kind'].isin(['caught','lbw','bowled','stumped','caught and bowled',"hit wicket"])]
-raina=raina.groupby('bowler').count().sort_values(by='dismissal_kind',ascending=0).dismissal_kind[:1].reset_index()
-raina['batsman']='SK Raina'
-
-abd=delivery[delivery['batsman']=='AB de Villiers']
-abd=abd[abd['dismissal_kind'].isin(['caught','lbw','bowled','stumped','caught and bowled',"hit wicket"])]
-abd=abd.groupby('bowler').count().sort_values(by='dismissal_kind',ascending=0).dismissal_kind[:1].reset_index()
-abd['batsman']='AB de Villiers'
-
-msd=delivery[delivery['batsman']=='MS Dhoni']
-msd=msd[msd['dismissal_kind'].isin(['caught','lbw','bowled','stumped','caught and bowled',"hit wicket"])]
-msd=msd.groupby('bowler').count().sort_values(by='dismissal_kind',ascending=0).dismissal_kind[:1].reset_index()
-msd['batsman']='MS Dhoni'
-
-
-gg=delivery[delivery['batsman']=='G Gambhir']
-gg=gg[gg['dismissal_kind'].isin(['caught','lbw','bowled','stumped','caught and bowled',"hit wicket"])]
-gg=gg.groupby('bowler').count().sort_values(by='dismissal_kind',ascending=0).dismissal_kind[:1].reset_index()
-gg['batsman']='G Gambhir'
-
-rohit=delivery[delivery['batsman']=='RG Sharma']
-rohit=rohit[rohit['dismissal_kind'].isin(['caught','lbw','bowled','stumped','caught and bowled',"hit wicket"])]
-rohit=rohit.groupby('bowler').count().sort_values(by='dismissal_kind',ascending=0).dismissal_kind[:1].reset_index()
-rohit['batsman']='RG Sharma'
-
-uthapa=delivery[delivery['batsman']=='RV Uthappa']
-uthapa=uthapa[uthapa['dismissal_kind'].isin(['caught','lbw','bowled','stumped','caught and bowled',"hit wicket"])]
-uthapa=uthapa.groupby('bowler').count().sort_values(by='dismissal_kind',ascending=0).dismissal_kind[:1].reset_index()
-uthapa['batsman']='RV Uthappa'
-
-dhawan=delivery[delivery['batsman']=='S Dhawan']
-dhawan=dhawan[dhawan['dismissal_kind'].isin(['caught','lbw','bowled','stumped','caught and bowled',"hit wicket"])]
-dhawan=dhawan.groupby('bowler').count().sort_values(by='dismissal_kind',ascending=0).dismissal_kind[:1].reset_index()
-dhawan['batsman']='S Dhawan'
-
-warn=delivery[delivery['batsman']=='DA Warner']
-warn=warn[warn['dismissal_kind'].isin(['caught','lbw','bowled','stumped','caught and bowled',"hit wicket"])]
-warn=warn.groupby('bowler').count().sort_values(by='dismissal_kind',ascending=0).dismissal_kind[:1].reset_index()
-warn['batsman']='DA Warner'
-
-new = gayle.append([kohli,raina,abd,msd,gg,rohit,uthapa,dhawan,warn])
-new = new[['batsman','bowler','dismissal_kind']]
-new.columns=['batsman','bowler','No_of_Dismissals']
-new
-
-
-# ### Frequency of Scores 
-
-# In[ ]:
-
-
-mlt.subplots(figsize=(10,6))
-bins=range(0,180,10)
-mlt.hist(top_scores["batsman_runs"],bins,histtype="bar",rwidth=1.2,color='#0ff0ff')
-mlt.xlabel('Runs')
-mlt.ylabel('Count')
-mlt.axvline(top_scores["batsman_runs"].mean(), color='b', linestyle='dashed', linewidth=2)
-mlt.plot()
-mlt.show()
-
-
-# The average score for a batsman is around 19-20. Also the number of single digit score is quite high and the number of centuries is low.
-
-# ### Orange Caps Each Season(Highest Run Getter per Season) (INTERACTIVE)
-
-# In[ ]:
-
-
-orange=matches[['id','season']]
-orange=orange.merge(delivery,left_on='id',right_on='match_id',how='left')
-orange=orange.groupby(['season','batsman'])['batsman_runs'].sum().reset_index()
-orange=orange.sort_values('batsman_runs',ascending=0)
-orange=orange.drop_duplicates(subset=["season"],keep="first")
-orange.sort_values(by='season')
-
-trace1 = go.Bar(
-    x=orange['season'].values,
-    y=orange['batsman_runs'].values,
-    name='Total Matches',
-    text=orange['batsman'].values,
-    marker=dict(
-        color='rgb(255,140,0)',
-        line=dict(
-            color='rgb(8,48,107)',
-            width=1.5,
-        )
-    ),
-    opacity=1
-)
-
-
-layout = go.Layout(
-    title='Orange-Cap Holders',
-)
-data=[trace1]
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='stacked-bar')
-
-
-# ## Top Bowlers
-
-# ### Highest Wicket Taker
-
-# In[ ]:
-
-
-mlt.subplots(figsize=(10,6))
-dismissal_kinds = ["bowled", "caught", "lbw", "stumped", "caught and bowled", "hit wicket"]  #since run-out is not creditted to the bowler
-ct=delivery[delivery["dismissal_kind"].isin(dismissal_kinds)]
-ax=ct['bowler'].value_counts()[:10].plot.bar(width=0.8,color='#1167a0')
-for p in ax.patches:
-    ax.annotate(format(p.get_height()), (p.get_x()+0.10, p.get_height()+1))
-mlt.show()
-
-
-# Lasith Malinga leads the chart, thanks to his unpredictable bowling action. Other bowlers have a very small wicket margin between them. 
-
-# ### Maximum Overs
-
-# In[ ]:
-
-
-eco=delivery.groupby(['bowler']).sum()
-eco['total balls']=delivery['bowler'].value_counts()
-eco['overs']=(eco['total balls']//6)
-eco[eco['overs']>200].sort_values(by='overs',ascending=0)['overs'].head(5).reset_index()
-
-
-# Most Economical Bowlers with 300+ overs
-
-# In[ ]:
-
-
-eco['economy']=(eco['total_runs']/(eco['overs']))
-eco[(eco['overs']>300)].sort_values('economy')[:10].economy.reset_index().T
-
-
-# ### Top 20 Bowlers (INTERACTIVE)
-
-# In[ ]:
-
-
-bowlers=delivery.groupby('bowler').sum().reset_index()
-bowl=delivery['bowler'].value_counts().reset_index()
-bowlers=bowlers.merge(bowl,left_on='bowler',right_on='index',how='left')
-bowlers=bowlers[['bowler_x','total_runs','bowler_y']]
-bowlers.columns=[['bowler','runs_given','balls']]
-bowlers['overs']=(bowlers['balls']//6)
-dismissal_kinds = ["bowled", "caught", "lbw", "stumped", "caught and bowled", "hit wicket"]  
-ct=delivery[delivery["dismissal_kind"].isin(dismissal_kinds)]
-ct=ct['bowler'].value_counts()[:20].reset_index()
-bowlers=bowlers.merge(ct,left_on='bowler',right_on='index',how='left').dropna()
-bowlers=bowlers[['bowler_x','runs_given','overs','bowler_y']]
-bowlers.columns=[['bowler','runs_given','overs','wickets']]
-bowlers['economy']=(bowlers['runs_given']/bowlers['overs'])
-bowlers.head()
-
-
-# In[ ]:
-
-
-trace = go.Scatter(
-    y = bowlers['wickets'],
-    x = bowlers['bowler'],
-    mode='markers',
-    marker=dict(
-        size= bowlers['wickets'].values,
-        color = bowlers['economy'].values,
-        colorscale='Viridis',
-        showscale=True,
-        colorbar = dict(title = 'Economy'),
-    ),
-    text = bowlers['overs'].values
-)
-data = [(trace)]
-
-layout= go.Layout(
-    autosize= True,
-    title= 'Top 20 Wicket Taking Bowlers',
-    hovermode= 'closest',
-    xaxis=dict(
-        showgrid=False,
-        zeroline=False,
-        showline=False,
-        title='Bowlers'
-    ),
-    yaxis=dict(
-        title= 'Wickets Taken',
-        ticklen= 5,
-        gridwidth= 2,
-        showgrid=False,
-        zeroline=False,
-        showline=False
-    ),
-    showlegend= False
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig,filename='scatterChol')
-
-
-# ### Frequency Of Economy
-
-# In[ ]:
-
-
-mlt.subplots(figsize=(10,6))
-eco.replace([np.inf, -np.inf], np.nan,inplace=True)
-eco.fillna(0,inplace=True)
-bins=range(0,26)
-mlt.hist(eco['economy'],bins,histtype="bar",rwidth=1.2,color='#0ff0ff')
-mlt.xlabel('Economy')
-mlt.ylabel('Count')
-mlt.axvline(eco["economy"].mean(), color='b', linestyle='dashed', linewidth=2)
-mlt.plot()
-mlt.show()
-
-
-# The average economy rate is between 8.5-9
-
-# ### Purple Caps Each Season (Maximum Wickets By Bowler per Season) (INTERACTIVE)
-
-# In[ ]:
-
-
-dismissal_kinds = ["bowled", "caught", "lbw", "stumped", "caught and bowled", "hit wicket"]  #since run-out is not creditted to the bowler
-purple=delivery[delivery["dismissal_kind"].isin(dismissal_kinds)]
-purple=purple.merge(matches,left_on='match_id',right_on='id',how='outer')
-purple=purple.groupby(['season','bowler'])['dismissal_kind'].count().reset_index()
-purple=purple.sort_values('dismissal_kind',ascending=False)
-purple=purple.drop_duplicates('season',keep='first').sort_values(by='season')
-purple.columns=[['season','bowler','count_wickets']]
-
-trace1 = go.Bar(
-    x=purple['season'].values,
-    y=purple['count_wickets'].values,
-    name='Total Matches',
-    text=purple['bowler'].values,
-    marker=dict(
-        color='rgb(75,0,130)',
-        line=dict(
-            color='rgb(108,148,107)',
-            width=1.5,
-        )
-    ),
-    opacity=1
-)
-
-
-layout = go.Layout(
-    title='Purple-Cap Holders',
-)
-data=[trace1]
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='stacked-bar')
-
-
-# ### Extras And Wickets (INTERACTIVE)
-
-# In[ ]:
-
-
-extras=['wide_runs','bye_runs','legbye_runs','noball_runs']
-sizes=[5161,680,3056,612]
-
-dismiss=["run out","bowled", "caught", "lbw", "stumped", "caught and bowled", "hit wicket"]
-ct=delivery[delivery["dismissal_kind"].isin(dismiss)]
-bx=ct.dismissal_kind.value_counts()[:10]
-bx
-
-
-fig = {
-  "data": [
-    {
-      "values": sizes,
-      "labels": extras,
-      "domain": {"x": [0, .48]},
-      "name": "Extra's",
-      "hoverinfo":"label+percent+name",
-      "hole": .4,
-      "type": "pie"
-    },     
-    {
-      "values": bx.values ,
-      "labels": bx.index,
-      "text":"CO2",
-      "textposition":"inside",
-      "domain": {"x": [.54, 1]},
-      "name": "Wickets",
-      "hoverinfo":"label+percent+name",
-      "hole": .4,
-      "type": "pie"
-    }],
-  "layout": {
-        "title":"Extras Distribution and Types Of Wickets",
-        "annotations": [
-            {
-                "font": {
-                    "size": 15
-                },
-                "showarrow": False,
-                "text": "EXTRA'S",
-                "x": 0.18,
-                "y": 0.5
-            },
-            {
-                "font": {
-                    "size": 15
-                },
-                "showarrow": False,
-                "text": "WICKETS",
-                "x": 0.85,
-                "y": 0.5
-            }
-        ]
-    }
-}
-py.iplot(fig, filename='donut')
-
-
-# ## Teams with maximum Boundaries (INTERACTIVE)
-
-# In[ ]:
-
-
-ax=delivery[delivery['batsman_runs']==6].batting_team.value_counts().reset_index()
-ax2=delivery[delivery['batsman_runs']==4].batting_team.value_counts().reset_index()
-ax=ax.merge(ax2,left_on='index',right_on='index',how='left')
-ax.columns=[['team',"6's","4's"]]
-ax
-
-trace1 = go.Bar(
-    x=ax.team.values, y=ax["6's"],
-    name="6's",
-    orientation = 'v',
-    marker = dict(color = 'rgba(204,12,28, 0.6)',
-        line = dict(color = 'rgba(204,12,28, 0.6)',
-            width = 3)
-    )
-)
-trace2 = go.Bar(
-    x=ax.team.values, y=ax["4's"],
-    name="4's",
-    orientation = 'v',
-    marker = dict(color = 'rgba(9,234,227, 0.6)',
-        line = dict(color = 'rgba(9, 227, 227, 1.0)',
-            width = 3)
-    )
-)
-
-data = [trace1, trace2]
-layout = go.Layout(
-    barmode='stack'
-)
-
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='marker-h-bar')
-
-
-# RCB-RCB everywhere. Here too RCB leads with a big margin
-
-# ## How to win Finals??
+fig = plt.figure(figsize = (10,8))
+def animate(Year):
+    ax = plt.axes()
+    ax.clear()
+    ax.set_title('Terrorism In India '+'\n'+'Year:' +str(Year))
+    m5 = Basemap(projection='lcc',resolution='l',llcrnrlon=67,llcrnrlat=5,urcrnrlon=99,urcrnrlat=37,lat_0=28,lon_0=77)
+    lat_gif=list(terror_india[terror_india['Year']==Year].latitude)
+    long_gif=list(terror_india[terror_india['Year']==Year].longitude)
+    x_gif,y_gif=m5(long_gif,lat_gif)
+    m5.scatter(x_gif, y_gif,s=[killed+wounded for killed,wounded in zip(terror_india[terror_india['Year']==Year].Killed,terror_india[terror_india['Year']==Year].Wounded)],color = 'r')
+    m5.drawcoastlines()
+    m5.drawcountries()
+    m5.fillcontinents(color='coral',lake_color='aqua', zorder = 1,alpha=0.4)
+    m5.drawmapboundary(fill_color='aqua')
+ani = animation.FuncAnimation(fig,animate,list(terror_india.Year.unique()), interval = 1500)    
+ani.save('animation.gif', writer='imagemagick', fps=1)
+plt.close(1)
+filename = 'animation.gif'
+video = io.open(filename, 'r+b').read()
+encoded = base64.b64encode(video)
+HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
+
+
+# The size of the marker is relative to the number of people killed + wounded.
 # 
-# First let us see which teams have played and won the maximum finals
+# The North-eastern and the Northern parts of India are the most terrorism prone areas. Jammu and Kashmir has witnessed highest attacks, and the numbers have gone up substantially since 1980's. The worst attack till date in India is the Mumbai Attack in 2006, which killed more than 200 people.
+
+# ### <a id='USA'> 1.7 Terror Activities in USA</a>
 
 # In[ ]:
 
 
-finals=matches.drop_duplicates(subset=['season'],keep='last')
-finals=finals[['id','season','city','team1','team2','toss_winner','toss_decision','winner']]
-most_finals=pd.concat([finals['team1'],finals['team2']]).value_counts().reset_index()
-most_finals.columns=[['team','count']]
-xyz=finals['winner'].value_counts().reset_index()
-most_finals=most_finals.merge(xyz,left_on='team',right_on='index',how='outer')
-most_finals=most_finals.replace(np.NaN,0)
-most_finals.drop('index',axis=1,inplace=True)
-most_finals.set_index('team',inplace=True)
-most_finals.columns=['finals_played','won_count']
-most_finals.plot.bar(width=0.8)
-fig=mlt.gcf()
+terror_usa=terror[terror['Country']=='United States']
+terror_usa_fol=terror_usa.copy()
+terror_usa_fol.dropna(subset=['latitude','longitude'],inplace=True)
+location_usa=terror_usa_fol[['latitude','longitude']]
+city_usa=terror_usa_fol['city']
+killed_usa=terror_usa_fol['Killed']
+wound_usa=terror_usa_fol['Wounded']
+target_usa=terror_usa_fol['Target_type']
+
+map5 = folium.Map(location=[39.50, -98.35],tiles='CartoDB dark_matter',zoom_start=3.5)
+for point in location_usa.index:
+    info='<b>City:</b>'+str(city_usa[point])+'<br><b>Killed</b>: '+str(killed_usa[point])+'<br><b>Wounded</b>: '+str(wound_usa[point])+'<br><b>Target</b>: '+str(target_usa[point])
+    iframe = folium.IFrame(html=info, width=200, height=200)
+    folium.CircleMarker(list(location_usa.loc[point].values),popup=folium.Popup(iframe),radius=point_size(killed_usa[point]),color=color_point(killed_usa[point])).add_to(map5)
+
+map5
+
+
+# #### Most Notorious Groups in USA and Favorite Attack Type
+
+# In[ ]:
+
+
+f,ax=plt.subplots(1,2,figsize=(25,12))
+usa_groups=terror_usa['Group'].value_counts()[1:11].index
+usa_groups=terror_usa[terror_usa['Group'].isin(usa_groups)]
+sns.countplot(y='Group',data=usa_groups,ax=ax[0])
+sns.countplot(y='AttackType',data=terror_usa,ax=ax[1])
+plt.subplots_adjust(hspace=0.3,wspace=0.6)
+ax[0].set_title('Top Terrorist Groups')
+ax[1].set_title('Favorite Attack Types')
+ax[0].tick_params(labelsize=15)
+ax[1].tick_params(labelsize=15)
+plt.show()
+
+
+# #### How did Terrorism Spread in USA(Animation)
+
+# In[ ]:
+
+
+fig = plt.figure(figsize = (10,8))
+def animate(Year):
+    ax = plt.axes()
+    ax.clear()
+    ax.set_title('Terrorism In USA '+'\n'+'Year:' +str(Year))
+    m6 = Basemap(llcrnrlon=-119,llcrnrlat=22,urcrnrlon=-64,urcrnrlat=49,
+        projection='lcc',lat_1=33,lat_2=45,lon_0=-95)
+    lat_gif1=list(terror_usa[terror_usa['Year']==Year].latitude)
+    long_gif1=list(terror_usa[terror_usa['Year']==Year].longitude)
+    x_gif1,y_gif1=m6(long_gif1,lat_gif1)
+    m6.scatter(x_gif1, y_gif1,s=[killed+wounded for killed,wounded in zip(terror_usa[terror_usa['Year']==Year].Killed,terror_usa[terror_usa['Year']==Year].Wounded)],color ='r') 
+    m6.drawcoastlines()
+    m6.drawcountries()
+    m6.fillcontinents(color='coral',lake_color='aqua', zorder = 1,alpha=0.4)
+    m6.drawmapboundary(fill_color='aqua')
+ani = animation.FuncAnimation(fig,animate,list(terror_usa.Year.unique()), interval = 1500)    
+ani.save('animation.gif', writer='imagemagick', fps=1)
+plt.close(1)
+filename = 'animation.gif'
+video = io.open(filename, 'r+b').read()
+encoded = base64.b64encode(video)
+HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
+
+
+# USA doesn't witness many terror attacks as compared to India.There are very few attacks that have claimed a very large number of lives. Also the number of casualities on an average is less as compared to that of India.
+# 
+# It has however witnessed one of the worst terrorist attacks in 2001 in New-York, which killed more than 1500 people.
+
+# ### <a id='Motive'> 1.8 Motive Behind Attacks</a>
+
+# Motive simply means the reason for doing something. Now this reason may be anything, personal grudges, revolt against government, religious sentiments, etc. In this part we will try to analyse what are the main reasons behind the terrorist activities.
+# 
+# For this we will use NLTK for Natural Language Processing. The reason for using NLP is because if we simply take the count of words and make a wordcloud, many useless words like 'the','and,'is', etc will have the highest count as they are very common in english language. Thus using NLTK, we can filter out these words and find other important words.
+
+# In[ ]:
+
+
+kaggle=b'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UUUUAFFFFABRRRQAUUUUAFHWiigDMl8O6HPL5s2jadJIDne9qhP5kVpKqoioihVUYAAwAKWigAooooAK8K/aQ18RaXpPh+NvnnlN3KAeQqgqv4Es3/fNe5u6xxtI7BUUEsxPAA718WfETxa3jTxpe6sAVtuIbZD/AAxL0/PlvqxoA5WiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAJo7l4reeAKhSYDO4ZIIOQR6HqPoTUNd18JvDmieKvGD6ZrxYWzWrNHtm8s+YGQAZ78E8VN8W/AUPgTxNDFYeYdLvIvMtzI24qw4dSe+Dg/RhQB5/RRRQAUUUUAFFFFABRRRQAUUUUAff8ARRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQAUUUUAFFFFABRRRQB5x8bvEv/CP/AA7uoIn23Wpt9kj55CkZc/8AfII/4EK+R6KKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKACiiigAooooAKKKKAOz+GHhK28aeMBpV1O8EX2WWUOhwwYLhSPXDENjvivTPFPwf8V6z4an1TWNXj1LxHAyrGPMIjFrGjDaOBl2OGyfzySaKKAPAKKKKACiiigAooooAKKKKACiiigD/2Q=='
+
+
+# In[ ]:
+
+
+import nltk
+from wordcloud import WordCloud, STOPWORDS
+motive=terror['Motive'].str.lower().str.replace(r'\|', ' ').str.cat(sep=' ')
+words=nltk.tokenize.word_tokenize(motive)
+word_dist = nltk.FreqDist(words)
+stopwords = nltk.corpus.stopwords.words('english')
+f1=open("kaggle.png", "wb")
+f1.write(codecs.decode(kaggle,'base64'))
+f1.close()
+img1 = imread("kaggle.png")
+hcmask1 = img1
+words_except_stop_dist = nltk.FreqDist(w for w in words if w not in stopwords) 
+wordcloud = WordCloud(stopwords=STOPWORDS,background_color='black',mask=hcmask1).generate(" ".join(words_except_stop_dist))
+plt.imshow(wordcloud)
+fig=plt.gcf()
 fig.set_size_inches(10,6)
-mlt.show()
+plt.axis('off')
+plt.show()
 
 
-# Wooh!! CSK has played 6 IPL finals(but could win only 2 :( ) followed by RCB with 3. CSK,MI,KKR have all won 2 titles each. Sadly RCB have never won a final even with 3 apperances.
-# 
-# Looking at the graph we can say that next year too CSK has a high chance of featuring in the finals as it has featured in 6 out of their 8 seasons played. 
+# Religious sentiments or religion looks to be the main cause of terrorism. Some of the most dangerous terrorist group names like 'al' for **al-kaeda** looks prominent. Some other words like 'government' and 'anti' also show attacks dur to resentment against the government.
 
-# ### Do Toss Winners Win Finals??
-
-# In[ ]:
-
-
-df=finals[finals['toss_winner']==finals['winner']]
-slices=[len(finals),(9-len(df))]
-labels=['yes','no']
-mlt.pie(slices,labels=labels,startangle=90,shadow=True,colors=['G','R'],explode=(0,0.1),autopct='%1.1f%%')
-fig = mlt.gcf()
-fig.set_size_inches(5,5)
-mlt.show()
-
-
-# 75%!!! of chances is that the toss winning team wins the title. Thats a huge number and thus indication that winning the toss plays a great  role in match winning!! 
-
-# ### Batting Or Fielding For Toss Winners
+# ### <a id='Animate'>1.9 World Terrorism Spread(Animation)</a>
 
 # In[ ]:
 
 
-finals['is_tosswin_matchwin']=finals['toss_winner']==finals['winner']
-sns.countplot(x='toss_decision',hue='is_tosswin_matchwin',data=finals)
-mlt.show()
+fig = plt.figure(figsize = (10,6))
+def animate(Year):
+    ax = plt.axes()
+    ax.clear()
+    ax.set_title('Animation Of Terrorist Activities'+'\n'+'Year:' +str(Year))
+    m6 = Basemap(projection='mill',llcrnrlat=-80,urcrnrlat=80, llcrnrlon=-180,urcrnrlon=180,lat_ts=20,resolution='c')
+    lat6=list(terror[terror['Year']==Year].latitude)
+    long6=list(terror[terror['Year']==Year].longitude)
+    x6,y6=m6(long6,lat6)
+    m6.scatter(x6, y6,s=[(kill+wound)*0.1 for kill,wound in zip(terror[terror['Year']==Year].Killed,terror[terror['Year']==Year].Wounded)],color = 'r')
+    m6.drawcoastlines()
+    m6.drawcountries()
+    m6.fillcontinents(zorder = 1,alpha=0.4)
+    m6.drawmapboundary()
+ani = animation.FuncAnimation(fig,animate,list(terror.Year.unique()), interval = 1500)    
+ani.save('animation.gif', writer='imagemagick', fps=1)
+plt.close(1)
+filename = 'animation.gif'
+video = io.open(filename, 'r+b').read()
+encoded = base64.b64encode(video)
+HTML(data='''<img src="data:image/gif;base64,{0}" type="gif" />'''.format(encoded.decode('ascii')))
 
 
-# Looks like after **Winning The Toss** team should opt for **Batting** as we can see that batting has proved to be match winning decision for 4/5 times out of 9 finals.
+# The size of the marker is relative to number of casualities(Killed+wounded).
 # 
-# Also the winner of IPL 10 chose to bat first on winning the toss. I know this as I saw The match :):):)
+# It is visible that the Middle-East and Southern-Asia are the regions with highest terrorist activites, not only in numbers, but also in casualities. It is spreading largely across the globe but in the past few years, India, Pakistan and Afghanistan have witnessed an increase in such number of activities.
 
-# I will keep updating the notebook as and when I get a new question to be analysed.
+# Lastly I would like to thank all of you for having a look at this notebook.
 # 
-# **Thank You For Having A Look At This Notebook**
-# 
-# **Please Upvote if this was Helpful**
+# If you liked it or learnt something from it, **PLEASE UPVOTE**, as it will keep me motivated for doing better.

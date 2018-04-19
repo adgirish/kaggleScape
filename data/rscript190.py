@@ -1,126 +1,139 @@
-'''
+#############################################################################################################
+# Created by qqgeogor
+# https://www.kaggle.com/qqgeogor
+#############################################################################################################
+
+import numpy as np
+from sklearn.base import BaseEstimator
+from keras.layers import Input, Embedding, Dense,Flatten, merge,Activation
+from keras.models import Model
+from keras.regularizers import l2 as l2_reg
+from keras import initializations
+import itertools
 
 
-Based on Abhishek Catapillar benchmark
-https://www.kaggle.com/abhishek/caterpillar-tube-pricing/beating-the-benchmark-v1-0
-
-@Soutik
-
-Have fun;)
-'''
-
-import pandas as pd
-import numpy as np 
-from sklearn import preprocessing
-import xgboost as xgb
-from sklearn.feature_extraction import DictVectorizer
+def make_batches(size, batch_size):
+    nb_batch = int(np.ceil(size/float(batch_size)))
+    return [(i*batch_size, min(size, (i+1)*batch_size)) for i in range(0, nb_batch)]
 
 
-def xgboost_pred(train,labels,test):
-	params = {}
-	params["objective"] = "reg:linear"
-	params["eta"] = 0.005
-	params["min_child_weight"] = 6
-	params["subsample"] = 0.7
-	params["colsample_bytree"] = 0.7
-	params["scale_pos_weight"] = 1
-	params["silent"] = 1
-	params["max_depth"] = 9
+def batch_generator(X,y,batch_size=128,shuffle=True):
+    sample_size = X[0].shape[0]
+    index_array = np.arange(sample_size)
+    while 1:
+        if shuffle:
+            np.random.shuffle(index_array)
+        batches = make_batches(sample_size, batch_size)
+        for batch_index, (batch_start, batch_end) in enumerate(batches):
+            batch_ids = index_array[batch_start:batch_end]
+            X_batch = [X[i][batch_ids] for i in range(len(X))]
+            y_batch = y[batch_ids]
+            yield X_batch,y_batch
+
+
+def test_batch_generator(X,y,batch_size=128):
+    sample_size = X[0].shape[0]
+    index_array = np.arange(sample_size)
+    batches = make_batches(sample_size, batch_size)
+    for batch_index, (batch_start, batch_end) in enumerate(batches):
+        batch_ids = index_array[batch_start:batch_end]
+        X_batch = [X[i][batch_ids] for i in range(len(X))]
+        y_batch = y[batch_ids]
+        yield X_batch,y_batch
+
+
+def predict_batch(model,X_t,batch_size=128):
+    outcome = []
+    for X_batch,y_batch in test_batch_generator(X_t,np.zeros(X_t[0].shape[0]),batch_size=batch_size):
+        outcome.append(model.predict(X_batch,batch_size=batch_size))
+    outcome = np.concatenate(outcome).ravel()
+    return outcome
+
+
+
+def build_model(max_features,K=8,solver='adam',l2=0.0,l2_fm = 0.0):
+
+    inputs = []
+    flatten_layers=[]
+    columns = range(len(max_features))
+    for c in columns:
+        inputs_c = Input(shape=(1,), dtype='int32',name = 'input_%s'%c)
+        num_c = max_features[c]
+
+        embed_c = Embedding(
+                        num_c,
+                        K,
+                        input_length=1,
+                        name = 'embed_%s'%c,
+                        W_regularizer=l2_reg(l2_fm)
+                        )(inputs_c)
+
+        flatten_c = Flatten()(embed_c)
+
+        inputs.append(inputs_c)
+        flatten_layers.append(flatten_c)
+
+    fm_layers = []
+    for emb1,emb2 in itertools.combinations(flatten_layers, 2):
+        dot_layer = merge([emb1,emb2],mode='dot',dot_axes=1)
+        fm_layers.append(dot_layer)
+
+    for c in columns:
+        num_c = max_features[c]
+        embed_c = Embedding(
+                        num_c,
+                        1,
+                        input_length=1,
+                        name = 'linear_%s'%c,
+                        W_regularizer=l2_reg(l2)
+                        )(inputs[c])
+
+        flatten_c = Flatten()(embed_c)
+
+        fm_layers.append(flatten_c)
+        
+        
+    flatten = merge(fm_layers,mode='sum')
+    outputs = Activation('sigmoid',name='outputs')(flatten)
     
-    
-	plst = list(params.items())
+    model = Model(input=inputs, output=outputs)
 
-	#Using 5000 rows for early stopping. 
-	offset = 4000
+    model.compile(
+                optimizer=solver,
+                loss= 'binary_crossentropy'
+              )
 
-	num_rounds = 10000
-	xgtest = xgb.DMatrix(test)
-
-	#create a train and validation dmatrices 
-	xgtrain = xgb.DMatrix(train[offset:,:], label=labels[offset:])
-	xgval = xgb.DMatrix(train[:offset,:], label=labels[:offset])
-
-	#train using early stopping and predict
-	watchlist = [(xgtrain, 'train'),(xgval, 'val')]
-	model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=120)
-	preds1 = model.predict(xgtest,ntree_limit=model.best_iteration)
+    return model
 
 
-	#reverse train and labels and use different 5k for early stopping. 
-	# this adds very little to the score but it is an option if you are concerned about using all the data. 
-	train = train[::-1,:]
-	labels = np.log(labels[::-1])
+class KerasFM(BaseEstimator):
+    def __init__(self,max_features=[],K=8,solver='adam',l2=0.0,l2_fm = 0.0):
+        self.model = build_model(max_features,K,solver,l2=l2,l2_fm = l2_fm)
 
-	xgtrain = xgb.DMatrix(train[offset:,:], label=labels[offset:])
-	xgval = xgb.DMatrix(train[:offset,:], label=labels[:offset])
+    def fit(self,X,y,batch_size=128,nb_epoch=10,shuffle=True,verbose=1,validation_data=None):
+        self.model.fit(X,y,batch_size=batch_size,nb_epoch=nb_epoch,shuffle=shuffle,verbose=verbose,validation_data=None)
 
-	watchlist = [(xgtrain, 'train'),(xgval, 'val')]
-	model = xgb.train(plst, xgtrain, num_rounds, watchlist, early_stopping_rounds=120)
-	preds2 = model.predict(xgtest,ntree_limit=model.best_iteration)
+    def fit_generator(self,X,y,batch_size=128,nb_epoch=10,shuffle=True,verbose=1,validation_data=None,callbacks=None):
+        tr_gen = batch_generator(X,y,batch_size=batch_size,shuffle=shuffle)
+        if validation_data:
+            X_test,y_test = validation_data
+            te_gen = batch_generator(X_test,y_test,batch_size=batch_size,shuffle=False)
+            nb_val_samples = X_test[-1].shape[0]
+        else:
+            te_gen = None
+            nb_val_samples = None
 
+        self.model.fit_generator(
+                tr_gen, 
+                samples_per_epoch=X[-1].shape[0], 
+                nb_epoch=nb_epoch, 
+                verbose=verbose, 
+                callbacks=callbacks, 
+                validation_data=te_gen, 
+                nb_val_samples=nb_val_samples, 
+                max_q_size=10
+                )
 
-	#combine predictions
-	#since the metric only cares about relative rank we don't need to average
-	preds = (preds1)*1.4 + (preds2)*8.6
-	return preds
-
-#load train and test 
-train  = pd.read_csv('../input/train.csv', index_col=0)
-test  = pd.read_csv('../input/test.csv', index_col=0)
-
-
-labels = train.Hazard
-train.drop('Hazard', axis=1, inplace=True)
-
-train_s = train
-test_s = test
-
-
-train_s.drop('T2_V10', axis=1, inplace=True)
-train_s.drop('T2_V7', axis=1, inplace=True)
-train_s.drop('T1_V13', axis=1, inplace=True)
-train_s.drop('T1_V10', axis=1, inplace=True)
-
-test_s.drop('T2_V10', axis=1, inplace=True)
-test_s.drop('T2_V7', axis=1, inplace=True)
-test_s.drop('T1_V13', axis=1, inplace=True)
-test_s.drop('T1_V10', axis=1, inplace=True)
-
-columns = train.columns
-test_ind = test.index
-
-
-train_s = np.array(train_s)
-test_s = np.array(test_s)
-
-# label encode the categorical variables
-for i in range(train_s.shape[1]):
-    lbl = preprocessing.LabelEncoder()
-    lbl.fit(list(train_s[:,i]) + list(test_s[:,i]))
-    train_s[:,i] = lbl.transform(train_s[:,i])
-    test_s[:,i] = lbl.transform(test_s[:,i])
-
-train_s = train_s.astype(float)
-test_s = test_s.astype(float)
-
-
-preds1 = xgboost_pred(train_s,labels,test_s)
-
-#model_2 building
-
-train = train.T.to_dict().values()
-test = test.T.to_dict().values()
-
-vec = DictVectorizer()
-train = vec.fit_transform(train)
-test = vec.transform(test)
-
-preds2 = xgboost_pred(train,labels,test)
-
-
-preds = 0.47 * (preds1**0.2) + 0.53 * (preds2**0.8)
-
-#generate solution
-preds = pd.DataFrame({"Id": test_ind, "Hazard": preds})
-preds = preds.set_index('Id')
-preds.to_csv('xgboost_benchmark_3.csv')
+    def predict(self,X,batch_size=128):
+        y_preds = predict_batch(self.model,X,batch_size=batch_size)
+        return y_preds

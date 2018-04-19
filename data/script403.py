@@ -1,322 +1,174 @@
 
 # coding: utf-8
 
-# # More To Come. Stay Tuned. !!
-# If there are any suggestions/changes you would like to see in the Kernel please let me know :). Appreciate every ounce of help!
+# # TalkingData AdTracking Fraud Detection Challenge
 # 
-# **This notebook will always be a work in progress**. Please leave any comments about further improvements to the notebook! Any feedback or constructive criticism is greatly appreciated!. **If you like it or it helps you , you can upvote and/or leave a comment :).**|
+# TalkingData is back with another competition: This time, our task is to predict where a click on some advertising is fraudlent given a few basic attributes about the device that made the click. What sets this competition apart is the sheer scale of the dataset: with 240 million rows it might be the biggest one I've seen on Kaggle so far.
 # 
-
-# In[1]:
-
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-import IPython.display as ipd  # To play sound in the notebook
-from tqdm import tqdm_notebook
-import wave
-from scipy.io import wavfile
-SAMPLE_RATE = 44100
-
-import seaborn as sns # for making plots with seaborn
-color = sns.color_palette()
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.offline as offline
-offline.init_notebook_mode()
-import plotly.tools as tls
-# Math
-import numpy as np
-from scipy.fftpack import fft
-from scipy import signal
-from scipy.io import wavfile
-import librosa
-
-
-# In[2]:
-
-
-import os
-print(os.listdir("../input"))
-
-
-# In[3]:
-
-
-INPUT_LIB = '../input/'
-audio_train_files = os.listdir('../input/audio_train')
-audio_test_files = os.listdir('../input/audio_test')
-train = pd.read_csv('../input/train.csv')
-submission = pd.read_csv("../input/sample_submission.csv", index_col='fname')
-train_audio_path = '../input/audio_train/'
-filename = '/001ca53d.wav' # Hi-hat
-sample_rate, samples = wavfile.read(str(train_audio_path) + filename)
-#sample_rate = 16000
-
-
-# In[4]:
-
-
-print(samples)
-
-
-# In[5]:
-
-
-print("Size of training data",train.shape)
-
-
-# In[6]:
-
-
-train.head()
-
-
-# In[7]:
-
-
-submission.head()
-
-
-# In[8]:
-
-
-def clean_filename(fname, string):   
-    file_name = fname.split('/')[1]
-    if file_name[:2] == '__':        
-        file_name = string + file_name
-    return file_name
-
-def load_wav_file(name, path):
-    _, b = wavfile.read(path + name)
-    assert _ == SAMPLE_RATE
-    return b
-
-
-# In[9]:
-
-
-train_data = pd.DataFrame({'file_name' : train['fname'],
-                         'target' : train['label']})   
-train_data['time_series'] = train_data['file_name'].apply(load_wav_file, 
-                                                      path=INPUT_LIB + 'audio_train/')    
-train_data['nframes'] = train_data['time_series'].apply(len)  
-
-
-# In[10]:
-
-
-train_data.head()
-
-
-# In[11]:
-
-
-print("Size of training data after some preprocessing : ",train_data.shape)
-
-
-# In[12]:
-
-
-# missing data in training data set
-total = train_data.isnull().sum().sort_values(ascending = False)
-percent = (train_data.isnull().sum()/train_data.isnull().count()).sort_values(ascending = False)
-missing_train_data = pd.concat([total, percent], axis=1, keys=['Total', 'Percent'])
-missing_train_data.head()
-
-
-# There is no missing data in training dataset
-
-# # Manually verified Audio
-
-# In[17]:
-
-
-temp = train['manually_verified'].value_counts()
-labels = temp.index
-sizes = (temp / temp.sum())*100
-trace = go.Pie(labels=labels, values=sizes, hoverinfo='label+percent')
-layout = go.Layout(title='Manually varification of labels(0 - No, 1 - Yes)')
-data = [trace]
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
-
-
-# * Approximately 40 % labels are manually varified.
+# There are some similarities with the last competition TalkingData launched: https://www.kaggle.com/c/talkingdata-mobile-user-demographics - that competition was about predicting the demographics of a user given their activity, and you can view this as a similar problem (predicting whether a user is real or not given their activity). However, that competition was plagued by a [leak](https://www.kaggle.com/wiki/Leakage) where the dataset wasn't sorted properly and certain portions of the dataset had different demographic distribtions. This meant that by adding the row ID as a feature you could get a huge boost in performance. Let's hope TalkingData have learnt their lesson this time around. 😉
+# 
+# Looking at the evaluation page, we can see that the evaluation metric used is** ROC-AUC** (the area under a curve on a Receiver Operator Characteristic graph).
+# In english, this means a few important things:
+# * This competition is a **binary classification** problem - i.e. our target variable is a binary attribute (Is the user making the click fraudlent or not?) and our goal is to classify users into "fraudlent" or "not fraudlent" as well as possible
+# * Unlike metrics such as [LogLoss](http://www.exegetic.biz/blog/2015/12/making-sense-logarithmic-loss/), the AUC score only depends on **how well you well you can separate the two classes**. In practice, this means that only the order of your predictions matter,
+#     * As a result of this, any rescaling done to your model's output probabilities will have no effect on your score. In some other competitions, adding a constant or multiplier to your predictions to rescale it to the distribution can help but that doesn't apply here.
+#   
+# If you want a more intuitive explanation of how AUC works, I recommend [this post](https://stats.stackexchange.com/questions/132777/what-does-auc-stand-for-and-what-is-it).
+# 
+# Let's dive right in by looking at the data we're given:
 
 # In[18]:
 
 
-plt.figure(figsize=(12,8))
-sns.distplot(train_data.nframes.values, bins=50, kde=False)
-plt.xlabel('nframes', fontsize=12)
-plt.title("Histogram of #frames")
-plt.show()
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import mlcrate as mlc
+import os
+import gc
+import matplotlib.pyplot as plt
+import seaborn as sns
+get_ipython().run_line_magic('matplotlib', 'inline')
 
+pal = sns.color_palette()
+
+print('# File sizes')
+for f in os.listdir('../input'):
+    if 'zip' not in f:
+        print(f.ljust(30) + str(round(os.path.getsize('../input/' + f) / 1000000, 2)) + 'MB')
+
+
+# Wow, that is some really big data. Unfortunately we don't have enough kernel memory to load the full dataset into memory; however we can get a glimpse at some of the statistics:
 
 # In[19]:
 
 
-plt.figure(figsize=(17,8))
-boxplot = sns.boxplot(x="target", y="nframes", data=train_data)
-boxplot.set(xlabel='', ylabel='')
-plt.title('Distribution of audio frames, per label', fontsize=17)
-plt.xticks(rotation=80, fontsize=17)
-plt.yticks(fontsize=17)
-plt.xlabel('Label name')
-plt.ylabel('nframes')
-plt.show()
+import subprocess
+print('# Line count:')
+for file in ['train.csv', 'test.csv', 'train_sample.csv']:
+    lines = subprocess.run(['wc', '-l', '../input/{}'.format(file)], stdout=subprocess.PIPE).stdout.decode('utf-8')
+    print(lines, end='', flush=True)
 
+
+# That makes **185 million rows** in the training set and ** 19 million** in the test set. Handily the organisers have provided a `train_sample.csv` which contains 100K rows in case you don't want to download the full data
+# 
+# For this analysis, I'm going to use the first 1M rows of the training and test datasets.
+# 
+# ## Data overview
 
 # In[20]:
 
 
-print("Total number of labels in training data : ",len(train_data['target'].value_counts()))
-print("Labels are : ", train_data['target'].unique())
-plt.figure(figsize=(15,8))
-audio_type = train_data['target'].value_counts().head(30)
-sns.barplot(audio_type.values, audio_type.index)
-for i, v in enumerate(audio_type.values):
-    plt.text(0.8,i,v,color='k',fontsize=12)
-plt.xticks(rotation='vertical')
-plt.xlabel('Frequency')
-plt.ylabel('Label Name')
-plt.title("Top 30 labels with their frequencies in training data")
-plt.show()
+df_train = pd.read_csv('../input/train.csv', nrows=1000000)
+df_test = pd.read_csv('../input/test.csv', nrows=1000000)
 
 
-# ### Total number of labels are 41
-
-# In[ ]:
+# In[24]:
 
 
-temp = train_data.sort_values(by='target')
-temp.head()
+print('Training set:')
+df_train.head()
 
 
-# ## Now look at  some labels waveform :
-#   1. Acoustic_guitar
-#   2. Applause
-#   3. Bark
-
-# ## 1. Acoustic_guitar
-
-# In[ ]:
+# In[26]:
 
 
-print("Acoustic_guitar : ")
-fig, ax = plt.subplots(10, 4, figsize = (12, 16))
-for i in range(40):
-    ax[i//4, i%4].plot(temp['time_series'][i])
-    ax[i//4, i%4].set_title(temp['file_name'][i][:-4])
-    ax[i//4, i%4].get_xaxis().set_ticks([])
-fig.savefig("AudioWaveform", dpi=900)     
+print('Test set:')
+df_test.head()
 
 
-# ## 2. Applause
+# ### Looking at the columns
+# 
+# According to the data page, our data contains:
+# 
+# * `ip`: ip address of click
+# * `app`: app id for marketing
+# * `device`: device type id of user mobile phone (e.g., iphone 6 plus, iphone 7, huawei mate 7, etc.)
+# * `os`: os version id of user mobile phone
+# * `channel`: channel id of mobile ad publisher
+# * `click_time`: timestamp of click (UTC)
+# * `attributed_time`: if user download the app for after clicking an ad, this is the time of the app download
+# * `is_attributed`: the target that is to be predicted, indicating the app was downloaded
+# 
+# **A few things of note:**
+# * If you look at the data samples above, you'll notice that all these variables are encoded - meaning we don't know what the actual value corresponds to - each value has instead been assigned an ID which we're given. This has likely been done because data such as IP addresses are sensitive, although it does unfortunately reduce the amount of feature engineering we can do on these.
+# * The `attributed_time` variable is only available in the training set - it's not immediately useful for classification but it could be used for some interesting analysis (for example, one could fill in the variable in the test set by building a model to predict it).
+# 
+# For each of our encoded values, let's look at the number of unique values:
 
-# In[ ]:
-
-
-print("Applause : ")
-fig, ax = plt.subplots(10, 4, figsize = (12, 16))
-for i in range(40):
-    ax[i//4, i%4].plot(temp['time_series'][i+300])
-    ax[i//4, i%4].set_title(temp['file_name'][i+300][:-4])
-    ax[i//4, i%4].get_xaxis().set_ticks([])
-
-
-# ## 3. Bark
-
-# In[ ]:
-
-
-print("Bark : ")
-fig, ax = plt.subplots(10, 4, figsize = (12, 16))
-for i in range(40):
-    ax[i//4, i%4].plot(temp['time_series'][i+600])
-    ax[i//4, i%4].set_title(temp['file_name'][i+600][:-4])
-    ax[i//4, i%4].get_xaxis().set_ticks([])
+# In[53]:
 
 
-# In[ ]:
+plt.figure(figsize=(15, 8))
+cols = ['ip', 'app', 'device', 'os', 'channel']
+uniques = [len(df_train[col].unique()) for col in cols]
+sns.set(font_scale=1.2)
+ax = sns.barplot(cols, uniques, palette=pal, log=True)
+ax.set(xlabel='Feature', ylabel='log(unique count)', title='Number of unique values per feature')
+for p, uniq in zip(ax.patches, uniques):
+    height = p.get_height()
+    ax.text(p.get_x()+p.get_width()/2.,
+            height + 10,
+            uniq,
+            ha="center") 
+# for col, uniq in zip(cols, uniques):
+#     ax.text(col, uniq, uniq, color='black', ha="center")
 
 
-from wordcloud import WordCloud
-wordcloud = WordCloud(max_font_size=50, width=600, height=300).generate(' '.join(train_data.target))
-plt.figure(figsize=(15,8))
-plt.imshow(wordcloud)
-plt.title("Wordcloud for Labels", fontsize=35)
-plt.axis("off")
-plt.show() 
-#fig.savefig("LabelsWordCloud", dpi=900)
+# ##  Encoded variables statistics
+# 
+# Although the actual values of these variables aren't helpful for us, it can still be useful to know what their distributions are. Note these statistics are computed on 1M samples, and so will be higher for the full dataset.
+
+# In[79]:
 
 
-# # Spectrogram
+for col, uniq in zip(cols, uniques):
+    counts = df_train[col].value_counts()
 
-# In[ ]:
-
-
-def log_specgram(audio, sample_rate, window_size=20,
-                 step_size=10, eps=1e-10):
-    nperseg = int(round(window_size * sample_rate / 1e3))
-    noverlap = int(round(step_size * sample_rate / 1e3))
-    freqs, times, spec = signal.spectrogram(audio,
-                                    fs=sample_rate,
-                                    window='hann',
-                                    nperseg=nperseg,
-                                    noverlap=noverlap,
-                                    detrend=False)
-    return freqs, times, np.log(spec.T.astype(np.float32) + eps)
-
-
-# In[ ]:
-
-
-freqs, times, spectrogram = log_specgram(samples, sample_rate)
-
-fig = plt.figure(figsize=(18, 8))
-ax2 = fig.add_subplot(211)
-ax2.imshow(spectrogram.T, aspect='auto', origin='lower', 
-           extent=[times.min(), times.max(), freqs.min(), freqs.max()])
-ax2.set_yticks(freqs[::40])
-ax2.set_xticks(times[::40])
-ax2.set_title('Spectrogram of Hi-hat ' + filename)
-ax2.set_ylabel('Freqs in Hz')
-ax2.set_xlabel('Seconds')
+    sorted_counts = np.sort(counts.values)
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    line, = ax.plot(sorted_counts, color='red')
+    ax.set_yscale('log')
+    plt.title("Distribution of value counts for {}".format(col))
+    plt.ylabel('log(Occurence count)')
+    plt.xlabel('Index')
+    plt.show()
+    
+    fig = plt.figure()
+    ax = fig.add_subplot(1, 1, 1)
+    plt.hist(sorted_counts, bins=50)
+    ax.set_yscale('log', nonposy='clip')
+    plt.title("Histogram of value counts for {}".format(col))
+    plt.ylabel('Number of IDs')
+    plt.xlabel('Occurences of value for ID')
+    plt.show()
+    
+    max_count = np.max(counts)
+    min_count = np.min(counts)
+    gt = [10, 100, 1000]
+    prop_gt = []
+    for value in gt:
+        prop_gt.append(round((counts > value).mean()*100, 2))
+    print("Variable '{}': | Unique values: {} | Count of most common: {} | Count of least common: {} | count>10: {}% | count>100: {}% | count>1000: {}%".format(col, uniq, max_count, min_count, *prop_gt))
+    
 
 
-# # Specgtrogram of "Hi-Hat" in 3d
+# ## What we're trying to predict
 
-# If we use spectrogram as an input features for NN, we have to remember to normalize features.
-
-# In[ ]:
+# In[63]:
 
 
-mean = np.mean(spectrogram, axis=0)
-std = np.std(spectrogram, axis=0)
-spectrogram = (spectrogram - mean) / std
+plt.figure(figsize=(8, 8))
+sns.set(font_scale=1.2)
+mean = (df_train.is_attributed.values == 1).mean()
+ax = sns.barplot(['Fraudulent (1)', 'Not Fradulent (0)'], [mean, 1-mean], palette=pal)
+ax.set(xlabel='Target Value', ylabel='Probability', title='Target value distribution')
+for p, uniq in zip(ax.patches, [mean, 1-mean]):
+    height = p.get_height()
+    ax.text(p.get_x()+p.get_width()/2.,
+            height+0.01,
+            '{}%'.format(round(uniq * 100, 2)),
+            ha="center") 
 
 
-# In[ ]:
-
-
-data = [go.Surface(z=spectrogram.T)]
-layout = go.Layout(
-    title='Specgtrogram of "Hi-Hat" in 3d',
-    scene = dict(
-    yaxis = dict(title='Frequencies', range=freqs),
-    xaxis = dict(title='Time', range=times),
-    zaxis = dict(title='Log amplitude'),
-    ),
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig)
-
-
-# # More To Come. Stayed Tuned !!
+# Wow, that's a really unbalanced dataset. Only 0.2% of the dataset is made up of fradulent clicks. This means that any models we run on the data will either need to be robust against class imbalance or will require some data resampling.

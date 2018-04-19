@@ -1,673 +1,293 @@
 
 # coding: utf-8
 
-# # Quora Question-pair classification
+# # Pistol Round Analysis
 # 
-# This competition is about modelling whether a pair of questions on Quora is asking the same question. For this problem we have about **400.000** training examples. Each row consists of two sentences and a binary label that indicates to us whether the two questions were the same or not.
+# Hello! I am the creator of this data-set and just wanted to provide a sample analysis for anyone interested in looking at CS.  I look at mainly the pistol round here but many of the techniques can be applied to all types of rounds.  There are many ways to analyze this dataset so I hope you can go off and answer interesting questions for yourself :)
 # 
-# Inspired by this nice [kernel](https://www.kaggle.com/arthurtok/d/mcdonalds/nutrition-facts/super-sized-we-macdonald-s-nutritional-metrics) from [Anisotropic](https://www.kaggle.com/arthurtok) I've added a few interactive 2D and 3D scatter plots.
-# To get an insight into how the duplicates evolve over the number of words in the questions, I've added a plotly animation that encodes number of words and word share similarity in a scatter plot.
+# In this notebook, I will analyze pistol round outcomes and damages done on average to improve player decision making on pistol rounds.  The analysis I provide in this notebook is very minimal, I'm only here to show code, however, you can find [the full analysis that I put on reddit with more in-depth talk about the numbers](https://www.reddit.com/r/GlobalOffensive/comments/72fkl7/mm_analytics_some_pistol_round_statistics_and/). 
 # 
-# **We will be looking in detail at:**
+# The following questions will be answered in this notebook:
 # 
-# * question pair TF-IDF encodings
-# * basic feature engineering and their embeddings in lower dimensional spaces
-# * parallel coordinates visualization
-# * model selection and evaluation + sample submission.
-# 
-# If you like this kernel, please upvote it :D, thanks!
-# 
-# 
-# ----------
-# 
-# 
-# Added a final section for cross-validated model selection and evaluation. We will look at standard binary classification metrics, like ROC and PR curves and their AUCs. The best (linear) model that we found then generates a submission.
+# 1. What are the most common pistol round buys?
+# - What is the ADR by each pistol on pistol rounds?
+# - What sites do bomb get planted the most on pistol rounds?
+# - After bomb gets planted at A/B Site, for all XvX situation, what is the win Probability for Ts?
+# - In a 1v1, 1v2, 2v1, 2v2, should players play out of site/in-site or one-in one-out to deal the most damage while receiving the least?
 
 # In[ ]:
 
 
-import numpy as np
 import pandas as pd
+import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
-from subprocess import check_output
-
+import warnings
+from scipy.misc import imread
+import matplotlib.patches as mpatches
+from matplotlib.collections import PatchCollection
+import matplotlib.colors as colors
+warnings.filterwarnings('ignore')
 get_ipython().run_line_magic('matplotlib', 'inline')
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
-
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-df = pd.read_csv("../input/train.csv").fillna("")
-df.head() 
-
-
-# So we have six columns in total one of which is the label.
-
-# In[ ]:
-
-
-df.info()
 
 
 # In[ ]:
 
 
-df.shape
-
-
-# We have a fairly balanced dataset here.
-
-# In[ ]:
-
-
-df.groupby("is_duplicate")['id'].count().plot.bar()
-
-
-# # Feature construction
-# 
-# We will now construct a basic set of features that we will later use to embed our samples with.
-# 
-# The first we will be looking at is rather standard TF-IDF encoding for each of the questions. In order to limit the computational complexity and storage requirements we will only encode the top terms across all documents with TF-IDF and also look at a subsample of the data.
-
-# In[ ]:
-
-
-dfs = df[0:2500]
-dfs.groupby("is_duplicate")['id'].count().plot.bar()
-
-
-# The subsample still has a very similar label distribution, ok to continue like that, without taking a deeper look how to achieve better sampling than just taking the first rows of the dataset.
-# 
-# Create a dataframe where the top 50% of rows have only question 1 and the bottom 50% have only question 2, same ordering per halve as in the original dataframe.
-
-# In[ ]:
-
-
-dfq1, dfq2 = dfs[['qid1', 'question1']], dfs[['qid2', 'question2']]
-dfq1.columns = ['qid1', 'question']
-dfq2.columns = ['qid2', 'question']
-
-# merge two two dfs, there are two nans for question
-dfqa = pd.concat((dfq1, dfq2), axis=0).fillna("")
-nrows_for_q1 = dfqa.shape[0]/2
-dfqa.shape
-
-
-# Transform questions by TF-IDF.
-
-# In[ ]:
-
-
-from sklearn.feature_extraction.text import TfidfVectorizer, HashingVectorizer
-mq1 = TfidfVectorizer(max_features = 256).fit_transform(dfqa['question'].values)
-mq1
-
-
-# Since we are looking at pairs of data, we will be taking the difference of all question one and question two pairs with this. This will result in a matrix that again has the same number of rows as the subsampled data and one vector that describes the relationship between the two questions.
-
-# In[ ]:
-
-
-diff_encodings = np.abs(mq1[::2] - mq1[1::2])
-diff_encodings
-
-
-# # 3D t-SNE embedding
-# 
-# We will use t-SNE to embed the TF-IDF vectors in three dimensions and create an interactive scatter plot with them.
-
-# In[ ]:
-
-
-from sklearn.manifold import TSNE
-tsne = TSNE(
-    n_components=3,
-    init='random', # pca
-    random_state=101,
-    method='barnes_hut',
-    n_iter=200,
-    verbose=2,
-    angle=0.5
-).fit_transform(diff_encodings.toarray())
-
-
-# In[ ]:
-
-
-trace1 = go.Scatter3d(
-    x=tsne[:,0],
-    y=tsne[:,1],
-    z=tsne[:,2],
-    mode='markers',
-    marker=dict(
-        sizemode='diameter',
-        color = dfs['is_duplicate'].values,
-        colorscale = 'Portland',
-        colorbar = dict(title = 'duplicate'),
-        line=dict(color='rgb(255, 255, 255)'),
-        opacity=0.75
-    )
-)
-
-data=[trace1]
-layout=dict(height=800, width=800, title='test')
-fig=dict(data=data, layout=layout)
-py.iplot(fig, filename='3DBubble')
-
-
-# That three dimensional embedding looks nice, but is not telling us much about the structure of the space that we created. There seem to be no clusters of either class present, so let's go on to the next section.
-
-# ## Feature EDA
-# 
-# Let us now construct a few features
-# 
-# * character length of questions 1 and 2
-# * number of words in question 1 and 2
-# * normalized word share count.
-# 
-# We can then have a look at how well each of these separate the two classes.
-
-# In[ ]:
-
-
-df['q1len'] = df['question1'].str.len()
-df['q2len'] = df['question2'].str.len()
-
-df['q1_n_words'] = df['question1'].apply(lambda row: len(row.split(" ")))
-df['q2_n_words'] = df['question2'].apply(lambda row: len(row.split(" ")))
-
-def normalized_word_share(row):
-    w1 = set(map(lambda word: word.lower().strip(), row['question1'].split(" ")))
-    w2 = set(map(lambda word: word.lower().strip(), row['question2'].split(" ")))    
-    return 1.0 * len(w1 & w2)/(len(w1) + len(w2))
-
-
-df['word_share'] = df.apply(normalized_word_share, axis=1)
-
+df = pd.read_csv('../input/mm_master_demos.csv', index_col=0)
+map_bounds = pd.read_csv('../input/map_data.csv', index_col=0)
 df.head()
 
 
-# The distributions for normalized word share have some overlap on the far right hand side, meaning there are quite a lot of questions with high word similarity but are both duplicates and non-duplicates.
-
-# In[ ]:
-
-
-plt.figure(figsize=(12, 8))
-plt.subplot(1,2,1)
-sns.violinplot(x = 'is_duplicate', y = 'word_share', data = df[0:50000])
-plt.subplot(1,2,2)
-sns.distplot(df[df['is_duplicate'] == 1.0]['word_share'][0:10000], color = 'green')
-sns.distplot(df[df['is_duplicate'] == 0.0]['word_share'][0:10000], color = 'red')
-
-
-# Scatter plot of question pair character lengths where color indicates duplicates and the size the word share coefficient we've calculated earlier.
-
-# In[ ]:
-
-
-df_subsampled = df[0:2000]
-
-trace = go.Scatter(
-    y = df_subsampled['q2len'].values,
-    x = df_subsampled['q1len'].values,
-    mode='markers',
-    marker=dict(
-        size= df_subsampled['word_share'].values * 60,
-        color = df_subsampled['is_duplicate'].values,
-        colorscale='Portland',
-        showscale=True,
-        opacity=0.5,
-        colorbar = dict(title = 'duplicate')
-    ),
-    text = np.round(df_subsampled['word_share'].values, decimals=2)
-)
-data = [trace]
-
-layout= go.Layout(
-    autosize= True,
-    title= 'Scatter plot of character lengths of question one and two',
-    hovermode= 'closest',
-        xaxis=dict(
-        showgrid=False,
-        zeroline=False,
-        showline=False
-    ),
-    yaxis=dict(
-        title= 'Question 2 length',
-        ticklen= 5,
-        gridwidth= 2,
-        showgrid=False,
-        zeroline=False,
-        showline=False,
-    ),
-    showlegend= False
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig,filename='scatterWords')
-
-
-# # Animation over average number of words
+# ### Data Prep
 # 
-# For that we will calculate the average number of words in both questions for each row.
+# Let's first only isolate for active duty maps as they are the maps that most competitive players really care about.  I also want to first convert the in-game coordinates to overhead map coordinates.
+
+# In[ ]:
+
+
+active_duty_maps = ['de_cache', 'de_cbble', 'de_dust2', 'de_inferno', 'de_mirage', 'de_overpass', 'de_train']
+df = df[df['map'].isin(active_duty_maps)]
+df = df.reset_index(drop=True)
+md = map_bounds.loc[df['map']]
+md[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']] = (df.set_index('map')[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']])
+md['att_pos_x'] = (md['ResX']*(md['att_pos_x']-md['StartX']))/(md['EndX']-md['StartX'])
+md['att_pos_y'] = (md['ResY']*(md['att_pos_y']-md['StartY']))/(md['EndY']-md['StartY'])
+md['vic_pos_x'] = (md['ResX']*(md['vic_pos_x']-md['StartX']))/(md['EndX']-md['StartX'])
+md['vic_pos_y'] = (md['ResY']*(md['vic_pos_y']-md['StartY']))/(md['EndY']-md['StartY'])
+df[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']] = md[['att_pos_x', 'att_pos_y', 'vic_pos_x', 'vic_pos_y']].values
+
+
+# In[ ]:
+
+
+print("Total Number of Rounds: %i" % df.groupby(['file', 'round'])['tick'].first().count())
+
+
+# ### Pistol Round Buys
 # 
-# In the end we want to have a scatter plot, just like the one above, but giving us one more dimension, in that case the average number of words in both questions. That will allow us to see the dependence on that variable. We also expect that as the number of words is increased, the character lengths of Q1 and Q2 will increase.
+# Let's first start by taking only pistol rounds and count the number of rounds
 
 # In[ ]:
 
 
-from IPython.display import display, HTML
+avail_pistols = ['USP', 'Glock', 'P2000', 'P250', 'Tec9', 'FiveSeven', 'Deagle', 'DualBarettas', 'CZ']
 
-df_subsampled['q_n_words_avg'] = np.round((df_subsampled['q1_n_words'] + df_subsampled['q2_n_words'])/2.0).astype(int)
-print(df_subsampled['q_n_words_avg'].max())
-df_subsampled = df_subsampled[df_subsampled['q_n_words_avg'] < 20]
-df_subsampled.head()
+df_pistol = df[(df['round'].isin([1,16])) & (df['wp'].isin(avail_pistols))]
+print("Total Number of Pistol Rounds: %i" % df_pistol.groupby(['file', 'round'])['tick'].first().count())
 
+
+# Let's first start by looking at pistol round buys.  We infer this from the damage dealt by pistols each round.  There is a bias here where if you did 0 damage with that pistol you had, then it doesn't get counted.  The potential bias is that aim punch will make most weapons get undercounted but I don't think it's a large issue.
 
 # In[ ]:
 
 
-word_lens = sorted(list(df_subsampled['q_n_words_avg'].unique()))
-# make figure
-figure = {
-    'data': [],
-    'layout': {
-        'title': 'Scatter plot of char lenghts of Q1 and Q2 (size ~ word share similarity)',
+pistol_buys = df_pistol.groupby(['file', 'round', 'att_side', 'wp'])['hp_dmg'].first()
+(pistol_buys.groupby(['wp']).count()/pistol_buys.groupby(['wp']).count().sum())*100.
+
+
+# Looks like Glock/USP trumps over most pistols.
+# 
+# ---
+# 
+# ### Heatmaps of Frequency of Pistol Damage
+# 
+# Next we can look at what are the most frequent spots when attacking as a T.  To keep it short, I will just do it on dust2 but changing `smap` will work on any map within `active_duty_maps`
+
+# In[ ]:
+
+
+smap = 'de_dust2'
+
+bg = imread('../input/'+smap+'.png')
+fig, (ax1, ax2) = plt.subplots(1,2,figsize=(18,16))
+ax1.grid(b=True, which='major', color='w', linestyle='--', alpha=0.25)
+ax2.grid(b=True, which='major', color='w', linestyle='--', alpha=0.25)
+ax1.imshow(bg, zorder=0, extent=[0.0, 1024, 0., 1024])
+ax2.imshow(bg, zorder=0, extent=[0.0, 1024, 0., 1024])
+plt.xlim(0,1024)
+plt.ylim(0,1024)
+
+plot_df = df_pistol.loc[(df_pistol.map == smap) & (df_pistol.att_side == 'Terrorist')]
+sns.kdeplot(plot_df['att_pos_x'], plot_df['att_pos_y'], cmap='YlOrBr', bw=15, ax=ax1)
+ax1.set_title('Terrorists Attacking')
+
+plot_df = df_pistol.loc[(df_pistol.map == smap) & (df_pistol.att_side == 'CounterTerrorist')]
+sns.kdeplot(plot_df['att_pos_x'], plot_df['att_pos_y'], cmap='Blues', bw=15, ax=ax2)
+ax2.set_title('Counter-Terrorists Attacking')
+
+
+# 
+# ---
+# 
+# ### ADR by Pistols
+# 
+# Next let's take a look at the average damage per round dealt by a player given their pistol.  Note that if they had picked up a pistol during the round, it does get counted separately.  However, given that most pistol kills are headshots, it shouldn't skew the statistic that much (especially for USPS).
+
+# In[ ]:
+
+
+df_pistol.groupby(['file', 'round', 'wp', 'att_id'])['hp_dmg'].sum().groupby('wp').agg(['count', 'mean']).sort_values(by='mean')
+
+
+# __Deagle has a massive advantage in damage__
+# 
+# ---
+# 
+# ### Bomb Site Plants
+# 
+# Let's now look at the Number of bomb plants by site.  This statistic tells us the T's preferences for deciding which site to take during the round.  Although the possibility of rotates are always there, it gives us a good idea of what to expect.
+
+# In[ ]:
+
+
+df_pistol[~df_pistol['bomb_site'].isnull()].groupby(['file', 'map', 'round', 'bomb_site'])['tick']         .first().groupby(['map', 'bomb_site']).count().unstack('bomb_site')
+
+
+# ---
+# 
+# ### Post-plant Win Probabilities by Advantages
+# 
+# This one could be further disseminated but we want to be able to look at the win probabilities post plant given the context of how many Ts and CTs are alive at that time.  First, we can look at overall statistic:
+
+# In[ ]:
+
+
+bomb_prob_overall = df_pistol[~df_pistol['bomb_site'].isnull()].groupby(['file', 'round', 'map', 'bomb_site', 'winner_side'])['tick'].first().groupby(['map', 'bomb_site', 'winner_side']).count()
+bomb_prob_overall_pct = bomb_prob_overall.groupby(level=[0,1]).apply(lambda x: 100 * x / float(x.sum()))
+bomb_prob_overall_pct.unstack('map')
+
+
+# Next we can first find for each round the post-plant situation (if it was planted at all) and calculate advantages.  I've given two options (XvX) or more generally by differences (e.g 5 Ts - 3 CTs = 2).
+
+# In[ ]:
+
+
+df_pistol['XvX'] = np.nan
+for k,g in df_pistol.groupby(['file', 'round']):
+    if((g['is_bomb_planted'] == True).any() == False):
+        continue
+    else:
+        post_plant_survivors = 5-np.floor((g[~g['is_bomb_planted']].groupby('vic_side')['hp_dmg'].sum()/100.))
+       # df_pistol.loc[g.index, 'XvX'] = "%iv%i" % (post_plant_survivors.get('Terrorist', 5), post_plant_survivors.get('CounterTerrorist', 5) )
+        df_pistol.loc[g.index, 'XvX'] = post_plant_survivors.get('Terrorist', 5) - post_plant_survivors.get('CounterTerrorist', 5)
+
+
+# Now we can calculate the Win probabilities by advantages, note that I isolate for just Terrorist because having CT columns (which is redundant), muddles the table.
+
+# In[ ]:
+
+
+bomb_prob = df_pistol[~df_pistol['XvX'].isnull()].groupby(['file', 'round', 'map', 'bomb_site', 'XvX', 'winner_side'])['tick'].first().groupby(['XvX', 'map', 'bomb_site', 'winner_side']).count()
+bomb_prob_pct = bomb_prob.groupby(level=[0,1,2]).apply(lambda x: 100 * x / float(x.sum()))
+bomb_prob_pct.xs('Terrorist', level=3).unstack(['XvX', 'bomb_site']).fillna(0)
+
+
+# ---
+# 
+# ### In/Out-of-site ADR
+# 
+# I've always wondered if it's better to play post-plants in-site our out-of-site during a one-man up/down or equal situation. In-site has the advantage of peeking when the CTs are clearing outer-site spots but the con of being in a spot where you are forced to duel the CTs. Outer-site has pro of baiting shots and playing time but having to peek into the CT when he is defusing. Let's isolate for only 1v1, 2v1, 1v2, 2v2 situations and look at average ADR differential when you play inner site or outer site.
+# 
+# Before we do that though, we have to define what is considered Inner/Outer site.  Using some basic rectangles, I can draw sites on the map and then define them via simple top-left, bottom-right coordinates.
+
+# In[ ]:
+
+
+callouts = {
+    'de_cache': {
+        'B inner': [[310,782,413,865]],
+        'A inner': [[278,165,388,320]]
     },
-    'frames': []#,
-    #'config': {'scrollzoom': True}
-}
-
-# fill in most of layout
-figure['layout']['xaxis'] = {'range': [0, 200], 'title': 'Q1 length'}
-figure['layout']['yaxis'] = {
-    'range': [0, 200],
-    'title': 'Q2 length'#,
-    #'type': 'log'
-}
-figure['layout']['hovermode'] = 'closest'
-
-figure['layout']['updatemenus'] = [
-    {
-        'buttons': [
-            {
-                'args': [None, {'frame': {'duration': 300, 'redraw': False},
-                         'fromcurrent': True, 'transition': {'duration': 300, 'easing': 'quadratic-in-out'}}],
-                'label': 'Play',
-                'method': 'animate'
-            },
-            {
-                'args': [[None], {'frame': {'duration': 0, 'redraw': False}, 'mode': 'immediate',
-                'transition': {'duration': 0}}],
-                'label': 'Pause',
-                'method': 'animate'
-            }
-        ],
-        'direction': 'left',
-        'pad': {'r': 10, 't': 87},
-        'showactive': False,
-        'type': 'buttons',
-        'x': 0.1,
-        'xanchor': 'right',
-        'y': 0,
-        'yanchor': 'top'
-    }
-]
-
-sliders_dict = {
-    'active': 0,
-    'yanchor': 'top',
-    'xanchor': 'left',
-    'currentvalue': {
-        'font': {'size': 20},
-        'prefix': 'Avg. number of words in both questions:',
-        'visible': True,
-        'xanchor': 'right'
+    'de_cbble': {
+        'B inner': [[625,626,720,688]],
+        'A inner': [[134,746,225,861]]
     },
-    'transition': {'duration': 300, 'easing': 'cubic-in-out'},
-    'pad': {'b': 10, 't': 50},
-    'len': 0.9,
-    'x': 0.1,
-    'y': 0,
-    'steps': []
-}
-
-# make data
-word_len = word_lens[0]
-dff = df_subsampled[df_subsampled['q_n_words_avg'] == word_len]
-data_dict = {
-    'x': list(dff['q1len']),
-    'y': list(dff['q2len']),
-    'mode': 'markers',
-    'text': list(dff['is_duplicate']),
-    'marker': {
-        'sizemode': 'area',
-        #'sizeref': 200000,
-        'colorscale': 'Portland',
-        'size': dff['word_share'].values * 120,
-        'color': dff['is_duplicate'].values,
-        'colorbar': dict(title = 'duplicate')
+    'de_train': {
+        'B inner': [[405,754,607,812]],
+        'A inner': [[582,462,713,539]]
     },
-    'name': 'some name'
+    'de_dust2': {
+        'B inner': [[162,99,256,199]],
+        'A inner': [[786,182,846,239]]
+    },
+    'de_mirage': {
+        'B inner': [[188,245,286,345]],
+        'A inner': [[498,737,610,835]]
+    },
+    'de_inferno': {
+        'B inner': [[410,115,548,320]],
+        'A inner': [[783,638,877,765]]
+    },
+    'de_overpass': {
+        'B inner': [[686,294,745,359]],
+        'A inner': [[452,174,560,272]]
+    },
 }
-figure['data'].append(data_dict)
 
-# make frames
-for word_len in word_lens:
-    frame = {'data': [], 'name': str(word_len)}
-    dff = df_subsampled[df_subsampled['q_n_words_avg'] == word_len]
-
-    data_dict = {
-        'x': list(dff['q1len']),
-        'y': list(dff['q2len']),
-        'mode': 'markers',
-        'text': list(dff['is_duplicate']),
-        'marker': {
-            'sizemode': 'area',
-            #'sizeref': 200000,
-            'size': dff['word_share'].values * 120,
-            'colorscale': 'Portland',
-            'color': dff['is_duplicate'].values,
-            'colorbar': dict(title = 'duplicate')
-        },
-        'name': 'some name'
-    }
-    frame['data'].append(data_dict)
-
-    figure['frames'].append(frame)
-    slider_step = {'args': [
-        [word_len],
-        {
-            'frame': {'duration': 300, 'redraw': False},
-            'mode': 'immediate',
-            'transition': {'duration': 300}
-        }
-     ],
-     'label': word_len,
-     'method': 'animate'}
-    sliders_dict['steps'].append(slider_step)
-
-    
-figure['layout']['sliders'] = [sliders_dict]
-
-py.iplot(figure)
+def find_callout(x,y,m,buffer=10): 
+    callout = 'N/A'
+    for c,coord in callouts[m].items():
+        for box in coord:
+            if ((box[2]+buffer >= x >= box[0]-buffer) & 
+                (buffer+(1024-box[1]) >= y >= (1024-box[3])-buffer)):
+                    callout = c
+    return callout
 
 
-# What is interesting about that, is that as the number of words increases, the distribution of character lengths of the first and second question becomes less and less spherical.
-
-# # Embedding with engineered features
-# 
-# We will now revisit the t-SNE embedding with the manually engineered features.
-# 
-# For that we use the number of words in both questions, character lengths and their word share coefficient. t-SNE is sensitive to scaling of different dimensions and we want all of the dimensions to contribute equally to the distance measure that t-SNE is trying to preserve.
+# Let's see an example of this on dust2
 
 # In[ ]:
 
 
-from sklearn.preprocessing import MinMaxScaler
+smap = 'de_dust2'
 
-df_subsampled = df[0:3000]
-X = MinMaxScaler().fit_transform(df_subsampled[['q1_n_words', 'q1len', 'q2_n_words', 'q2len', 'word_share']])
-y = df_subsampled['is_duplicate'].values
+def calc_plot_coord(l):
+    tx,ty,bx,by = l
+    by = 1024-by; ty=1024-ty;
+    w = bx-tx; h= ty-by;
+    return (tx,by,w,h)
 
-
-# In[ ]:
-
-
-tsne = TSNE(
-    n_components=3,
-    init='random', # pca
-    random_state=101,
-    method='barnes_hut',
-    n_iter=200,
-    verbose=2,
-    angle=0.5
-).fit_transform(X)
-
-
-# In[ ]:
-
-
-trace1 = go.Scatter3d(
-    x=tsne[:,0],
-    y=tsne[:,1],
-    z=tsne[:,2],
-    mode='markers',
-    marker=dict(
-        sizemode='diameter',
-        color = y,
-        colorscale = 'Portland',
-        colorbar = dict(title = 'duplicate'),
-        line=dict(color='rgb(255, 255, 255)'),
-        opacity=0.75
-    )
-)
-
-data=[trace1]
-layout=dict(height=800, width=800, title='3d embedding with engineered features')
-fig=dict(data=data, layout=layout)
-py.iplot(fig, filename='3DBubble')
+bg = imread('../input/'+smap+'.png')
+fig, ax = plt.subplots(figsize=(10,10))
+ax.grid(b=True, which='major', color='w', linestyle='--', alpha=0.25)
+ax.imshow(bg, zorder=0, extent=[0.0, 1024, 0., 1024])
+plt.xlim(0,1024)
+plt.ylim(0,1024)
+patches = []
+for k,coords in callouts[smap].items():
+    for c in coords:
+        x,y,w,h = calc_plot_coord(c)
+        patches.append(mpatches.Rectangle((x,y),w,h))
+        plt.text(x+w/2.3,y+h/2.3, s=k, size= 8, color='w')
+colors = np.linspace(0, 1, len(patches))
+collection = PatchCollection(patches, cmap=plt.cm.hsv, alpha=0.4)
+collection.set_array(np.array(colors))
+ax.add_collection(collection)
 
 
-# The embedding of the engineered features has much more structure than the previous one where we were only computing differences of TF-IDF encodings.
-# 
-# In the cluster of the negatives we have few positives whereas in the cluster of positives we have a lot more negatives. That matches our observation from the boxplot of word share coefficient above, where we could see that the negative class has a lot of overlap with the positive class for high word share coefficients.
-
-# # Parallel Coordinates
-# 
-# We now want to get another perspective on high dimensional data, such as the TF-IDF encoded questions. For that purpose I'll encode the concatenated questions into a set of N dimensions, s.t. each row in the dataframe then has one N dimensional vector associated to it.
-# With this we can then have a look at how these coordinates (or TF-IDF dimensions) vary by label.
-# 
-# There are many EDA methods to visualize high dimensional data, I'll show parallel coordinates here.
-# 
-# To make a nice looking plot, I've chosen N to be quite small, much smaller actually than you would encode it in a machine learning algorithm.
+# Now let's convert the coordinates of T attackers or victims to callouts (either N/A: outer site or Inner A/Inner B)
 
 # In[ ]:
 
 
-from pandas.tools.plotting import parallel_coordinates
+bomb_dist = df_pistol[(df_pistol['XvX'].isin([-1, 0, 1]))
+                     &(~df_pistol['bomb_site'].isnull())
+                     &((df_pistol['vic_side'] == 'Terrorist') | (df_pistol['att_side'] == 'Terrorist'))]
 
-df_subsampled = df[0:500]
-
-N = 64
-
-#encoded = HashingVectorizer(n_features = N).fit_transform(df_subsampled.apply(lambda row: row['question1']+' '+row['question2'], axis=1).values)
-encoded = TfidfVectorizer(max_features = N).fit_transform(df_subsampled.apply(lambda row: row['question1']+' '+row['question2'], axis=1).values)
-# generate columns in the dataframe for each of the 32 dimensions
-cols = ['hashed_'+str(i) for i in range(encoded.shape[1])]
-for idx, col in enumerate(cols):
-    df_subsampled[col] = encoded[:,idx].toarray()
-
-plt.figure(figsize=(12,8))
-kws = {
-    'linewidth': 0.5,
-    'alpha': 0.7
-}
-parallel_coordinates(
-    df_subsampled[cols + ['is_duplicate']],
-    'is_duplicate',
-    axvlines=False, colormap=plt.get_cmap('plasma'),
-    **kws
-)
-#plt.grid(False)
-plt.xticks([])
-plt.xlabel("encoded question dimensions")
-plt.ylabel("value of dimension")
+bomb_dist['att_callout'] = bomb_dist.apply(lambda x: find_callout(x['att_pos_x'], x['att_pos_y'], x['map'], buffer=5), axis=1)
+bomb_dist['vic_callout'] = bomb_dist.apply(lambda x: find_callout(x['vic_pos_x'], x['vic_pos_y'], x['map'], buffer=5), axis=1)
 
 
-# In the parallel coordinates we can see that there are some dimensions that have high TF-IDF features values for duplicates and others high values for non-duplicates.
-
-# # Question character length correlations by duplication label
-# 
-# The pairplot of character length of both questions by duplication label is showing us that, duplicated questions seem to have a somewhat similar amount of characters in them.
-# 
-# Also we can see something quite intuitive, that there is rather strong correlation in the number of words and the number of characters in a question.
+# Now we can calculate ADR by site
 
 # In[ ]:
 
 
-n = 10000
-sns.pairplot(df[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'is_duplicate']][0:n], hue='is_duplicate')
+bomb_dist_total_dmg_att = bomb_dist.groupby(['file', 'map', 'round', 'att_callout', 'att_id'])['hp_dmg'].sum()
+bomb_dist_total_dmg_vic = bomb_dist.groupby(['file', 'map', 'round', 'vic_callout', 'vic_id'])['hp_dmg'].sum()
+dmg_dealt = bomb_dist_total_dmg_att.groupby(['map', 'att_callout']).agg(['count', 'mean'])
+dmg_rec = bomb_dist_total_dmg_vic.groupby(['map', 'vic_callout']).agg(['count', 'mean'])
+dmg_diff = dmg_dealt['mean'] - dmg_rec['mean']
+dmg_diff.unstack('att_callout')
 
-
-# # Model starter
-# 
-# Train a model with the basic feature we've constructed so far.
-# 
-# For that we will use Logisitic regression, for which we will do a quick parameter search with CV, plot ROC and PR curve on the holdout set and finally generate a submission.
-
-# In[ ]:
-
-
-from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import precision_recall_curve, auc, roc_curve
-from sklearn.model_selection import GridSearchCV, train_test_split
-from sklearn.preprocessing import MinMaxScaler
-
-scaler = MinMaxScaler().fit(df[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'word_share']])
-
-X = scaler.transform(df[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'word_share']])
-y = df['is_duplicate']
-
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.33, random_state=42)
-
-X_train.shape, X_test.shape, y_train.shape, y_test.shape
-
-
-# Run cross-validation with a few hyper parameters.
-
-# In[ ]:
-
-
-clf = LogisticRegression()
-grid = {
-    'C': [1e-6, 1e-3, 1e0],
-    'penalty': ['l1', 'l2']
-}
-cv = GridSearchCV(clf, grid, scoring='neg_log_loss', n_jobs=-1, verbose=1)
-cv.fit(X_train, y_train)
-
-
-# Print validation results. Here we see that the strongly regularized model has much worse negative log loss than the other two models, regardless of which regularizer we've used.
-
-# In[ ]:
-
-
-for i in range(1, len(cv.cv_results_['params'])+1):
-    rank = cv.cv_results_['rank_test_score'][i-1]
-    s = cv.cv_results_['mean_test_score'][i-1]
-    sd = cv.cv_results_['std_test_score'][i-1]
-    params = cv.cv_results_['params'][i-1]
-    print("{0}. Mean validation neg log loss: {1:.3f} (std: {2:.3f}) - {3}".format(
-        rank,
-        s,
-        sd,
-        params
-    ))
-
-
-# In[ ]:
-
-
-print(cv.best_params_)
-print(cv.best_estimator_.coef_)
-
-
-# ### ROC
-# 
-# Receiver operator characteristic, used very commonly to assess the quality of models for binary classification.
-# 
-# We will look at at three different classifiers here, a strongly regularized one and two with weaker regularization. The heavily regularized model has parameters very close to zero and is actually worse than if we would pick the labels for our holdout samples randomly.
-
-# In[ ]:
-
-
-colors = ['r', 'g', 'b', 'y', 'k', 'c', 'm', 'brown', 'r']
-lw = 1
-Cs = [1e-6, 1e-4, 1e0]
-
-plt.figure(figsize=(12,8))
-plt.xlabel('False Positive Rate')
-plt.ylabel('True Positive Rate')
-plt.title('ROC Curve for different classifiers')
-
-plt.plot([0, 1], [0, 1], color='navy', lw=lw, linestyle='--')
-
-labels = []
-for idx, C in enumerate(Cs):
-    clf = LogisticRegression(C = C)
-    clf.fit(X_train, y_train)
-    print("C: {}, parameters {} and intercept {}".format(C, clf.coef_, clf.intercept_))
-    fpr, tpr, _ = roc_curve(y_test, clf.predict_proba(X_test)[:,1])
-    roc_auc = auc(fpr, tpr)
-    plt.plot(fpr, tpr, lw=lw, color=colors[idx])
-    labels.append("C: {}, AUC = {}".format(C, np.round(roc_auc, 4)))
-
-plt.legend(['random AUC = 0.5'] + labels)
-
-
-# # Precision-Recall Curve
-# 
-# Also used very commonly, but more often in cases where we have class-imbalance. We can see here, that there are a few positive samples that we can identify quite reliably. On in the medium and high recall regions we see that there are also positives samples that are harder to separate from the negatives.
-
-# In[ ]:
-
-
-pr, re, _ = precision_recall_curve(y_test, cv.best_estimator_.predict_proba(X_test)[:,1])
-plt.figure(figsize=(12,8))
-plt.plot(re, pr)
-plt.title('PR Curve (AUC {})'.format(auc(re, pr)))
-plt.xlabel('Recall')
-plt.ylabel('Precision')
-
-
-# # Prepare submission
-# 
-# Here we read the test data and apply the same transformations that we've used for the training data. We also need to scale the computed features again.
-
-# In[ ]:
-
-
-dftest = pd.read_csv("../input/test.csv").fillna("")
-
-dftest['q1len'] = dftest['question1'].str.len()
-dftest['q2len'] = dftest['question2'].str.len()
-
-dftest['q1_n_words'] = dftest['question1'].apply(lambda row: len(row.split(" ")))
-dftest['q2_n_words'] = dftest['question2'].apply(lambda row: len(row.split(" ")))
-
-dftest['word_share'] = dftest.apply(normalized_word_share, axis=1)
-
-dftest.head()
-
-
-# We use the best estimator found by cross-validation and retrain it, using the best hyper parameters, on the whole training set.
-
-# In[ ]:
-
-
-retrained = cv.best_estimator_.fit(X, y)
-
-X_submission = scaler.transform(dftest[['q1len', 'q2len', 'q1_n_words', 'q2_n_words', 'word_share']])
-
-y_submission = retrained.predict_proba(X_submission)[:,1]
-
-submission = pd.DataFrame({'test_id': dftest['test_id'], 'is_duplicate': y_submission})
-submission.head()
-
-
-# In[ ]:
-
-
-sns.distplot(submission.is_duplicate[0:2000])
-
-
-# In[ ]:
-
-
-submission.to_csv("submission.csv", index=False)
-
-
-# Most likely this submission will not score very good, we've only used a small set of features and didn't really dive into feature engineering that much. :)

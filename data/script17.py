@@ -1,935 +1,445 @@
 
 # coding: utf-8
 
-# # **Introduction**
+# **This notebook is for a Portuguese speaking audiance as part of a training session. Soon I will post it in English. **
 # 
-# This is an initial Explanatory Data Analysis for the [Mercari Price Suggestion Challenge](https://www.kaggle.com/c/mercari-price-suggestion-challenge#description) with matplotlib. [bokeh](https://bokeh.pydata.org/en/latest/) and [Plot.ly](https://plot.ly/feed/) - a visualization tool that creates beautiful interactive plots and dashboards.  The competition is hosted by Mercari, the biggest Japanese community-powered shopping app with the main objective to predict an accurate price that Mercari should suggest to its sellers, given the item's information. 
+# >"Então você não se lembra de um mundo sem robôs.  Houve um tempo quando a humanidade enfrentou o universo sozinha e sem amigo. Agora ela tem criaturas para ajudá-la; criaturas mais fortes que si mesma, mais confiáveis,  mais úteis e absolutamente devotas. A humanidade não mais está sozinha. Você já pensou nisso desta forma?" <br>
+# I, Robot - Issac Asimov, 1950
 # 
-# ***Update***: The abundant amount of food from my family's Thanksgiving dinner has really energized me to continue working on this model. I decided to dive deeper into the NLP analysis and found an amazing tutorial by Ahmed BESBES. The framework below is  based on his [source code](https://ahmedbesbes.com/how-to-mine-newsfeed-data-and-extract-interactive-insights-in-python.html).  It provides guidance on pre-processing documents and  machine learning techniques (K-means and LDA) to clustering topics.  So that this kernel will be divided into 2 parts: 
 # 
-# 1. Explanatory Data Analysis 
-# 2. Text Processing  
-#     2.1. Tokenizing and  tf-idf algorithm  
-#     2.2. K-means Clustering  
-#     2.3. Latent Dirichlet Allocation (LDA)  / Topic Modelling
-#  
+# # Uma breve história dos algoritmos que aprendem
+# 
+# <br><br>
+# **Bem-vindos ao Laboratório Introdutório de Machine Learning!**
+# <br><br>
+# 
+# Esse é um dos livros que vamos  usar como referência [Python Machine Learning - Second Edition,
+# Raschka & Mirjalili, September-2017](https://www.packtpub.com/big-data-and-business-intelligence/python-machine-learning-second-edition)
+# 
+# 
+# O primeiro passo para iniciar nossos estudos  é compreender que **Machine Learning (ML)** é um sub-campo de pesquisa da **Inteleligência Artificial (IA)** e,  portanto, não é necessariamente seu sinônimo como erroneamente sugerem alguns desavisados por ai.  ** Deep Learning (DL)** é um dos tópicos de **Redes Neurais (NN's)** que por sua vez são uma das sub-áreas de **ML**.  Não cometa o erro de confundir indistintamente Deep Learning com Machine Learning.
+# ![](https://blogs.nvidia.com/wp-content/uploads/2016/07/Deep_Learning_Icons_R5_PNG.jpg.png)
+# 
+# 
+# 
+# # Peceptron
+# Algoritmos de aprendizagem não são um tema novo.  A definição de neurônio artificial, o **perceptron**, foi estabelecida no final da década de 50 (The Perceptron: A Perceiving and Recognizing Automaton, F. Rosenblatt, Cornell Aeronautical Laboratory, 1957) e pode ser resumida na função abaixo:
+# 
+# ![](https://www.dropbox.com/s/s0uvoloszvkg83x/00-Perceptron.jpg?dl=1)
+# 
+# De forma simplificada, a saída de um neurônio artificial é igual a soma do produto das entradas ***x*** pelos pesos ***w*** aplicados a cada entrada.   As entradas ***x*** de um neurônio artificial equivalem aos dentritos de um neurônio biológico e a soma **$\sum_{j=0}^m x_{j}w_{j}$** é o estímulo resultante no axônio, definido por um limiar interno do neurônio (**threshold**) que vai determinar a sua "sensibilidade" ou quando será ativado ou não. Em ML preferencialmente utilizaremos a notação matricial  **$w^Tx$** onde o produto é dado pela transposta de *w* por *x*. A utilização de matrizes permite maior eficiência computacional e simplificação dos códigos de ML. 
+# 
+# <br><BR>
+# Aqui temos a representação gráfica do perceptron:
+# 
+# ![](https://www.dropbox.com/s/yxvrkm7kk1r991e/01-Perceptron.jpg?dl=1)
+
+# ![](https://www.sololearn.com/avatars/b2b6905b-4e53-412a-bcb8-22bfef2bcec5.jpg)
+# 
+# # Quando as máquinas aprendem...
+# 
+# A aprendizagem se traduz em encontrar pesos que aplicados aos valores de entrada resultem em um determinado valor de saída esperado.  Ainda analisando o gráfico do perceptron acima, vale notar que por questões de convenção e cálculo a entrada **$x_{0} $** é fixada com o valor ***1*** e seu o peso **$w_{0} $**  é chamado de **bias**.   Em uma rede neural de apenas uma entrada teríamos a seguinte equação equivalente z =  $w_{0}$ + $w_{1}x_{1}$.  Se voltarmos às aulas de matemática fundamental veremos que essa é exatamente uma **equação reduzida da reta **, onde $w_{0}$ define a "altura" da reta e  $w_{1}$ define sua inclinação no gráfico.   
+# 
+# ![](https://www.dropbox.com/s/cdai4n28jp5m5wp/simple_regression.png?dl=1)
+# 
+# 
+# O que os algoritmos de ML fazem é buscar de forma automática a equação que melhor representa o conjunto verdade (**y**) para um conjunto de observações ou amostras de entradas.  Uma forma de encontrar a melhor equação é através do cálculo sucessivo da diferença entre os valores gerados pela equação "aprendida" (**ŷ**) e os valores reais observados (**y**). Essa diferença chamamos de **Erro** ou **Perda**. As funções de perda  ou **loss functions** são um importante elemento na construção de algoritmos inteligentes. Em outras palavras, podemos afirmar que a aprendizagem de máquina é essencialmente uma tarefa de otimização de funções.  Atualmente os principais frameworks de ML implementam diversos algoritmos de otimização, sendo o Gradiente Descendente Estocástico ([SGD](http://ruder.io/optimizing-gradient-descent)) um dos mais populares.
+# 
+# O processo de ajustar pesos através de algoritmos de otimização de função é denominado **fit (treino)**, e cada rodada de ajustes é chamada de **Epoch (Época)**. O ajuste geralmente é feito usando um determinado número de amostras por vez que chamamos de **Batch (Lote)** .
+# 
+# No gráfico acima temos um problema onde os valores de solução podem ser linearmente correlacionadas com as amostras de entrada. Neste caso um algoritmo de ** Regressão ** poderia ser aplicado, mas existem varios tipos de algoritmos de ML e cada um vai funcionar melhor em determinados cenários.  Daí o teorema  **No Free Lunch**  em Machine Learning de David H. Wolpert, que nos recorda de que nenhum algoritmo de ML é universalmente melhor que todos os outros em todos cenários (The Lack of A Priori Distinctions Between Learning Algorithms, Wolpert and David H, 1996).
+# 
+# 
+# 
+# # Rolling in the Deep
+# 
+# As redes profundas conhecidas como Deep Learning(DL) ganharam maior destaque a partir de 2012 com a vitória de um time universitário canadense em uma competição de classificação de Imagens, a [ImageNet](http://www.image-net.org/).
+# 
+# Mas a vitória deste time canadense está intimamente relacionada com avanços da década de 80, sendo um de seus expoentes o cientista de computação e psicologia cognitiva **Geoffrey Hinton** da Universidade de Toronto. Hinton é conhecido por temas como **Propagação Reversa (Backpropagation)**, **Máquina de Boltzman (Boltzmann Machine** e **Deep Learning**. 
+# 
+# Embora o termo Deep Learning já havia sido aplicado a redes neurais artificiais por Igor Aizenberg em 2000,  foi uma plublicação de Geoffrey Hinton e Ruslan Salakhutdinov em 2006 que chamou mais atenção ao mostrar como redes neurais poderiam ser pré-treinadas uma camada por vez, e então fazer ajustes finos por meio de Backpropagation.  Esse avanço contribuiu fortemente para a viabilidade das redes DL como hoje conhecemos.
+# 
+# Em 2012, Hinton e seus dois alunos Alex Krizhevsky e Ilya Sutskever entraram na competição ImageNet e ao fazerem uso de redes densas convolucionais (CNN's) e técnicas avançadas para reduzir overfitting (ajuste excessivo aos dados de treino que resulta em baixa generalização) conseguiram atingir um incrível patamar de erro de 16% contra os 25% alcançados até então com algoritmos classificadores existentes. Hinton e seus alunos criaram uma empresa que seria adquirida posteriormente pelo Google.
+# 
+# Abaixo o gráfico da arquitetura de sua rede **[AlexNet](https://papers.nips.cc/paper/4824-imagenet-classification-with-deep-convolutional-neural-networks.pdf)** . Esta rede foi treinada por cerca de 5 a 6 dias usando um dataset de milhões de imagens classificadas milhares de classes. A equipe da AlexNet além da arquitetura inovadora utilizou duas placas de video GTX 580 (GPU) para poder suportar a alta demanda de processamento desse tipo de rede. O poder de manipulação de matrizes de uma GPU é muito bemvindo com algoritmos de ML, já que no final das contas toda informação e aprendizagem resultam em matrizes de dados e pesos.
+# 
+# 
+# ![](https://image.slidesharecdn.com/dlcvd2l4imagenet-160802094728/95/deep-learning-for-computer-vision-imagenet-challenge-upc-2016-7-638.jpg?cb=1470131387)
+# 
+# Nos anos seguintes empresas como Nvidia, Google, Microsoft, Baidu, Amazon, IBM, Ubber, Facebook e Tesla  entrariam de forma ainda mais agressiva na corrida tecnológica por plataformas de inteligência artificial mudando o nível do jogo para uma aposta de trilhões de dólares,  e criando com o apoio das diversas comunidades de código aberto os frameworks poderosos que estão hoje ao alcance de alguns cliques. Abaixo algum dos principais frameworks da atualidade:
+# 
+# ![](https://www.dropbox.com/s/lv9ooa3ur8pxc33/deep-learning-developer-frameworks-407.png?dl=1)
+
+# # O que é Machine Learning?
+# <br>
+# A seguir vamos começar a entender um pouco mais sobre como funciona os principais tipos de algoritmos de ML,  quais são as estratégias de treino e etapas para construção destes algorítimos.
+# 
+# Então, uma pergunta importante a fazer é: o que é um algorítimo de aprendizagem de máquina? Uma boa definição, emprestada de [*Deep Learning*](http://www.deeplearningbook.org) (Goodfellow-et-al-2016),  seria ***"um algorítmo de aprendizagem de máquina é um algorítmo capaz de aprender com os dados"* **.
+# 
+# Ok, mas o que significa aprender? Tom Mitchell em seu livro* Machine Learning* (McGraw-Hill, New York. 97) nos ajuda com uma definição bem sucinta: *** “Um programa de computador é dito aprender de uma experiência E em respeito a alguma classe de tarefa T e medida de performance P, se sua performance em tarefas T, como medido por P, melhora com a experiência E".*** 
+# 
+# Todavia não podemos esquecer que Machine Learning é um campo em construção e muitos dos conceitos que hoje consideramos  verdade serão descartados nos próximos anos. O próprio [Geoffrey Hinton em entrevista com Andrew NG](https://www.youtube.com/watch?v=-eyhCTvrEtE) (outro nome bastante conhecido da galera de ML) diz *"Meu conselho é que leia alguma literatura (*de ML*) mas não leia demais... alguns dizem que você deveria passar vários anos lendo a literatura e só então começar a trabalhar em suas próprias idéias e isso pode ser verdade para alguns pesquisadores, mas para pesquisadores criativos eu penso que o que você quer é estudar uma parte da literatura e, então, notar o que todos estão fazendo errado... aquilo que você sente que não está correto, e ao contrário imaginar um jeito de fazer certo... e quando os outros disserem que não serve, apenas continue... tenho um bom princípio para ajudar as pessoas a continuarem que é: ou suas intuições são boas ou não, se são boas você deveria seguir-las e ao final terá sucesso, se não são boas não importa o que você faça... você deveria confiar nas suas intuições não há razão para não fazê-lo..."* (tradução livre)
+# 
+# 
+# Portanto, a seguir veremos três grandes grupos de algoritimos de ML, mas utilize essa divisão apenas como ferramenta de compreensão já que alguns algoritmos atuais extravasam essas classificações.
+# 
+# 
+# # Os três tipos de Machine Learning
+# 
+# Os algoritmos de Machine Learning podem ser agrupados em três tipos principais:
+# 
+# 
+# ![](https://www.dropbox.com/s/btluyzv2e08djan/02-MLTipos.jpg?dl=1)
+# 
+# ## Supervised Learning
+# O principal objetivo na **aprendizagem supervisionada** é "aprender" um modelo com base nos dados de treino rotulados que seja capaz fazer predições a respeito de dados novos ou de dados futuros. 
+# 
+# Quando os valores esperados são discretos, como por exemplo um algoritmo capaz de reconhecer se uma imagem é de um gato ou cachorro, dizemos que se trata de uma **Tarefa de Classificação** ou seja buscamos um modelo classificador.  Classificação é uma subcategoria da aprendizagem supervisionada na qual o foco é prever rótulos categóricos de novas instâncias baseado nas observações do passado.
+# 
+# A predição de valores contínuos, como por exemplo o preço de venda de um imóvel, é tratada por outra subcategoria de aprendizagem supervisionada a **Regressão**.  
+# 
+# 
+# ## Reinforcement Learning
+# Outro tipo de aprendizagem de máquina é o aprendizado por reforço. Em **reinforcement learning** o objetivo é desenvolver um **agente** que melhora sua performance baseado em sucessivas interações com o ambiente.  Diferentemente das funções de perda (loss functions) das técnicas supervisioanadas, aqui o feedback é dado por um sistema de recompensas que pune ou premia certos resultados (**reward function**) com base em certos estados do ambiente.
+# 
+# Um exemplo popular desta arquitetura de aprendizagem é uma Engine de Xadrez. Nela o agente decide uma série de movimentos de acordo com o estado do tabuleiro, a recompensa pode ser definida com base em diversos resultados como sobrepor uma peça inimiga ou tomar sua rainha, ou mesmo a vitória ou derrota final.
+# 
+# 
+# 
+# 
+# ## Unsupervised Learning
+# Na aprendizagem não supervisionada lidamos com dados não rótulados ou com informação cuja estrutura não é exatamente conhecida.   
+# 
+# Ao usarmos  técnicas de aprendizagem não supervisionada somos capazes de explorar a estrutura de nossas amostras e extrair informação significativa de como essas amostras se relacionam.  Uma das aplicações práticas deste tipo de aprendizagem é a segmentação (**clustering**) de clientes de acordo com suas preferências ou quaisquer outras características que tenhamos à disposição. 
+# 
+# Outro campo de aplicação da aprendizagem não supervisionada é redução de dimensionalidade de dados. A redução de dimensionalidade permite eliminar ruídos e comprimir informação resultando em economia de processamento e armazenamento de dados. 
+
+# # Botando a mão na massa!
+# 
+# Agora que vimos em linhas gerais o que são algorítmos de ML, vamos começar com o primeiro passo no desenvolvimento de um sistema de ML:   A preparação e exploração de dados ou **exploratory data analysis (EDA)** termo também emprestado do campo de estatística.  
+# 
+# Nos exemplos vou usar um famoso dataset chamado Iris que possui 150 amostras de 3 tipos de flores e os tamanhos de suas pétalas.  Em ML essas características ou dados de entrada denominamos **features**.
+# 
+# *Você deve executar cada célula de código . Use Ctrl + Enter para executar e Shift + Enter para criar uma nova célula*
+# 
+# ## 1 - Bibliotecas 
 
 # In[ ]:
 
 
-import nltk
-import string
-import re
-import numpy as np
-import pandas as pd
-import pickle
-#import lda
+#Usamos import para importar as bibliotecas e pacotes que vamos utilizar
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt # library for draring charts
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-sns.set(style="white")
-
-from nltk.stem.porter import *
-from nltk.tokenize import word_tokenize, sent_tokenize
-from nltk.corpus import stopwords
-from sklearn.feature_extraction import stop_words
-
-from collections import Counter
-from wordcloud import WordCloud
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.decomposition import LatentDirichletAllocation
-
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
+# a magic cell (%) abaixo permite exibir gráficos de forma interna adequadamente
 get_ipython().run_line_magic('matplotlib', 'inline')
 
-import bokeh.plotting as bp
-from bokeh.models import HoverTool, BoxSelectTool
-from bokeh.models import ColumnDataSource
-from bokeh.plotting import figure, show, output_notebook
-#from bokeh.transform import factor_cmap
-
-import warnings
-warnings.filterwarnings('ignore')
-import logging
-logging.getLogger("lda").setLevel(logging.WARNING)
+# Exibe a versão das biblioteca. Em alguns casos é importante em que versão está trabalhando
+print("Numpy Version {}".format(np.__version__))
+print("Pandas Version {}".format(pd.__version__))
 
 
-# # **Exploratory Data Analysis**
-# On the first look at the data, besides the unique identifier (item_id), there are 7 variables in this model. This notebook will sequentially go through each of them with a brief statistical summary. 
+# ## 2 - Caminho do Dataset
+
+# In[ ]:
+
+
+'''
+O dataset que vamos usar foi adicionado automaticamente. Podemos adicionar qualquer dataset 
+público do Kaggle com o botão "Add a Data Source" ou o seu próprio com "Upload a Dataset"
+
+Os dataset adicionados serão postos no caminho "../input".
+Abaixo executamos o comando linux ls através do python para listar os arquivos desta pasta:
+'''
+from subprocess import check_output
+print('Arquivos Iris:')
+print(check_output(["ls", "../input/iris"]).decode("utf8"))
+
+
+# ## 3 - Carregando o Dataset
+
+# In[ ]:
+
+
+# Existem várias formas de se carregar um dataset para uso em ML as duas mais comuns:
+# usar iblioteca numpy ou carregar um data frame do pandas como abaixo
+df_iris = pd.read_csv('../input/iris/Iris.csv')
+
+
+# In[ ]:
+
+
+# Exibe as primeiras 5 linhas do dataframe
+df_iris.head(5)
+
+
+# ## 4 - Explorando os dados com gráficos do matplotlib
 # 
-# 1. **Numerical/Continuous Features**
-#     1. price: the item's final bidding price. This will be our reponse / independent variable that we need to predict in the test set
-#     2. shipping cost     
-#  
-# 1. **Categorical Features**: 
-#     1. shipping cost: A binary indicator, 1 if shipping fee is paid by seller and 0 if it's paid by buyer
-#     2. item_condition_id: The condition of the items provided by the seller
-#     1. name: The item's name
-#     2. brand_name: The item's producer brand name
-#     2. category_name: The item's single or multiple categories that are separated by "\" 
-#     3. item_description: A short description on the item that may include removed words, flagged by [rm]
+# No dataset Iris temos na coluna Species os tipos das flores que vamos analisar. Para isso precisamos transformar as classes de flores em números, para podermos seguir com as análise
+
+# **Exibindo a distribuição das classes**
 
 # In[ ]:
 
 
-PATH = "../input/"
+# Verificamos os valores únicos para as espécies
+print(df_iris['Species'].unique())
+
+# Adicionamos uma nova coluna no data frame e mapeamos com um valor númerico por classe
+# essa coluna é nosso target (a predição que nossa rede vai gerar)
+df_iris['y'] = df_iris['Species'].map({'Iris-setosa': 1, 'Iris-versicolor': 2, 'Iris-virginica' : 3})
+
+# Configuramos o gráfico
+plt.xlabel('Sepal Length Cm')
+plt.ylabel('Petal Length Cm')
+#plt.scatter(x,y, c=color)
+plt.scatter(df_iris['SepalLengthCm'],df_iris['PetalLengthCm'], c=df_iris['y'])
+plt.show() # como usamos a magic cell no inicio, esse comando não é obrigatório.
 
 
-# In[ ]:
+# Observando o gráfico acima podemos verificar que com apenas duas features do dataset é possível separar as classes (com uma apenas amostra como de exceção).  Esse tipo de feature é muito útil para construirmos nossos modelos de aprendizagem.
 
-
-train = pd.read_csv(f'{PATH}train.tsv', sep='\t')
-test = pd.read_csv(f'{PATH}test.tsv', sep='\t')
-
-
-# In[ ]:
-
-
-# size of training and dataset
-print(train.shape)
-print(test.shape)
-
-
-# In[ ]:
-
-
-# different data types in the dataset: categorical (strings) and numeric
-train.dtypes
-
+# **Usando funções plot e hist do matplotlib para compreender melhor os dados:**
 
 # In[ ]:
 
 
-train.head()
-
-
-# ## Target Variable: **Price**
-
-# The next standard check is with our response or target variables, which in this case is the `price` we are suggesting to the Mercari's marketplace sellers.  The median price of all the items in the training is about \$267 but given the existence of some extreme values of over \$100 and the maximum at \$2,009, the distribution of the variables is heavily skewed to the left. So let's make log-transformation on the price (we added +1 to the value before the transformation to avoid zero and negative values).
-
-# In[ ]:
-
-
-train.price.describe()
-
-
-# In[ ]:
-
-
-plt.subplot(1, 2, 1)
-(train['price']).plot.hist(bins=50, figsize=(20,10), edgecolor='white',range=[0,250])
-plt.xlabel('price+', fontsize=17)
-plt.ylabel('frequency', fontsize=17)
-plt.tick_params(labelsize=15)
-plt.title('Price Distribution - Training Set', fontsize=17)
-
-plt.subplot(1, 2, 2)
-np.log(train['price']+1).plot.hist(bins=50, figsize=(20,10), edgecolor='white')
-plt.xlabel('log(price+1)', fontsize=17)
-plt.ylabel('frequency', fontsize=17)
-plt.tick_params(labelsize=15)
-plt.title('Log(Price) Distribution - Training Set', fontsize=17)
+# Nesse grafico podemos ver que nosso dataset é bastante balanceado
+plt.title('Histograma das Classes - Cada Classe tem 50 ocorrências')
+plt.hist(df_iris['y'])
+plt.show() # Estou mantendo o comando apenas por questão de estética na saída.
+ 
+plt.title('Histograma da Propriedade Sepal Length\n Maior número de amostras com valor entre 5 e 7 cm')
+plt.hist(df_iris['SepalLengthCm'], bins=6)
 plt.show()
 
 
-# ## **Shipping**
-# 
-# The shipping cost burden is decently splitted between sellers and buyers with more than half of the items' shipping fees are paid by the sellers (55%). In addition, the average price paid by users who have to pay for shipping fees is lower than those that don't require additional shipping cost. This matches with our perception that the sellers need a lower price to compensate for the additional shipping.
-
 # In[ ]:
 
 
-train.shipping.value_counts()/len(train)
-
-
-# In[ ]:
-
-
-prc_shipBySeller = train.loc[train.shipping==1, 'price']
-prc_shipByBuyer = train.loc[train.shipping==0, 'price']
-
-
-# In[ ]:
-
-
-fig, ax = plt.subplots(figsize=(20,10))
-ax.hist(np.log(prc_shipBySeller+1), color='#8CB4E1', alpha=1.0, bins=50,
-       label='Price when Seller pays Shipping')
-ax.hist(np.log(prc_shipByBuyer+1), color='#007D00', alpha=0.7, bins=50,
-       label='Price when Buyer pays Shipping')
-ax.set(title='Histogram Comparison', ylabel='% of Dataset in Bin')
-plt.xlabel('log(price+1)', fontsize=17)
-plt.ylabel('frequency', fontsize=17)
-plt.title('Price Distribution by Shipping Type', fontsize=17)
-plt.tick_params(labelsize=15)
+#Como as amostras estão ordenadas é possível "ver" no gráfico onde começa e termina
+#cada grupo de 50.
+plt.figure(figsize=(15,10))
+plt.title('Exibindo as medidas por amostras')
+plt.plot ( df_iris['SepalLengthCm'], c='blue', ) 
+plt.plot ( df_iris['SepalWidthCm'], c= 'red')
+plt.plot ( df_iris['PetalLengthCm'], c= 'green')
+plt.plot ( df_iris['PetalWidthCm'], c= 'yellow')
 plt.show()
 
 
-# ## **Item Category**
+# ##  5 - Selecionando um algoritmo de ML
+# Embora seja um Dataset bem pequeno, ele é bastande balanceadol.  Vimos que as duas features  SepalLengthCm e PetalLengthCm sozinhas praticamente conseguem definir a separação das três classes mas queremos um classificador que faça o maior acerto possíve por isto vamos usar as 4 features que dispomos (O campo **Id ** será descartado para análises).  A biblioteca sckit-learn é muito útil para preparação de dados e para algoritmos que não envolvam redes neurais.
 # 
-# There are about **1,287** unique categories but among each of them, we will always see a main/general category firstly, followed by two more particular subcategories (e.g. Beauty/Makeup/Face or Lips). In adidition, there are about 6,327 items that do not have a category labels. Let's split the categories into three different columns. We will see later that this information is actually quite important from the seller's point of view and how we handle the missing information in the `brand_name` column will impact the model's prediction. 
-
-# In[ ]:
-
-
-print("There are %d unique values in the category column." % train['category_name'].nunique())
-
-
-# In[ ]:
-
-
-# TOP 5 RAW CATEGORIES
-train['category_name'].value_counts()[:5]
-
-
-# In[ ]:
-
-
-# missing categories
-print("There are %d items that do not have a label." % train['category_name'].isnull().sum())
-
-
-# In[ ]:
-
-
-# reference: BuryBuryZymon at https://www.kaggle.com/maheshdadhich/i-will-sell-everything-for-free-0-55
-def split_cat(text):
-    try: return text.split("/")
-    except: return ("No Label", "No Label", "No Label")
-
-
-# In[ ]:
-
-
-train['general_cat'], train['subcat_1'], train['subcat_2'] = zip(*train['category_name'].apply(lambda x: split_cat(x)))
-train.head()
-
-
-# In[ ]:
-
-
-# repeat the same step for the test set
-test['general_cat'], test['subcat_1'], test['subcat_2'] = zip(*test['category_name'].apply(lambda x: split_cat(x)))
-
-
-# In[ ]:
-
-
-print("There are %d unique first sub-categories." % train['subcat_1'].nunique())
-
-
-# In[ ]:
-
-
-print("There are %d unique second sub-categories." % train['subcat_2'].nunique())
-
-
-# Overall, we have  **7 main categories** (114 in the first sub-categories and 871 second sub-categories): women's and beauty items as the two most popular categories (more than 50% of the observations), followed by kids and electronics. 
-
-# In[ ]:
-
-
-x = train['general_cat'].value_counts().index.values.astype('str')
-y = train['general_cat'].value_counts().values
-pct = [("%.2f"%(v*100))+"%"for v in (y/len(train))]
-
-
-# In[ ]:
-
-
-trace1 = go.Bar(x=x, y=y, text=pct)
-layout = dict(title= 'Number of Items by Main Category',
-              yaxis = dict(title='Count'),
-              xaxis = dict(title='Category'))
-fig=dict(data=[trace1], layout=layout)
-py.iplot(fig)
-
-
-# In[ ]:
-
-
-x = train['subcat_1'].value_counts().index.values.astype('str')[:15]
-y = train['subcat_1'].value_counts().values[:15]
-pct = [("%.2f"%(v*100))+"%"for v in (y/len(train))][:15]
-
-
-# In[ ]:
-
-
-trace1 = go.Bar(x=x, y=y, text=pct,
-                marker=dict(
-                color = y,colorscale='Portland',showscale=True,
-                reversescale = False
-                ))
-layout = dict(title= 'Number of Items by Sub Category (Top 15)',
-              yaxis = dict(title='Count'),
-              xaxis = dict(title='SubCategory'))
-fig=dict(data=[trace1], layout=layout)
-py.iplot(fig)
-
-
-# From the pricing (log of price) point of view, all the categories are pretty well distributed, with no category with an extraordinary pricing point 
-
-# In[ ]:
-
-
-general_cats = train['general_cat'].unique()
-x = [train.loc[train['general_cat']==cat, 'price'] for cat in general_cats]
-
-
-# In[ ]:
-
-
-data = [go.Box(x=np.log(x[i]+1), name=general_cats[i]) for i in range(len(general_cats))]
-
-
-# In[ ]:
-
-
-layout = dict(title="Price Distribution by General Category",
-              yaxis = dict(title='Frequency'),
-              xaxis = dict(title='Category'))
-fig = dict(data=data, layout=layout)
-py.iplot(fig)
-
-
-# ## **Brand Name**
-
-# In[ ]:
-
-
-print("There are %d unique brand names in the training dataset." % train['brand_name'].nunique())
-
-
-# In[ ]:
-
-
-x = train['brand_name'].value_counts().index.values.astype('str')[:10]
-y = train['brand_name'].value_counts().values[:10]
-
-
-# In[ ]:
-
-
-# trace1 = go.Bar(x=x, y=y, 
-#                 marker=dict(
-#                 color = y,colorscale='Portland',showscale=True,
-#                 reversescale = False
-#                 ))
-# layout = dict(title= 'Top 10 Brand by Number of Items',
-#               yaxis = dict(title='Brand Name'),
-#               xaxis = dict(title='Count'))
-# fig=dict(data=[trace1], layout=layout)
-# py.iplot(fig)
-
-
-# ## **Item Description**
-
-# It will be more challenging to parse through this particular item since it's unstructured data. Does it mean a more detailed and lengthy description will result in a higher bidding price? We will strip out all punctuations, remove some english stop words (i.e. redundant words such as "a", "the", etc.) and any other words with a length less than 3: 
-
-# In[ ]:
-
-
-def wordCount(text):
-    # convert to lower case and strip regex
-    try:
-         # convert to lower case and strip regex
-        text = text.lower()
-        regex = re.compile('[' +re.escape(string.punctuation) + '0-9\\r\\t\\n]')
-        txt = regex.sub(" ", text)
-        # tokenize
-        # words = nltk.word_tokenize(clean_txt)
-        # remove words in stop words
-        words = [w for w in txt.split(" ")                  if not w in stop_words.ENGLISH_STOP_WORDS and len(w)>3]
-        return len(words)
-    except: 
-        return 0
-
-
-# In[ ]:
-
-
-# add a column of word counts to both the training and test set
-train['desc_len'] = train['item_description'].apply(lambda x: wordCount(x))
-test['desc_len'] = test['item_description'].apply(lambda x: wordCount(x))
-
-
-# In[ ]:
-
-
-train.head()
-
-
-# In[ ]:
-
-
-df = train.groupby('desc_len')['price'].mean().reset_index()
-
-
-# In[ ]:
-
-
-trace1 = go.Scatter(
-    x = df['desc_len'],
-    y = np.log(df['price']+1),
-    mode = 'lines+markers',
-    name = 'lines+markers'
-)
-layout = dict(title= 'Average Log(Price) by Description Length',
-              yaxis = dict(title='Average Log(Price)'),
-              xaxis = dict(title='Description Length'))
-fig=dict(data=[trace1], layout=layout)
-py.iplot(fig)
-
-
-# We also need to check if there are any missing values in the item description (4 observations don't have a description) andl remove those observations from our training set.
-
-# In[ ]:
-
-
-train.item_description.isnull().sum()
-
-
-# In[ ]:
-
-
-# remove missing values in item description
-train = train[pd.notnull(train['item_description'])]
-
-
-# In[ ]:
-
-
-# create a dictionary of words for each category
-cat_desc = dict()
-for cat in general_cats: 
-    text = " ".join(train.loc[train['general_cat']==cat, 'item_description'].values)
-    cat_desc[cat] = tokenize(text)
-
-# flat list of all words combined
-flat_lst = [item for sublist in list(cat_desc.values()) for item in sublist]
-allWordsCount = Counter(flat_lst)
-all_top10 = allWordsCount.most_common(20)
-x = [w[0] for w in all_top10]
-y = [w[1] for w in all_top10]
-
-
-# In[ ]:
-
-
-trace1 = go.Bar(x=x, y=y, text=pct)
-layout = dict(title= 'Word Frequency',
-              yaxis = dict(title='Count'),
-              xaxis = dict(title='Word'))
-fig=dict(data=[trace1], layout=layout)
-py.iplot(fig)
-
-
-# If we look at the most common words by category, we could also see that, ***size***, ***free*** and ***shipping*** is very commonly used by the sellers, probably with the intention to attract customers, which is contradictory to what  we have shown previously that there is little correlation between the two variables `price` and `shipping` (or shipping fees do not account for a differentiation in prices). ***Brand names*** also played quite an important role - it's one of the most popular in all four categories.  
-
-# # **Text Processing - Item Description**
-# *
-# The following section is based on the tutorial at https://ahmedbesbes.com/how-to-mine-newsfeed-data-and-extract-interactive-insights-in-python.html*
-
-# ## **Pre-processing:  tokenization**
+# Com dados estruturados os modelos baseados em Regressão, Decisiona Tree e Random Forests são mais indicados. Mas qui vou somente por questão de didática vamos usar uma rede neural de 3 neurônios de com 1 saída (uma para cada tipo de flor) com 4 entradas (uma para cada feature de entrada), em algorítmos de classificação o número de saídas deve ser igual ao número de classes - se não for uma classificação binária(0 ou 1, true ou false, etc).
 # 
-# Most of the time, the first steps of an NLP project is to **"tokenize"** your documents, which main purpose is to normalize our texts. The three fundamental stages will usually include: 
-# * break the descriptions into sentences and then break the sentences into tokens
-# * remove punctuation and stop words
-# * lowercase the tokens
-# * herein, I will also only consider words that have length equal to or greater than 3 characters
+# Não se preocupe caso não compreenda completamente alguma parte do código, vamos explorar todos detalhes nos próximos Labs, o objetivo aqui é você ver etapas gerais de uma solução completa usando Keras e TensorFlow. 
 
 # In[ ]:
 
 
-stop = set(stopwords.words('english'))
-def tokenize(text):
-    """
-    sent_tokenize(): segment text into sentences
-    word_tokenize(): break sentences into words
-    """
-    try: 
-        regex = re.compile('[' +re.escape(string.punctuation) + '0-9\\r\\t\\n]')
-        text = regex.sub(" ", text) # remove punctuation
-        
-        tokens_ = [word_tokenize(s) for s in sent_tokenize(text)]
-        tokens = []
-        for token_by_sent in tokens_:
-            tokens += token_by_sent
-        tokens = list(filter(lambda t: t.lower() not in stop, tokens))
-        filtered_tokens = [w for w in tokens if re.search('[a-zA-Z]', w)]
-        filtered_tokens = [w.lower() for w in filtered_tokens if len(w)>=3]
-        
-        return filtered_tokens
-            
-    except TypeError as e: print(text,e)
+#veja que ao importar o keras que é um wrapper, o TensorFlow será exibido como backend
+from sklearn.model_selection import train_test_split
+from keras.models import Sequential
+from keras.layers.core import Dense, Activation
+from keras.optimizers import SGD
+from keras.utils import np_utils
 
 
-# In[ ]:
-
-
-# apply the tokenizer into the item descriptipn column
-train['tokens'] = train['item_description'].map(tokenize)
-test['tokens'] = test['item_description'].map(tokenize)
-
-
-# In[ ]:
-
-
-train.reset_index(drop=True, inplace=True)
-test.reset_index(drop=True, inplace=True)
-
-
-# Let's look at the examples of if the tokenizer did a good job in cleaning up our descriptions
-
-# In[ ]:
-
-
-for description, tokens in zip(train['item_description'].head(),
-                              train['tokens'].head()):
-    print('description:', description)
-    print('tokens:', tokens)
-    print()
-
-
-# We could aso use the package `WordCloud` to easily visualize which words has the highest frequencies within each category:
-
-# In[ ]:
-
-
-# build dictionary with key=category and values as all the descriptions related.
-cat_desc = dict()
-for cat in general_cats: 
-    text = " ".join(train.loc[train['general_cat']==cat, 'item_description'].values)
-    cat_desc[cat] = tokenize(text)
-
-
-# find the most common words for the top 4 categories
-women100 = Counter(cat_desc['Women']).most_common(100)
-beauty100 = Counter(cat_desc['Beauty']).most_common(100)
-kids100 = Counter(cat_desc['Kids']).most_common(100)
-electronics100 = Counter(cat_desc['Electronics']).most_common(100)
-
-
-# In[ ]:
-
-
-def generate_wordcloud(tup):
-    wordcloud = WordCloud(background_color='white',
-                          max_words=50, max_font_size=40,
-                          random_state=42
-                         ).generate(str(tup))
-    return wordcloud
-
-
-# In[ ]:
-
-
-fig,axes = plt.subplots(2, 2, figsize=(30, 15))
-
-ax = axes[0, 0]
-ax.imshow(generate_wordcloud(women100), interpolation="bilinear")
-ax.axis('off')
-ax.set_title("Women Top 100", fontsize=30)
-
-ax = axes[0, 1]
-ax.imshow(generate_wordcloud(beauty100))
-ax.axis('off')
-ax.set_title("Beauty Top 100", fontsize=30)
-
-ax = axes[1, 0]
-ax.imshow(generate_wordcloud(kids100))
-ax.axis('off')
-ax.set_title("Kids Top 100", fontsize=30)
-
-ax = axes[1, 1]
-ax.imshow(generate_wordcloud(electronics100))
-ax.axis('off')
-ax.set_title("Electronic Top 100", fontsize=30)
-
-
-# ## **Pre-processing:  tf-idf**
-
-# tf-idf is the acronym for **Term Frequency–inverse Document Frequency**. It quantifies the importance of a particular word in relative to the vocabulary of a collection of documents or corpus. The metric depends on two factors: 
-# - **Term Frequency**: the occurences of a word in a given document (i.e. bag of words)
-# - **Inverse Document Frequency**: the reciprocal number of times a word occurs in a corpus of documents
+# ## 6 - Feature Engineering 
 # 
-# Think about of it this way: If the word is used extensively in all documents, its existence within a specific document will not be able to provide us much specific information about the document itself. So the second term could be seen as a penalty term that penalizes common words such as "a", "the", "and", etc. tf-idf can therefore, be seen as a weighting scheme for words relevancy in a specific document.
+# Nesta fase temos a seleção das features que vão compor nosso Modelo - e seu ajuste para compatibilidade com o formato de entrada do tipo de algorítm ML selecionado.  Nossa coluna **'y'**, por exemplo contém valores de 1 a 3, esses valores serão transformados para 0 a 2 e convertidos em três colunas no formato** One-Hot**( esse tipo de codificação será explicada nos próximos labs). Além disso em muitos casos vamos ter que normalizar os valores de entrada antes entregar para uma rede neural ou algum outro tipo de algoritmo de ML.
 
 # In[ ]:
 
 
-from sklearn.feature_extraction.text import TfidfVectorizer
-vectorizer = TfidfVectorizer(min_df=10,
-                             max_features=180000,
-                             tokenizer=tokenize,
-                             ngram_range=(1, 2))
+#Número de classes possíveis
+n_classes = len(df_iris['Species'].unique()) # 3 classes
+
+#Fazemos slice do Dataframe e as convertemos em matrizes do NumPy
+x_full = np.array(df_iris.iloc[:, 1:5].values) # selecionamos as colunas de features e todas linhas
+y_full = np.array(df_iris.iloc[:, 6].values) # selecionamos todas linhas mas apenas a coluna 'y' 
+
+# Para algorítimos de classificação com mais de duas classes temos que usar one-hot
+# aqui uso uma simples subtração para alterar os valores de todas a linhas y
+y_full = np_utils.to_categorical(y_full - 1, n_classes) 
+
+print("Vericamos se as matrizes de entrada possuem o formato correto")
+print("x_full.shape ={}    y_full.shape ={}".format(x_full.shape, y_full.shape))
 
 
-# In[ ]:
-
-
-all_desc = np.append(train['item_description'].values, test['item_description'].values)
-vz = vectorizer.fit_transform(list(all_desc))
-
-
-# vz is a tfidf matrix where:
-# * the number of rows is the total number of descriptions
-# * the number of columns is the total number of unique tokens across the descriptions
-
-# In[ ]:
-
-
-#  create a dictionary mapping the tokens to their tfidf values
-tfidf = dict(zip(vectorizer.get_feature_names(), vectorizer.idf_))
-tfidf = pd.DataFrame(columns=['tfidf']).from_dict(
-                    dict(tfidf), orient='index')
-tfidf.columns = ['tfidf']
-
-
-# Below is the 10 tokens with the lowest tfidf score, which is unsurprisingly, very generic words that we could not use to distinguish one description from another.
+# ## 7 - Split do dataset em treino e validação
 
 # In[ ]:
 
 
-tfidf.sort_values(by=['tfidf'], ascending=True).head(10)
+seed = 42 # aqui ficamos o seed randômico, para garantir a reprodução de resultados
+
+# A separação do dataset é uma técnica muito importante para maior eficiência
+# da validação da eficácia de um modelo e veremos em maior detalhe nos próximos labs. 
+X_train, X_val, y_train, y_val = train_test_split(x_full, y_full,
+                                                test_size=0.2, random_state=seed)
+
+# A classe train_test_split faz o embaralhamento dos dados antes
+print("Novamente validamos os formatos do split:")
+print(X_train.shape, y_train.shape); print(X_val.shape, y_val.shape)
 
 
-# Below is the 10 tokens with the highest tfidf score, which includes words that are a lot specific that by looking at them, we could guess the categories that they belong to: 
+# ## 8 - Definindo a arquitetura de nossa Rede Neural
 
 # In[ ]:
 
 
-tfidf.sort_values(by=['tfidf'], ascending=False).head(10)
+# Fixamos o seed para biblioteca randômica do NumPy
+np.random.seed(seed) 
+
+#Cada implementação de um algorítimo de ML chamamos de modelo
+model = Sequential()  # modelo sequencial
+model.add(Dense(n_classes, input_shape=(4,))) # cria uma camada com 3 neurônios
+model.add(Activation('softmax')) # usamos ativação de threshold conhecida como softmax
+model.summary()
 
 
-# Given the high dimension of our tfidf matrix, we need to reduce their dimension using the Singular Value Decomposition (SVD) technique. And to visualize our vocabulary, we could next use t-SNE to reduce the dimension from 50 to 2. t-SNE is more suitable for dimensionality reduction to 2 or 3. 
+# Se olharmos acima notamos a existência de 15 parâmetros treináveis. Cada um dos três neurônios possuem 4 entradas, uma para cada feature, portanto teremos 4 x 3  = 12, ou seja 12 pesos que devem ser treinados. E de onde vem os 15?  
 # 
-# ### **t-Distributed Stochastic Neighbor Embedding (t-SNE)**
+# Lembra que para cada neurônio vamos ter uma entrada $x_{0}$ igual a 1 e um peso peso $w_{0}$ que será seu **bias**?   Então como temos 3 neurônios teremos 3 biases a serem treinados. Dai 12 pesos + 3 biases, resultando em 15 parâmetros treináveis.
+
+# ## 9 - Compilando e Treinando nosso Modelo (Finalmente!!)
+
+# In[ ]:
+
+
+import timeit
+
+n_epoch = 500 # Número de Épocas
+batch_size = 10 #tamanho do Batch (quantidade de amostras por lote de treino)
+
+#Aqui vamos usar o Gradiente Descendente Estocástico, que é um tipo de otimizador
+sgd = SGD(lr= 0.1) # lr é o Learning Rate conceito que vamos ver nos próximos labs.
+
+#Todo modelo precisa ser compilado, veja que no parâmetro loss informamos a função de erro
+model.compile(optimizer=sgd, loss='categorical_crossentropy', metrics=['accuracy']) 
+
+#Inicia contagem do tempo
+start = timeit.default_timer()
+
+# Aqui fazemos o fit do modelo e salvamos o resultado de cada epoca em history
+history = model.fit(X_train, y_train, batch_size=batch_size, epochs=n_epoch,verbose=0) 
+
+#Inicia contagem do tempo
+elapsed = timeit.default_timer() - start
+
+print("Rede Treinada em {} épocas durante {:.4f} segundos".format(n_epoch, elapsed))
+
+
+# ## 10 - Avaliando o quão inteligente é nosso algorítimo
+
+# In[ ]:
+
+
+_, train_accuracy = model.evaluate(X_train, y_train, verbose=0)
+_, val_accuracy = model.evaluate(X_val, y_val, verbose=0)
+
+print('Acurácia no Treino: {:.2f}%'.format(train_accuracy * 100))
+print('Acurácia na Validação: {:.2f}%'.format(val_accuracy * 100))
+
+
+# A acurácia é uma métrica que indica em percentual quantas amostras do todo foram classificadas corretamente.  
+# ***Acurária = Número de Acertos / Número de Testes***
 # 
-# t-SNE is a technique for dimensionality reduction that is particularly well suited for the visualization of high-dimensional datasets. The goal is to take a set of points in a high-dimensional space and find a representation of those points in a lower-dimensional space, typically the 2D plane. It is based on probability distributions with random walk on neighborhood graphs to find the structure within the data. But since t-SNE complexity is significantly high, usually we'd use other high-dimension reduction techniques before applying t-SNE.
+# Em nosso dataset de treino conseguimos 117 acertos em 120 amostras (ou testes); e 30 acertos em 30 amostras no conjunto de teste. Com isso temos uma acurácia de 97,5% no treino e de 100% no dataset de teste.
 # 
-# First, let's take a sample from the both training and testing item's description since t-SNE can take a very long time to execute. We can then reduce the dimension of each vector from to n_components (50) using SVD.
-
-# In[ ]:
-
-
-trn = train.copy()
-tst = test.copy()
-trn['is_train'] = 1
-tst['is_train'] = 0
-
-sample_sz = 15000
-
-combined_df = pd.concat([trn, tst])
-combined_sample = combined_df.sample(n=sample_sz)
-vz_sample = vectorizer.fit_transform(list(combined_sample['item_description']))
-
-
-# In[ ]:
-
-
-from sklearn.decomposition import TruncatedSVD
-
-n_comp=30
-svd = TruncatedSVD(n_components=n_comp, random_state=42)
-svd_tfidf = svd.fit_transform(vz_sample)
-
-
-# Now we can reduce the dimension from 50 to 2 using t-SNE!
-
-# In[ ]:
-
-
-from sklearn.manifold import TSNE
-tsne_model = TSNE(n_components=2, verbose=1, random_state=42, n_iter=500)
-
-
-# In[ ]:
-
-
-tsne_tfidf = tsne_model.fit_transform(svd_tfidf)
-
-
-# It's now possible to visualize our data points. Note that the deviation as well as the size of the clusters imply little information  in t-SNE.
-
-# In[ ]:
-
-
-output_notebook()
-plot_tfidf = bp.figure(plot_width=700, plot_height=600,
-                       title="tf-idf clustering of the item description",
-    tools="pan,wheel_zoom,box_zoom,reset,hover,previewsave",
-    x_axis_type=None, y_axis_type=None, min_border=1)
-
-
-# In[ ]:
-
-
-combined_sample.reset_index(inplace=True, drop=True)
-
-
-# In[ ]:
-
-
-tfidf_df = pd.DataFrame(tsne_tfidf, columns=['x', 'y'])
-tfidf_df['description'] = combined_sample['item_description']
-tfidf_df['tokens'] = combined_sample['tokens']
-tfidf_df['category'] = combined_sample['general_cat']
-
-
-# In[ ]:
-
-
-plot_tfidf.scatter(x='x', y='y', source=tfidf_df, alpha=0.7)
-hover = plot_tfidf.select(dict(type=HoverTool))
-hover.tooltips={"description": "@description", "tokens": "@tokens", "category":"@category"}
-show(plot_tfidf)
-
-
-# ## **K-Means Clustering**
+# Uau!!! Um excelente resultado com cerca de 5 segundos de treino e uma rede de somente 3 neurônios e um mínimo ajuste de **hiperparâmetro**, o **Learning Rate** (LR=0.1). 
 # 
-# K-means clustering obejctive is to minimize the average squared Euclidean distance of the document / description from their cluster centroids. 
+# Hiperparâmetros serão tema para um próximo lab. Fiquem a vontade para fazer Fork desse Kernel e testar valores diferentes para número de épocas, batch size e tipo de otimizador.  
 
-# In[ ]:
-
-
-from sklearn.cluster import MiniBatchKMeans
-
-num_clusters = 30 # need to be selected wisely
-kmeans_model = MiniBatchKMeans(n_clusters=num_clusters,
-                               init='k-means++',
-                               n_init=1,
-                               init_size=1000, batch_size=1000, verbose=0, max_iter=1000)
-
-
-# In[ ]:
-
-
-kmeans = kmeans_model.fit(vz)
-kmeans_clusters = kmeans.predict(vz)
-kmeans_distances = kmeans.transform(vz)
-
-
-# In[ ]:
-
-
-sorted_centroids = kmeans.cluster_centers_.argsort()[:, ::-1]
-terms = vectorizer.get_feature_names()
-
-for i in range(num_clusters):
-    print("Cluster %d:" % i)
-    aux = ''
-    for j in sorted_centroids[i, :10]:
-        aux += terms[j] + ' | '
-    print(aux)
-    print() 
-
-
-# In order to plot these clusters, first we will need to reduce the dimension of the distances to 2 using tsne: 
-
-# In[ ]:
-
-
-# repeat the same steps for the sample
-kmeans = kmeans_model.fit(vz_sample)
-kmeans_clusters = kmeans.predict(vz_sample)
-kmeans_distances = kmeans.transform(vz_sample)
-# reduce dimension to 2 using tsne
-tsne_kmeans = tsne_model.fit_transform(kmeans_distances)
-
-
-# In[ ]:
-
-
-colormap = np.array(["#6d8dca", "#69de53", "#723bca", "#c3e14c", "#c84dc9", "#68af4e", "#6e6cd5",
-"#e3be38", "#4e2d7c", "#5fdfa8", "#d34690", "#3f6d31", "#d44427", "#7fcdd8", "#cb4053", "#5e9981",
-"#803a62", "#9b9e39", "#c88cca", "#e1c37b", "#34223b", "#bdd8a3", "#6e3326", "#cfbdce", "#d07d3c",
-"#52697d", "#194196", "#d27c88", "#36422b", "#b68f79"])
-
-
-# In[ ]:
-
-
-#combined_sample.reset_index(drop=True, inplace=True)
-kmeans_df = pd.DataFrame(tsne_kmeans, columns=['x', 'y'])
-kmeans_df['cluster'] = kmeans_clusters
-kmeans_df['description'] = combined_sample['item_description']
-kmeans_df['category'] = combined_sample['general_cat']
-#kmeans_df['cluster']=kmeans_df.cluster.astype(str).astype('category')
-
-
-# In[ ]:
-
-
-plot_kmeans = bp.figure(plot_width=700, plot_height=600,
-                        title="KMeans clustering of the description",
-    tools="pan,wheel_zoom,box_zoom,reset,hover,previewsave",
-    x_axis_type=None, y_axis_type=None, min_border=1)
-
-
-# In[ ]:
-
-
-source = ColumnDataSource(data=dict(x=kmeans_df['x'], y=kmeans_df['y'],
-                                    color=colormap[kmeans_clusters],
-                                    description=kmeans_df['description'],
-                                    category=kmeans_df['category'],
-                                    cluster=kmeans_df['cluster']))
-
-plot_kmeans.scatter(x='x', y='y', color='color', source=source)
-hover = plot_kmeans.select(dict(type=HoverTool))
-hover.tooltips={"description": "@description", "category": "@category", "cluster":"@cluster" }
-show(plot_kmeans)
-
-
-# ## **Latent Dirichlet Allocation**
+# ** Matrix de Confusão** 
 # 
-# Latent Dirichlet Allocation (LDA) is an algorithms used to discover the topics that are present in a corpus.
+# Esta é uma outra forma de visualizar a acurácia de uma rede, geralmente aplicamos somente no dataset de validação.
+# Aqui apliquei nos dois para poder exibir onde nosso algoritmo errou.
+
+# In[ ]:
+
+
+y_hat_train = model.predict_classes(X_train)
+pd.crosstab(y_hat_train, np.argmax(y_train, axis=1)) 
+
+
+# In[ ]:
+
+
+y_hat_val = model.predict_classes(X_val)
+pd.crosstab(y_hat_val, np.argmax(y_val, axis=1))
+
+
+# Se olharmos as duas matrizes de confusão veremos que nosso modelo errou apenas 3 amostras das 150. Um ótimo feito para uma rede de penas uma camada densa de 3 neurônios.
+
+# ## 11 - Verificando a curva de aprendizagem de sua rede
+# É possível verificar que a partir da época 300 não há grande melhoria (diminuição do erro)
+
+# In[ ]:
+
+
+# a impressão dos valores de perda a cada época de treinamento
+# permite ter valiosos insights sobre como seu modelo se comporta durante o treinamento
+plt.figure(figsize=(10,8))
+plt.plot(history.history['loss'], label='Erro')
+plt.plot(history.history['acc'], label='Acurácia')
+plt.legend(loc='upper center')
+plt.show()
+
+
+# ## Tarefas do Lab
 # 
-# >  LDA starts from a fixed number of topics. Each topic is represented as a distribution over words, and each document is then represented as a distribution over topics. Although the tokens themselves are meaningless, the probability distributions over words provided by the topics provide a sense of the different ideas contained in the documents.
-# > 
-# > Reference: https://medium.com/intuitionmachine/the-two-paths-from-natural-language-processing-to-artificial-intelligence-d5384ddbfc18
+# Crie um fork deste notebook em sua conta (assim você trabalha em sua própria cópia), e nos quadros abaixo escreva código para carregar o dataset  **House Sales in King County** (kc_house_data.csv) que já está copiado na pasta **../input/housesalesprediction** .  Se necessário crie novas células com Alt + Enter.
 # 
-# Its input is a **bag of words**, i.e. each document represented as a row, with each columns containing the count of words in the corpus. We are going to use a powerful tool called pyLDAvis that gives us an interactive visualization for LDA. 
+
+# ### 1 - Carregar o Dataset House Sales de King County
 
 # In[ ]:
 
 
-cvectorizer = CountVectorizer(min_df=4,
-                              max_features=180000,
-                              tokenizer=tokenize,
-                              ngram_range=(1,2))
-
-
-# In[ ]:
-
-
-cvz = cvectorizer.fit_transform(combined_sample['item_description'])
+print('Arquivo House Sales:')
+print(check_output(["ls", "../input/housesalesprediction"]).decode("utf8"))
 
 
 # In[ ]:
 
 
-lda_model = LatentDirichletAllocation(n_components=20,
-                                      learning_method='online',
-                                      max_iter=20,
-                                      random_state=42)
+#Usando pandas crie um dataframe para armazenar o dataset House Sales
+#df_house = pd.read_csv...
 
 
-# In[ ]:
-
-
-X_topics = lda_model.fit_transform(cvz)
-
+# ### 2 - Exibir as 20 primeiras linhas e as últimas 5 do data frame df_house
 
 # In[ ]:
 
 
-n_top_words = 10
-topic_summaries = []
+#Crie seu código abaixo
 
-topic_word = lda_model.components_  # get the topic words
-vocab = cvectorizer.get_feature_names()
 
-for i, topic_dist in enumerate(topic_word):
-    topic_words = np.array(vocab)[np.argsort(topic_dist)][:-(n_top_words+1):-1]
-    topic_summaries.append(' '.join(topic_words))
-    print('Topic {}: {}'.format(i, ' | '.join(topic_words)))
-
+# ### 3 - Adicione uma nova coluna no dataframe com o nome 'yearsale' (o campo date possui a data da venda)
 
 # In[ ]:
 
 
-# reduce dimension to 2 using tsne
-tsne_lda = tsne_model.fit_transform(X_topics)
+#
 
 
-# In[ ]:
-
-
-unnormalized = np.matrix(X_topics)
-doc_topic = unnormalized/unnormalized.sum(axis=1)
-
-lda_keys = []
-for i, tweet in enumerate(combined_sample['item_description']):
-    lda_keys += [doc_topic[i].argmax()]
-
-lda_df = pd.DataFrame(tsne_lda, columns=['x','y'])
-lda_df['description'] = combined_sample['item_description']
-lda_df['category'] = combined_sample['general_cat']
-lda_df['topic'] = lda_keys
-lda_df['topic'] = lda_df['topic'].map(int)
-
+# ### 4 - Criar um gráfico que relacione o ano de cosntrução (yr_built) com o valor da venda (price)
+# Aqui é possível utilizar a função plot ou scatter, veja qual funciona melhor.
 
 # In[ ]:
 
 
-plot_lda = bp.figure(plot_width=700,
-                     plot_height=600,
-                     title="LDA topic visualization",
-    tools="pan,wheel_zoom,box_zoom,reset,hover,previewsave",
-    x_axis_type=None, y_axis_type=None, min_border=1)
+#
 
 
-# In[ ]:
+# ### 5 - Mostrar o histograma de distribuição das vendas de acordo com o local (zipcode), preço de venda (price) e tamanho das casas (sqft_living)
 
+# ### 6 - Avaliando de forma geral o conteúdo deste dataset qual ou quais colunas você acredita que tenha maior impacto sobre o valor da venda do imóvel?  Correlacione essas colunas com a coluna price. Plote gráficos que justifiquem sua resposta.
 
-source = ColumnDataSource(data=dict(x=lda_df['x'], y=lda_df['y'],
-                                    color=colormap[lda_keys],
-                                    description=lda_df['description'],
-                                    topic=lda_df['topic'],
-                                    category=lda_df['category']))
+# ### 7 - Em ML recorremos ao conceito estatístico *Outlier*. Dada uma série de dados uma amostra que possua um valor muito destoante do restante é considerado um *outlier*.   Em algumas análises reconhecer outliers pode ser de grande ajuda para entender a natureza dos dados a serem explorados.  Como você faria para identificar a existência de outliers ao verificarmos o valor das vendas deste dataset?  Dica tente usar gráficos scatter e hist.  
 
-plot_lda.scatter(source=source, x='x', y='y', color='color')
-hover = plot_kmeans.select(dict(type=HoverTool))
-hover = plot_lda.select(dict(type=HoverTool))
-hover.tooltips={"description":"@description",
-                "topic":"@topic", "category":"@category"}
-show(plot_lda)
-
-
-# In[ ]:
-
-
-def prepareLDAData():
-    data = {
-        'vocab': vocab,
-        'doc_topic_dists': doc_topic,
-        'doc_lengths': list(lda_df['len_docs']),
-        'term_frequency':cvectorizer.vocabulary_,
-        'topic_term_dists': lda_model.components_
-    } 
-    return data
-
-
-# *Note: It's a shame that by putting the HTML of the visualization using pyLDAvis, it will distort the layout of the kernel, I won't upload in here. But if you follow the below code, there should be an HTML file generated with very interesting interactive bubble chart that visualizes the space of your topic clusters and the term components within each topic.*
-# 
-# ![](https://farm5.staticflickr.com/4536/38709272151_7128c577ee_h.jpg)
-
-# In[ ]:
-
-
-import pyLDAvis
-
-lda_df['len_docs'] = combined_sample['tokens'].map(len)
-ldadata = prepareLDAData()
-pyLDAvis.enable_notebook()
-prepared_data = pyLDAvis.prepare(**ldadata)
-
-
-# <a data-flickr-embed="true"  href="https://www.flickr.com/photos/thykhuely/38709272151/in/dateposted-public/" title="pyLDAvis"><img src="https://farm5.staticflickr.com/4536/38709272151_7128c577ee_h.jpg" width="1600" height="976" alt="pyLDAvis"></a><script async src="//embedr.flickr.com/assets/client-code.js" charset="utf-8"></script>
-
-# In[ ]:
-
-
-import IPython.display
-from IPython.core.display import display, HTML, Javascript
-
-#h = IPython.display.display(HTML(html_string))
-#IPython.display.display_HTML(h)
-
+# ### 8 - Usando Python e NumPy calcule o valor médio do square feet (pode utilizar a coluna sqft_living para o cálculo) e crie um gráfico para exibir todas as amostras cujo valor do square feet de venda seja maior que o valor médio.

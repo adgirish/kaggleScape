@@ -1,192 +1,161 @@
 
 # coding: utf-8
 
+# # Introduction
+# 
+# In this kernel I aim to outline a common flaw in data augmentation/validation that I see in primarily the keras kernels for this competition. The essence of the problem is that the train/validation split is done after a one-time deterministic data augmentation is applied to grow the size of the dataset. Probably we should just be stochastically augmenting for every batch, but if we insist on augmenting data in this way, then we should do the train/validation split before augmenting. Otherwise, we will have training examples where an augmented version of the same example is in the validation set.
+# 
+# Example kernels:
+# - https://www.kaggle.com/a45632/keras-starter-4l-added-performance-graph
+# - https://www.kaggle.com/cbryant/keras-cnn-statoil-iceberg-lb-0-1995-now-0-1516
+# - https://www.kaggle.com/vincento/keras-starter-4l-0-1694-lb-icebergchallenge
+# - https://www.kaggle.com/henokanh/cnn-batchnormalization-0-1646
+# - https://www.kaggle.com/hcc1995/keras-cnn-model
+# - https://www.kaggle.com/fvzaur/iceberg-ship-classification-with-cnn-on-keras
+
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import keras
-from keras.applications.vgg19 import VGG19
-from keras.models import Model
-from keras.layers import Dense, Dropout, Flatten
-
-import os
-from tqdm import tqdm
-from sklearn import preprocessing
-from sklearn.model_selection import train_test_split
+# Let's get the imports out of the way
+import pandas as pd
+import numpy as np
 import cv2
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+np.random.seed(1234) 
+from keras.models import Sequential
+from keras.layers import Dense, Flatten
+from keras.layers import Conv2D, MaxPooling2D
+import matplotlib.pyplot as plt
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+df_train = pd.read_json('../input/train.json')
 
-# Any results you write to the current directory are saved as output.
+def get_scaled_imgs(df):
+    imgs = []
+    
+    for i, row in df.iterrows():
+        #make 75x75 image
+        band_1 = np.array(row['band_1']).reshape(75, 75)
+        band_2 = np.array(row['band_2']).reshape(75, 75)
+        band_3 = band_1 + band_2 # plus since log(x*y) = log(x) + log(y)
+        
+        # Rescale
+        a = (band_1 - band_1.mean()) / (band_1.max() - band_1.min())
+        b = (band_2 - band_2.mean()) / (band_2.max() - band_2.min())
+        c = (band_3 - band_3.mean()) / (band_3.max() - band_3.min())
 
+        imgs.append(np.dstack((a, b, c)))
 
-# First we will read in the csv's so we can see some more information on the filenames and breeds
-
-# In[ ]:
-
-
-df_train = pd.read_csv('../input/labels.csv')
-df_test = pd.read_csv('../input/sample_submission.csv')
-
-
-# In[ ]:
-
-
-df_train.head(10)
-
-
-# We can see that the breed needs to be one-hot encoded for the final submission, so we will now do this.
-
-# In[ ]:
+    return np.array(imgs)
 
 
-targets_series = pd.Series(df_train['breed'])
-one_hot = pd.get_dummies(targets_series, sparse = True)
-
+# This is a common function that you see in the kernels. It takes in a set of 3-channel images and outputs a larger array of: the original images, then their vetical flips, then their horizontal flips. I'm not really a fan of this way of augmenting data, but that's not the point of the kernel. Assuming that you were going to do this...
 
 # In[ ]:
 
 
-one_hot_labels = np.asarray(one_hot)
+def get_more_images(imgs):
+    
+    more_images = []
+    vert_flip_imgs = []
+    hori_flip_imgs = []
+      
+    for i in range(0,imgs.shape[0]):
+        a=imgs[i,:,:,0]
+        b=imgs[i,:,:,1]
+        c=imgs[i,:,:,2]
+        
+        av=cv2.flip(a,1)
+        ah=cv2.flip(a,0)
+        bv=cv2.flip(b,1)
+        bh=cv2.flip(b,0)
+        cv=cv2.flip(c,1)
+        ch=cv2.flip(c,0)
+        
+        vert_flip_imgs.append(np.dstack((av, bv, cv)))
+        hori_flip_imgs.append(np.dstack((ah, bh, ch)))
+      
+    v = np.array(vert_flip_imgs)
+    h = np.array(hori_flip_imgs)
+       
+    more_images = np.concatenate((imgs,v,h))
+    
+    return more_images
 
 
-# Next we will read in all of the images for test and train, using a for loop through the values of the csv files. I have also set an im_size variable which sets the size for the image to be re-sized to,  90x90 px, you should play with this number to see how it affects accuracy.
-
-# In[ ]:
-
-
-im_size = 90
-
-
-# In[ ]:
-
-
-x_train = []
-y_train = []
-x_test = []
-
-
-# In[ ]:
-
-
-i = 0 
-for f, breed in tqdm(df_train.values):
-    img = cv2.imread('../input/train/{}.jpg'.format(f))
-    label = one_hot_labels[i]
-    x_train.append(cv2.resize(img, (im_size, im_size)))
-    y_train.append(label)
-    i += 1
-
-
-# In[ ]:
-
-
-for f in tqdm(df_test['id'].values):
-    img = cv2.imread('../input/test/{}.jpg'.format(f))
-    x_test.append(cv2.resize(img, (im_size, im_size)))
-
+# Let's use a relatively straightforward model to prove this concept.
 
 # In[ ]:
 
 
-y_train_raw = np.array(y_train, np.uint8)
-x_train_raw = np.array(x_train, np.float32) / 255.
-x_test  = np.array(x_test, np.float32) / 255.
+def get_model():
+    model=Sequential()
+    model.add(Conv2D(32, kernel_size=(3, 3),activation='relu', input_shape=(75, 75, 3)))
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=(2, 2)))
+    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu' ))
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Conv2D(256, kernel_size=(3, 3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Flatten())
+    model.add(Dense(256, activation='relu'))
+    model.add(Dense(128, activation='relu'))
+    model.add(Dense(1, activation="sigmoid"))
+    model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])   
+    return model
 
 
-# We check the shape of the outputs to make sure everyting went as expected.
-
-# In[ ]:
-
-
-print(x_train_raw.shape)
-print(y_train_raw.shape)
-print(x_test.shape)
-
-
+# # Typical Kernal Validation
 # 
-# We can see above that there are 120 different breeds. We can put this in a num_class variable below that can then be used when creating the CNN model.
+# Below we will use the get_more_images function as you see in a typical kernel and vadliate using the `validadtion_split` argument in Keras `model.fit()`
 
 # In[ ]:
 
 
-num_class = y_train_raw.shape[1]
+Xtrain = get_scaled_imgs(df_train)
+Ytrain = np.array(df_train['is_iceberg'])
+
+Xtr_more = get_more_images(Xtrain) 
+Ytr_more = np.concatenate((Ytrain,Ytrain,Ytrain))
+
+model = get_model()
+history_1 = model.fit(Xtr_more, Ytr_more, batch_size=32, epochs=10, verbose=1, validation_split=0.25)
 
 
-# It is important to create a validation set so that you can gauge the performance of your model on independent data, unseen to the model in training. We do this by splitting the current training set (x_train_raw) and the corresponding labels (y_train_raw) so that we set aside 30 % of the data at random and put these in validation sets (X_valid and Y_valid).
+# # Better Validation
 # 
-# * This split needs to be improved so that it contains images from every class, with 120 separate classes some can not be represented and so the validation score is not informative. 
+# Here I demonstrate what I believe to be a better way of doing validation. First we split our data, and then we use augmentation to increase the size. Maybe we wouldn't even augment the validation set, but we may as well for comparison purposes.
 
 # In[ ]:
 
 
-X_train, X_valid, Y_train, Y_valid = train_test_split(x_train_raw, y_train_raw, test_size=0.3, random_state=1)
+from sklearn.model_selection import train_test_split
+X_train, X_valid, y_train, y_valid = train_test_split(Xtrain, Ytrain, test_size=0.25)
+
+X_train_more = get_more_images(X_train)
+y_train_more = np.concatenate([y_train, y_train, y_train])
+X_valid_more = get_more_images(X_valid)
+y_valid_more = np.concatenate([y_valid, y_valid, y_valid])
+
+model = get_model()
+history_2 = model.fit(X_train_more, y_train_more, batch_size=32, epochs=10, verbose=1,
+                     validation_data=(X_valid_more, y_valid_more))
 
 
-# Now we build the CNN architecture. Here we are using a pre-trained model VGG19 which has already been trained to identify many different dog breeds (as well as a lot of other objects from the imagenet dataset see here for more information: http://image-net.org/about-overview). Unfortunately it doesn't seem possible to downlod the weights from within this kernel so make sure you set the weights argument to 'imagenet' and not None, as it currently is below.
+# # Comparison
 # 
-# We then remove the final layer and instead replace it with a single dense layer with the number of nodes corresponding to the number of breed classes we have (120).
+# You can see right away by sudying the `val_loss` for epoch 10 that these two situations give us different results. Let's just plot them to be sure.
 
 # In[ ]:
 
 
-# Create the base pre-trained model
-# Can't download weights in the kernel
-base_model = VGG19(#weights='imagenet',
-    weights = None, include_top=False, input_shape=(im_size, im_size, 3))
-
-# Add a new top layer
-x = base_model.output
-x = Flatten()(x)
-predictions = Dense(num_class, activation='softmax')(x)
-
-# This is the model we will train
-model = Model(inputs=base_model.input, outputs=predictions)
-
-# First: train only the top layers (which were randomly initialized)
-for layer in base_model.layers:
-    layer.trainable = False
-
-model.compile(loss='categorical_crossentropy', 
-              optimizer='adam', 
-              metrics=['accuracy'])
-
-callbacks_list = [keras.callbacks.EarlyStopping(monitor='val_acc', patience=3, verbose=1)]
-model.summary()
+plt.figure(figsize=(12,8))
+plt.plot(history_1.history['val_loss'], label='bad validation')
+plt.plot(history_2.history['val_loss'], label='good validation')
+plt.title('Validation Loss by Epch')
+plt.xlabel('Epoch')
+plt.ylabel('Validation Loss')
+plt.legend()
+plt.show()
 
 
-# In[ ]:
-
-
-model.fit(X_train, Y_train, epochs=1, validation_data=(X_valid, Y_valid), verbose=1)
-
-
-# Remember, accuracy is low here because we are not taking advantage of the pre-trained weights as they cannot be downloaded in the kernel. This means we are training the wights from scratch and I we have only run 1 epoch due to the hardware constraints in the kernel.
-# 
-# Next we will make our predictions.
-
-# In[ ]:
-
-
-preds = model.predict(x_test, verbose=1)
-
-
-# In[ ]:
-
-
-sub = pd.DataFrame(preds)
-# Set column names to those generated by the one-hot encoding earlier
-col_names = one_hot.columns.values
-sub.columns = col_names
-# Insert the column id from the sample_submission at the start of the data frame
-sub.insert(0, 'id', df_test['id'])
-sub.head(5)
-
+# I think you can see that the "bad validation" is dramatically underestimating the true validatdion loss.

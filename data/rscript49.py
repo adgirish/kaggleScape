@@ -1,168 +1,203 @@
+import pandas as pd # Used to open CSV files 
+import numpy as np # Used for matrix operations
+import cv2 # Used for image augmentation
+from matplotlib import pyplot as plt
+np.random.seed(666)
 
-''' 
-Author: Danijel Kivaranovic 
-Title: Neural network (Keras) with sparse data
-'''
 
-## import libraries
-import numpy as np
-np.random.seed(123)
-
-import pandas as pd
-import subprocess
-from scipy.sparse import csr_matrix, hstack
-from sklearn.metrics import mean_absolute_error
-from sklearn.preprocessing import StandardScaler
-from sklearn.cross_validation import KFold
 from keras.models import Sequential
-from keras.layers import Dense, Dropout, Activation
+from keras.layers import Dense, Dropout, Flatten, Activation
+from keras.layers import Conv2D, MaxPooling2D
+from keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
 from keras.layers.normalization import BatchNormalization
-from keras.layers.advanced_activations import PReLU
+from keras.optimizers import Adam
 
-## Batch generators ##################################################################################################################################
+df_train = pd.read_json('../input/train.json') # this is a dataframe
 
-def batch_generator(X, y, batch_size, shuffle):
-    #chenglong code for fiting from generator (https://www.kaggle.com/c/talkingdata-mobile-user-demographics/forums/t/22567/neural-network-for-sparse-matrices)
-    number_of_batches = np.ceil(X.shape[0]/batch_size)
-    counter = 0
-    sample_index = np.arange(X.shape[0])
-    if shuffle:
-        np.random.shuffle(sample_index)
-    while True:
-        batch_index = sample_index[batch_size*counter:batch_size*(counter+1)]
-        X_batch = X[batch_index,:].toarray()
-        y_batch = y[batch_index]
-        counter += 1
-        yield X_batch, y_batch
-        if (counter == number_of_batches):
-            if shuffle:
-                np.random.shuffle(sample_index)
-            counter = 0
 
-def batch_generatorp(X, batch_size, shuffle):
-    number_of_batches = X.shape[0] / np.ceil(X.shape[0]/batch_size)
-    counter = 0
-    sample_index = np.arange(X.shape[0])
-    while True:
-        batch_index = sample_index[batch_size * counter:batch_size * (counter + 1)]
-        X_batch = X[batch_index, :].toarray()
-        counter += 1
-        yield X_batch
-        if (counter == number_of_batches):
-            counter = 0
-
-########################################################################################################################################################
-
-## read data
-train = pd.read_csv('input/train.csv')
-test = pd.read_csv('input/test.csv')
-
-index = list(train.index)
-print index[0:10]
-np.random.shuffle(index)
-print index[0:10]
-train = train.iloc[index]
-'train = train.iloc[np.random.permutation(len(train))]'
-
-## set test loss to NaN
-test['loss'] = np.nan
-
-## response and IDs
-y = np.log(train['loss'].values+200)
-id_train = train['id'].values
-id_test = test['id'].values
-
-## stack train test
-ntrain = train.shape[0]
-tr_te = pd.concat((train, test), axis = 0)
-
-## Preprocessing and transforming to sparse data
-sparse_data = []
-
-f_cat = [f for f in tr_te.columns if 'cat' in f]
-for f in f_cat:
-    dummy = pd.get_dummies(tr_te[f].astype('category'))
-    tmp = csr_matrix(dummy)
-    sparse_data.append(tmp)
-
-f_num = [f for f in tr_te.columns if 'cont' in f]
-scaler = StandardScaler()
-tmp = csr_matrix(scaler.fit_transform(tr_te[f_num]))
-sparse_data.append(tmp)
-
-del(tr_te, train, test)
-
-## sparse train and test data
-xtr_te = hstack(sparse_data, format = 'csr')
-xtrain = xtr_te[:ntrain, :]
-xtest = xtr_te[ntrain:, :]
-
-print('Dim train', xtrain.shape)
-print('Dim test', xtest.shape)
-
-del(xtr_te, sparse_data, tmp)
-
-## neural net
-def nn_model():
-    model = Sequential()
+def get_scaled_imgs(df):
+    imgs = []
     
-    model.add(Dense(400, input_dim = xtrain.shape[1], init = 'he_normal'))
-    model.add(PReLU())
-    model.add(BatchNormalization())
-    model.add(Dropout(0.4))
+    for i, row in df.iterrows():
+        #make 75x75 image
+        band_1 = np.array(row['band_1']).reshape(75, 75)
+        band_2 = np.array(row['band_2']).reshape(75, 75)
+        band_3 = band_1 + band_2 # plus since log(x*y) = log(x) + log(y)
         
-    model.add(Dense(200, init = 'he_normal'))
-    model.add(PReLU())
-    model.add(BatchNormalization())    
-    model.add(Dropout(0.2))
+        # Rescale
+        a = (band_1 - band_1.mean()) / (band_1.max() - band_1.min())
+        b = (band_2 - band_2.mean()) / (band_2.max() - band_2.min())
+        c = (band_3 - band_3.mean()) / (band_3.max() - band_3.min())
+
+        imgs.append(np.dstack((a, b, c)))
+
+    return np.array(imgs)
+
+
+Xtrain = get_scaled_imgs(df_train)
+Ytrain = np.array(df_train['is_iceberg'])
+
+
+df_train.inc_angle = df_train.inc_angle.replace('na',0)
+idx_tr = np.where(df_train.inc_angle>0)
+
+
+Ytrain = Ytrain[idx_tr[0]]
+Xtrain = Xtrain[idx_tr[0],...]
+
+
+def get_more_images(imgs):
     
-    model.add(Dense(50, init = 'he_normal'))
-    model.add(PReLU())
-    model.add(BatchNormalization())    
-    model.add(Dropout(0.2))
+    more_images = []
+    vert_flip_imgs = []
+    hori_flip_imgs = []
+      
+    for i in range(0,imgs.shape[0]):
+        a=imgs[i,:,:,0]
+        b=imgs[i,:,:,1]
+        c=imgs[i,:,:,2]
+        
+        av=cv2.flip(a,1)
+        ah=cv2.flip(a,0)
+        bv=cv2.flip(b,1)
+        bh=cv2.flip(b,0)
+        cv=cv2.flip(c,1)
+        ch=cv2.flip(c,0)
+        
+        vert_flip_imgs.append(np.dstack((av, bv, cv)))
+        hori_flip_imgs.append(np.dstack((ah, bh, ch)))
+      
+    v = np.array(vert_flip_imgs)
+    h = np.array(hori_flip_imgs)
+       
+    more_images = np.concatenate((imgs,v,h))
     
-    model.add(Dense(1, init = 'he_normal'))
-    model.compile(loss = 'mae', optimizer = 'adadelta')
-    return(model)
+    return more_images
 
-## cv-folds
-nfolds = 10
-folds = KFold(len(y), n_folds = nfolds, shuffle = True, random_state = 111)
 
-## train models
-i = 0
-nbags = 10
-nepochs = 55
-pred_oob = np.zeros(xtrain.shape[0])
-pred_test = np.zeros(xtest.shape[0])
+Xtr_more = get_more_images(Xtrain) 
+Ytr_more = np.concatenate((Ytrain,Ytrain,Ytrain))
 
-for (inTr, inTe) in folds:
-    xtr = xtrain[inTr]
-    ytr = y[inTr]
-    xte = xtrain[inTe]
-    yte = y[inTe]
-    pred = np.zeros(xte.shape[0])
-    for j in range(nbags):
-        model = nn_model()
-        fit = model.fit_generator(generator = batch_generator(xtr, ytr, 128, True),
-                                  nb_epoch = nepochs,
-                                  samples_per_epoch = xtr.shape[0],
-                                  verbose = 0)
-        pred += np.exp(model.predict_generator(generator = batch_generatorp(xte, 800, False), val_samples = xte.shape[0])[:,0])-200
-        pred_test += np.exp(model.predict_generator(generator = batch_generatorp(xtest, 800, False), val_samples = xtest.shape[0])[:,0])-200
-    pred /= nbags
-    pred_oob[inTe] = pred
-    score = mean_absolute_error(np.exp(yte)-200, pred)
-    i += 1
-    print('Fold ', i, '- MAE:', score)
 
-print('Total - MAE:', mean_absolute_error(np.exp(y)-200, pred_oob))
 
-## train predictions
-df = pd.DataFrame({'id': id_train, 'loss': pred_oob})
-df.to_csv('preds_oob.csv', index = False)
+def get_more_images(imgs):
+    
+    more_images = []
+    vert_flip_imgs = []
+    hori_flip_imgs = []
+      
+    for i in range(0,imgs.shape[0]):
+        a=imgs[i,:,:,0]
+        b=imgs[i,:,:,1]
+        c=imgs[i,:,:,2]
+        
+        av=cv2.flip(a,1)
+        ah=cv2.flip(a,0)
+        bv=cv2.flip(b,1)
+        bh=cv2.flip(b,0)
+        cv=cv2.flip(c,1)
+        ch=cv2.flip(c,0)
+        
+        vert_flip_imgs.append(np.dstack((av, bv, cv)))
+        hori_flip_imgs.append(np.dstack((ah, bh, ch)))
+      
+    v = np.array(vert_flip_imgs)
+    h = np.array(hori_flip_imgs)
+       
+    more_images = np.concatenate((imgs,v,h))
+    
+    return more_images
 
-## test predictions
-pred_test /= (nfolds*nbags)
-df = pd.DataFrame({'id': id_test, 'loss': pred_test})
-df.to_csv('submission_keras_shift_perm.csv', index = False)
+Ytr_more = np.concatenate((Ytrain,Ytrain,Ytrain))
+
+
+def getModel():
+    #Build keras model
+    
+    model=Sequential()
+    
+    # CNN 1
+    model.add(Conv2D(64, kernel_size=(3, 3),activation='relu', input_shape=(75, 75, 3)))
+    model.add(MaxPooling2D(pool_size=(3, 3), strides=(2, 2)))
+    model.add(Dropout(0.2))
+
+    # CNN 2
+    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu' ))
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Dropout(0.2))
+
+    # CNN 3
+    model.add(Conv2D(128, kernel_size=(3, 3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Dropout(0.3))
+
+    #CNN 4
+    model.add(Conv2D(64, kernel_size=(3, 3), activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2), strides=(2, 2)))
+    model.add(Dropout(0.3))
+
+    # You must flatten the data for the dense layers
+    model.add(Flatten())
+
+    #Dense 1
+    model.add(Dense(512, activation='relu'))
+    model.add(Dropout(0.2))
+
+    #Dense 2
+    model.add(Dense(256, activation='relu'))
+    model.add(Dropout(0.2))
+
+    # Output 
+    model.add(Dense(1, activation="sigmoid"))
+
+    optimizer = Adam(lr=0.001, decay=0.0)
+    model.compile(loss='binary_crossentropy', optimizer=optimizer, metrics=['accuracy'])
+    
+    return model
+
+model = getModel()
+model.summary()
+
+batch_size = 32
+earlyStopping = EarlyStopping(monitor='val_loss', patience=10, verbose=0, mode='min')
+mcp_save = ModelCheckpoint('.mdl_wts.hdf5', save_best_only=True, monitor='val_loss', mode='min')
+reduce_lr_loss = ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=7, verbose=1, epsilon=1e-4, mode='min')
+
+#------------------------------------------------------------------------------------------------------------------------------------------------------
+# Let's view progress 
+history = model.fit(Xtr_more, Ytr_more, batch_size=batch_size, epochs=50, verbose=1, callbacks=[earlyStopping, mcp_save, reduce_lr_loss], validation_split=0.25)
+
+print(history.history.keys())
+#
+fig = plt.figure()
+plt.plot(history.history['acc'])
+plt.plot(history.history['val_acc'])
+plt.title('model accuracy')
+plt.ylabel('accuracy')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='upper left')
+plt.plot(history.history['loss'])
+plt.plot(history.history['val_loss'])
+plt.title('model loss')
+plt.ylabel('loss')
+plt.xlabel('epoch')
+plt.legend(['train', 'test'], loc='lower left')
+#
+fig.savefig('performance.png')
+#---------------------------------------------------------------------------------------
+
+model.load_weights(filepath = '.mdl_wts.hdf5')
+
+score = model.evaluate(Xtrain, Ytrain, verbose=1)
+print('Train score:', score[0])
+print('Train accuracy:', score[1])
+
+df_test = pd.read_json('../input/test.json')
+df_test.inc_angle = df_test.inc_angle.replace('na',0)
+Xtest = (get_scaled_imgs(df_test))
+pred_test = model.predict(Xtest)
+
+submission = pd.DataFrame({'id': df_test["id"], 'is_iceberg': pred_test.reshape((pred_test.shape[0]))})
+print(submission.head(10))
+
+submission.to_csv('submission.csv', index=False)

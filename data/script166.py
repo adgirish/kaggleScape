@@ -4,356 +4,164 @@
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-# Draw inline
-get_ipython().run_line_magic('matplotlib', 'inline')
-
-# Set figure aesthetics
-sns.set_style("white", {'ytick.major.size': 10.0})
-sns.set_context("poster", font_scale=1.1)
-
-
-# I wanted to take a look at the user data we have for this competition so I made this little notebook to share my findings and discuss about those. At the moment I've started with the basic user data, I'll take a look at sessions and the other *csv* files later on this month.
-# 
-# Please, feel free to comment with anything you think it can be improved or fixed. I am not a professional in this field and there will be mistakes or things that can be *improved*. This is the flow I took and there are some plots not really interesting but I thought on keeping it in case someone see something interesting.
-# 
-# Let's see the data!
-
-# ## Data Exploration
-
-# Generally, when I start with a Data Science project I'm looking to answer the following questions:
-# 
-# - Is there any mistakes in the data?
-# - Does the data have peculiar behavior?
-# - Do I need to fix or remove any of the data to be more realistic?
-
-# In[ ]:
-
-
-# Load the data into DataFrames
-train_users = pd.read_csv('../input/train_users.csv')
-test_users = pd.read_csv('../input/test_users.csv')
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import timeit
+import warnings
+warnings.filterwarnings("ignore")
+pd.options.mode.chained_assignment = None  # default='warn'
 
 
 # In[ ]:
 
 
-print("We have", train_users.shape[0], "users in the training set and", 
-      test_users.shape[0], "in the test set.")
-print("In total we have", train_users.shape[0] + test_users.shape[0], "users.")
+target_cols = ['ind_ahor_fin_ult1','ind_aval_fin_ult1','ind_cco_fin_ult1',
+               'ind_cder_fin_ult1','ind_cno_fin_ult1','ind_ctju_fin_ult1',
+               'ind_ctma_fin_ult1','ind_ctop_fin_ult1','ind_ctpp_fin_ult1',
+               'ind_deco_fin_ult1','ind_deme_fin_ult1','ind_dela_fin_ult1',
+               'ind_ecue_fin_ult1','ind_fond_fin_ult1','ind_hip_fin_ult1',
+               'ind_plan_fin_ult1','ind_pres_fin_ult1','ind_reca_fin_ult1',
+               'ind_tjcr_fin_ult1','ind_valo_fin_ult1','ind_viv_fin_ult1',
+               'ind_nomina_ult1','ind_nom_pens_ult1','ind_recibo_ult1']
+
+canal_dict = {'KAI': 35,'KBG': 17,'KGU': 149,'KDE': 47,'KAJ': 41,'KCG': 59,
+ 'KHM': 12,'KAL': 74,'KFH': 140,'KCT': 112,'KBJ': 133,'KBL': 88,'KHQ': 157,'KFB': 146,'KFV': 48,'KFC': 4,
+ 'KCK': 52,'KAN': 110,'KES': 68,'KCB': 78,'KBS': 118,'KDP': 103,'KDD': 113,'KBX': 116,'KCM': 82,
+ 'KAE': 30,'KAB': 28,'KFG': 27,'KDA': 63,'KBV': 100,'KBD': 109,'KBW': 114,'KGN': 11,
+ 'KCP': 129,'KAK': 51,'KAR': 32,'KHK': 10,'KDS': 124,'KEY': 93,'KFU': 36,'KBY': 111,
+ 'KEK': 145,'KCX': 120,'KDQ': 80,'K00': 50,'KCC': 29,'KCN': 81,'KDZ': 99,'KDR': 56,
+ 'KBE': 119,'KFN': 42,'KEC': 66,'KDM': 130,'KBP': 121,'KAU': 142,'KDU': 79,
+ 'KCH': 84,'KHF': 19,'KCR': 153,'KBH': 90,'KEA': 89,'KEM': 155,'KGY': 44,'KBM': 135,
+ 'KEW': 98,'KDB': 117,'KHD': 2,'RED': 8,'KBN': 122,'KDY': 61,'KDI': 150,'KEU': 72,
+ 'KCA': 73,'KAH': 31,'KAO': 94,'KAZ': 7,'004': 83,'KEJ': 95,'KBQ': 62,'KEZ': 108,
+ 'KCI': 65,'KGW': 147,'KFJ': 33,'KCF': 105,'KFT': 92,'KED': 143,'KAT': 5,'KDL': 158,
+ 'KFA': 3,'KCO': 104,'KEO': 96,'KBZ': 67,'KHA': 22,'KDX': 69,'KDO': 60,'KAF': 23,'KAW': 76,
+ 'KAG': 26,'KAM': 107,'KEL': 125,'KEH': 15,'KAQ': 37,'KFD': 25,'KEQ': 138,'KEN': 137,
+ 'KFS': 38,'KBB': 131,'KCE': 86,'KAP': 46,'KAC': 57,'KBO': 64,'KHR': 161,'KFF': 45,
+ 'KEE': 152,'KHL': 0,'007': 71,'KDG': 126,'025': 159,'KGX': 24,'KEI': 97,'KBF': 102,
+ 'KEG': 136,'KFP': 40,'KDF': 127,'KCJ': 156,'KFR': 144,'KDW': 132,-1: 6,'KAD': 16,
+ 'KBU': 55,'KCU': 115,'KAA': 39,'KEF': 128,'KAY': 54,'KGC': 18,'KAV': 139,'KDN': 151,
+ 'KCV': 106,'KCL': 53,'013': 49,'KDV': 91,'KFE': 148,'KCQ': 154,'KDH': 14,'KHN': 21,
+ 'KDT': 58,'KBR': 101,'KEB': 123,'KAS': 70,'KCD': 85,'KFL': 34,'KCS': 77,'KHO': 13,
+ 'KEV': 87,'KHE': 1,'KHC': 9,'KFK': 20,'KDC': 75,'KFM': 141,'KHP': 160,'KHS': 162,
+ 'KFI': 134,'KGV': 43}
 
 
-# Let's get those together so we can work with all the data.
+pais_dict = {'LV': 102,'CA': 2,'GB': 9,'EC': 19,'BY': 64,'ML': 104,'MT': 118,
+ 'LU': 59,'GR': 39,'NI': 33,'BZ': 113,'QA': 58,'DE': 10,'AU': 63,'IN': 31,
+ 'GN': 98,'KE': 65,'HN': 22,'JM': 116,'SV': 53,'TH': 79,'IE': 5,'TN': 85,
+ 'PH': 91,'ET': 54,'AR': 13,'KR': 87,'GA': 45,'FR': 8,'SG': 66,'LB': 81,
+ 'MA': 38,'NZ': 93,'SK': 69,'CN': 28,'GI': 96,'PY': 51,'SA': 56,'PL': 30,
+ 'PE': 20,'GE': 78,'HR': 67,'CD': 112,'MM': 94,'MR': 48,'NG': 83,'HU': 106,
+ 'AO': 71,'NL': 7,'GM': 110,'DJ': 115,'ZA': 75,'OM': 100,'LT': 103,'MZ': 27,
+ 'VE': 14,'EE': 52,'CF': 109,'CL': 4,'SL': 97,'DO': 11,'PT': 26,'ES': 0,
+ 'CZ': 36,'AD': 35,'RO': 41,'TW': 29,'BA': 61,'IS': 107,'AT': 6,'ZW': 114,
+ 'TR': 70,'CO': 21,'PK': 84,'SE': 24,'AL': 25,'CU': 72,'UY': 77,'EG': 74,'CR': 32,
+ 'GQ': 73,'MK': 105,'KW': 92,'GT': 44,'CM': 55,'SN': 47,'KZ': 111,'DK': 76,
+ 'LY': 108,'AE': 37,'PA': 60,'UA': 49,'GW': 99,'TG': 86,'MX': 16,'KH': 95,
+ 'FI': 23,'NO': 46,'IT': 18,'GH': 88, 'JP': 82,'RU': 43,'PR': 40,'RS': 89,
+ 'DZ': 80,'MD': 68,-1: 1,'BG': 50,'CI': 57,'IL': 42,'VN': 90,'CH': 3,'US': 15,'HK': 34,
+ 'CG': 101,'BO': 62,'BR': 17,'BE': 12,'BM': 117}
 
-# In[ ]:
-
-
-# Merge train and test users
-users = pd.concat((train_users, test_users), axis=0, ignore_index=True)
-
-# Remove ID's since now we are not interested in making predictions
-users.drop('id',axis=1, inplace=True)
-
-users.head()
-
-
-# The data seems to be in an ussable format so the next important thing is to take a look at the missing data.
-
-# ### Missing Data
-
-# Usually the missing data comes in the way of *NaN*, but if we take a look at the DataFrame printed above we can see at the `gender` column some values being `-unknown-`. We will need to transform those values into *NaN* first:
-
-# In[ ]:
-
-
-users.gender.replace('-unknown-', np.nan, inplace=True)
-
-
-# Now let's see how much data we are missing. For this purpose let's compute the NaN percentage of each feature.
-
-# In[ ]:
-
-
-users_nan = (users.isnull().sum() / users.shape[0]) * 100
-users_nan[users_nan > 0].drop('country_destination')
-
-
-# We have quite a lot of *NaN* in the `age` and `gender` wich will yield in lesser performance of the classifiers we will build. The feature `date_first_booking` has a 58% of NaN values because this feature is not present at the tests users, and therefore, we won't need it at the *modeling* part.
-
-# In[ ]:
-
-
-print("Just for the sake of curiosity; we have", 
-      int((train_users.date_first_booking.isnull().sum() / train_users.shape[0]) * 100), 
-      "% of missing values at date_first_booking in the training data")
-
-
-# The other feature with a high rate of *NaN* was `age`. Let's see:
-
-# In[ ]:
-
-
-users.age.describe()
-
-
-# There is some inconsistency in the age of some users as we can see above. It could be because the `age` inpout field was not sanitized or there was some mistakes handlig the data.
-
-# In[ ]:
-
-
-print(sum(users.age > 122))
-print(sum(users.age < 18))
-
-
-# So far, do we have 801 users with [the longest confirmed human lifespan record](https://en.wikipedia.org/wiki/Jeanne_Calment) and 176 little *gangsters* breaking the [Aribnb Eligibility Terms](https://www.airbnb.com/terms)?
-
-# In[ ]:
-
-
-users[users.age > 122]['age'].describe()
-
-
-# It's seems that the weird values are caused by the appearance of 2014. I didn't figured why, but I supose that might be related with a wrong input being added with the new users.
-
-# In[ ]:
-
-
-users[users.age < 18]['age'].describe()
-
-
-# The young users seems to be under an acceptable range being the 50% of those users above 16 years old. 
-# We will need to hande the outliers. The simple thing that came to my mind it's to set an acceptance range and put those out of it to NaN.
-
-# In[ ]:
-
-
-users.loc[users.age > 95, 'age'] = np.nan
-users.loc[users.age < 13, 'age'] = np.nan
-
-
-# ### Data Types
-
-# Let's treat each feature as what they are. This means we need to transform into categorical those features that we treas as categories and the same with the dates:
-
-# In[ ]:
-
-
-categorical_features = [
-    'affiliate_channel',
-    'affiliate_provider',
-    'country_destination',
-    'first_affiliate_tracked',
-    'first_browser',
-    'first_device_type',
-    'gender',
-    'language',
-    'signup_app',
-    'signup_method'
-]
-
-for categorical_feature in categorical_features:
-    users[categorical_feature] = users[categorical_feature].astype('category')
+emp_dict = {'N':0,-1:-1,'A':1,'B':2,'F':3,'S':4}
+indfall_dict = {'N':0,-1:-1,'S':1}
+sexo_dict = {'V':0,'H':1,-1:-1}
+tiprel_dict = {'A':0,-1:-1,'I':1,'P':2,'N':3,'R':4}
+indresi_dict = {'N':0,-1:-1,'S':1}
+indext_dict = {'N':0,-1:-1,'S':1}
+conyuemp_dict = {'N':0,-1:-1,'S':1}
+segmento_dict = {-1:-1,'01 - TOP':1,'02 - PARTICULARES':2,'03 - UNIVERSITARIO':3}
 
 
 # In[ ]:
 
 
-users['date_account_created'] = pd.to_datetime(users['date_account_created'])
-users['date_first_booking'] = pd.to_datetime(users['date_first_booking'])
-users['date_first_active'] = pd.to_datetime((users.timestamp_first_active // 1000000), format='%Y%m%d')
+tic=timeit.default_timer()
+def resize_data(DF,is_DF=True):
+    DF.replace(' NA', -2, inplace=True)
+    DF.replace('         NA', -2, inplace=True)
+    DF.fillna(-1, inplace=True)
 
+    DF['ncodpers'] = DF['ncodpers'].astype(np.int32)
+    DF['renta'] = DF['renta'].astype(np.float32)
+    DF['indrel'] = DF['indrel'].map(lambda x: 2 if x == 99 else x).astype(np.int8)
 
-# ### Visualizing the Data
+    DF['ind_empleado'] = DF['ind_empleado'].map(lambda x: emp_dict[x]).astype(np.int8)
 
-# Usually, looking at tables, percentiles, means, and other several measures at this state is rarely useful unless you know very well your data.
-# 
-# For me, it's usually better to visualize the data in some way. Visualization makes me see the outliers and errors immediately!
+    DF['sexo'] = DF['sexo'].map(lambda x: sexo_dict[x]).astype(np.int8)
+    DF['age'] = DF['age'].astype(np.int16)
+    DF['ind_nuevo'] = DF['ind_nuevo'].astype(np.int8)
+    DF['antiguedad'] = DF['antiguedad'].map(lambda x: -1 if x == '     NA' else x).astype(int)
+    DF['antiguedad'] = DF['antiguedad'].map(lambda x: -2 if x == -999999 else x).astype(np.int16)
+    DF['indrel_1mes'] = DF['indrel_1mes'].map(lambda x: -2 if x == 'P' else x).astype(np.float16)
+    DF['indrel_1mes'] = DF['indrel_1mes'].astype(np.int8)
 
-# #### Gender
+    DF['tiprel_1mes'] = DF['tiprel_1mes'].map(lambda x: tiprel_dict[x]).astype(np.int8)
 
-# In[ ]:
+    DF['indresi'] = DF['indresi'].map(lambda x: indresi_dict[x]).astype(np.int8)
 
+    DF['indext'] = DF['indext'].map(lambda x: indext_dict[x]).astype(np.int8)
 
-users.gender.value_counts(dropna=False).plot(kind='bar', color='#FD5C64', rot=0)
-plt.xlabel('Gender')
-sns.despine()
+    DF['conyuemp'] = DF['conyuemp'].map(lambda x: conyuemp_dict[x]).astype(np.int8)
 
+    DF['canal_entrada'] = DF['canal_entrada'].map(lambda x: canal_dict[x]).astype(np.int16)
 
-# As we've seen before at this plot we can see the ammount of missing data in perspective. Also, notice that there is a slight difference between user gender.
-# 
-# Next thing it might be interesting to see if there is any gender preferences when travelling:
 
-# In[ ]:
+    DF['indfall'] = DF['indfall'].map(lambda x: indfall_dict[x]).astype(np.int8)
 
+    DF['pais_residencia'] = DF['pais_residencia'].map(lambda x: pais_dict[x]).astype(np.int8)
 
-women = sum(users['gender'] == 'FEMALE')
-men = sum(users['gender'] == 'MALE')
+    DF['tipodom'] = DF['tipodom'].astype(np.int8)
 
-female_destinations = users.loc[users['gender'] == 'FEMALE', 'country_destination'].value_counts() / women * 100
-male_destinations = users.loc[users['gender'] == 'MALE', 'country_destination'].value_counts() / men * 100
+    DF['cod_prov'] = DF['cod_prov'].astype(np.int8)
 
-# Bar width
-width = 0.4
+    DF.drop('nomprov',axis=1,inplace=True)
 
-male_destinations.plot(kind='bar', width=width, color='#4DD3C9', position=0, label='Male', rot=0)
-female_destinations.plot(kind='bar', width=width, color='#FFA35D', position=1, label='Female', rot=0)
+    DF['ind_actividad_cliente'] = DF['ind_actividad_cliente'].astype(np.int8)
 
-plt.legend()
-plt.xlabel('Destination Country')
-plt.ylabel('Percentage')
+    DF['fecha_dato_month'] = DF['fecha_dato'].map(lambda x: int(x[5:7])).astype(np.int8)
+    DF['fecha_dato_year'] = DF['fecha_dato'].map(lambda x: int(x[0:4]) - 2015).astype(np.int8)
+    DF['month_int'] = (DF['fecha_dato_month'] + 12 * DF['fecha_dato_year']).astype(np.int8)
+    DF.drop('fecha_dato',axis=1,inplace=True)
 
-sns.despine()
-plt.show()
+    DF['fecha_alta'] = DF['fecha_alta'].map(lambda x: '2020-00-00' if x == -1 else x)
+    DF['fecha_alta_month'] = DF['fecha_alta'].map(lambda x: int(x[5:7])).astype(np.int8)
+    DF['fecha_alta_year'] = DF['fecha_alta'].map(lambda x: int(x[0:4]) - 2015).astype(np.int8)
+    DF['fecha_alta_day'] = DF['fecha_alta'].map(lambda x: int(x[8:10])).astype(np.int8)
+    DF['fecha_alta_month_int'] = (DF['fecha_alta_month'] + 12 * DF['fecha_alta_year']).astype(np.int8)
+    DF.drop('fecha_alta',axis=1,inplace=True)
+    DF['ult_fec_cli_1t'] = DF['ult_fec_cli_1t'].map(lambda x: '2020-00-00' if x == -1 else x)
+    DF['ult_fec_cli_1t_month'] = DF['ult_fec_cli_1t'].map(lambda x: int(x[5:7])).astype(np.int8)
+    DF['ult_fec_cli_1t_year'] = DF['ult_fec_cli_1t'].map(lambda x: int(x[0:4]) - 2015).astype(np.int8)
+    DF['ult_fec_cli_1t_day'] = DF['ult_fec_cli_1t'].map(lambda x: int(x[8:10])).astype(np.int8)
+    DF['ult_fec_cli_1t_month_int'] = (DF['ult_fec_cli_1t_month'] + 12 * DF['ult_fec_cli_1t_year']).astype(np.int8)
+    DF.drop('ult_fec_cli_1t',axis=1,inplace=True)
 
+    DF['segmento'] = DF['segmento'].map(lambda x: segmento_dict[x]).astype(np.int8)
 
-# There are no big differences between the 2 main genders, so this plot it's not really ussefull except to know the relative destination frecuency of the countries. Let's see it clear here:
+    for col in target_cols:
+        if is_DF:
+            DF[col] = DF[col].astype(np.int8)
 
-# In[ ]:
-
-
-destination_percentage = users.country_destination.value_counts() / users.shape[0] * 100
-destination_percentage.plot(kind='bar',color='#FD5C64', rot=0)
-# Using seaborn can also be plotted
-# sns.countplot(x="country_destination", data=users, order=list(users.country_destination.value_counts().keys()))
-plt.xlabel('Destination Country')
-plt.ylabel('Percentage')
-sns.despine()
-
-
-# The first thing we can see that if there is a reservation, it's likely to be inside the US. But there is a 45% of people that never did a reservation.
-
-# #### Age
-
-# Now that I know there is no difference between male and female reservations at first sight I'll dig into the age.
-
-# In[ ]:
-
-
-sns.distplot(users.age.dropna(), color='#FD5C64')
-plt.xlabel('Age')
-sns.despine()
-
-
-# As expected, the common age to travel is between 25 and 40. Let's see if, for example, older people travel in a different way. Let's pick an arbitrary age to split into two groups. Maybe 45?
-
-# In[ ]:
-
-
-age = 45
-
-younger = sum(users.loc[users['age'] < age, 'country_destination'].value_counts())
-older = sum(users.loc[users['age'] > age, 'country_destination'].value_counts())
-
-younger_destinations = users.loc[users['age'] < age, 'country_destination'].value_counts() / younger * 100
-older_destinations = users.loc[users['age'] > age, 'country_destination'].value_counts() / older * 100
-
-younger_destinations.plot(kind='bar', width=width, color='#63EA55', position=0, label='Youngers', rot=0)
-older_destinations.plot(kind='bar', width=width, color='#4DD3C9', position=1, label='Olders', rot=0)
-
-plt.legend()
-plt.xlabel('Destination Country')
-plt.ylabel('Percentage')
-
-sns.despine()
-plt.show()
-
-
-# We can see that the young people tends to stay in the US, and the older people choose to travel outside the country. Of vourse, there are no big differences between them and we must remember that we do not have the 42% of the ages. 
-# 
-# The first thing I thought when reading the problem was the importance of the native lenguage when choosing the destination country. So let's see how manny users use english as main language:
-
-# In[ ]:
-
-
-print((sum(users.language == 'en') / users.shape[0])*100)
-
-
-# With the 96% of users using English as their language, it is understandable that a lot of people stay in the US. Someone maybe thinking, if the language is important, why not travel to GB? We need to remember that there is also a lot of factor we are not acounting so making assumpions or predictions like that might be dangerous.
-
-# #### Dates
-
-# To see the dates of our users and the timespan of them, let's plot the number of accounts created by time:
-
-# In[ ]:
-
-
-sns.set_style("whitegrid", {'axes.edgecolor': '0'})
-sns.set_context("poster", font_scale=1.1)
-users.date_account_created.value_counts().plot(kind='line', linewidth=1.2, color='#FD5C64')
-
-
-# It's appreciable how fast Airbnb has grown over the last 3 years. Does this correlate with the date when the user was active for the first time? It should be very similar, so doing this is a way to check the data!
-
-# In[ ]:
-
-
-users.date_first_active.value_counts().plot(kind='line', linewidth=1.2, color='#FD5C64')
-
-
-# We can se that's almost the same as `date_account_created`, and also, notice the small peaks. We can, either smooth the graph or dig into those peaks. Let's dig in:
-
-# In[ ]:
-
-
-users_2013 = users[users['date_first_active'] > pd.to_datetime(20130101, format='%Y%m%d')]
-users_2013 = users_2013[users_2013['date_first_active'] < pd.to_datetime(20140101, format='%Y%m%d')]
-users_2013.date_first_active.value_counts().plot(kind='line', linewidth=2, color='#FD5C64')
-plt.show()
-
-
-# At first sight we can see a small pattern, there are some peaks at the same distance. Looking more closely:
-
-# In[ ]:
-
-
-weekdays = []
-for date in users.date_account_created:
-    weekdays.append(date.weekday())
-weekdays = pd.Series(weekdays)
+    return DF
 
 
 # In[ ]:
 
 
-sns.barplot(x = weekdays.value_counts().index, y=weekdays.value_counts().values, order=range(0,7))
-plt.xlabel('Week Day')
-sns.despine()
+reader = pd.read_csv('../input/train_ver2.csv', chunksize=100000, header=0)
+train = pd.concat([resize_data(chunk) for chunk in reader])
+
+reader_2 = pd.read_csv('../input/test_ver2.csv', chunksize=10000, header=0)
+test = pd.concat([resize_data(chunk,is_DF=False) for chunk in reader_2])
+
+train.info(memory_usage=True)
+test.info(memory_usage=True)
+
+toc=timeit.default_timer()
+print('Load Time',toc - tic)
 
 
-# The local minimums where the Sundays(where the people use less *the Internet*), and it's usually to hit a maximum at Tuesdays!
-# 
-# The last date related plot I want to see is the next:
+#train.to_csv('train_encoded.csv', index=False)
+#test.to_csv('test_encoded.csv', index=False)
 
-# In[ ]:
-
-
-date = pd.to_datetime(20140101, format='%Y%m%d')
-
-before = sum(users.loc[users['date_first_active'] < date, 'country_destination'].value_counts())
-after = sum(users.loc[users['date_first_active'] > date, 'country_destination'].value_counts())
-before_destinations = users.loc[users['date_first_active'] < date, 
-                                'country_destination'].value_counts() / before * 100
-after_destinations = users.loc[users['date_first_active'] > date, 
-                               'country_destination'].value_counts() / after * 100
-before_destinations.plot(kind='bar', width=width, color='#63EA55', position=0, label='Before 2014', rot=0)
-after_destinations.plot(kind='bar', width=width, color='#4DD3C9', position=1, label='After 2014', rot=0)
-
-plt.legend()
-plt.xlabel('Destination Country')
-plt.ylabel('Percentage')
-
-sns.despine()
-plt.show()
-
-
-# It's a clean comparision of usual destinations then and now, where we can see how the new users, register more and book less, and when they book they stay at the US.
-
-# I'll make more plots about the devices and singup methods/flow later this week. I hope you all have enjoyed this little analysis that despine not being very rellevant to make the predictions, it is to understand the problem and the user behaviour. 
-# 
-# Again, criticism is welcomed!
-# 
-#                                                                                 David Gasquez

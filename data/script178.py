@@ -1,112 +1,232 @@
 
 # coding: utf-8
 
-# In[ ]:
-
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-print(check_output(["ls", "../input/porto-seguros-safe-driver-noisy-features"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
-
-
-# This notebook displays the results of a search for noisy features. This search has been carried out using Light GBM in RandomForest mode (to avoid the hassle of *how many rounds fo I need to run ?* )
+# <h1> Welcome to my Kernel </h1><br>
+# I will do some explorations though the data of Financial Hedging just to better understand the pattern of variables
+# <br>
 # 
-# The file noisy_feature_check_results.csv contains the average importances of each feature and their corresponding *shadows* over 30 runs. Standard deviation of the importances is also available.
 # 
-# Shadows are simply shuffled copies of real features. Comparing features to their shadows is an easy way to assess their genuine forecasting power. This is extensively used in Boruta packages (python and R)
+# <h3> Introduction to the data</h3> 
+
+# <b>Background:</b>
+# The underlying concept behind hedging strategies is simple, create a model, and make money doing it. The hardest part is finding the features that matter. For a more in-depth look at hedging strategies, I have attached one of my graduate papers to get you started.
+#  <br>
+# - <b>Mortgage-Backed Securities</b> <br>
+# - <b>Geographic Business Investment</b> <br>
+# - <b> Real Estate Analysis </b><br>
 # 
-# For information, Python Boruta packages has selected the following features (the rest is considered noise !!!):
-# - ps_ind_01
-# - ps_ind_03
-# - ps_ind_05_cat
-# - ps_ind_07_bin
-# - ps_ind_15
-# - ps_ind_16_bin
-# - ps_reg_01
-# - ps_reg_02
-# - ps_reg_03
-# - ps_car_01_cat
-# - ps_car_03_cat
-# - ps_car_07_cat
-# - ps_car_12
-# - ps_car_13
-# - ps_car_14
-# - ps_car_15
 # 
-# The classifier used for the task is a LGBMClassifier with the following parameters:
-# * boosting_type="rf",
-# * num_leaves=1024,
-# * max_depth=6,
-# * n_estimators=500,
-# * subsample=.623,
-# * colsample_bytree=.5
+# <b>Statistical Fields:</b> <br>
+# Note: All interpolated statistical data include Mean, Median, and Standard Deviation Statistics. For more information view the variable definitions document.
 # 
-# Now let's review some results
+# <b>Monthly Mortgage & Owner Costs: </b>Sum of mortgage payments, home equity loans, utilities, property taxes <br>
+# <b>Monthly Owner Costs:</b> Sum of utilities, property taxes <br>
+# <b>Gross Rent:</b> contract rent plus the estimated average monthly cost of utilities <br>
+# <b>Household Income: </b>sum of the householder and all other individuals +15 years who reside in the household <br>
+# <b>Family Income:</b> Sum of incomes of all members +15 years of age related to the householder.
 
 # In[ ]:
 
 
-results = pd.read_csv("../input/porto-seguros-safe-driver-noisy-features/noisy_feature_check_results.csv")
+#Load the librarys
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
+from matplotlib import rcParams
 
+get_ipython().run_line_magic('matplotlib', 'inline')
 
-# Show the best scoring features
-
-# In[ ]:
-
-
-results.sort_values(by="importance_mean", ascending=False, inplace=True)
-results.dropna(axis=0, inplace=True)
-results.head(10)
+# figure size in inches
+rcParams['figure.figsize'] = 8,6
 
 
 # In[ ]:
 
 
-good_to_go = []
-doubt = []
-suspicious = []
-rejected = []
-for feature in results.feature.unique():
-    sha_mean, sha_dev = results.loc[(results["feature"] == feature) 
-                                    & (results["process"] == "Shadow"), ["importance_mean", "importance_std"]].values[0]
-    id_mean, id_dev = results.loc[(results["feature"] == feature) 
-                                    & (results["process"] == "Identity"), ["importance_mean", "importance_std"]].values[0]
-    if sha_mean >= id_mean:
-        rejected.append((feature, id_mean, sha_mean))
-    elif sha_mean + sha_dev >= id_mean:
-        suspicious.append((feature, id_mean, sha_mean))
-    elif sha_mean + sha_dev >= id_mean - id_dev:
-        doubt.append((feature, id_mean, sha_mean))
-    else:
-        good_to_go.append((feature, id_mean, sha_mean))
-
-print("Good features (%d)" % len(good_to_go))
-for f, score, sha in good_to_go:
-    print("\t%-20s : %7.2f / shadow %7.2f" % (f, score, sha))
-print("Doubts (%d)" % len(doubt))
-for f, score, sha in doubt:
-    print("\t%-20s : %7.2f / shadow %7.2f" % (f, score, sha))
-print("Suspicious features (%d)" % len(suspicious))
-for f, score, sha in suspicious:
-    print("\t%-20s : %7.2f / shadow %7.2f" % (f, score, sha))
-print("Rejected features (%d)" % len(rejected))
-for f, score, sha in rejected:
-    print("\t%-20s : %7.2f / shadow %7.2f" % (f, score, sha))
-        
+df_features = pd.read_csv("../input/kaggle_ACS_Financial_Features.csv", encoding='ISO-8859-1' )
 
 
-# Features kept by Boruta are also kept by my feature selection process.
+# In[ ]:
+
+
+#looking the shape of data
+print(df_features.shape)
+
+#in my local notebook I also have plotted describe(), info() functions
+print(df_features.nunique())
+
+
+# In[ ]:
+
+
+#Looking the data
+df_features.head()
+
+
+# Ps: In this dataset we dont have any Nan's 
+
+# <h1>First, let's known the Type variable that will be a first guide to the exploration</h1><br>
+# We have just 2 categorical variables, so lets explore them
 # 
-# I you find this note useful please upvote.
+
+# In[ ]:
+
+
+print(df_features.Type.value_counts())
+
+g = sns.factorplot(x='Type', data=df_features, kind="count",size=6,aspect=2)
+g.set_titles("Count by Type")
+plt.show()
+
+
+# <h1>Primary Key</h1>
+
+# In[ ]:
+
+
+print(df_features.Primary.value_counts())
+
+sns.factorplot(x="Primary", data=df_features, kind="count",size=5,aspect=1)
+plt.show()
+
+
+# <h2>What if we cross Type and Primary? 
+
+# In[ ]:
+
+
+g = sns.factorplot(x="Type", data=df_features, 
+               kind="count", hue="Primary",
+               size=5, aspect=2)
+g.set_axis_labels(x_var="Types",
+                  y_var="Counting")
+plt.show()
+
+
+# <h1>We can see that the Track is represented by themself</h1><br>
+# We don't need to color by Primary
+# 
+
+# <h2>I will explore all the continuous variables through our  categorical datas</h2>
+# 
+# <h1> Starting by <i>family_income</i></h1>
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(5,1, figsize=(12,8*3))
+
+sns.distplot(df_features['family_income_mean'], 
+             ax=ax[0],bins=50)
+sns.boxplot(x='Type', y='family_income_mean', data=df_features,
+            ax=ax[1])
+sns.boxplot(x='Type', y='family_income_median', data=df_features, 
+            ax=ax[2])
+sns.boxplot(x='Type', y='family_income_stdev', data=df_features, 
+            ax=ax[3])
+sns.boxplot(x='Type', y='family_income_families', data=df_features, 
+            ax=ax[4])
+
+plt.show()
+
+
+# <h1> <i>gross_rent</i></h1>
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(5,1, figsize=(12,8*3))
+
+sns.distplot(df_features['gross_rent_mean'], 
+             ax=ax[0],bins=50)
+sns.boxplot(x='Type', y='gross_rent_mean', data=df_features, 
+            ax=ax[1])
+sns.boxplot(x='Type', y='gross_rent_median', data=df_features, 
+            ax=ax[2])
+sns.boxplot(x='Type', y='gross_rent_stdev', data=df_features, 
+            ax=ax[3])
+sns.boxplot(x='Type', y='gross_rent_samples', data=df_features, 
+            ax=ax[4])
+
+plt.show()
+
+
+# <h1> <i>morgages_ocsts</i></h1>
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(5,1, figsize=(12,8*3))
+
+sns.distplot(df_features['morgages_ocsts_mean'], 
+             ax=ax[0],bins=50)
+sns.boxplot(x='Type', y='morgages_ocsts_mean', data=df_features, 
+            ax=ax[1])
+sns.boxplot(x='Type', y='morgages_ocsts_median', data=df_features, 
+            ax=ax[2])
+sns.boxplot(x='Type', y='morgages_ocsts_stdev', data=df_features, 
+            ax=ax[3])
+sns.boxplot(x='Type', y='morgages_csts_samples', data=df_features, 
+            ax=ax[4])
+
+plt.show()
+
+
+# <h1> <i>owner_cost</i></h1>
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(5,1, figsize=(12,8*3))
+
+sns.distplot(df_features['owner_cost_mean'], 
+             ax=ax[0],bins=50)
+sns.boxplot(x='Type', y='owner_cost_mean', data=df_features, 
+            ax=ax[1])
+sns.boxplot(x='Type', y='owner_cost_median', data=df_features, 
+            ax=ax[2])
+sns.boxplot(x='Type', y='owner_cost_stdev', data=df_features, 
+            ax=ax[3])
+sns.boxplot(x='Type', y='owner_cost_samples', data=df_features, 
+            ax=ax[4])
+plt.show()
+
+
+# <h1> <i>household_income</i></h1>
+
+# In[ ]:
+
+
+fig, ax = plt.subplots(5,1, figsize=(12,8*3))
+
+sns.distplot(df_features['household_income_mean'], 
+             ax=ax[0],bins=50)
+sns.boxplot(x='Type', y='household_income_mean', data=df_features, 
+            ax=ax[1])
+sns.boxplot(x='Type', y='household_income_median', data=df_features, 
+            ax=ax[2])
+sns.boxplot(x='Type', y='household_income_stdev', data=df_features, 
+            ax=ax[3])
+sns.boxplot(x='Type', y='household_income_wsum', data=df_features, 
+            ax=ax[4])
+plt.show()
+
+
+# <h1> <i>Exploring the States</i></h1>
+
+# In[ ]:
+
+
+print("States with frequency greatest than 500: ")
+print(df_features.State_Name.value_counts()[:13])
+
+g = sns.factorplot(x="State_Name", data=df_features, 
+                   kind="count", size = 6, aspect=2,  
+                   orient='v')
+g.set_titles(template="State count")
+g.set_axis_labels(x_var="States Name",
+                  y_var="Counting ")
+g.set_xticklabels(rotation=90)
+plt.show()
+

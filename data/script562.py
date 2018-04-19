@@ -1,157 +1,148 @@
 
 # coding: utf-8
 
-# # Shake-up or Shake-down?
+# *This tutorial is part of the [Learn Machine Learning](https://www.kaggle.com/dansbecker/learn-machine-learning) series. In this step, you will learn how to create and interpret partial dependence plots, one of the most valuable ways to extract insight from your models.* 
 # 
-# Everybody is talking about shake-up at this competition ([here](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43144), [here](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43315) ,[here](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43547), [here](https://www.kaggle.com/c/porto-seguro-safe-driver-prediction/discussion/43336)). Here is my 2 cents. Let's try to estimate shake-up numericaly somehow. This notebook based on [nice exploration](https://www.kaggle.com/vpaslay/is-your-small-gini-significant) of how many samples should be guessed additionally to get an improvement of 0.001 of gini score and a [discussion](https://www.kaggle.com/vpaslay/is-your-small-gini-significant#244525) below it. Another [interesting kernel](https://www.kaggle.com/alexfir/expected-gini-standard-error) on this topic estimated the standard error of simple model depending on test size.
+# # What Are Partial Dependence Plots
 # 
-# The main question I want to explore here is:
-# - How much can be the **difference between public and private test score**?
+# Some people complain machine learning models are *black boxes.*  These people will argue we cannot see how these models are working on any given dataset, so we can neither extract insight nor identify problems with the model.
 # 
-# We will use simple and naive method to estimate aforementioned difference depending on the public score. We do not have labels for test dataset, but we have train labels, so let's assume that our train set can represent test set. We will use OOF predictions of train set, split them randomly with a same proportion as public and private leaderboard split (private is **70%** of all test). (OOF predictions were taken from [notebook v 38](https://www.kaggle.com/aharless/xgboost-cv-lb-284), feature "New kernel with this data" didn't work as I expected and I couldn't read the data =( so downloaded and uploaded the validation predictions).
+# By and large, people making this claim are unfamiliar with partial dependence plots.  Partial dependence plots show how each variable or predictor affects the model's predictions. This is useful for questions like:
+# * How much of wage differences between men and women are due solely to gender, as opposed to differences in education backgrounds or work experience?
 # 
-# ## Assumptions
-# It should be noticed that here we assume several things:
-# - Train and test datasets have similar class balances;
-# - Difference of sample sizes of train and test can be ignored;
-# - Generaly: OOF predictions of train set can represent test set.
+# * Controlling for house characteristics, what impact do longitude and latitude have on home prices? To restate this, we want to understand how similarly sized houses would be priced in different areas, even if the homes actually at these sites are different sizes.
+# 
+# * Are health differences between two groups due to differences in their diets, or due to other factors?
+# 
+# If you are familiar with linear or logistic regression models, partial dependence plots can be interepreted similarly to the coefficients in those models.  But partial dependence plots can capture more complex patterns from your data, and they can be used with any model.  If you aren't familiar with linear or logistic regressions, don't get caught up on that comparison.
+# 
+# We will show a couple examples below, explain what they mean, and then talk about the code.
+# 
+# ## Interpreting Partial Dependence Plots
 
-# ## Load data
-# 
-# Let's load OOF predictions and train target (with ID field) and define gini calculating function.
+# We'll start with 2 partial dependence plots showing the relationship (according to our model) between Price and a couple variables from the Melbourne Housing dataset.  We'll walk through how these plots are created and interpreted.
 
 # In[ ]:
 
 
-import numpy as np 
-import pandas as pd 
-from sklearn.model_selection import train_test_split
-import matplotlib.pyplot as plt
-plt.style.use('seaborn-poster')
+import pandas as pd
+from sklearn.ensemble import GradientBoostingRegressor, GradientBoostingClassifier
+from sklearn.ensemble.partial_dependence import partial_dependence, plot_partial_dependence
+from sklearn.preprocessing import Imputer
 
-# load the data
-oof_preds = pd.read_csv('../input/xgb-valid-preds-public/xgb_valid.csv')
-y = pd.read_csv('../input/porto-seguro-safe-driver-prediction/train.csv', 
-                usecols = ['id', 'target'])
+cols_to_use = ['Distance', 'Landsize', 'BuildingArea']
 
-print('Shape of OOF preds: \t', oof_preds.shape)
-print('Shape of train target:\t', y.shape)
+def get_some_data():
+    data = pd.read_csv('../input/melbourne-housing-snapshot/melb_data.csv')
+    y = data.Price
+    X = data[cols_to_use]
+    my_imputer = Imputer()
+    imputed_X = my_imputer.fit_transform(X)
+    return imputed_X, y
+    
+
+X, y = get_some_data()
+my_model = GradientBoostingRegressor()
+my_model.fit(X, y)
+my_plots = plot_partial_dependence(my_model, 
+                                   features=[0,2], 
+                                   X=X, 
+                                   feature_names=cols_to_use, 
+                                   grid_resolution=10)
+
+
+# The left plot shows the partial dependence between our target, Sales Price, and the distance variable.  Distance in this dataset measures the distance to Melbourne's central business district.
+# 
+# **The partial dependence plot is calculated only after the model has been fit.**  The model is fit on real data.  In that real data, houses in different parts of town may differ in myriad ways (different ages, sizes, etc.)  But after the model is fit, we could start by taking all the characteristics of a single house.  Say, a house with 2 bedrooms, 2 bathrooms, a large lot, an age of 10 years, etc. 
+# 
+# We then use the model to predict the price of that house, but we change the distance variable before making a prediction.  We first predict the price for that house when sitting distance to 4.  We then predict it's price setting distance to 5.  Then predict again for 6.  And so on.  We trace out how predicted price changes (on the vertical axis) as we move from small values of distance to large values (on the horizontal axis).
+# 
+# In this description, we used only a single house.  But because of interactions, the partial dependence plot for a single house may be atypical.  So, instead we repeat that mental experiment with multiple houses, and we plot the average predicted price on the vertical axis.  You'll see some negative numbers.  That doesn't mean the price would sell for a negative price.  Instead it means the prices would have been less than the actual average price for that distance.
+# 
+# In the left graph, we see house prices fall as we get further from the central business distract.  Though there seems to be a nice suburb about 16 kilometers out, where home prices are higher than many nearer and further suburbs.
+# 
+# The right graph shows the impact of building area, which is interpreted similarly.  A larger building area means higher prices.
+# 
+# These plots are useful both to extract insights, as well as to sanity check that your model is learning something you think is sensible.
+
+# # Code
+# 
+# We won't focus on code to load the data, just the code to make the plot.
+
+# In[ ]:
+
+
+def get_some_data():
+    cols_to_use = ['Distance', 'Landsize', 'BuildingArea']
+    data = pd.read_csv('../input/melbourne-housing-snapshot/melb_data.csv')
+    y = data.Price
+    X = data[cols_to_use]
+    my_imputer = Imputer()
+    imputed_X = my_imputer.fit_transform(X)
+    return imputed_X, y
+    
 
 
 # In[ ]:
 
 
-# gini calculation from https://www.kaggle.com/tezdhar/faster-gini-calculation
-def ginic(actual, pred):
-    actual = np.asarray(actual) #In case, someone passes Series or list
-    n = len(actual)
-    a_s = actual[np.argsort(pred)]
-    a_c = a_s.cumsum()
-    giniSum = a_c.sum() / a_s.sum() - (n + 1) / 2.0
-    return giniSum / n
- 
-def gini_normalizedc(a, p):
-    if p.ndim == 2:#Required for sklearn wrapper
-        p = p[:,1] #If proba array contains proba for both 0 and 1 classes, just pick class 1
-    return ginic(a, p) / ginic(a, a)
+from sklearn.ensemble.partial_dependence import partial_dependence, plot_partial_dependence
+
+# get_some_data is defined in hidden cell above.
+X, y = get_some_data()
+# scikit-learn originally implemented partial dependence plots only for Gradient Boosting models
+# this was due to an implementation detail, and a future release will support all model types.
+my_model = GradientBoostingRegressor()
+# fit the model as usual
+my_model.fit(X, y)
+# Here we make the plot
+my_plots = plot_partial_dependence(my_model,       
+                                   features=[0, 2], # column numbers of plots we want to show
+                                   X=X,            # raw predictors data.
+                                   feature_names=['Distance', 'Landsize', 'BuildingArea'], # labels on graphs
+                                   grid_resolution=10) # number of values to plot on x axis
 
 
-# ## Single split
+# Some tips related to plot_partial_dependence:
+# * The features are the column numbers from the X array or dataframe that you wish to have plotted.  This starts to look bad beyond 2 or 3 variables.  You could make repeated calls to plot 2 or 3 at a time.
+# * There are options to establish what points on the horizontal axis are plotted.  The simplest is *grid_resolution* which we use to determine how many different points are plotted.  These plots tend to look jagged as that value increases, because you will pick up lots of randomness or noise in your model.  It's best not to take the small or jagged fluctuations too literally.  Smaller values of grid_resolution smooth this out.  It's also much less of an issue for datasets with many rows.
+# * There is a function called *partial_dependence* to get the raw data making up this plot, rather than making the visual plot itself. This is useful if you want to control how it is visualized using a plotting package like Seaborn.  With moderate effort, you could make much nicer looking plots.
+
+# ## Another Example
 # 
-# Here we make one split of OOF predictions using *train_test_split* from *sklearn* (with fixed seed). As mentioned above proportion of test size is 70% from all test - so we will use he same share. 
+# Here are partial plots from a very simple model on the Titanic data.
 
 # In[ ]:
 
 
-PROPORTION_PRIVATE = 0.70
-y_preds_public, y_preds_private, y_public, y_private = train_test_split(oof_preds.target.values, 
-                                                                        y.target.values, 
-                                                                        test_size=PROPORTION_PRIVATE, 
-                                                                        random_state=42)
 
-print('Proportion of private:\t',PROPORTION_PRIVATE)
-print('Public score:\t', round(gini_normalizedc(y_public, y_preds_public), 6))
-print('Private score:\t', round(gini_normalizedc(y_private, y_preds_private), 6))
+titanic_data = pd.read_csv('../input/titanic/train.csv')
+titanic_y = titanic_data.Survived
+clf = GradientBoostingClassifier()
+titanic_X_colns = ['PassengerId','Age', 'Fare',]
+titanic_X = titanic_data[titanic_X_colns]
+my_imputer = Imputer()
+imputed_titanic_X = my_imputer.fit_transform(titanic_X)
+
+clf.fit(imputed_titanic_X, titanic_y)
+titanic_plots = plot_partial_dependence(clf, features=[1,2], X=imputed_titanic_X, 
+                                        feature_names=titanic_X_colns, grid_resolution=8)
 
 
-# So, we splited OOF predictions somehow and got 0.275 gini score on small part (public) and 0.290 on big part (private). That was a lucky split=) Let's do it many times to collect statistics over scores.
-
-# ## 10k splits
+# These might seem surprising at first glance.  But they show some interesting insights:
+# * Being young increased your odds of survival. This is consistent with historical recountings that they got women and children off the Titanic first.
+# * People who paid more had better odds of survival.  It turns out that higher fares got you a cabin that was closer to the top of the boat, and may have given you better odds of getting a life-boat.
 # 
-# Here we will do the public-private split 10 000 times with different random seeds and collect gini scores from every split. (take some time - about 20 min)
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'gini_public = []\ngini_private = []\n# do the split 10k times\nfor rs in range(10000):\n    y_preds_public, y_preds_private, y_public, y_private = train_test_split(oof_preds.target.values, \n                                                                            y.target.values, \n                                                                            test_size=PROPORTION_PRIVATE, \n                                                                            random_state=rs)\n    gini_public.append(gini_normalizedc(y_public, y_preds_public))\n    gini_private.append(gini_normalizedc(y_private, y_preds_private))\n\n# save results to numpy arrays\ngini_public_arr = np.array(gini_public)\ngini_private_arr = np.array(gini_private)')
-
-
-# Let's plot a histogram of public-private difference of scores:
-
-# In[ ]:
-
-
-# 10000 random_states
-plt.figure(figsize=(10,6))
-plt.hist(gini_public_arr - gini_private_arr, bins=50)
-plt.title('(Public - Private) scores')
-plt.xlabel('Gini score difference')
-plt.show()
-
-
-# Looks much the same as in [aforementioned kernel](https://www.kaggle.com/vpaslay/is-your-small-gini-significant): we have deviation mostly between -0.02 and 0.02, it's realy huge range that leads to depression=(.
+# # Conclusion
+# Partial dependence plots are a great way (though not the only way) to extract insights from complex models.  These can be incredibly powerful for communicating those insights to colleagues or non-technical users. 
 # 
-# But wait! Here we use the OOF predictions of model which score on leaderboard **we know** (it's 0.284). So let's naively assume that this score represent our public-private split score on train and find in our array of public ginis (computed above) those splits, which score 0.284. Let's plot the public-private difference only for them:
-
-# In[ ]:
-
-
-#find indexies where public score was .284
-my_indexies = np.where((gini_public_arr >= 0.284) &(gini_public_arr < 0.285))[0]
-
-plt.figure(figsize=(10,6))
-plt.hist(gini_public_arr[my_indexies] - gini_private_arr[my_indexies], bins=50)
-plt.title('(Public - Private) scores, where public = .284')
-plt.xlabel('Gini score difference')
-plt.show()
-
-
-# Hm... absolutely different picture: we have not so wide, uniform range between -0.003 and -0.0016, and most importantly that private score is a higher than public (all differences < 0).
+# There are a variety of opinions on how to interpret these plots when they come from non-experimental data.  Some claim you can conclude nothing about cause-and-effect relationships from data unless it comes from experiments. Others are more positive about what can be learned from non-experimental data (also called observational data). It's a divisive topic in the data science world, beyond the scope of this tutorial.
 # 
-# For comparison let's look at differences in splits, which scores 0.286 on public part:
-
-# In[ ]:
-
-
-#find indexies where public score was .286
-my_indexies = np.where((gini_public_arr >= 0.286) &(gini_public_arr < 0.287))[0]
-
-plt.figure(figsize=(10,6))
-plt.hist(gini_public_arr[my_indexies] - gini_private_arr[my_indexies], bins=50)
-plt.title('(Public - Private) scores, where public = .286')
-plt.xlabel('Gini score difference')
-plt.show()
-
-
-# On the plot above again we have uniform distribution in range between -0.0020 and 0.0012. Lets compare it with range of public between 0.284 and 0.287 (not including 0.287)
-
-# In[ ]:
-
-
-#find indexies where public score was .284-.287
-my_indexies = np.where((gini_public_arr >= 0.284) &(gini_public_arr < 0.287))[0]
-
-plt.figure(figsize=(10,6))
-plt.hist(gini_public_arr[my_indexies] - gini_private_arr[my_indexies], bins=50)
-plt.title('(Public - Private) scores, where public between .284 and .287')
-plt.xlabel('Gini score difference')
-plt.show()
-
-
-# ## Summary
+# However most agree that these are useful to understand your model.  Also, given the messiness of most real-world data sources, it's also a good sanity check that your model is capturing realistic patterns.
 # 
-# So if we take into consideration **all assumptions mentioned above** and assume that our model (which OOF we used here) quiet stable and scores 0.284 on public we can expect private score between 0.285 and 0.287 (from -0.001 to -0.003), which is literally speaking "shake UP", not "shake DOWN" of scores. 
+# The *partial_dependence_plot* function is an easy way to get these plots, though the results aren't visually beautiful.  The *partial_dependence* function gives you the raw data, in case you want to make presentation-quality graphs.
 # 
-# So that is quite interesting conclusion and what needed to be mentioned that this method is truely naive (and maybe, misleading) and used several assumptions, which can be violated in real train-test setting.
+# # Your Turn
+# Pick three predictors in your project.  Formulate an hypothesis about what the partial dependence plot will look like.  Create the plots, and check the results against your hypothesis.
 # 
-# Hope this notebook will help you guys. If you have any comments or remarks feel free to write them below.
+# Once you've done that, **[click here](https://www.kaggle.com/dansbecker/learn-machine-learning)** to return to Learning Machine Learning, where you will keep improving your results.

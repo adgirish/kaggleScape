@@ -1,116 +1,131 @@
 
 # coding: utf-8
 
-# Following a similar recipe to lewis' R script (https://www.kaggle.com/cartographic/bosch-production-line-performance/bish-bash-xgboost), sampling the data to select features before running on the full set in order to stay within kaggle's memory limits. Here I add in the train_date data too.
-# 
-# Please feel free to fork and improve.
+# Hi guys. Please take a look at some features that I've come up with and haven't seen in solutions of other participants. I hope you can fit them nicely in your models :)
 
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
-from xgboost import XGBClassifier
-from sklearn.metrics import matthews_corrcoef, roc_auc_score
-from sklearn.cross_validation import cross_val_score, StratifiedKFold
-import matplotlib.pyplot as plt
-import seaborn as sns
-get_ipython().run_line_magic('matplotlib', 'inline')
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
+
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
 
 
-# In[ ]:
-
-
-# I'm limited by RAM here and taking the first N rows is likely to be
-# a bad idea for the date data since it is ordered.
-# Sample the data in a roundabout way:
-date_chunks = pd.read_csv("../input/train_date.csv", index_col=0, chunksize=100000, dtype=np.float32)
-num_chunks = pd.read_csv("../input/train_numeric.csv", index_col=0,
-                         usecols=list(range(969)), chunksize=100000, dtype=np.float32)
-X = pd.concat([pd.concat([dchunk, nchunk], axis=1).sample(frac=0.05)
-               for dchunk, nchunk in zip(date_chunks, num_chunks)])
-y = pd.read_csv("../input/train_numeric.csv", index_col=0, usecols=[0,969], dtype=np.float32).loc[X.index].values.ravel()
-X = X.values
-
+# Let's load the test and train sets:
 
 # In[ ]:
 
 
-clf = XGBClassifier(base_score=0.005)
-clf.fit(X, y)
+def read_train_test():
+    data_path = "../input/"
+    train_file = data_path + "train.json"
+    test_file = data_path + "test.json"
+    train_df = pd.read_json(train_file)
+    test_df = pd.read_json(test_file)
+    return train_df, test_df
+
+train_df, test_df = read_train_test()
 
 
-# In[ ]:
 
-
-# threshold for a manageable number of features
-plt.hist(clf.feature_importances_[clf.feature_importances_>0])
-important_indices = np.where(clf.feature_importances_>0.005)[0]
-print(important_indices)
-
-
-# In[ ]:
-
-
-# load entire dataset for these features. 
-# note where the feature indices are split so we can load the correct ones straight from read_csv
-n_date_features = 1156
-X = np.concatenate([
-    pd.read_csv("../input/train_date.csv", index_col=0, dtype=np.float32,
-                usecols=np.concatenate([[0], important_indices[important_indices < n_date_features] + 1])).values,
-    pd.read_csv("../input/train_numeric.csv", index_col=0, dtype=np.float32,
-                usecols=np.concatenate([[0], important_indices[important_indices >= n_date_features] + 1 - 1156])).values
-], axis=1)
-y = pd.read_csv("../input/train_numeric.csv", index_col=0, dtype=np.float32, usecols=[0,969]).values.ravel()
-
+# **Let's thing about the coordinates of our flats. Are the patterns of high/low interest really vertical? Let's try look at them from different perspective = let's rotate them!
+# Also, while we're in the are of coordinate systems, let's add polar coordinates, picking central park as the central point.**
 
 # In[ ]:
 
 
-clf = XGBClassifier(max_depth=5, base_score=0.005)
-cv = StratifiedKFold(y, n_folds=3)
-preds = np.ones(y.shape[0])
-for i, (train, test) in enumerate(cv):
-    preds[test] = clf.fit(X[train], y[train]).predict_proba(X[test])[:,1]
-    print("fold {}, ROC AUC: {:.3f}".format(i, roc_auc_score(y[test], preds[test])))
-print(roc_auc_score(y, preds))
+import math
+def cart2rho(x, y):
+    rho = np.sqrt(x**2 + y**2)
+    return rho
 
+
+def cart2phi(x, y):
+    phi = np.arctan2(y, x)
+    return phi
+
+
+def rotation_x(row, alpha):
+    x = row['latitude']
+    y = row['longitude']
+    return x*math.cos(alpha) + y*math.sin(alpha)
+
+
+def rotation_y(row, alpha):
+    x = row['latitude']
+    y = row['longitude']
+    return y*math.cos(alpha) - x*math.sin(alpha)
+
+
+def add_rotation(degrees, df):
+    namex = "rot" + str(degrees) + "_X"
+    namey = "rot" + str(degrees) + "_Y"
+
+    df['num_' + namex] = df.apply(lambda row: rotation_x(row, math.pi/(180/degrees)), axis=1)
+    df['num_' + namey] = df.apply(lambda row: rotation_y(row, math.pi/(180/degrees)), axis=1)
+
+    return df
+
+def operate_on_coordinates(tr_df, te_df):
+    for df in [tr_df, te_df]:
+        #polar coordinates system
+        df["num_rho"] = df.apply(lambda x: cart2rho(x["latitude"] - 40.78222222, x["longitude"]+73.96527777), axis=1)
+        df["num_phi"] = df.apply(lambda x: cart2phi(x["latitude"] - 40.78222222, x["longitude"]+73.96527777), axis=1)
+        #rotations
+        for angle in [15,30,45,60]:
+            df = add_rotation(angle, df)
+
+    return tr_df, te_df
+
+train_df, test_df = operate_on_coordinates(train_df, test_df)
+
+
+# Finaly, let's add some other interesting features :)
 
 # In[ ]:
 
 
-# pick the best threshold out-of-fold
-thresholds = np.linspace(0.01, 0.99, 50)
-mcc = np.array([matthews_corrcoef(y, preds>thr) for thr in thresholds])
-plt.plot(thresholds, mcc)
-best_threshold = thresholds[mcc.argmax()]
-print(mcc.max())
+import re
+
+def cap_share(x):
+    return sum(1 for c in x if c.isupper())/float(len(x)+1)
+
+for df in [train_df, test_df]:
+    # do you think that users might feel annoyed BY A DESCRIPTION THAT IS SHOUTING AT THEM?
+    df['num_cap_share'] = df['description'].apply(cap_share)
+    
+    # how long in lines the desc is?
+    df['num_nr_of_lines'] = df['description'].apply(lambda x: x.count('<br /><br />'))
+   
+    # is the description redacted by the website?        
+    df['num_redacted'] = 0
+    df['num_redacted'].ix[df['description'].str.contains('website_redacted')] = 1
+
+    
+    # can we contact someone via e-mail to ask for the details?
+    df['num_email'] = 0
+    df['num_email'].ix[df['description'].str.contains('@')] = 1
+    
+    #and... can we call them?
+    
+    reg = re.compile(".*?(\(?\d{3}\D{0,3}\d{3}\D{0,3}\d{4}).*?", re.S)
+    def try_and_find_nr(description):
+        if reg.match(description) is None:
+            return 0
+        return 1
+
+    df['num_phone_nr'] = df['description'].apply(try_and_find_nr)
 
 
-# In[ ]:
-
-
-# load test data
-X = np.concatenate([
-    pd.read_csv("../input/test_date.csv", index_col=0, dtype=np.float32,
-                usecols=np.concatenate([[0], important_indices[important_indices<1156]+1])).values,
-    pd.read_csv("../input/test_numeric.csv", index_col=0, dtype=np.float32,
-                usecols=np.concatenate([[0], important_indices[important_indices>=1156] +1 - 1156])).values
-], axis=1)
-
-
-# In[ ]:
-
-
-# generate predictions at the chosen threshold
-preds = (clf.predict_proba(X)[:,1] > best_threshold).astype(np.int8)
-
-
-# In[ ]:
-
-
-# and submit
-sub = pd.read_csv("../input/sample_submission.csv", index_col=0)
-sub["Response"] = preds
-sub.to_csv("submission.csv.gz", compression="gzip")
-
+# That's it guys, hopefully the features improve your models

@@ -1,189 +1,196 @@
 
 # coding: utf-8
 
-# This notebook goes through a simple process of extracting usable columns, append decomposition components to the data set, generating a few basic features, building a model and then make predictions.  
+# # Start-to-Finish Solution in Keras
 # 
-# I am using the TPOT package to create a pipeline. TPOT is a Python Automated Machine Learning tool that optimizes machine learning pipelines using genetic programming.  I thought it is useful to add this to the list of kernels available in this competition.
-
-# Objective:
-# ----------
-# 
-# This data set contains an anonymized set of variables that describe different Mercedes cars. The ground truth is labeled 'y' and represents the time (in seconds) that the car took to pass testing.
-# 
-# Let us first import the necessary modules.
+# Here is my basic method for getting a LB submission churned out. No parameter tuning or data augmentation has been attempted, which should increase the score significantly. 
 
 # In[ ]:
 
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn import preprocessing
-import xgboost as xgb
+import os, cv2, random
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import log_loss
 from sklearn.preprocessing import LabelEncoder
-from sklearn.random_projection import GaussianRandomProjection
-from sklearn.random_projection import SparseRandomProjection
-from sklearn.decomposition import PCA, FastICA
-from sklearn.decomposition import TruncatedSVD
-color = sns.color_palette()
 
+import matplotlib.pyplot as plt
+from matplotlib import ticker
+import seaborn as sns
 get_ipython().run_line_magic('matplotlib', 'inline')
 
+from keras.models import Sequential
+from keras.layers import Dropout, Flatten, Convolution2D, MaxPooling2D, ZeroPadding2D, Dense, Activation
+from keras.optimizers import RMSprop, Adam
+from keras.callbacks import EarlyStopping
+from keras.utils import np_utils
+from keras import backend as K
 
-# In[ ]:
-
-
-# Load the data
-train_df = pd.read_csv("../input/train.csv")
-test_df = pd.read_csv("../input/test.csv")
-print("Train shape : ", train_df.shape)
-print("Test shape : ", test_df.shape)
-
-
-# In[ ]:
-
-
-train_df.head()
+TRAIN_DIR = '../input/train/'
+TEST_DIR = '../input/test_stg1/'
+FISH_CLASSES = ['ALB', 'BET', 'DOL', 'LAG', 'NoF', 'OTHER', 'SHARK', 'YFT']
+ROWS = 90  #720
+COLS = 160 #1280
+CHANNELS = 3
 
 
-# In[ ]:
-
-
-test_df.head()
-
-
-# In[ ]:
-
-
-# Do label encoding
-for c in train_df.columns:
-    if train_df[c].dtype == 'object':
-        lbl = LabelEncoder()
-        lbl.fit(list(train_df[c].values) + list(test_df[c].values))
-        train_df[c] = lbl.transform(list(train_df[c].values))
-        test_df[c] = lbl.transform(list(test_df[c].values))
-
-
-# In[ ]:
-
-
-#n_comp = 12
-n_comp = 20
-
-# tSVD
-tsvd = TruncatedSVD(n_components=n_comp, random_state=420)
-tsvd_results_train = tsvd.fit_transform(train_df.drop(["y"], axis=1))
-tsvd_results_test = tsvd.transform(test_df)
-
-# PCA
-pca = PCA(n_components=n_comp, random_state=420)
-pca2_results_train = pca.fit_transform(train_df.drop(["y"], axis=1))
-pca2_results_test = pca.transform(test_df)
-
-# ICA
-ica = FastICA(n_components=n_comp, random_state=420)
-ica2_results_train = ica.fit_transform(train_df.drop(["y"], axis=1))
-ica2_results_test = ica.transform(test_df)
-
-# GRP
-grp = GaussianRandomProjection(n_components=n_comp, eps=0.1, random_state=420)
-grp_results_train = grp.fit_transform(train_df.drop(["y"], axis=1))
-grp_results_test = grp.transform(test_df)
-
-# SRP
-srp = SparseRandomProjection(n_components=n_comp, dense_output=True, random_state=420)
-srp_results_train = srp.fit_transform(train_df.drop(["y"], axis=1))
-srp_results_test = srp.transform(test_df)
-
-
-# In[ ]:
-
-
-usable_columns = list(set(train_df.columns) - set(['y']))
-
-# Append decomposition components to datasets
-for i in range(1, n_comp + 1):
-    train_df['pca_' + str(i)] = pca2_results_train[:, i - 1]
-    test_df['pca_' + str(i)] = pca2_results_test[:, i - 1]
-
-    train_df['ica_' + str(i)] = ica2_results_train[:, i - 1]
-    test_df['ica_' + str(i)] = ica2_results_test[:, i - 1]
-
-    train_df['tsvd_' + str(i)] = tsvd_results_train[:, i - 1]
-    test_df['tsvd_' + str(i)] = tsvd_results_test[:, i - 1]
-
-    train_df['grp_' + str(i)] = grp_results_train[:, i - 1]
-    test_df['grp_' + str(i)] = grp_results_test[:, i - 1]
-
-    train_df['srp_' + str(i)] = srp_results_train[:, i - 1]
-    test_df['srp_' + str(i)] = srp_results_test[:, i - 1]
-
-
-# In[ ]:
-
-
-y_train = train_df['y'].values
-y_mean = np.mean(y_train)
-id_test = test_df['ID'].values
-finaltrainset = train_df[usable_columns].values
-finaltestset = test_df[usable_columns].values
-
-
-# Train a simple classifier
-# ----------
+# # Loading and Preprocessing Data
 # 
-# We use the TPOT package to handle the cross validation and hyperparameters for us
+# Not much processing, other than resizing to 90x160, but you will probably want to run larger images on a GPU for a higher score. I am also keeping track of the labels as I loop through each image folder.  
 
 # In[ ]:
 
 
-from tpot import TPOTRegressor
-auto_classifier = TPOTRegressor(generations=2, population_size=6, verbosity=2)
-from sklearn.model_selection import train_test_split
+def get_images(fish):
+    """Load files from train folder"""
+    fish_dir = TRAIN_DIR+'{}'.format(fish)
+    images = [fish+'/'+im for im in os.listdir(fish_dir)]
+    return images
+
+def read_image(src):
+    """Read and resize individual images"""
+    im = cv2.imread(src, cv2.IMREAD_COLOR)
+    im = cv2.resize(im, (COLS, ROWS), interpolation=cv2.INTER_CUBIC)
+    return im
 
 
-# In[ ]:
+files = []
+y_all = []
 
-
-# Split training data to train and validate
-X_train, X_valid, y_train, y_valid = train_test_split(finaltrainset, y_train,
-                                                    train_size=0.75, test_size=0.25)
-
-
-# In[ ]:
-
-
-auto_classifier.fit(X_train, y_train)
-
-
-# In[ ]:
-
-
-print("The cross-validation MSE")
-print(auto_classifier.score(X_valid, y_valid))
-
-
-# In[ ]:
-
-
-# we need access to the pipeline to get the probabilities
-test_result = auto_classifier.predict(finaltestset)
-sub = pd.DataFrame()
-sub['ID'] = id_test
-sub['y'] = test_result
-
-sub.to_csv('MB_TpotModels.csv', index=False)
-
-
-sub.head()
+for fish in FISH_CLASSES:
+    fish_files = get_images(fish)
+    files.extend(fish_files)
+    
+    y_fish = np.tile(fish, len(fish_files))
+    y_all.extend(y_fish)
+    print("{0} photos of {1}".format(len(fish_files), fish))
+    
+y_all = np.array(y_all)
 
 
 # In[ ]:
 
 
-auto_classifier.export('tpot_pipeline.py')
+X_all = np.ndarray((len(files), ROWS, COLS, CHANNELS), dtype=np.uint8)
+
+for i, im in enumerate(files): 
+    X_all[i] = read_image(TRAIN_DIR+im)
+    if i%1000 == 0: print('Processed {} of {}'.format(i, len(files)))
+
+print(X_all.shape)
 
 
-# That is it for now. You can run locally with more number of generations, population, etc. to get a better result. Because of Kaggle time limitations I could not choose parameters that take longer to run.
-# I hope you like it. If so please up-vote.
+# In[ ]:
+
+
+## Uncomment to check out a fish from each class
+#uniq = np.unique(y_all, return_index=True)
+# for f, i in zip(uniq[0], uniq[1]):
+    #plt.imshow(X_all[i])
+    #plt.title(f)
+    #plt.show()
+
+
+# # Splitting the Training Data
+# 
+# One-Hot-Encode the labels, then create a stratified train/validation split. 
+
+# In[ ]:
+
+
+# One Hot Encoding Labels
+y_all = LabelEncoder().fit_transform(y_all)
+y_all = np_utils.to_categorical(y_all)
+
+X_train, X_valid, y_train, y_valid = train_test_split(X_all, y_all, 
+                                                    test_size=0.2, random_state=23, 
+                                                    stratify=y_all)
+
+
+# ## The Model
+# 
+# Pretty typical CNN in Keras with a plenty of dropout regularization between the fully connected layers. Note: I set the epochs to 1 to avoid timing out - change it to around 20. 
+
+# In[ ]:
+
+
+optimizer = RMSprop(lr=1e-4)
+objective = 'categorical_crossentropy'
+
+def center_normalize(x):
+    return (x - K.mean(x)) / K.std(x)
+
+model = Sequential()
+
+model.add(Activation(activation=center_normalize, input_shape=(ROWS, COLS, CHANNELS)))
+
+model.add(Convolution2D(32, 5, 5, border_mode='same', activation='relu', dim_ordering='tf'))
+model.add(Convolution2D(32, 5, 5, border_mode='same', activation='relu', dim_ordering='tf'))
+model.add(MaxPooling2D(pool_size=(2, 2), dim_ordering='tf'))
+
+model.add(Convolution2D(64, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
+model.add(Convolution2D(64, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
+model.add(MaxPooling2D(pool_size=(2, 2), dim_ordering='tf'))
+
+model.add(Convolution2D(128, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
+model.add(Convolution2D(128, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
+model.add(MaxPooling2D(pool_size=(2, 2), dim_ordering='tf'))
+
+model.add(Convolution2D(256, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
+model.add(Convolution2D(256, 3, 3, border_mode='same', activation='relu', dim_ordering='tf'))
+model.add(MaxPooling2D(pool_size=(2, 2), dim_ordering='tf'))
+
+
+model.add(Flatten())
+model.add(Dense(256, activation='relu'))
+model.add(Dropout(0.5))
+
+model.add(Dense(64, activation='relu'))
+model.add(Dropout(0.5))
+
+model.add(Dense(len(FISH_CLASSES)))
+model.add(Activation('sigmoid'))
+
+model.compile(loss=objective, optimizer=optimizer)
+
+
+# In[ ]:
+
+
+early_stopping = EarlyStopping(monitor='val_loss', patience=4, verbose=1, mode='auto')        
+        
+model.fit(X_train, y_train, batch_size=64, nb_epoch=1,
+              validation_split=0.2, verbose=1, shuffle=True, callbacks=[early_stopping])
+
+
+# In[ ]:
+
+
+preds = model.predict(X_valid, verbose=1)
+print("Validation Log Loss: {}".format(log_loss(y_valid, preds)))
+
+
+# # Predicting the Test Set
+# 
+# Finishing off with predictions on the test set. Scored LB 1.279 
+
+# In[ ]:
+
+
+test_files = [im for im in os.listdir(TEST_DIR)]
+test = np.ndarray((len(test_files), ROWS, COLS, CHANNELS), dtype=np.uint8)
+
+for i, im in enumerate(test_files): 
+    test[i] = read_image(TEST_DIR+im)
+    
+test_preds = model.predict(test, verbose=1)
+
+
+# In[ ]:
+
+
+submission = pd.DataFrame(test_preds, columns=FISH_CLASSES)
+submission.insert(0, 'image', test_files)
+submission.head()
+

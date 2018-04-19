@@ -1,182 +1,1045 @@
 
 # coding: utf-8
 
-# In[1]:
+# **Scroll to the bottom of the page if you just want to see the rankings**
+
+# This notebook uses the Trueskill rating system to compute the world kitefoil rankings based on the major 2016 races. Trueskill was developed by Microsoft Research for ranking XBox players. It works similarly to the well-known Elo rating system used to rank chess players. The principle behind Trueskill is easy to understand: if racer A beats racer B and in a different regatta, racer B beats racer C, Trueskill deduces that A is probably better than C. 
+# 
+# For those familiar with Elo, Trueskill has two main that make it more suitable for kitefoil rankings:
+# 1. it's more flexible and can handles races (not just 1 on 1 matches)
+# 2. it accounts for uncertainty. If a racer has not raced very much, then each race will have a bigger impact on ranking than a racer that has raced a lot for example.
+# 
+# *Regatta's included*
+#    - February 2016: NZ National Championships in Lake Taupo
+#    - March 2016: Mexican Leg of 2016 Hydrofoil Pro Tour in La Ventana
+#    - May 2016: France Leg of the IFKO Silver Cup in Montpellier 
+#    - May 2016: European Championship in Cagliari 
+#    - May 2016: Florida Kite League Spring Regatta in St Petersburg
+#    - May 2016: Rippin the Rio in Sherman Island California
+#    - July 2016: Sail Brisbane in Brisbane 
+#    - July 2016: Italian Leg of the IKA Gold Cup in Gizzeria
+#    - August 2016: US Leg of 2016 Hydrofoil Pro Tour in San Francisco
+#    - August 2016: Mauritius Leg of the 2016 Hydrofoil Pro Tour in Mauritius 
+#    - August 2016: Pringles Foil World Cup in Fehnmarn  
+#    - September 2016: Danish National Championship
+#    - September 2016: IKA World Championship in Weifang 
+#    - October 2016: Vineyard Cup in Martha's Vineyard
+#    - November 2016: Florida Kite League Fall Regatta in St Petersburg
+#    - November 2016: Qatar Leg of the IKA Gold Cup 
+#    - November 2016: Australian National Championships in Rockingham
+#    - November 2016: Australian Leg of the 2016 Hydrofoil Pro Tour in Rockingham
+#    - December 2016: Sail Melbourne in Melbourne
+#    - January 2017: Lord of the Wind in La Ventana
+#    - February 2017: NZ National Championships
+#    - February 2017: WA State Titles  
+#    - March 2017:  Hydrofoil Pro Tour in La Ventana, Mexico 
+#    - April 2017: New South Wales State Championships in George's River 
+#    - April 2017: Sailing World Cup in Hyeres, France 
+#    - May 2017: Elvstrom Zellerbach Regatta in San Francisco
+#    - May 2017: Florida Kite League Spring Regatta in St Petersburg
+#    - June 2017: Hydrofoil Pro Tour in Montpellier
+#    - June 2017: Sailing World Cup in Santander
+#    - August 2017: Hydrofoil Pro Tour in San Francisco
+#    - August 2017: Hydrofoil Pro Tour in Germany
+#    - September 2017: Hydrofoil Pro Tour in Mauritius
+#    - October 2017: Kitefoil Gold Cup in Sardinia
+# 
+# *To add*
+#    - 2016 and 2017 SF Club Races
+#    - 2016 Perth Kite Reviews
+#    - 2016 Zellebach Regatta
+#    - 2017 SF Club Races
+#    
+# *Missing Results*
+#    - Turkish National Championship
+#    - French National Championship
+# 
+# *Assumptions*
+# - Dropped races don't count towards ranking
+# - DNF, DSQ, RET, RCT count as last place
+# - DNC, DNS, OCS, UFD don't count towards ranking even if they're not dropped races
+# - No scoring penalty is applied for an SCP
+# - I'm only ranking those who have a result for at least three races
+# - Silver Fleet rankings are added to the back of the Gold Fleet (so 1st in the Silver Fleet counts as 25th in the regatta if the Gold Fleet had 24 racers). The Bronze Fleet is added to the back of the Silver Fleet and Gold Fleet. 
+#  - Removes anybody who hasn't competed in at least 2 regattas, 5 races
+#  - Removes anybody who hasn't raced in the last year
+# 
+# *Technical Assumption*
+#  - I'm using Mu - 3 x sigma rather than Mu, which has penalizes those who Trueskill is less sure about (either because they have competed in fewer races or have inconsistent results). Microsoft use this by default. It makes the ratings a little conservative. 
+#  - I doubled the default value of tau, to make the impact of new races much higher. The reason is that races can be few and far between and people can improve a lot between races. 
+# 
+
+# In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import os
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-import matplotlib.pyplot as plt
-import skimage.io
-import seaborn as sns
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
+import pandas as pd 
+import numpy as np
+import trueskill as ts
+from IPython.display import display
+import datetime
 
 
-# In[2]:
+resultDir = '../input/RaceResults/'
+
+pd.set_option('display.max_rows', 400)
+pd.set_option('display.max_columns', 300)
 
 
-input_dir = '../input'
-train_dir = '../input/stage1_train'
+# *Clean names and handle things like DNC, DNF etc*
+# 
+# This section loads the libraries and cleans up names. For example Rikki Leccese sometimes races as Riccardo Andrea Leccese. Please use consistent names when you register for races in future. 
+# 
+# This section also has the logic that handles the assumptions around how DNF, DNC, DNS etc are handled. 
+
+# In[ ]:
 
 
-# In[3]:
+def cleanResults(raceColumns,dfResultsTemp,appendScore, nameAllCaps):
+    for raceCol in raceColumns:
 
-
-df_labels = pd.read_csv(os.path.join(input_dir, 'stage1_train_labels.csv'))
-
-
-# # visualize random image
-
-# In[4]:
-
-
-def show_images(image_ids):
-  plt.close('all')
-  fig, ax = plt.subplots(nrows=len(image_ids),ncols=3, figsize=(50,50))
-
-  for image_idx, image_id in enumerate(image_ids):
-    image_path = os.path.join(train_dir, image_id, 'images', '{}.png'.format(image_id))
-    mask_paths = os.path.join(train_dir, image_id, 'masks', '*.png')
-  
-    image = skimage.io.imread(image_path)
-    masks = skimage.io.imread_collection(mask_paths).concatenate()
-    mask = np.zeros(image.shape[:2], np.uint16)
-    for mask_idx in range(masks.shape[0]):
-      mask[masks[mask_idx] > 0] = mask_idx + 1
-    other = mask == 0
+        #Clean up Names
+        
+        if (nameAllCaps):
+            dfResultsTemp.index = dfResultsTemp.index.str.lower()
+        
+        dfResultsTemp.index = dfResultsTemp.index.str.replace(r"(\w)([A-Z])", r"\1 \2")
+        
+        dfResultsTemp.index = dfResultsTemp.index.str.title()
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('\([A-Z\ 0-9]*\)','')
+        dfResultsTemp.index = dfResultsTemp.index.str.strip()
+        
+        
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Riccardo Andrea Leccese','Rikki Leccese')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Riccardo Leccese','Rikki Leccese')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Nicolas Parlier','Nico Parlier')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Alejandro Climent Hernã¥_ Ndez', 'Alejandro Climent Hernandez')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Alexandre Caizergues','Alex Caizergues')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Florian Trit.*','Florian Trittel Paul')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Jean Guillaume Rivaud','Jean-Guillaume Rivaud')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('^Kieran Le$','Kieran Le Borgne')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Marvin Baumeister.*','Marvin Baumeister Schoenian')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Mavin Baumeister Schoenian','Marvin Baumeister Schoenian')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Theo De Ramecourt','Theo De-Ramecourt')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('James Johnson','James Johnsen')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('^Enrico$','Enrico Tonon')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Roman Liubimtsev','Roman Lyubimtsev')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Tomek Glazik','Tomasz Glazik')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Andrew Hansen','Andy Hansen')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Andrew Mc Manus','Andrew McManus')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Matthew Taggart','Matt Taggart')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Joey Pasqauli','Joey Pasquali')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Stefanus Viljoen','Stefaans Viljoen')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('^Alejandro Climent$','Alejandro Climent Hernandez')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('?','')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Jan Blaesiide','Jan Blaesino')  	
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Zachary Marks','Zack Marks')  	
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Matthew Reinhardt','Matt Reinhardt')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Georgina Hewson','Gina Hewson')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Normand Mc Guire','Normand Mcguire')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Henrik Baerentzen','Henrik Baerentsen')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Jade Oconnor','Jade O\'Connor')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('James Mc Grath','James Mcgrath')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('.*Vieujot.*','Mateo Vieujot')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Steph Bridge','Stephanie Bridge')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Oliver Bridge','Olly Bridge')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Natalie Flintrop-Clarke','Natalie Clarke')              
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Timothy Mossholder','Tim Mossholder')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Pete Mc Kewen','Pete Mckewen')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Charlie Morano','Charles Morano')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Katia Rose','Katja Roose')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Johnvon Tesmar','John Von Tesmar')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('William Morris','Will Morris')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Yang Fung','Yang Fung')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Nicholas Leason','Nick Leason')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Phillip Rowlands','Philip Rowlands')
+        dfResultsTemp.index = dfResultsTemp.index.str.replace('Sylvain Hocieni','Sylvain Hoceini')  
     
-    if len(image_ids) > 1:
-      ax[image_idx, 0].imshow(image)
-      ax[image_idx, 1].imshow(mask)
-      ax[image_idx, 2].imshow(np.expand_dims(other, axis=2) * image)
-    else:
-      ax[0].imshow(image)
-      ax[1].imshow(mask)
-      ax[2].imshow(np.expand_dims(other, axis=2) * image)
+    
+        
+             
+        #Handle DNF, DNS etc
+        dfResultsTemp[raceCol] = dfResultsTemp[raceCol].astype(str)
+        #dfResultsTemp[raceCol] = dfResultsTemp[raceCol].str.replace('','')
+        droppedRaces = ['\(.*\)','\(.*','-.*','\[.*\]','\*']
+        countAsMissing = ['D\+D','DCT','DNS','DNC','D\+0','OCS','\/','UFD','DNE','^[0-9\.]*C']
+        countAsNoPenalty = ['SCP-*','RDG-*','RDG','^[0-9\.]*G']
+        
+        removeCharacter = ['\\n','nan']
+        
+
+        missingStr =  ("%s%s%s%s%s%s%s") % ('|'. join(droppedRaces),'|.*','.*|.*'.join(countAsMissing),'|','|' . join(countAsNoPenalty),'|','|' . join(removeCharacter)) 
+
+        dfResultsTemp[raceCol] = dfResultsTemp[raceCol].str.replace(missingStr,'')              
+        
+        countASLast = ['RET','DNF','DSQ','RCT']
+        lastStr = ("%s%s%s") % ('.*','.*|.*'.join(countASLast),'.*')
+        dfResultsTemp[raceCol] = dfResultsTemp[raceCol].str.replace(lastStr,str(len(dfResultsTemp)+1))
+        
+        #remove any remaining white space
+        dfResultsTemp[raceCol] = dfResultsTemp[raceCol].str.strip()
+        
+        #convert result to int or float
+        
+        #for debugging the regex expressions above
+        #print(dfResultsTemp[raceCol])
+        
+        dfResultsTemp[raceCol] = pd.to_numeric(dfResultsTemp[raceCol])  
+        #append score adjusts positions for silver fleet and bronze fleets
+        dfResultsTemp[raceCol] = dfResultsTemp[raceCol] + appendScore
+        
+    return dfResultsTemp
 
 
-# In[5]:
+# In[ ]:
 
 
-sample_image = df_labels.sample(n=1).iloc[0]
-show_images([sample_image['ImageId']])
+#This function adds results to the Results dataframe, which stores all races in one dataframe
+def mergeResults(raceColumns,raceName,dfResultsTemp,dfResults):
+    for raceCol in raceColumns:
+        raceIndex = ("%s%s%s") % (raceName,'-',raceCol)     
+        dfResultsTemp[raceIndex] = dfResultsTemp[raceCol]
+        del(dfResultsTemp[raceCol])
+        dfResults = pd.merge(dfResults,dfResultsTemp[[raceIndex]],left_index=True,right_index=True,how='outer')
+        
+        
+    lastRegatta = pd.to_datetime([raceName[0:8]])[0]
+    dfResults.loc[dfResults.index.isin(dfResultsTemp.index),'lastRegatta'] = lastRegatta
+    dfResults['numRegattas'] = dfResults['numRegattas'].fillna(0)
+    dfResults.loc[dfResults.index.isin(dfResultsTemp.index),'numRegattas'] += 1
+
+    return dfResults
 
 
-# # Statistics
-
-# In[6]:
+# In[ ]:
 
 
-def get_nuclei_sizes():
-  image_ids = list(df_labels.drop_duplicates(subset='ImageId')['ImageId'])
-  def nuclei_size_stats(image_id):
-    mask_paths = os.path.join(train_dir, image_id, 'masks', '*.png')
-    masks = skimage.io.imread_collection(mask_paths).concatenate()
-    masks = (masks > 0).astype(np.uint16)
-    nuclei_sizes = np.sum(masks, axis=(1,2))
-    return {'nuclei_size_min': np.min(nuclei_sizes),
-            'nuclei_size_max': np.max(nuclei_sizes),
-            'nuclei_size_mean': np.mean(nuclei_sizes),
-            'nuclei_size_std': np.std(nuclei_sizes)}
-  return pd.DataFrame.from_dict({image_id: nuclei_size_stats(image_id) for image_id in image_ids}, orient='index')
+#call this if the regatta doesn't explicitly allow for droped races
+def dropRaces(numDrops,dfResultsTemp,raceColumns):
+    for i in (dfResultsTemp[raceColumns].isnull().sum(axis=1) < numDrops).index:
+        toDelete = numDrops-dfResultsTemp[raceColumns][dfResultsTemp.index == i].isnull().sum(axis=1).values[0]
+        if toDelete > 0:
+            for j in range(1,toDelete+1):
+                maxToDelete = dfResultsTemp[raceColumns][dfResultsTemp.index == i].idxmax(axis=1).values[0]            
+                dfResultsTemp.loc[dfResultsTemp.index == i,maxToDelete] = np.nan 
+    return dfResultsTemp
 
 
-# In[7]:
+# In[ ]:
 
 
-df_nuclei_sizes = get_nuclei_sizes()
+#initialize the results table
+dfResults = pd.DataFrame(columns=['numRegattas','lastRegatta'])
+#dfResults['numRegattas'] = dfResults['numRegattas'].astype(int)
 
 
-# In[8]:
+# **Load Results: February 2016 - New Zealand National Championships **
+# 
+# [Raw results][1]
+# 
+#   [1]: https://kaggle2.blob.core.windows.net/inbox-files/1924/Sailwave%20results%20for%20New%20Zealand%20Open%20Kite%20Foil%20National%20Championships%20at%20Lake%20Taupo%202016.pdf?sv=2012-02-12&se=2016-09-19T15%3A31%3A18Z&sr=b&sp=r&sig=w%2BgVqy0ZG6koKaBd3Du%2FBQe7l%2BGrSL6O2pvfZooTzsg%3D
+
+# In[ ]:
 
 
-def plot_stats(df):
-  fig, axs = plt.subplots(nrows=3, ncols=2, figsize=(64,64))
-  def plot_with_set_font_size(key, ax):
-    p = sns.distplot(df_stats[key], kde=False, rug=False, ax=ax)
-    p.tick_params(labelsize=50)
-    p.set_xlabel(key, fontsize=50)
-  
-  plot_with_set_font_size('mask_counts', axs[0,0])
-  plot_with_set_font_size('nuclei_size_min', axs[1,0])
-  plot_with_set_font_size('nuclei_size_max', axs[1,1])
-  plot_with_set_font_size('nuclei_size_mean', axs[2,0])
-  plot_with_set_font_size('nuclei_size_std', axs[2,1])
+raceName = '20160229-LakeTaupo-NZNationals'
+dfResultsTemp = pd.read_csv(resultDir + raceName + '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['HelmName'])
+raceColumns = ['R1','R2','R3','R4','R5','R6']
+
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,False)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults) 
 
 
-# In[9]:
+# **Load Results: March 2016 - Mexico Leg of 2106 Hydrofoil Pro Tour **
+# 
+# [Raw results][1]
+# 
+# 
+#   [1]: https://kaggle2.blob.core.windows.net/inbox-files/1925/Results%20Gold%20&%20Silver%20Fleet%20_%20HydroFoil%20Pro%20Tour.pdf?sv=2012-02-12&se=2016-09-19T15%3A31%3A18Z&sr=b&sp=r&sig=O%2FlT9KdABg60%2BaHRlVjotF8SG4AWgtXZbOqJ9RX1fYg%3D
+
+# In[ ]:
 
 
-df_mask_counts = df_labels.groupby(['ImageId']).count()
-df_mask_counts.columns = ['mask_counts']
-df_stats = df_mask_counts.join(df_nuclei_sizes)
+##Load LaVentana  Results
+raceName = '20160323-LaVentana-HydrofoilProTour'
+raceColumns = ['Q1','Q2','R1','R2','R3','R4','R5','R6']
 
-display(df_stats.describe())
-plot_stats(df_stats)
+dfResultsTempGold = pd.read_csv(resultDir+raceName+ '-Gold.csv')
+dfResultsTempGold = dfResultsTempGold.set_index(dfResultsTempGold['Name'] + ' ' + dfResultsTempGold['LastName'])
+dfResultsTempGold = cleanResults(raceColumns,dfResultsTempGold,0,False)
 
+dfResultsTempSilver = pd.read_csv(resultDir+raceName+ '-Silver.csv')
+dfResultsTempSilver = dfResultsTempSilver.set_index(dfResultsTempSilver['Name'] + ' ' + dfResultsTempSilver['LastName'])
+dfResultsTempSilver = cleanResults(raceColumns,dfResultsTempSilver,len(dfResultsTempGold),False)
 
-# ## lower percentile of mask counts
-
-# In[10]:
-
-
-lower_percentile_stats = df_stats.query('mask_counts < 15.25')
-display(lower_percentile_stats.describe())
-plot_stats(lower_percentile_stats)
+dfResultsTemp = dfResultsTempGold.append(dfResultsTempSilver)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
 
 
-# In[11]:
+# **Load Result: May 2016 - Rippin the Rio**
+
+# In[ ]:
 
 
-samples = lower_percentile_stats.sample(n=5)
-display(samples)
-show_images(list(samples.index))
+raceName = '20160515-ShermanIsland-RippinTheRio'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7']
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+#drop worst race
+dfResultsTemp = dropRaces(1,dfResultsTemp,raceColumns)
+            
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
 
 
-# ## middle percentile of mask counts
+# **Load Result: May 2016 - Florida Kite League Fall Regatta**
+# 
+# [Raw results][1]
+# 
+#   [1]: http://www.regattanetwork.com/event/12210#_newsroom
 
-# In[12]:
-
-
-middle_percentile_stats = df_stats.query('mask_counts > 15.25 and mask_counts < 54.0')
-display(middle_percentile_stats.describe())
-plot_stats(middle_percentile_stats)
-
-
-# In[13]:
+# In[ ]:
 
 
-samples = middle_percentile_stats.sample(n=5)
-display(samples)
-show_images(list(samples.index))
+raceName = '20160515-StPete-FKLSpringRegatta'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8','R9','R10']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Skipper'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
 
 
-# ## upper percentile of mask counts
+# **Load Result: May 2016 - France Leg of IFKO Silver Cup**
+# 
+# [Raw results][1]
+# 
+#   [1]: https://kaggle2.blob.core.windows.net/inbox-files/1888/Montpellier.png?sv=2012-02-12&se=2016-09-14T17%3A39%3A22Z&sr=b&sp=r&sig=uz1gSwGb7Wwl3bio8ZK5K2xrBZr4EmBJcOGaEEdsAmc%3D
 
-# In[14]:
-
-
-upper_percentile_stats = df_stats.query('mask_counts > 54.0')
-display(upper_percentile_stats.describe())
-plot_stats(upper_percentile_stats)
-
-
-# In[15]:
+# In[ ]:
 
 
-samples = upper_percentile_stats.sample(n=5)
-display(samples)
-show_images(list(samples.index))
+raceName = '20160516-MontPellier-IFKOSilverCup'
+raceColumns = ['CO 1', 'CO 2','CO 3','CO 4','CO 5','CO 6','CO 7','CO 8','CO 9','CO 10','CO 11','CO 12']
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+
+for index, row in dfResultsTemp.iterrows():
+    numNames = len(row['Name'].split(' '))
+    dfResultsTemp.loc[dfResultsTemp.index == index,'Name'] = row['Name'].split(' ')[numNames-1] + ' ' + row['Name'].split(' ')[0]
+    
+   
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+#drop worst 3 races
+dfResultsTemp = dropRaces(3,dfResultsTemp,raceColumns)
+            
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: May 2016 - European Championship**
+# 
+# [Raw results][1]
+# 
+# 
+#   [1]: https://kaggle2.blob.core.windows.net/inbox-files/1894/Cagliari.png?sv=2012-02-12&se=2016-09-16T05%3A01%3A10Z&sr=b&sp=r&sig=eSZRz4Zi6IPv8Sj9NIOhTffFSe3H%2FYwP%2BRqPlTxhi3Q%3D
+
+# In[ ]:
+
+
+##Load Cagliari Results
+raceName = '20160522-Cagliari-EuropeanChampionships'
+raceColumns = ['CF1','CF2','F1','F2','F3','F4','F5','F6','F7','F8','F9','F10','M1','M2','M3','M4']
+
+
+dfResultsTempPlatinum = pd.read_csv(resultDir+raceName+ '-Platinum.csv',encoding = "ISO-8859-1")
+dfResultsTempPlatinum = dfResultsTempPlatinum.set_index(dfResultsTempPlatinum['Name'])
+dfResultsTempPlatinum = cleanResults(raceColumns,dfResultsTempPlatinum,0,False)
+
+dfResultsTempGold = pd.read_csv(resultDir+raceName+ '-Gold.csv',encoding = "ISO-8859-1")
+dfResultsTempGold = dfResultsTempGold.set_index(dfResultsTempGold['Name'])
+dfResultsTempGold = cleanResults(raceColumns,dfResultsTempGold,len(dfResultsTempPlatinum),False)
+
+dfResultsTempSilver = pd.read_csv(resultDir+raceName+ '-Silver.csv',encoding = "ISO-8859-1")
+dfResultsTempSilver = dfResultsTempSilver.set_index(dfResultsTempSilver['Name'])
+dfResultsTempSilver = cleanResults(raceColumns,dfResultsTempSilver,len(dfResultsTempGold),False)
+
+dfResultsTemp = dfResultsTempPlatinum.append(dfResultsTempGold)
+dfResultsTemp = dfResultsTemp.append(dfResultsTempSilver)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: July 2016 - Sail Brisbane**
+
+# In[ ]:
+
+
+##Load Brisbane Results
+raceName = '20160710-Brisbane-SailBrisbane'
+raceColumns = ['Race 11','Race 10','Race 9','Race 8','Race 7','Race 6','Race 5','Race 4','Race 3','Race 2','Race 1']
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Skipper'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,False)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: July 2016 - Italian Leg of the IKA Gold Cup**
+# 
+# [Raw results][1]
+# 
+# 
+#   [1]: https://kaggle2.blob.core.windows.net/inbox-files/1891/Gizerria.png?sv=2012-02-12&se=2016-09-14T17%3A39%3A22Z&sr=b&sp=r&sig=C0doGeMU63l02XiRXk%2BRAoWlRLx8v2ZrxTCxXBcGsQ8%3D`
+
+# In[ ]:
+
+
+###Load Italy results
+raceName = '20160717-Gizzeria-IKAGoldCup'
+
+
+
+raceColumns = ['CF 1','CF 2','F 1','F 2','F 3','F 4','F 5','F 6','F 7','F 8',	'F 9','F 10']
+dfResultsTempGold = pd.read_csv(resultDir+raceName+ '-Gold.csv')
+dfResultsTempGold = dfResultsTempGold.set_index(dfResultsTempGold['Name'])
+dfResultsTempGold = cleanResults(raceColumns,dfResultsTempGold,0,False)
+
+raceColumns = ['CF 1','CF 2','F 1','F 2','F 3','F 4','F 5','F 6','F 8']
+dfResultsTempSilver = pd.read_csv(resultDir+raceName+ '-Silver.csv')
+dfResultsTempSilver = dfResultsTempSilver.set_index(dfResultsTempSilver['Name'])
+dfResultsTempSilver = cleanResults(raceColumns,dfResultsTempSilver,len(dfResultsTempGold),False)
+
+raceColumns = ['CF 1','CF 2','F 1','F 2','F 3','F 4','F 5','F 6']
+dfResultsTemp = dfResultsTempGold.append(dfResultsTempSilver)
+
+dfResultsTempBronze = pd.read_csv(resultDir+raceName+ '-Bronze.csv',encoding = "ISO-8859-1")
+dfResultsTempBronze = dfResultsTempBronze.set_index(dfResultsTempBronze['Name'])
+dfResultsTempBronze = cleanResults(raceColumns,dfResultsTempBronze,len(dfResultsTemp),False)
+
+dfResultsTemp = dfResultsTemp.append(dfResultsTempBronze)
+
+raceColumns = ['CF 1','CF 2','F 1','F 2','F 3','F 4','F 5','F 6','F 7','F 8',	'F 9','F 10']
+
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: August 2016 - US leg of the Hydrofoil Pro Tour**
+# 
+# [Raw results][1]
+# 
+# 
+#   [1]: https://kaggle2.blob.core.windows.net/inbox-files/1892/SanFrancisco.png?sv=2012-02-12&se=2016-09-14T17%3A39%3A22Z&sr=b&sp=r&sig=vaq39h3n3S0EVE4gR%2BWpij%2BKY4UjwkbC%2BCmfi0vV9RQ%3D
+
+# In[ ]:
+
+
+##Load SF results
+raceName = '20160807-SanFrancisco-HydrofoilProTour'
+dfResultsTemp = pd.read_csv(resultDir + raceName + '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+raceColumns = ['R1','R2','R3','R4','R5','R6','R7','R8','R9','R10','R11','R12','R13','R14','R15','R16']
+
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,False)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: August 2016 - Mauritius leg of the Hydrofoil Pro Tour**
+# 
+# [Raw results][1]
+# 
+# 
+#   [1]: https://kaggle2.blob.core.windows.net/inbox-files/1926/Mauritius%20Results%20_%20HydroFoil%20Pro%20Tour.pdf?sv=2012-02-12&se=2016-09-19T15%3A31%3A18Z&sr=b&sp=r&sig=48Y8tXleSDLFa0bHpTRgDAfXM7hcKMQEQnHhKA%2Fwb2o%3D
+
+# In[ ]:
+
+
+##Load Mauritius results
+raceName = '20160820-Mauritius-HydrofoilProTour'
+dfResultsTemp = pd.read_csv(resultDir + raceName + '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['HelmName'])
+raceColumns = ['R1','R2','R3','R4','R5','R6','R7','R8','R9','R10','R11','R12','R13','R14','R15','R16','R17']
+
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: August 2016 - Pringles Foil World Cup in Fehnmarn **
+
+# In[ ]:
+
+
+##Load Fehnmanr Results - Men
+raceName = '20160830-Fehnmarn-PringlesFoilWorldCup'
+raceColumns = ['R1','R2','R3','R4','R5','R6','R7','R8']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,False)
+
+#drop worst two 
+dfResultsTemp = dropRaces(2,dfResultsTemp,raceColumns)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: September 2016 - Danish National Championship**
+
+# In[ ]:
+
+
+raceName = '20160911-Denmark-NationalChampionship'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8','R9','R10']
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv',encoding = "ISO-8859-1")
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+#drop worst 2 races
+dfResultsTemp = dropRaces(2,dfResultsTemp,raceColumns)
+            
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: September 2016 - IKA World Championship in Weifang**
+
+# In[ ]:
+
+
+##Load Weifang Results - Men
+raceName = '20160915-Weifang-WorldChampionship'
+raceColumns = ['CF1','CF2','F1','F2','F3','F4','F5','M1','M2','M3','M4']
+
+dfResultsTempPlatinumAndGold = pd.read_csv(resultDir+raceName+ '-PlatinumAndGold.csv',encoding = "ISO-8859-1")
+dfResultsTempPlatinumAndGold = dfResultsTempPlatinumAndGold.set_index(dfResultsTempPlatinumAndGold['Name'])
+dfResultsTempPlatinumAndGold = cleanResults(raceColumns,dfResultsTempPlatinumAndGold,0,False)
+
+raceColumns = ['CF1','CF2','F1','F2','F3','F4']
+dfResultsTempSilver = pd.read_csv(resultDir+raceName+ '-Silver.csv',encoding = "ISO-8859-1")
+dfResultsTempSilver = dfResultsTempSilver.set_index(dfResultsTempSilver['Name'])
+dfResultsTempSilver = cleanResults(raceColumns,dfResultsTempSilver,len(dfResultsTempPlatinumAndGold),False)
+
+dfResultsTemp = dfResultsTempPlatinumAndGold.append(dfResultsTempSilver)
+
+#put all race columns back before merging results
+raceColumns = ['CF1','CF2','F1','F2','F3','F4','F5','M1','M2','M3','M4']
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# In[ ]:
+
+
+##Load Weifang Results - Women
+raceName = '20160915-Weifang-WorldChampionship-Women'
+raceColumns = ['Q1','Q2','Q3','Q4','Q5','Q6','Q7','Q8','M1','M2','M3','M4']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv',encoding = "ISO-8859-1")
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,False)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load: September 2016 Battle of the Bay in San Francisco**
+
+# In[ ]:
+
+
+raceName = '20160918-SanFrancisco-BattleOfTheBay'
+raceColumns = ['Race 1','Race 2','Race 3','Race 4','Race 5','Race 6']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,False)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load: October 2016: Vineyard Cup**
+
+# In[ ]:
+
+
+##Load Vineyard Cup Results
+raceName = '20161002-MarthasVineyard-VineyardCup'
+raceColumns = ['R1','R2','R3','R4','R5','R6','R7','R8','R9','R10']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv',encoding = "ISO-8859-1")
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,False)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: November 2016 - Florida Kite League Spring Regatta**
+# 
+# [Raw results][1]
+# 
+#   [1]: http://www.regattanetwork.com/event/13310#_newsroom
+
+# In[ ]:
+
+
+raceName = '20161106-StPete-FKLFallRegatta'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8','R9']
+
+dfResultsTemp = pd.read_csv(resultDir + raceName+ '.csv',encoding = "ISO-8859-1")
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Skipper'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: November 2016 - Qatar Leg of the IKA Gold Cup**
+
+# In[ ]:
+
+
+raceName = '20161119-Doha-IKAGoldCup'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8','R9','R10','R11','R12','R13','R14','R15']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv',encoding = "ISO-8859-1")
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['HelmName'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: November 2016 - Australian National Formula Championships in Rockingham**
+
+# In[ ]:
+
+
+raceName = '20161128-Rockingham-Australian-Formula-Nationals'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv',encoding = "ISO-8859-1")
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: November 2016 - Australian Leg of the 2016 Hydrofoil Pro Tour in Rockingham**
+
+# In[ ]:
+
+
+raceName = '20161129-Rockingham-HydrofoilProTour-Australia'
+raceColumns = ['1', '2','3','4','5','6','7','8','9','10','11','12','13','14','15','16','17']
+
+dfResultsTemp = pd.read_csv(resultDir + raceName+ '.csv',encoding = "ISO-8859-1")
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: November 2016 - 2016 Australian National Kitefoil Championship in Rockingham**
+
+# In[ ]:
+
+
+raceName = '20161129-Rockingham-Australian-Kitefoil-Nationals'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8', 'R9','R10','R11','R12','R13','R14','R15','R16','R17']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv',encoding = "ISO-8859-1")
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,False)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: December 2016 - 2016 Sail Melbourne**
+
+# In[ ]:
+
+
+raceName = '20161210-Melbourne-SailMelbourne'
+
+raceColumns = ['R13','R14','R15','R16','R17','R18','R19','R20','R21','R22','R23','R24']
+
+dfResultsTempGold = pd.read_csv(resultDir+raceName+ '-Gold.csv')
+dfResultsTempGold = dfResultsTempGold.set_index(dfResultsTempGold['Name'])
+dfResultsTempGold = cleanResults(raceColumns,dfResultsTempGold,0,True)
+
+raceColumns = ['R13','R14','R15','R16','R17','R18','R19','R20']
+dfResultsTempSilver = pd.read_csv(resultDir+raceName+ '-Silver.csv')
+dfResultsTempSilver = dfResultsTempSilver.set_index(dfResultsTempSilver['Name'])
+dfResultsTempSilver = cleanResults(raceColumns,dfResultsTempSilver,len(dfResultsTempGold),True)
+
+dfResultsTemp = dfResultsTempGold.append(dfResultsTempSilver)
+
+#put all race columns back before merging results
+raceColumns = ['R13','R14','R15','R16','R17','R18','R19','R20','R21','R22','R23','R24']
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: January 2017 - Lord of the Wind in La Ventana**
+
+# In[ ]:
+
+
+raceName = '20170122-LosBarriles-LordOfTheWind'
+raceColumns = ['R1','R2','R3','R4','R5','R6','R7','R8']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+#drop worst two 
+dfResultsTemp = dropRaces(2,dfResultsTemp,raceColumns)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: February 2017 - New Zealand Nationals**
+
+# In[ ]:
+
+
+raceName = '20170207-Takapuna-NZNationalChampionships'
+raceColumns = ['R1','R2','R3','R4','R5','R6','R7','R8','R9','R10','R11']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['HelmName'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: February 2017 - WA State Titles**
+
+# In[ ]:
+
+
+raceName = '20170219-JervoiseBay-WAStateTitles'
+raceColumns = ['R1','R2','R3','R4']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Sailor(s)'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result: March 2017 - Hydrofoil Pro Tour in Mexico**
+
+# In[ ]:
+
+
+raceName = '20170329-LaVentana-HydrofoilProTour'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8', 'R9','R10','R11','R12','R13','R14','R15','R16','R17','R18','R19']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['NAME'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+dfResultsTemp = dropRaces(3,dfResultsTemp,raceColumns)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result April 2017 - NSW State Championship**
+
+# In[ ]:
+
+
+raceName = '20170409-NSWChampionship-GeorgeRiverSailingClub'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+dfResultsTemp = dropRaces(1,dfResultsTemp,raceColumns)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result April 2017 - Sailing World Cup in Hyeres**
+
+# In[ ]:
+
+
+raceName = '20170429-Hyeres-SailingWorldCup-QualificationSplit1Blue'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+raceName = '20170429-Hyeres-SailingWorldCup-QualificationSplit1Yellow'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+raceName = '20170429-Hyeres-SailingWorldCup-QualificationSplit2Blue'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+raceName = '20170429-Hyeres-SailingWorldCup-QualificationSplit2Yellow'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+raceName = '20170429-Hyeres-SailingWorldCup-Gold'
+raceColumns = ['R13','R14','R15','R16','R17','R18','M1','M2','M3']
+dfResultsTempGold = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTempGold = dfResultsTempGold.set_index(dfResultsTempGold['Name'])
+dfResultsTempGold = cleanResults(raceColumns,dfResultsTempGold,0,True)
+
+raceName = '20170429-Hyeres-SailingWorldCup-Silver'
+raceColumns = ['R13','R14','R15','R16','R17','R18']
+dfResultsTempSilver = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTempSilver = dfResultsTempSilver.set_index(dfResultsTempSilver['Name'])
+dfResultsTempSilver = cleanResults(raceColumns,dfResultsTempSilver,len(dfResultsTempGold),True)
+
+dfResultsTemp = dfResultsTempGold.append(dfResultsTempSilver)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+
+
+# **Load Result May 2017 - Elvstrom Zellerbach Regatta in SF**
+
+# In[ ]:
+
+
+raceName = '20170507-SanFrancisco-Elvstrom-Zellerbach'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Sailor(s)'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result May 2017 - Florida Kite League Spring Regatta**
+
+# In[ ]:
+
+
+raceName = '20170507-StPete-SpringRegatta2017'
+raceColumns = ['1', '2','3','4','5','6','7','8']
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Skipper'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result June 2017 - Hydrofoil Pro Tour Montpellier**
+
+# In[ ]:
+
+
+raceName = '20170605-Montpellier-HydrofoilProTour'
+
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8', 'R9','R10','R11','R12','R13']
+
+dfResultsTempGold = pd.read_csv(resultDir+raceName+ '-Gold.csv')
+dfResultsTempGold = dfResultsTempGold.set_index(dfResultsTempGold['Name'])
+dfResultsTempGold = cleanResults(raceColumns,dfResultsTempGold,0,True)
+
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8', 'R9','R10','R11','R12']
+dfResultsTempSilver = pd.read_csv(resultDir+raceName+ '-Silver.csv')
+dfResultsTempSilver = dfResultsTempSilver.set_index(dfResultsTempSilver['Name'])
+dfResultsTempSilver = cleanResults(raceColumns,dfResultsTempSilver,len(dfResultsTempGold),True)
+
+dfResultsTemp = dfResultsTempGold.append(dfResultsTempSilver)
+
+
+#put all race columns back before merging results
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8', 'R9','R10','R11','R12','R13']
+dfResultsTemp = dropRaces(2,dfResultsTemp,raceColumns)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# **Load Result June 2016: Sailing World Cup in Santander**
+
+# In[ ]:
+
+
+raceName = '20170610-Santander-SailingWorldCupSeriesFinal-QualificationSplit1Blue'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResultsTemp = dropRaces(1,dfResultsTemp,raceColumns)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+raceName = '20170610-Santander-SailingWorldCupSeriesFinal-QualificationSplit1Yellow'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6']
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResultsTemp = dropRaces(1,dfResultsTemp,raceColumns)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+raceName = '20170610-Santander-SailingWorldCupSeriesFinal-QualificationSplit2Blue'
+raceColumns = ['R7', 'R8','R9','R10','R11','R12']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResultsTemp = dropRaces(1,dfResultsTemp,raceColumns)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+raceName = '20170610-Santander-SailingWorldCupSeriesFinal-QualificationSplit2Yellow'
+raceColumns = ['R7', 'R8','R9','R10','R11','R12']
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResultsTemp = dropRaces(1,dfResultsTemp,raceColumns)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+raceName = '20170610-Santander-SailingWorldCupSeriesFinal-Gold'
+raceColumns = ['R13','R14','R15','R16','R17','R18','R19','R20','R21','R22','R23','R24','M1','M2','M3']
+dfResultsTempGold = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTempGold = dfResultsTempGold.set_index(dfResultsTempGold['Name'])
+dfResultsTempGold = cleanResults(raceColumns,dfResultsTempGold,0,True)
+
+raceName = '20170610-Santander-SailingWorldCupSeriesFinal-Silver'
+raceColumns = ['R13','R14','R15','R16','R17','R18','R19','R20','R21','R22','R23','R24']
+dfResultsTempSilver = pd.read_csv(resultDir+raceName+ '.csv')
+dfResultsTempSilver = dfResultsTempSilver.set_index(dfResultsTempSilver['Name'])
+dfResultsTempSilver = cleanResults(raceColumns,dfResultsTempSilver,len(dfResultsTempGold),True)
+
+
+dfResultsTemp = dfResultsTempGold.append(dfResultsTempSilver)
+dfResultsTemp = dropRaces(3,dfResultsTemp,raceColumns)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+
+
+# **Load Result August 2018: Hydrofoil Pro Tour in San Francisco**
+
+# In[ ]:
+
+
+raceName = '20170803-SanFrancisco-HydrofoilProTour'
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8', 'R9','R10','R11','R12','R13']
+
+dfResultsTemp = pd.read_csv(resultDir+raceName+ '.csv',encoding = "ISO-8859-1")
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Sailor(s)'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults)
+
+
+# In[ ]:
+
+
+raceName = '20170823-Fehman-HydrofoilProTour'
+dfResultsTemp = pd.read_csv(resultDir + raceName + '.csv',encoding = "ISO-8859-1")
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8', 'R9','R10','R11','R12']
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Sailor(s)'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults) 
+
+
+# In[ ]:
+
+
+raceName = '20170922-Mauritius-HydrofoilProTour'
+dfResultsTemp = pd.read_csv(resultDir + raceName + '.csv',encoding = "ISO-8859-1")
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8', 'R9','R10','R11','R12','R13','R14','R15','R16','R17','R18']
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Sailor(s)'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults) 
+
+
+# In[ ]:
+
+
+raceName = '20171008-Sardinia-KitefoilGoldCup'
+dfResultsTemp = pd.read_csv(resultDir + raceName + '.csv',encoding = "ISO-8859-1")
+raceColumns = ['R1', 'R2','R3','R4','R5','R6','R7','R8', 'R9','R10','R11','R12']
+dfResultsTemp = dfResultsTemp.set_index(dfResultsTemp['Name'])
+dfResultsTemp = cleanResults(raceColumns,dfResultsTemp,0,True)
+dfResults = mergeResults(raceColumns,raceName,dfResultsTemp,dfResults) 
+
+
+# **Do Rating**
+
+# In[ ]:
+
+
+def doRating(dfResults):
+    
+    env = ts.TrueSkill()
+    ts.setup(tau=0.2)
+    
+    columns = ['Name','mu_minus_3sigma','numRaces','Rating']
+        
+    dfRatings = pd.DataFrame(columns=columns,index=dfResults.index)
+    dfRatings = pd.merge(dfRatings,dfResults[['numRegattas','lastRegatta']],left_index=True,right_index=True,how='outer')
+    
+    
+    dfRatings['numRaces'] = dfResults.count(axis=1)
+    dfRatings['Rating'] = pd.Series(np.repeat(env.Rating(),len(dfRatings))).T.values.tolist()
+    
+    
+    
+    for raceCol in dfResults:
+        if (raceCol != 'numRegattas') or (raceCol != 'lastRegatta'):  
+            competed = dfRatings.index.isin(dfResults.index[dfResults[raceCol].notnull()])
+            rating_group = list(zip(dfRatings['Rating'][competed].T.values.tolist()))
+            ranking_for_rating_group = dfResults[raceCol][competed].T.values.tolist()
+            dfRatings.loc[competed, 'Rating'] = ts.rate(rating_group, ranks=ranking_for_rating_group)
+
+    
+    dfRatings = pd.DataFrame(dfRatings) #convert to dataframe
+
+    dfRatings['mu_minus_3sigma'] = pd.Series(np.repeat(0.0,len(dfRatings))) #calculate mu - 3 x sigma: MSFT convention
+
+    for index, row in dfRatings.iterrows():
+        dfRatings.loc[dfRatings.index == index,'mu_minus_3sigma'] = float(row['Rating'].mu) - 3 * float(row['Rating'].sigma)
+
+    #competed in at least 5 races and 1 regatta and has competed in the last 12 months
+    dfRatings = dfRatings[dfRatings['numRaces'] > 4]
+    dfRatings = dfRatings[dfRatings['numRegattas'] > 1]
+    dfRatings = dfRatings[(datetime.datetime.now() - dfRatings['lastRegatta'] ) / np.timedelta64(1, 'D') < 365] 
+
+    dfRatings['Name'] = dfRatings.index
+    dfRatings.index = dfRatings['mu_minus_3sigma'].rank(ascending=False).astype(int) #set index to ranking
+    dfRatings.index.names = ['Rank']
+
+    
+    return dfRatings.sort_values('mu_minus_3sigma',ascending=False) 
+
+
+# **Kitefoil World Ranking**
+
+# In[ ]:
+
+
+dfRatings = doRating(dfResults)
+display(dfRatings)
+
+
+# **Check duplicates**
+
+# In[ ]:
+
+
+dfRatings['Name'].sort_values()
 

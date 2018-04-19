@@ -1,423 +1,397 @@
 
 # coding: utf-8
 
-# One way to approach the competition is to look for a solution structure that has a good chance to yield good submission.  A solution structure is defined by a number of bag types, plus a number of occurrence of each bag type.  A bag type is defined by the number of gifts of each type it contains. For instance 3 blocks and 1 train.
+# # GPU EDA
 # 
-# We can focus on bag types because all bags have the same capacity (50 pounds).
+# **_2017-09-24_**
 # 
-# There is a finite number of bag types that are possible.  We define one random variables for each bag type. 
-# 
-# All we need is an estimate the expected value and the variance of each possible bag type.  Then we use two properties to find a combination of bags that maximizes a combination of expected value and standard deviation:
-# 
-# - the expected value of a sum of random variables is the sum of the expected values of the random variables
-# - the variance of a sum of independent random variables is the sum of the variances of the random variable
-# 
-# Kernels or scripts with similar approaches have been proposed by [Dominic Breuker](https://www.kaggle.com/breuker/santas-uncertain-bags/can-we-improve-by-increasing-variance) and [Ben Gorman](https://www.kaggle.com/ben519/santas-uncertain-bags/merry-christmas-y-all).
-# 
-# The difference is that here we find the optimal solution in a probabilistic sense.
+# * [1.0 Introduction](#introduction)
+#     * [1.1 Import packages](#import-packages)
+#     * [1.2 Import data](#import-data)
+#     * [1.3 Preprocessing and feature engineering](#preprocessing)
+# * [2.0 Release dates](#release-dates)
+# * [3.0 Resolution and 4k support](#resolution)
+# * [4.0 Manufacturers](#manufacturers)
+# * [5.0 Metrics by year](#metrics)
+#     * [5.1 Core speed](#core-speed)
+#     * [5.2 Memory](#memory)
+#     * [5.3 Memory speed and bandwidth](#memory-speed)
+#     * [5.4 Max power](#max-power)
+#     * [5.5 Number of texture mapping units (TMU)](#tmu)
+#     * [5.6 Texture Rate](#texture-rate)
+#     * [5.7 Pixel Rate](#pixel-rate)
+#     * [5.8 Process](#process)
+#     * [5.9 Price](#price)
+# * [6.0 Price/performance ratios](#ratios)
+# * [7.0 GTX 1080](#gtx)
+# * [8.0 Conclusion](#conclusion)
+
+# ## 1.0 Introduction <a class="anchor" id="introduction"></a>
+# Comprehensive analysis of GPU models over time, by price, max resolution, and various performance metrics. Please upvote if you like it, this notebook took time to compose. Any feedback a is also appreciated.
+
+# ### 1.1 Import packages <a class="anchor" id="import-packages"></a>
 
 # In[ ]:
 
 
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
-
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
-
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
+import pandas as pd
+import numpy as np
+import seaborn as sns
+import matplotlib.pyplot as plt
 
 
-# First some definitions.
+# ### 1.2 Import data <a class="anchor" id="import-data"></a>
 
 # In[ ]:
 
 
-gift_types = ['horse', 'ball', 'bike', 'train', 'coal', 'book', 'doll', 'blocks', 'gloves']
-ngift_types = len(gift_types)
-
-horse, ball, bike, train, coal, book, doll, blocks, gloves = range(ngift_types)
+df = pd.read_csv('../input/All_GPUs.csv')
 
 
-# We will use Monte Carlo simulation quite a bit. Let's agree on the number of samples to use.  Set it to a higher value to get more accurate results.
+# ### 1.3 Preprocessing and feature engineering <a class="anchor" id="preprocessing"></a>
 
 # In[ ]:
 
 
-nsample=10000
+#Convert release dates to useable format
+df['Release_Date']=df['Release_Date'].str[1:-1]
+df=df[df['Release_Date'].str.len()==11]
+df['Release_Date']=pd.to_datetime(df['Release_Date'], format='%d-%b-%Y')
 
-
-# Let's look at bags composed of a single gift type. We use a vectorized version of the original numpy distributions.
-# 
 
 # In[ ]:
 
 
-def gift_weights(gift, ngift, n=nsample):
-    if ngift == 0:
-        return np.array([0.0])
-    np.random.seed(2016)
-    if gift == horse:
-        dist = np.maximum(0, np.random.normal(5,2,(n, ngift))).sum(axis=1)
-    if gift == ball:
-        dist = np.maximum(0, 1 + np.random.normal(1,0.3,(n, ngift))).sum(axis=1)
-    if gift == bike:
-        dist = np.maximum(0, np.random.normal(20,10,(n, ngift))).sum(axis=1)
-    if gift == train:
-        dist = np.maximum(0, np.random.normal(10,5,(n, ngift))).sum(axis=1)
-    if gift == coal:
-        dist = 47 * np.random.beta(0.5,0.5,(n, ngift)).sum(axis=1)
-    if gift == book:
-        dist = np.random.chisquare(2,(n, ngift)).sum(axis=1)
-    if gift == doll:
-        dist = np.random.gamma(5,1,(n, ngift)).sum(axis=1)
-    if gift == blocks:
-        dist = np.random.triangular(5,10,20,(n, ngift)).sum(axis=1)
-    if gift == gloves:
-        gloves1 = 3.0 + np.random.rand(n, ngift)
-        gloves2 = np.random.rand(n, ngift)
-        gloves3 = np.random.rand(n, ngift)
-        dist = np.where(gloves2 < 0.3, gloves1, gloves3).sum(axis=1)
-    return dist
+#Convert memory bandwidths to GB/s
+s=df['Memory_Bandwidth']
+s[(s.notnull()==True)&(s.str.contains('MB'))]=s[(s.notnull()==True)&(s.str.contains('MB'))].str[:-6].astype(int)/1000
+s[(s.notnull()==True)&(s.str.contains('GB'))]=s[(s.notnull()==True)&(s.str.contains('GB'))].str[:-6].astype(float)
+df['Memory_Bandwidth']=s
 
-
-# Let's find a reasonable upper bound on the number of gifts in the bag. For this we compute the expected score for bags with an increasing number of toys until the score decreases. The bag with largest score is determining the maximum value. This is fine when optimizing the expected value, as adding additional toys uses more toys without improving the objective function.
 
 # In[ ]:
 
 
-epsilon = 1
-max_type = np.zeros(ngift_types).astype('int')
+#Drop units from core_speed
+df.Core_Speed=df.Core_Speed.str[:-4]
+df.Core_Speed=df.Core_Speed.replace('',np.NaN)
 
-for gift, gift_type in enumerate(gift_types):
-    best_value = 0.0
-    for j in range(1, 200):
-        weights = gift_weights(gift, j, nsample)
-        raw_value = np.where(weights <= 50.0, weights, 0.0)
-        value = raw_value.mean()
-        if value > best_value:
-            best_value = value
-        else:
-            break
-    max_type[gift] = j
-max_type
+# Create year/month/quarter features from release_date
+df['Release_Price']=df['Release_Price'].str[1:].astype(float)
+df['Release_Year']=df['Release_Date'].dt.year
+df['Release_Quarter']=df['Release_Date'].dt.quarter
+df['Release_Month']=df['Release_Date'].dt.month
 
 
-# We can now look at more general bag types. First we precompute weights of bags with a single type. The code is similar to the above one.
-# 
-# For each gift type , we create a 2D array with nsample rows, and ntype columns. Column j contains the weights of a bag made of j+1 toys of the given gift type.
+# Brief look at the first few rows of the dataset:
 
 # In[ ]:
 
 
-def gift_distributions(gift, ngift, n=nsample):
-    if ngift == 0:
-        return np.array([0.0])
-    np.random.seed(2016)
-    if gift == horse:
-        dist = np.maximum(0, np.random.normal(5,2,(n, ngift)))
-    if gift == ball:
-        dist = np.maximum(0, 1 + np.random.normal(1,0.3,(n, ngift)))
-    if gift == bike:
-        dist = np.maximum(0, np.random.normal(20,10,(n, ngift)))
-    if gift == train:
-        dist = np.maximum(0, np.random.normal(10,5,(n, ngift)))
-    if gift == coal:
-        dist = 47 * np.random.beta(0.5,0.5,(n, ngift))
-    if gift == book:
-        dist = np.random.chisquare(2,(n, ngift))
-    if gift == doll:
-        dist = np.random.gamma(5,1,(n, ngift))
-    if gift == blocks:
-        dist = np.random.triangular(5,10,20,(n, ngift))
-    if gift == gloves:
-        gloves1 = 3.0 + np.random.rand(n, ngift)
-        gloves2 = np.random.rand(n, ngift)
-        gloves3 = np.random.rand(n, ngift)
-        dist = np.where(gloves2 < 0.3, gloves1, gloves3)
-    for j in range(1, ngift):
-        dist[:,j] += dist[:,j-1]
-    return dist
-
-distributions = dict()
-    
-for gift in range(ngift_types):
-    distributions[gift] = gift_distributions(gift, max_type[gift])
+df.head()
 
 
-# We can now compute expected value of complex bags with lookups of precomputed weight distributions. With a slight change it code it is easy to compute additional statistics like the variance of the weight.
+# ## 2.0 Release dates<a class="anchor" id="release-dates"></a>
 
 # In[ ]:
 
 
-def gift_distributions(gift, ngift):
-    if ngift <= 0:
-        return 0
-    if ngift >= max_type[gift]:
-        return 51
-    return distributions[gift][:,ngift-1]
-
-def gift_value(ntypes):
-    weights = np.zeros(nsample)
-    for gift in range(ngift_types):
-        dist = gift_distributions(gift, ntypes[gift])
-        weights += dist
-    weights = np.where(weights <= 50.0, weights, 0.0)
-    return weights.mean(), weights.std()
+plt.figure(figsize=(13, 6))
+df['Release_Month'].groupby(df['Release_Month']).count().plot(kind='bar')
+plt.title('Resolution counts')
+plt.xlabel('Release Month')
+plt.ylabel('Count of GPU releases')
+plt.show()
 
 
-# We can now generate bag types. The idea is to start with an empty bag, and to add one item at a time. We do it until the expected value of the bag decreases. When this happens then we can discard the newly created bag, as it uses more items and yields a lower expected value.
-# We use a queue and some dictionaries to keep track of what bag types are relevant.
-# 
-# Once the relevant bags are found we put all of them in a dataframe.  We remove those with less than three elements.
-# 
-# This takes a time roughly proportional to nsample.  With 10,000 is takes less than a minute.   Go grab a coffee if you set nsample to a larger value, say 100,000.
+# The modal month for releasing GPU models is June. December and July are low frequency release months.
 
 # In[ ]:
 
 
-from collections import deque
-
-def get_update_value(bag, bag_stats):
-    if bag in bag_stats:
-        bag_mean, bag_std = bag_stats[bag]
-    else:
-        bag_mean, bag_std = gift_value(bag)
-        bag_stats[bag] = (bag_mean, bag_std)
-    return bag_mean, bag_std
-
-def gen_bags():
-    bag_stats = dict()
-    queued = dict()
-    queue = deque()
-    bags = []
-    bag0 = (0,0,0,0,0,0,0,0,0)
-    queue.append(bag0)
-    queued[bag0] = True
-    bag_stats[bag0] = (0,0)
-    counter = 0
-    try:
-        while True:
-            if counter % 1000 == 0:
-                print(counter, end=' ')
-            counter += 1
-            bag = queue.popleft()
-            bag_mean, bag_std = get_update_value(bag, bag_stats)
-            bags.append(bag+(bag_mean, bag_std ))
-            for gift in range(ngift_types):
-                new_bag = list(bag)
-                new_bag[gift] = 1 + bag[gift]
-                new_bag = tuple(new_bag)
-                if new_bag in queued:
-                    continue
-                new_bag_mean, new_bag_std = get_update_value(new_bag, bag_stats)
-                if new_bag_mean > bag_mean:
-                    queue.append(new_bag)
-                    queued[new_bag] = True
-                    
-    except:
-        return bags
-
-    
-bags = gen_bags()
-
-nbags = len(bags)
-
-bags = pd.DataFrame(columns=gift_types+['mean', 'std'], 
-                    data=bags)
-
-bags['var'] = bags['std']**2
-
-bags = bags[bags[gift_types].sum(axis=1) >= 3].reset_index(drop=True)
-
-bags.head()
+plt.figure(figsize=(13, 6))
+df['Release_Year'].groupby(df['Release_Year']).count().plot(kind='bar')
+plt.title('Count of model releases')
+plt.xlabel('Release Year')
+plt.ylabel('GPU model releases')
+plt.show()
 
 
-# We have about 40k bags.
+# The modal year for number of models of GPU released was 2012. Remember this doesn't mean quantity of sales, only number of models released in a year. Anecdotally more GPUs have been sold in recent years with fewer models to choose from.
+# 
+# ## 3.0 Resolution and 4K Support<a class="anchor" id="resolution"></a>
 
 # In[ ]:
 
 
-bags.shape[0]
+res=['1920 x 1080', '1600 x 900','1366 x 768','2560 x 1440','2560 x 1600', '1024 x 768', '3840 x 2160']
+plt.figure(figsize=(13,6))
+for i in res:
+        df[df['Best_Resolution']==i]['Best_Resolution'].groupby(df['Release_Year']).count().plot(kind='line')
+plt.title('Resolution counts')
+plt.xlabel('Release Year')
+plt.ylabel('Count of GPU releases')
+plt.legend(res)
+plt.show()
 
 
-# Let's now look at the available gifts.  We one hot encode the gift type.
+# 1024 x 768 best resolution was most popular from 2002  until 2008 when 1366 x 768 took over. No new GPUs came out with a highest resolution capacity of 1024 x 768 after 2014. 4k support (3840 x 2160) was first introduced in 2013 and increased dramatically in 2017 as it replaced 2560x1600 as the highest resolution capacity.
+# 
+# ## 4.0 Manufacturers<a class="anchor" id="manufacturers"></a>
 
 # In[ ]:
 
 
-gifts = pd.read_csv('../input/gifts.csv')
-
-for gift in gift_types:
-    gifts[gift] = 1.0 * gifts['GiftId'].str.startswith(gift)
-
-gifts.head()
+plt.figure(figsize=(12, 12))
+df['Manufacturer'].value_counts().plot(kind='pie')
 
 
-# The number of gift of each type is easy to get.
+# Nvidia dominates in terms of number of models released
 
 # In[ ]:
 
 
-allgifts = gifts[gift_types].sum()
+manufacturers=df['Manufacturer'].unique()
+plt.figure(figsize=(13, 6))
+for i in manufacturers:
+      df[df['Manufacturer']==i]['Manufacturer'].groupby(df['Release_Year']).count().plot(kind='line')
+plt.title('Manufacturer counts by release year')
+plt.xlabel('Release Year')
+plt.ylabel('Count of GPU releases')
+plt.legend(manufacturers)
+plt.show()
 
-allgifts
 
-
-# We can now look for a combination of bag types that optimizes the expected value, or a combination of the expected value and the standard deviation.
-# 
-# The mathematical formulation is as follows.
-# 
-# $$
-# \begin{align}
-# & \text{maximize} && mean + \alpha \cdot std& \\
-# & \text{s.t.} 
-# && \sum_{i=1}^n g_{ij} \cdot x_i \leq capa_j && \forall j = 1,\ldots,m \\
-# &&& \sum_{i=1}^nx_i \leq 1000  \\
-# &&& \sum_{i=1}^n mean_i \cdot x_i = mean & \\
-# &&& \sum_{i=1}^n var_i \cdot x_i = var & \\
-# &&& std^2 = var & \\
-# &&& x_{i} \geq 0&& \forall i = 1,\ldots,n\\
-# \end{align}
-# $$ 
-# where:
-# - $n$ is the number of bag types
-# - $m$ the number of gift types
-# - $\alpha$ is the relative importance of std vs mean in the objective function
-# - $w_i$ the expected value of the weight of bag type $i$
-# - $var_i$ the variance of the weight of bag type $i$
-# - $g_{ij}$ the number of gifts of type $j$ in bag type $i$
-# - $capa_j$ the number of available gifts of type $j$
-# - $x_i$ is an integer decision variable that takes the value $a$ if bag type $i$ is used $a$ times
-# - $std$ a decision variable representing the standard deviation of the solution
-# - $var$ a decision variable representing the variance of the solution
-# 
-# Constraints (1) ensure that the solution does not use more gifts than available. Constraints (2) states that there are at most 1,000 bags in the solution.  Constraint (3) computes the mean the solution, constraint (4) computes the variance of the solution, and constraint (5) compute its standard deviation.
-# 
-# The trick 
-# here is that the last constraint is a quadratic constraint.  We cannot use an open source LP solver because of
-# it, which is why I use CPLEX.  CPLEX is not available on Kaggle kernel, but one can use the [feely available DoCplexCloud trial](https://developer.ibm.com/docloud/try-docloud-free/) run the following code.
+# Nvidia/AMD war in terms of models released (could be interpreted as market share) was close until around 2013 when Nvidia started to nudge ahead. Intel have fallen off in the last couple of years. AMD took a serious drop in 2016 but have released many GPUs in the first part of 2017. 
 
 # In[ ]:
 
 
-from docplex.mp.model import Model
+plt.figure(figsize=(13, 6))
+sns.kdeplot(df[df['Release_Year']==2012]['Release_Price'])
+sns.kdeplot(df[df['Release_Year']==2013]['Release_Price'])
+sns.kdeplot(df[df['Release_Year']==2014]['Release_Price'])
+sns.kdeplot(df[df['Release_Year']==2015]['Release_Price'])
+sns.kdeplot(df[df['Release_Year']==2016]['Release_Price'])
+plt.title('Price distributions by year')
+plt.xlabel('Price')
+plt.legend(['2012','2013','2014','2015','2016'])
+plt.xlim(-100,1500)
 
-def qcpmip_solve(gift_types, bags, std_coef):
-    mdl = Model('Santa')
-
-    rbags = range(bags.shape[0])
-    x_names = ['x_%d' % i for i in range(bags.shape[0])]
-    x = mdl.integer_var_list(rbags, lb=0, name=x_names)
-    
-    var = mdl.continuous_var(lb=0, ub=mdl.infinity, name='var')
-    std = mdl.continuous_var(lb=0, ub=mdl.infinity, name='std')
-    mean = mdl.continuous_var(lb=0, ub=mdl.infinity, name='mean')
-                                  
-    mdl.maximize(mean + std_coef * std)
-    
-    for gift in gift_types:
-        mdl.add_constraint(mdl.sum(bags[gift][i] * x[i] for i in rbags) <= allgifts[gift])
-        
-    mdl.add_constraint(mdl.sum(x[i] for i in rbags) <= 1000)
-
-    mdl.add_constraint(mdl.sum(bags['mean'][i] * x[i] for i in rbags) == mean)
-    
-    mdl.add_constraint(mdl.sum(bags['var'][i] * x[i] for i in rbags) == var)
-
-    mdl.add_constraint(std**2 <= var)
-    
-    mdl.parameters.mip.tolerances.mipgap = 0.00001
-    
-    s = mdl.solve(log_output=False)
-    assert s is not None
-    mdl.print_solution()
-    
-
-
-# We can now solve the problem if we have CPLEX installed. For instance, if we are only looking for the best expected value:
 
 # In[ ]:
 
 
-qcpmip_solve(gift_types, bags, 0.0)
+plt.figure(figsize=(13, 6))
+sns.kdeplot(df[(df['Manufacturer']=='Nvidia')&(df['Release_Price']<2000)]['Release_Price'])
+#excluding expensive GPU from Nvidia, see section 5.9
+sns.kdeplot(df[df['Manufacturer']=='AMD']['Release_Price'])
+sns.kdeplot(df[df['Manufacturer']=='ATI']['Release_Price'])
+plt.title('Price distributions by manufacturer')
+plt.xlabel('Price')
+plt.legend(['Nvidia','AMD','ATI'])
 
 
-# Let me paste output here given it does not run on Kaggle kernel:
+# Nvidia have a wider distribution than other manufacturers and have strong market share above 400 dollars. Nvidia is known for high quality, high end GPUs. AMD tends to cover the 50-300 dollar budget. ATI have a very specific niche in the market at approx 250 dollars.
 # 
-#     objective: 35618.561
-#       x_14954=1
-#       x_368=63
-#       x_773=395
-#       x_3936=93
-#       x_39480=47
-#       x_36998=1
-#       x_474=24
-#       x_11628=55
-#       mean=35618.561
-#       x_2089=76
-#       x_264=46
-#       x_2091=199
-
-# We see that the best solution structure has an expected value around 35620.  I noticed that as the sample size is increased (the value of nsample), then the objective value decreases.
-
-# For instance, when using `nsample=100000`, we get
-#     
-#    
-# 
-#      objective: 35545.217
-#       x_2315=6
-#       x_36888=1
-#       x_2301=61
-#       x_39358=47
-#       x_8792=115
-#       x_5991=2
-#       x_420=2
-#       x_822=1
-#       x_315=286
-#       x_2137=303
-#       mean=35545.217
-#       var=106992.386
-#       x_418=87
-#       x_3965=89
-
-# We see that the expected value is now about 35545. When I run the code with even larger sample, for instance with nsample=1000000 I get below 35540.
-
-# If we want to maximize the expected value plus 3 times the standard deviation:
-# 
+# ## 5.0 Performance by year<a class="anchor" id="performance"></a>
+# ### 5.1 Core speed  <a class="anchor" id="core-speed"></a>
 
 # In[ ]:
 
 
-qcpmip_solve(gift_types, bags, 3.0)
+plt.figure(figsize=(13, 6))
+df['Core_Speed'].fillna(0).astype(int).groupby(df['Release_Year']).mean().plot(kind='line')
+df['Core_Speed'].fillna(0).astype(int).groupby(df['Release_Year']).max().plot(kind='line')
+plt.title('Core speed in MHz by release year')
+plt.xlabel('Release year')
+plt.ylabel('Core speed MHz')
+plt.legend(['Mean','Max'])
+plt.xlim(2004,2016)
+plt.show()
 
 
-# Output with `nsample=100000` is:
-# 
-#     objective: 36533.143
-#       var=113259.323
-#       mean=35523.522
-#       x_3965=100
-#       x_36888=1
-#       x_523=1
-#       x_2137=299
-#       x_315=199
-#       x_6121=49
-#       x_39358=47
-#       x_2301=200
-#       x_8768=1
-#       x_1035=95
-#       std=336.540
-#       x_418=8
-# 
+# In[ ]:
 
-# This time we get a lower mean, but a larger std. 
+
+print(df.ix[df['Core_Speed'].fillna(0).astype(int).idxmax()][['Name','Core_Speed']])
+
+
+# The most performant card in this dataset in terms of core speed is the GeForce GTX 1080 Asus ROG Strix Gaming OC 8GB, at 1784 MHz.
 # 
-# Solution structure found this way are the best if given enough submissions, as they maximize the likelihood of a good submission.  But the competition shows that switching to a local search approach using feedback from LB is more effective.
+# ### 5.2 Memory  <a class="anchor" id="memory"></a>
+
+# In[ ]:
+
+
+plt.figure(figsize=(13, 6))
+df['Memory'].str[:-3].fillna(0).astype(int).groupby(df['Release_Year']).mean().plot(kind='line')
+df['Memory'].str[:-3].fillna(0).astype(int).groupby(df['Release_Year']).median().plot(kind='line')
+plt.title('Memory in MB by release year')
+plt.xlabel('Release year')
+plt.ylabel('Memory MB')
+plt.legend(['Mean','Median'])
+plt.show()
+
+
+# ### 5.3 Memory speed and bandwidth  <a class="anchor" id="memory-speed"></a>
+
+# In[ ]:
+
+
+fig, ax1=plt.subplots(figsize=(13,6))
+ax = df['Memory_Bandwidth'].fillna(0).astype(float).groupby(df['Release_Year']).mean().plot(kind='line', zorder=9999); 
+df['Memory_Speed'].str[:-5].fillna(0).astype(float).groupby(df['Release_Year']).mean().plot(ax=ax, kind='line',secondary_y=True)
+ax.set_ylabel('Memory Speed MHz', fontsize=10);
+
+plt.title('Mean memory bandwidth and speed by release year')
+plt.xlabel('Release year')
+plt.ylabel('Memory bandwidth GB/sec')
+plt.show()
+
+
+# ### 5.4 Max power <a class="anchor" id="max-power"></a>
+
+# In[ ]:
+
+
+plt.figure(figsize=(13, 6))
+df['Max_Power'].str[:-5].fillna(0).astype(float).groupby(df['Release_Year']).mean().plot(kind='line')
+df['Max_Power'].str[:-5].fillna(0).astype(float).groupby(df['Release_Year']).median().plot(kind='line')
+plt.title('Maximum power capacity of GPU in Watts by release year')
+plt.xlabel('Release year')
+plt.ylabel('Max power Watts')
+plt.legend(['Mean','Median'])
+plt.show()
+
+
+# ### 5.5 Number of texture mapping units<a class="anchor" id="tmu"></a>
+
+# In[ ]:
+
+
+plt.figure(figsize=(13, 6))
+df['TMUs'].groupby(df['Release_Year']).mean().plot(kind='line')
+df['TMUs'].groupby(df['Release_Year']).max().plot(kind='line')
+plt.title('TMU value by release year')
+plt.legend(['Mean','Max'])
+plt.xlabel('Release year')
+plt.ylabel('TMU value')
+plt.xlim(2001,)
+plt.show()
+
+
+# ### 5.6 Texture Rate<a class="anchor" id="texture-rate"></a>
+
+# In[ ]:
+
+
+plt.figure(figsize=(13, 6))
+df['Texture_Rate'].str[:-9].astype(float).groupby(df['Release_Year']).mean().plot(kind='line')
+df['Texture_Rate'].str[:-9].astype(float).groupby(df['Release_Year']).median().plot(kind='line')
+plt.title('Texture rate by release year')
+plt.legend(['Mean','Median'])
+plt.xlabel('Release year')
+plt.ylabel('Texture rate GTexel/s')
+plt.xlim(2001,)
+plt.show()
+
+
+# ### 5.7 Pixel Rate<a class="anchor" id="pixel-rate"></a>
+
+# In[ ]:
+
+
+plt.figure(figsize=(13, 6))
+df['Pixel_Rate'].str[:-9].astype(float).groupby(df['Release_Year']).mean().plot(kind='line')
+df['Pixel_Rate'].str[:-9].astype(float).groupby(df['Release_Year']).median().plot(kind='line')
+df['Pixel_Rate'].str[:-9].astype(float).groupby(df['Release_Year']).max().plot(kind='line')
+
+plt.title('Pixel rate by release year')
+plt.legend(['Mean','Median','Max'])
+plt.xlabel('Release year')
+plt.ylabel('Texture rate')
+plt.xlim(2001,)
+plt.show()
+
+
+# ### 5.8 Process<a class="anchor" id="process"></a>
+
+# In[ ]:
+
+
+plt.figure(figsize=(13, 6))
+df['Process'].str[:-2].astype(float).groupby(df['Release_Year']).mean().plot(kind='line')
+df['Process'].str[:-2].astype(float).groupby(df['Release_Year']).min().plot(kind='line')
+plt.title('Process by release year')
+plt.legend(['Mean','Min'])
+plt.xlabel('Release year')
+plt.ylabel('Process Nm')
+plt.xlim(2001,)
+plt.show()
+
+
+# ### 5.9 Price<a class="anchor" id="price"></a>
+
+# In[ ]:
+
+
+plt.figure(figsize=(13, 6))
+df['Release_Price'].groupby(df['Release_Year']).mean().plot(kind='line')
+df['Release_Price'].groupby(df['Release_Year']).median().plot(kind='line')
+plt.title('Price by release year')
+plt.legend(['Mean','Median'])
+plt.xlabel('Release year')
+plt.ylabel('Price $')
+plt.xlim(2006,)
+plt.show()
+
+
+# In[ ]:
+
+
+print(df.ix[df['Release_Price'].fillna(0).astype(int).idxmax()][['Name','Release_Price','Release_Year']])
+
+
+# The most expensive card in the dataset is the Quadro Plex 7000, at $15k. This was one of the first GPUs with 4k support.
+# 
+# ## 6.0 Price/performance ratios<a class="anchor" id="ratios"></a>
+
+# In[ ]:
+
+
+plt.figure(figsize=(13, 6))
+df['Ratio_Rate']=df['Release_Price']/(df['Texture_Rate'].str[:-9].fillna(0).astype(int))
+df['Ratio_Speed']=df['Release_Price']/(df['Memory_Speed'].str[:-5].fillna(0).astype(int))
+df['Ratio_BW']=df['Release_Price']/(df['Memory_Bandwidth'].fillna(0).astype(int))
+df['Ratio_Memory']=df['Release_Price']/(df['Memory'].str[:-3].fillna(0).astype(int))
+
+df['Ratio_Memory'].groupby(df['Release_Year']).median().plot(kind='line')
+df['Ratio_BW'].groupby(df['Release_Year']).median().plot(kind='line')
+df['Ratio_Speed'].groupby(df['Release_Year']).median().plot(kind='line')
+df['Ratio_Rate'].groupby(df['Release_Year']).median().plot(kind='line')
+plt.title('Price/performance ratio')
+plt.legend(['Texture_Rate','Memory_Speed','Memory_Bandwidth','Memory'])
+plt.xlabel('Release year')
+plt.ylabel('Price to metric ratio')
+plt.xlim(2005,)
+plt.show()
+
+
+# As we saw in section 5, the performance metrics have increased over time but the price has remained generally stable. This means price/performance ratios decrease over time and that you essentially get more performance for less money.
+# 
+# ## 7.0 GTX 1080<a class="anchor" id="gtx"></a>
+
+# In[ ]:
+
+
+print(len(df[df.Name.str.contains('GTX 1080')]['Name']))
+
+
+# There are 76 model variations of the Nvidia GTX 1080.
+# 
+# ## 8.0 Conclusion<a class="anchor" id="conclusion"></a>
+# 
+# This EDA has shown the strong increase in GPU performance over recent years, but median prices stay approximately constant at ~250$, even despite inflation. Some metrics such as memory seem to be exponentially increasing. Price/performance ratios show that higher performance has generally gotten cheaper in the last few years and continues to decrease.
+# 
+# It seems the maximum values in 2017 for performance metrics are less than previous years. One reason for this could perhaps be the move to research grade GPUs and TPUs for very high performance which aren't included in this dataset e.g. Tesla K80, P100. An update to the dataset over time to include these for analysis would be interesting.

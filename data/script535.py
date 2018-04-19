@@ -1,131 +1,315 @@
 
 # coding: utf-8
 
-# # INTRODUCTION
-# 
-# This notebook will be a very simple and quick comparison between two widely used dimensionality reduction techniques, that of PCA ( Principal Component Analysis ) and TSNE ( T-Distributed Stochastic Neighbouring Entities).
+# # Introduction
+# This notebook demos Data Visualisation and various Machine Learning Classification algorithms on Pima Indians dataset.
 
-# In[1]:
+# In[ ]:
 
 
-# Import our relevant libraries
-import numpy as np
+from IPython.display import YouTubeVideo
+YouTubeVideo("pN4HqWRybwk")
+
+
+# # 1) Loading Libraries
+
+# In[ ]:
+
+
 import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
 import seaborn as sns
-from matplotlib import pyplot as plt
 get_ipython().run_line_magic('matplotlib', 'inline')
+get_ipython().run_line_magic('config', "InlineBackend.figure_format = 'retina'")
+import warnings
+warnings.filterwarnings('ignore')
 
 
-# Load the data as a dataframe
+# # 2) Data
 
-# In[2]:
-
-
-data = pd.read_csv('../input/data.csv')
-data.head()
+# In[ ]:
 
 
-# From a quick look at the data, we can see a few things.  Our target column, **diagnosis** is in a non-numeric format, therefore if we need to carry out any visualisations, we will probably need to convert the strings to numeric values. Second point, there exists Null values in the dataframe and we need to get rid of that. Furthermore, the id column is probably irrelevant in our visualisation endeavours so we can get rid of that as well.
-
-# In[3]:
+pima = pd.read_csv("../input/diabetes.csv")
 
 
-# Drop the id column
-data = data.drop('id', axis=1)
-# Convert the diagnosis column to numeric format
-data['diagnosis'] = data['diagnosis'].factorize()[0]
-# Fill all Null values with zero
-data = data.fillna(value=0)
-# Store the diagnosis column in a target object and then drop it
-target = data['diagnosis']
-data = data.drop('diagnosis', axis=1)
+# In[ ]:
 
 
-# # VISUALISING PCA AND TSNE PLOTS
+pima.head()
+
+
+# #### Additional details about the attributes
 # 
-# Let's get to the meat of this notebook which is to produce high-level PCA and TSNE visuals 
-
-# In[4]:
-
-
-from sklearn.decomposition import PCA # Principal Component Analysis module
-from sklearn.manifold import TSNE # TSNE module
-
-
-# In[5]:
-
-
-# Turn dataframe into arrays
-X = data.values
-
-# Invoke the PCA method. Since this is a binary classification problem
-# let's call n_components = 2
-pca = PCA(n_components=2)
-pca_2d = pca.fit_transform(X)
-
-# Invoke the TSNE method
-tsne = TSNE(n_components=2, verbose=1, perplexity=40, n_iter=2000)
-tsne_results = tsne.fit_transform(X)
-
-
-# In[10]:
-
-
-# Plot the TSNE and PCA visuals side-by-side
-plt.figure(figsize = (16,11))
-plt.subplot(121)
-plt.scatter(pca_2d[:,0],pca_2d[:,1], c = target, 
-            cmap = "coolwarm", edgecolor = "None", alpha=0.35)
-plt.colorbar()
-plt.title('PCA Scatter Plot')
-plt.subplot(122)
-plt.scatter(tsne_results[:,0],tsne_results[:,1],  c = target, 
-            cmap = "coolwarm", edgecolor = "None", alpha=0.35)
-plt.colorbar()
-plt.title('TSNE Scatter Plot')
-plt.show()
-
-
-# As one can see from these high-level plots, even though PCA does quite a decent job of visualising our two target clusters ( M for Malignant and B for Benign - cheating a bit here with the labels), the visuals in TSNE is much more obvious in terms of the demarcation in the target.
-
-# # STANDARDISATION AND VISUALISATION
+# >Pregnancies: Number of times pregnant
 # 
-# Let's now try scaling (or standardising) our features and see if we can get even more obvious/intuitive clusters in our plots.
+# >Glucose: Plasma glucose concentration a 2 hours in an oral glucose tolerance test
+# 
+# >BloodPressure: Diastolic blood pressure (mm Hg)
+# 
+# >SkinThickness: Triceps skin fold thickness (mm)
+# 
+# >Insulin: 2-Hour serum insulin (mu U/ml)
+# 
+# >BMI: Body mass index (weight in kg/(height in m)^2)
+# 
+# >DiabetesPedigreeFunction: Diabetes pedigree function
+# 
+# >Age: Age (years)
+# 
+# >Outcome: Class variable (0 or 1)
 
-# In[7]:
+# In[ ]:
 
 
-# Calling Sklearn scaling method
+pima.shape
+
+
+# In[ ]:
+
+
+pima.describe()
+
+
+# In[ ]:
+
+
+pima.groupby("Outcome").size()
+
+
+# # 3) Data Visualisation
+# Let's try to visualise this data
+
+# In[ ]:
+
+
+pima.hist(figsize=(10,8))
+
+
+# In[ ]:
+
+
+pima.plot(kind= 'box' , subplots=True, layout=(3,3), sharex=False, sharey=False, figsize=(10,8))
+
+
+# In[ ]:
+
+
+column_x = pima.columns[0:len(pima.columns) - 1]
+
+
+# In[ ]:
+
+
+column_x
+
+
+# In[ ]:
+
+
+corr = pima[pima.columns].corr()
+
+
+# In[ ]:
+
+
+sns.heatmap(corr, annot = True)
+
+
+# # 4) Feature Extraction
+
+# In[ ]:
+
+
+from sklearn.feature_selection import SelectKBest
+from sklearn.feature_selection import chi2
+
+
+# In[ ]:
+
+
+X = pima.iloc[:,0:8]
+Y = pima.iloc[:,8]
+select_top_4 = SelectKBest(score_func=chi2, k = 4)
+
+
+# In[ ]:
+
+
+fit = select_top_4.fit(X,Y)
+features = fit.transform(X)
+
+
+# In[ ]:
+
+
+features[0:5]
+
+
+# In[ ]:
+
+
+pima.head()
+
+
+# So, the top performing features are Glucose, Insulin, BMI, Age 
+
+# In[ ]:
+
+
+X_features = pd.DataFrame(data = features, columns = ["Glucose","Insulin","BMI","Age"])
+
+
+# In[ ]:
+
+
+X_features.head()
+
+
+# In[ ]:
+
+
+Y = pima.iloc[:,8]
+
+
+# In[ ]:
+
+
+Y.head()
+
+
+# #  5) Standardization
+# It changes the attribute values to Guassian distribution with mean as 0 and standard deviation as 1. It is useful when the algorithm expects the input features to be in Guassian distribution.
+
+# In[ ]:
+
+
 from sklearn.preprocessing import StandardScaler
-X_std = StandardScaler().fit_transform(X)
+rescaledX = StandardScaler().fit_transform(X_features)
 
 
-# In[8]:
+# In[ ]:
 
 
-# Invoke the PCA method on the standardised data
-pca = PCA(n_components=2)
-pca_2d_std = pca.fit_transform(X_std)
-
-# Invoke the TSNE method
-tsne = TSNE(n_components=2, verbose=1, perplexity=40, n_iter=2000)
-tsne_results_std = tsne.fit_transform(X_std)
+X = pd.DataFrame(data = rescaledX, columns= X_features.columns)
 
 
-# In[11]:
+# In[ ]:
 
 
-# Plot the TSNE and PCA visuals side-by-side
-plt.figure(figsize = (16,11))
-plt.subplot(121)
-plt.scatter(pca_2d_std[:,0],pca_2d_std[:,1], c = target, 
-            cmap = "RdYlGn", edgecolor = "None", alpha=0.35)
-plt.colorbar()
-plt.title('PCA Scatter Plot')
-plt.subplot(122)
-plt.scatter(tsne_results_std[:,0],tsne_results_std[:,1],  c = target, 
-            cmap = "RdYlGn", edgecolor = "None", alpha=0.35)
-plt.colorbar()
-plt.title('TSNE Scatter Plot')
-plt.show()
+X.head()
+
+
+# # 6) Binary Classification
+
+# In[ ]:
+
+
+from sklearn.model_selection import train_test_split
+X_train,X_test,Y_train,Y_test = train_test_split(X,Y, random_state = 22, test_size = 0.2)
+
+
+# In[ ]:
+
+
+from sklearn.model_selection import KFold
+from sklearn.model_selection import cross_val_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.naive_bayes import GaussianNB
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.svm import SVC
+
+
+# In[ ]:
+
+
+models = []
+models.append(("LR",LogisticRegression()))
+models.append(("NB",GaussianNB()))
+models.append(("KNN",KNeighborsClassifier()))
+models.append(("DT",DecisionTreeClassifier()))
+models.append(("SVM",SVC()))
+
+
+# In[ ]:
+
+
+results = []
+names = []
+for name,model in models:
+    kfold = KFold(n_splits=10, random_state=22)
+    cv_result = cross_val_score(model,X_train,Y_train, cv = kfold,scoring = "accuracy")
+    names.append(name)
+    results.append(cv_result)
+for i in range(len(names)):
+    print(names[i],results[i].mean())
+
+
+# # 7) Visualising Results
+
+# In[ ]:
+
+
+ax = sns.boxplot(data=results)
+ax.set_xticklabels(names)
+
+
+# # 8) Final Prediction using Test Data
+# Logistic Regression and SVM provides maximum results.
+
+# In[ ]:
+
+
+lr = LogisticRegression()
+lr.fit(X_train,Y_train)
+predictions = lr.predict(X_test)
+
+
+# In[ ]:
+
+
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import classification_report
+from sklearn.metrics import confusion_matrix
+
+
+# In[ ]:
+
+
+print(accuracy_score(Y_test,predictions))
+
+
+# In[ ]:
+
+
+svm = SVC()
+svm.fit(X_train,Y_train)
+predictions = svm.predict(X_test)
+
+
+# In[ ]:
+
+
+print(accuracy_score(Y_test,predictions))
+
+
+# In[ ]:
+
+
+print(classification_report(Y_test,predictions))
+
+
+# In[ ]:
+
+
+conf = confusion_matrix(Y_test,predictions)
+
+
+# In[ ]:
+
+
+label = ["0","1"]
+sns.heatmap(conf, annot=True, xticklabels=label, yticklabels=label)
 

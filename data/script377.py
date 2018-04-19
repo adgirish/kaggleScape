@@ -1,259 +1,186 @@
 
 # coding: utf-8
 
-# > Here is an overview of the HR dataset  in which I am going to higlight some unexpected patterns
+# # Try Different ML Methods in Python
+
+# ## Load Data
 
 # In[ ]:
 
 
-import numpy as np
-import pandas as pd
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+train = pd.read_csv('../input/train.csv')
+test  = pd.read_csv('../input/test.csv')
+train.head()
+
+
+# In[ ]:
+
+
+train.shape
+
+
+# High dimension data always results in a good training score, yet the test score is not necessarily good as the overfiting  problem may occur. Therefore, before learning, we use the feature selection techniques built in sklearn package to select the useful features. The tutorial of feature selection can be found at the link below.
+# 
+# http://scikit-learn.org/stable/modules/feature_selection.html
+
+# ## Feature Selection
+
+# ### Tree_based feature selection
+
+# In[ ]:
+
+
+import sklearn
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.feature_selection import SelectFromModel
+features = train.iloc[:,0:562]
+label = train['Activity']
+clf = ExtraTreesClassifier()
+clf = clf.fit(features, label)
+model = SelectFromModel(clf, prefit=True)
+New_features = model.transform(features)
+print(New_features.shape)
+
+
+# ### L1-based feature selection
+
+# In[ ]:
+
+
+from sklearn.svm import LinearSVC
+lsvc = LinearSVC(C=0.01, penalty="l1", dual=False).fit(features, label)
+model_2 = SelectFromModel(lsvc, prefit=True)
+New_features_2 = model_2.transform(features)
+print(New_features_2.shape)
+
+
+# The L1-based feature selection will keep more features within the training set.  
+
+# ## Fitting Classifiers
+
+# **Load Models**
+
+# In[ ]:
+
+
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.ensemble import RandomForestClassifier,GradientBoostingClassifier
+Classifiers = [DecisionTreeClassifier(),RandomForestClassifier(n_estimators=200),GradientBoostingClassifier(n_estimators=200)]
+
+
+# ### Without feature selection
+
+# In[ ]:
+
+
+from sklearn.metrics import accuracy_score
+import timeit
+test_features= test.iloc[:,0:562]
+Time_1=[]
+Model_1=[]
+Out_Accuracy_1=[]
+for clf in Classifiers:
+    start_time = timeit.default_timer()
+    fit=clf.fit(features,label)
+    pred=fit.predict(test_features)
+    elapsed = timeit.default_timer() - start_time
+    Time_1.append(elapsed)
+    Model_1.append(clf.__class__.__name__)
+    Out_Accuracy_1.append(accuracy_score(test['Activity'],pred))
+
+
+# ### Tree-based feature selection
+
+# In[ ]:
+
+
+test_features= model.transform(test.iloc[:,0:562])
+Time_2=[]
+Model_2=[]
+Out_Accuracy_2=[]
+for clf in Classifiers:
+    start_time = timeit.default_timer()
+    fit=clf.fit(New_features,label)
+    pred=fit.predict(test_features)
+    elapsed = timeit.default_timer() - start_time
+    Time_2.append(elapsed)
+    Model_2.append(clf.__class__.__name__)
+    Out_Accuracy_2.append(accuracy_score(test['Activity'],pred))
+
+
+# ### L1-Based feature selection
+
+# In[ ]:
+
+
+test_features= model_2.transform(test.iloc[:,0:562])
+Time_3=[]
+Model_3=[]
+Out_Accuracy_3=[]
+for clf in Classifiers:
+    start_time = timeit.default_timer()
+    fit=clf.fit(New_features_2,label)
+    pred=fit.predict(test_features)
+    elapsed = timeit.default_timer() - start_time
+    Time_3.append(elapsed)
+    Model_3.append(clf.__class__.__name__)
+    Out_Accuracy_3.append(accuracy_score(test['Activity'],pred))
+
+
+# ## Evaluation
+
+# In the final chapter, we will evaluate the feature selections based on **running time and accuracy.** The running time is somehow determinant to the scala-bility of the model while the accuracy is gonna to tell us whether shrinking the dimension of the data may hugely jeopardize the performance of the model.
+
+# ### Accuracy
+
+# In[ ]:
+
+
 import matplotlib.pyplot as plt
-import seaborn as sns
+import numpy as np
+get_ipython().run_line_magic('matplotlib', 'inline')
+ind =  np.arange(3)   # the x locations for the groups
+width = 0.1       # the width of the bars
+fig, ax = plt.subplots()
+rects1 = ax.bar(ind, Out_Accuracy_1, width, color='r')
+rects2 = ax.bar(ind + width, Out_Accuracy_2, width, color='y')
+rects3 = ax.bar(ind + width + width ,Out_Accuracy_3, width, color='b')
+ax.set_ylabel('Accuracy')
+ax.set_title('Accuracy by Models and Selection Process')
+ax.set_xticks(ind + width)
+ax.set_xticklabels(Model_3,rotation=45)
+plt.show()
 
-data = pd.read_csv("../input/HR_comma_sep.csv")
 
-data.head()
+# **The legend may cover the main part of bar so I remove them in this plot. For the meanings of colors, you can refer to the next plot.**
+
+# ### Running Time
+
+# In[ ]:
 
 
-# ##Last Evaluation Analysis
+import matplotlib.pyplot as plt
+import numpy as np
+get_ipython().run_line_magic('matplotlib', 'inline')
+ind =  np.arange(3)   # the x locations for the groups
+width = 0.1       # the width of the bars
+fig, ax = plt.subplots()
+rects1 = ax.bar(ind, Time_1, width, color='r')
+rects2 = ax.bar(ind + width, Time_2, width, color='y')
+rects3 = ax.bar(ind + width + width ,Time_3, width, color='b')
+ax.set_ylabel('Running Time')
+ax.set_title('Time by Models and Selection Process')
+ax.set_xticks(ind + width)
+ax.set_xticklabels(Model_3,rotation=45)
+ax.legend((rects1[0], rects2[0],rects3[0]), ('No Selection', 'Tree_Based','L1_Based'))
 
+plt.show()
+
+
+# ## Conclusion
+
+# 1. The feature selection can hugely decrease the running time of complicated model, without obviously jeopardizing the performance of model.
 # 
-# Let's start out by analyzing the evaluation of our employees. I am interested to know how many emploeeys have been evaluated more or less than 0.7. Here is a histogram and density plot of the 'last_evaluation' distribution:
-
-# In[ ]:
-
-
-f,ax1 = plt.subplots(1,1)
-sns.distplot(data['last_evaluation'],bins=10,norm_hist=False)
-plt.show()
-print('there are {} employees evaluated more than 0.7'.format(len(data[data['last_evaluation']>0.7])))
-print('there are {} employees evaluated less than 0.7'.format(len(data[data['last_evaluation']<=0.7])))
-
-
-# We are interested to understand if there is some of the available features which is related to the satisfaction of our best employees. To this end we can plot a heatmap showing the correlation values of each pair of features.
-# 
-# As depicted in the following figure there is a correation with the 'left' property and 'satisfaction_level' whichproves us the assumption that the employees who left the company had low levels of satisfaction.
-# However if we look at the satisfaction_level we see this feature does not show a strong correlation with other features (but left).
-# 
-# So at now we know unsatisfied employees leave but we do not know what causes low satisfaction.
-
-# In[ ]:
-
-
-
-corrmat = data.corr()
-f, axarr = plt.subplots(2, 2, sharey=True)
-
-
-sns.heatmap(corrmat, vmax=.8, square=True,ax=axarr[0,0])
-axarr[0,0].set_title("All Employees")
-axarr[0,0].xaxis.set_visible(False)
-
-ge = data[data['last_evaluation']>=0.7]
-gecorrmat = ge.corr()
-axarr[0,1].xaxis.set_visible(False)
-axarr[0,1].set_title("last_evaluation > 0.7")
-sns.heatmap(gecorrmat, vmax=.8, square=True,ax=axarr[0,1])
-
-be = data[data['last_evaluation']<=0.7]
-becorrmat = be.corr()
-sns.heatmap(becorrmat, vmax=.8, square=True,ax=axarr[1,0])
-axarr[1,0].set_title("last_evaluation <= 0.7")
-
-vbe = data[data['last_evaluation']<=0.5]
-vbecorrmat = vbe.corr()
-sns.heatmap(vbecorrmat, vmax=.8, square=True,ax=axarr[1,1])
-axarr[1,1].set_title("last_evaluation <= 0.5")
-
-plt.show()
-
-
-#  it seems that:
-# 
-# * employees with last_evaluation > 0.7 are more likely to leave if they work on many projects;
-# 
-# * employees with last_evaluation < 0.7 are more likely to leave if they work on few projects
-# 
-# This makes me curious about how projects are distributed among the employees. Let's check it out:
-
-# In[ ]:
-
-
-whle_df = data[['last_evaluation','number_project']].copy()
-f ,ax1 = plt.subplots(1,1)
-ax1.scatter(data['last_evaluation'],data['number_project'])
-plt.show()
-
-
-# It sems projects are distributed VERY homogeneously. Too much (in my opinion) to extrat any valuable information.
-
-# # Department Analysis
-
-# Let's move to departments. How employees are distributed among departments?
-
-# In[ ]:
-
-
-vc = data['sales'].value_counts().plot(kind='bar')
-plt.show()
-
-
-# Let's see how projects are distributed among departments
-
-# In[ ]:
-
-
-sales = data[data['sales']=='sales']['number_project']
-tec = data[data['sales']=='technical']['number_project']
-support = data[data['sales']=='support']['number_project']
-it = data[data['sales']=='IT']['number_project']
-hr = data[data['sales']=='hr']['number_project']
-product_mng = data[data['sales']=='product_mng']['number_project']
-
-
-print('sales mean projects {0} with variance {1}'.format(sales.mean(),sales.std()))
-print('technical mean projects {0} with variance {1}'.format(tec.mean(),tec.std()))
-print('support mean projects {0} with variance {1}'.format(support.mean(),support.std()))
-print('IT mean projects {0} with variance {1}'.format(it.mean(),it.std()))
-print('HR mean projects {0} with variance {1}'.format(hr.mean(),hr.std()))   
-print('product_mng mean projects {0} with variance {1}'.format(product_mng.mean(),product_mng.std()))  
-
-
-# It seems projects are distributed in almost the same way mong departments (almost the same mean and even almost the same variance). This happens regardless the department. For instance techincal, product_mng, IT and HR shows almost the same mean and variance of projects but I would expect HR to have less projects than the techincal or product MGMT department. This is very strange .
-# 
-# This makes me think evaluations are homogenous  among departments, let's check it  out:
-
-# In[ ]:
-
-
-var_name = "sales"
-col_order = np.sort(data[var_name].unique()).tolist()
-plt.figure(figsize=(12,6))
-sns.violinplot(x=var_name, y='number_project', data=data, order=col_order)
-plt.xlabel(var_name, fontsize=12)
-plt.ylabel('y', fontsize=12)
-plt.title("Distribution of number_project variable with "+var_name, fontsize=15)
-plt.show()
-
-
-# In[ ]:
-
-
-sales_eval = data[data['sales']=='sales']['last_evaluation']
-tec_eval = data[data['sales']=='technical']['last_evaluation']
-support_evl = data[data['sales']=='support']['last_evaluation']
-it_eval = data[data['sales']=='IT']['last_evaluation']
-hr_eval = data[data['sales']=='hr']['last_evaluation']
-
-print('sales mean evaluation {0} with variance {1}'.format(sales_eval.mean(),sales_eval.std()))
-print('technical mean evaluation {0} with variance {1}'.format(tec_eval.mean(),tec_eval.std()))
-print('support mean evaluation {0} with variance {1}'.format(tec_eval.mean(),tec_eval.std()))
-print('it mean evaluation {0} with variance {1}'.format(it_eval.mean(),it_eval.std()))
-print('hr mean evaluation {0} with variance {1}'.format(hr_eval.mean(),hr_eval.std()))
-
-
-# In[ ]:
-
-
-var_name = "sales"
-col_order = np.sort(data[var_name].unique()).tolist()
-plt.figure(figsize=(12,6))
-sns.violinplot(x=var_name, y='last_evaluation', data=data, order=col_order)
-plt.xlabel(var_name, fontsize=12)
-plt.ylabel('y', fontsize=12)
-plt.title("Distribution of last_evaluation variable with "+var_name, fontsize=15)
-plt.show()
-
-
-# Almost the same evaluation mean with almost the same STD. It seems that the department information is basically irrelevant.
-
-# In[ ]:
-
-
-sales_eval = data[data['sales']=='sales']['satisfaction_level']
-tec_eval = data[data['sales']=='technical']['satisfaction_level']
-support_evl = data[data['sales']=='support']['satisfaction_level']
-it_eval = data[data['sales']=='IT']['satisfaction_level']
-hr_eval = data[data['sales']=='hr']['satisfaction_level']
-
-print('sales mean evaluation {0} with variance {1}'.format(sales_eval.mean(),sales_eval.std()))
-print('technical mean evaluation {0} with variance {1}'.format(tec_eval.mean(),tec_eval.std()))
-print('support mean evaluation {0} with variance {1}'.format(tec_eval.mean(),tec_eval.std()))
-print('it mean evaluation {0} with variance {1}'.format(it_eval.mean(),it_eval.std()))
-print('hr mean evaluation {0} with variance {1}'.format(hr_eval.mean(),hr_eval.std()))
-
-
-# The same holds for the satisfaction level
-
-# In[ ]:
-
-
-var_name = "sales"
-col_order = np.sort(data[var_name].unique()).tolist()
-plt.figure(figsize=(12,6))
-sns.violinplot(x=var_name, y='satisfaction_level', data=data, order=col_order)
-plt.xlabel(var_name, fontsize=12)
-plt.ylabel('y', fontsize=12)
-plt.title("Distribution of satisfaction_level variable with "+var_name, fontsize=15)
-plt.show()
-
-
-# In[ ]:
-
-
-var_name = "sales"
-col_order = np.sort(data[var_name].unique()).tolist()
-plt.figure(figsize=(12,6))
-sns.violinplot(x=var_name, y='average_montly_hours', data=data, order=col_order)
-plt.xlabel(var_name, fontsize=12)
-plt.ylabel('y', fontsize=12)
-plt.title("Distribution of average_montly_hours variable with "+var_name, fontsize=15)
-plt.show()
-
-
-# ## Salary Analysis
-
-# Let's now check how salary is related to satisfaction.
-
-# In[ ]:
-
-
-var_name = "salary"
-col_order = np.sort(data[var_name].unique()).tolist()
-plt.figure(figsize=(12,6))
-sns.violinplot(x=var_name, y='satisfaction_level', data=data, order=col_order)
-plt.xlabel(var_name, fontsize=12)
-plt.ylabel('y', fontsize=12)
-plt.title("Distribution of satisfaction_level variable with "+var_name, fontsize=15)
-plt.show()
-
-
-# According to the chart there is not a strong relationship between salary and satisfaction.
-
-# In[ ]:
-
-
-var_name = "salary"
-col_order = np.sort(data[var_name].unique()).tolist()
-plt.figure(figsize=(12,6))
-sns.violinplot(x=var_name, y='last_evaluation', data=data, order=col_order)
-plt.xlabel(var_name, fontsize=12)
-plt.ylabel('y', fontsize=12)
-plt.title("Distribution of last_evaluation variable with "+var_name, fontsize=15)
-plt.show()
-
-
-# In[ ]:
-
-
-
-var_name = "salary"
-col_order = np.sort(data[var_name].unique()).tolist()
-plt.figure(figsize=(12,6))
-sns.violinplot(x=var_name, y='average_montly_hours', data=data, order=col_order)
-plt.xlabel(var_name, fontsize=12)
-plt.ylabel('y', fontsize=12)
-plt.title("Distribution of average_montly_hours variable with "+var_name, fontsize=15)
-plt.show()
-
+# 2. The overall accuracy of the model will not be necessarily compromised by shrinking the size of the data set. The main reason is that good feature selection may prevent over-fitting to some extents.  

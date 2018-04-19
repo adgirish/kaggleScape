@@ -1,164 +1,223 @@
-# -*- coding: utf-8 -*-
-"""
-@author: Faron
-"""
+# Starter code for multiple regressors implemented by Leandro dos Santos Coelho
+# Source code based on Forecasting Favorites, 1owl
+# https://www.kaggle.com/the1owl/forecasting-favorites , version 10
+
+# Part II
+
 import numpy as np
 import pandas as pd
-import matplotlib.pylab as plt
-from datetime import datetime
+from sklearn import preprocessing, linear_model, metrics
+import gc; gc.enable()
+import random
 
-'''
-This kernel implements the O(n²) F1-Score expectation maximization algorithm presented in
-"Ye, N., Chai, K., Lee, W., and Chieu, H.  Optimizing F-measures: A Tale of Two Approaches. In ICML, 2012."
+from sklearn.neural_network import MLPRegressor
+from sklearn.linear_model import TheilSenRegressor, BayesianRidge
 
-It solves argmax_(0 <= k <= n,[[None]]) E[F1(P,k,[[None]])]
-with [[None]] being the indicator for predicting label "None"
-given posteriors P = [p_1, p_2, ... , p_n], where p_1 > p_2 > ... > p_n
-under label independence assumption by means of dynamic programming in O(n²).
-'''
+from sklearn.ensemble import BaggingRegressor
+from sklearn.ensemble import GradientBoostingRegressor
 
+from sklearn.tree import DecisionTreeRegressor
 
-class F1Optimizer():
-    def __init__(self):
-        pass
+import time
 
-    @staticmethod
-    def get_expectations(P, pNone=None):
-        expectations = []
-        P = np.sort(P)[::-1]
+np.random.seed(165)
 
-        n = np.array(P).shape[0]
-        DP_C = np.zeros((n + 2, n + 1))
-        if pNone is None:
-            pNone = (1.0 - P).prod()
+# store the total processing time
+start_time = time.time()
+tcurrent   = start_time
 
-        DP_C[0][0] = 1.0
-        for j in range(1, n):
-            DP_C[0][j] = (1.0 - P[j - 1]) * DP_C[0, j - 1]
-
-        for i in range(1, n + 1):
-            DP_C[i, i] = DP_C[i - 1, i - 1] * P[i - 1]
-            for j in range(i + 1, n + 1):
-                DP_C[i, j] = P[j - 1] * DP_C[i - 1, j - 1] + (1.0 - P[j - 1]) * DP_C[i, j - 1]
-
-        DP_S = np.zeros((2 * n + 1,))
-        DP_SNone = np.zeros((2 * n + 1,))
-        for i in range(1, 2 * n + 1):
-            DP_S[i] = 1. / (1. * i)
-            DP_SNone[i] = 1. / (1. * i + 1)
-        for k in range(n + 1)[::-1]:
-            f1 = 0
-            f1None = 0
-            for k1 in range(n + 1):
-                f1 += 2 * k1 * DP_C[k1][k] * DP_S[k + k1]
-                f1None += 2 * k1 * DP_C[k1][k] * DP_SNone[k + k1]
-            for i in range(1, 2 * k - 1):
-                DP_S[i] = (1 - P[k - 1]) * DP_S[i] + P[k - 1] * DP_S[i + 1]
-                DP_SNone[i] = (1 - P[k - 1]) * DP_SNone[i] + P[k - 1] * DP_SNone[i + 1]
-            expectations.append([f1None + 2 * pNone / (2 + k), f1])
-
-        return np.array(expectations[::-1]).T
-
-    @staticmethod
-    def maximize_expectation(P, pNone=None):
-        expectations = F1Optimizer.get_expectations(P, pNone)
-
-        ix_max = np.unravel_index(expectations.argmax(), expectations.shape)
-        max_f1 = expectations[ix_max]
-
-        predNone = True if ix_max[0] == 0 else False
-        best_k = ix_max[1]
-
-        return best_k, predNone, max_f1
-
-    @staticmethod
-    def _F1(tp, fp, fn):
-        return 2 * tp / (2 * tp + fp + fn)
-
-    @staticmethod
-    def _Fbeta(tp, fp, fn, beta=1.0):
-        beta_squared = beta ** 2
-        return (1.0 + beta_squared) * tp / ((1.0 + beta_squared) * tp + fp + beta_squared * fn)
+print('Three regressors - Neural network (MLP), Bayesian Ridge, Bagging(4x) and XGBoost (2x)\n')
+print('Datasets reading')
 
 
-def print_best_prediction(P, pNone=None):
-    print("Maximize F1-Expectation")
-    print("=" * 23)
-    P = np.sort(P)[::-1]
-    n = P.shape[0]
-    L = ['L{}'.format(i + 1) for i in range(n)]
-
-    if pNone is None:
-        print("Estimate p(None|x) as (1-p_1)*(1-p_2)*...*(1-p_n)")
-        pNone = (1.0 - P).prod()
-
-    PL = ['p({}|x)={}'.format(l, p) for l, p in zip(L, P)]
-    print("Posteriors: {} (n={})".format(PL, n))
-    print("p(None|x)={}".format(pNone))
-
-    opt = F1Optimizer.maximize_expectation(P, pNone)
-    best_prediction = ['None'] if opt[1] else []
-    best_prediction += (L[:opt[0]])
-    f1_max = opt[2]
-
-    print("Prediction {} yields best E[F1] of {}\n".format(best_prediction, f1_max))
+# read datasets
+dtypes = {'id':'int64', 'item_nbr':'int32', 'store_nbr':'int8', 'onpromotion':str}
+data = {
+    'tra': pd.read_csv('../input/train.csv', dtype=dtypes, parse_dates=['date']),
+    'tes': pd.read_csv('../input/test.csv', dtype=dtypes, parse_dates=['date']),
+    'ite': pd.read_csv('../input/items.csv'),
+    'sto': pd.read_csv('../input/stores.csv'),
+    'trn': pd.read_csv('../input/transactions.csv', parse_dates=['date']),
+    'hol': pd.read_csv('../input/holidays_events.csv', dtype={'transferred':str}, parse_dates=['date']),
+    'oil': pd.read_csv('../input/oil.csv', parse_dates=['date']),
+    }
 
 
-def save_plot(P, filename='expected_f1.png'):
-    E_F1 = pd.DataFrame(F1Optimizer.get_expectations(P).T, columns=["/w None", "/wo None"])
-    best_k, _, max_f1 = F1Optimizer.maximize_expectation(P)
+# dataset processing
+print('Datasets processing')
 
-    plt.style.use('ggplot')
-    plt.figure()
-    E_F1.plot()
-    plt.title('Expected F1-Score for \n {}'.format("P = [{}]".format(",".join(map(str, P)))), fontsize=12)
-    plt.xlabel('k')
-    plt.xticks(np.arange(0, len(P) + 1, 1.0))
-    plt.ylabel('E[F1(P,k)]')
-    plt.plot([best_k], [max_f1], 'o', color='#000000', markersize=4)
-    plt.annotate('max E[F1(P,k)] = E[F1(P,{})] = {:.5f}'.format(best_k, max_f1), xy=(best_k, max_f1),
-                 xytext=(best_k, max_f1 * 0.8), arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=7),
-                 horizontalalignment='center', verticalalignment='top')
-    plt.gcf().savefig(filename)
+train = data['tra'][(data['tra']['date'].dt.month == 8) & (data['tra']['date'].dt.day > 15)]
+del data['tra']; gc.collect();
+target = train['unit_sales'].values
+target[target < 0.] = 0.
+train['unit_sales'] = np.log1p(target)
+
+def df_lbl_enc(df):
+    for c in df.columns:
+        if df[c].dtype == 'object':
+            lbl = preprocessing.LabelEncoder()
+            df[c] = lbl.fit_transform(df[c])
+            print(c)
+    return df
+
+def df_transform(df):
+    df['date'] = pd.to_datetime(df['date'])
+    df['yea'] = df['date'].dt.year
+    df['mon'] = df['date'].dt.month
+    df['day'] = df['date'].dt.day
+    df['date'] = df['date'].dt.dayofweek
+    df['onpromotion'] = df['onpromotion'].map({'False': 0, 'True': 1})
+    df['perishable'] = df['perishable'].map({0:1.0, 1:1.25})
+    df = df.fillna(-1)
+    return df
+
+data['ite'] = df_lbl_enc(data['ite'])
+train = pd.merge(train, data['ite'], how='left', on=['item_nbr'])
+test = pd.merge(data['tes'], data['ite'], how='left', on=['item_nbr'])
+del data['tes']; gc.collect();
+del data['ite']; gc.collect();
+
+train = pd.merge(train, data['trn'], how='left', on=['date','store_nbr'])
+test = pd.merge(test, data['trn'], how='left', on=['date','store_nbr'])
+del data['trn']; gc.collect();
+target = train['transactions'].values
+target[target < 0.] = 0.0001
+train['transactions'] = np.log1p(target)
+
+data['sto'] = df_lbl_enc(data['sto'])
+train = pd.merge(train, data['sto'], how='left', on=['store_nbr'])
+test = pd.merge(test, data['sto'], how='left', on=['store_nbr'])
+del data['sto']; gc.collect();
+
+data['hol'] = data['hol'][data['hol']['locale'] == 'National'][['date','transferred']]
+data['hol']['transferred'] = data['hol']['transferred'].map({'False': 0, 'True': 1})
+train = pd.merge(train, data['hol'], how='left', on=['date'])
+test = pd.merge(test, data['hol'], how='left', on=['date'])
+del data['hol']; gc.collect();
+
+train = pd.merge(train, data['oil'], how='left', on=['date'])
+test = pd.merge(test, data['oil'], how='left', on=['date'])
+del data['oil']; gc.collect();
+
+train = df_transform(train)
+test = df_transform(test)
+col = [c for c in train if c not in ['id', 'unit_sales','perishable','transactions']]
+
+x1 = train[(train['yea'] != 2016)]
+x2 = train[(train['yea'] == 2016)]
+del train; gc.collect();
+
+y1 = x1['transactions'].values
+y2 = x2['transactions'].values
+
+def NWRMSLE(y, pred, w):
+    return metrics.mean_squared_error(y, pred, sample_weight=w)**0.5
 
 
+#------------------- forecasting based on multiple regressors (r) models
+    
+print('\nRunning the basic regressors ...')    
 
-def timeit(P):
-    s = datetime.now()
-    F1Optimizer.maximize_expectation(P)
-    e = datetime.now()
-    return (e-s).microseconds / 1E6
+number_regressors_to_test = 5
+
+for method in range(1, number_regressors_to_test+1):
+    
+    # set the seed to generate random numbers
+    ra1 = round(method + 15*method + 564*method) 
+    np.random.seed(ra1)
+    
+    
+    print('\nmethod = ', method)
+    
+    if (method==1):
+        print('Multilayer perceptron (MLP) neural network 01')
+        str_method = 'MLP model01'    
+        r = MLPRegressor(hidden_layer_sizes=(4,), max_iter=40)
+
+    if (method==2):
+        print('Multilayer perceptron (MLP) neural network 02')
+        str_method = 'MLP model02'    
+        r = MLPRegressor(hidden_layer_sizes=(5,), max_iter=30)
+
+    if (method==3):
+        print('Bayesian Ridge')
+        str_method = 'BayesianRidge'
+        r = BayesianRidge(compute_score=True)
+        
+        
+    # class sklearn.ensemble.BaggingRegressor(base_estimator=None, n_estimators=10, 
+    #    max_samples=1.0, max_features=1.0, bootstrap=True, bootstrap_features=False, 
+    # oob_score=False, warm_start=False, n_jobs=1, random_state=None, verbose=0)        
+    
+    if (method==4):
+        print('Bagging Regressor 01')
+        str_method = 'BaggingRegressor01'
+        r = BaggingRegressor(DecisionTreeRegressor(max_depth=6,max_features=0.75))        
+
+    if (method==5):
+        print('GradientBoosting 01')
+        str_method = 'GradientBoosting01'
+        r = GradientBoostingRegressor(n_estimators=95, max_depth=6, learning_rate = 0.04, 
+                                       random_state=ra2, verbose=0, warm_start=True,
+                                       subsample= 0.7, max_features = 0.8)        
+                                       
+    r.fit(x1[col], y1)
 
 
-def benchmark(n=100, filename='runtimes.png'):
-    results = pd.DataFrame(index=np.arange(1,n+1))
-    results['runtimes'] = 0
+    a1 = NWRMSLE(y2, r.predict(x2[col]), x2['perishable'])
+    # part of the output file name
+    N1 = str(a1)
+    
+    test['transactions'] = r.predict(test[col])
+    test['transactions'] = test['transactions'].clip(lower=0.+1e-12)
 
-    for i in range(1,n+1):
-        runtimes = []
-        for j in range(5):
-            runtimes.append(timeit(np.sort(np.random.rand(i))[::-1]))
-        results.iloc[i-1] = np.mean(runtimes)
-
-    x = results.index
-    y = results.runtimes
-    results['quadratic fit'] = np.poly1d(np.polyfit(x, y, deg=2))(x)
-
-    plt.style.use('ggplot')
-    plt.figure()
-    results.plot()
-    plt.title('Expectation Maximization Runtimes', fontsize=12)
-    plt.xlabel('n = |P|')
-    plt.ylabel('time in seconds')
-    plt.gcf().savefig(filename)
+    col = [c for c in x1 if c not in ['id', 'unit_sales','perishable']]
+    y1 = x1['unit_sales'].values
+    y2 = x2['unit_sales'].values
 
 
-if __name__ == '__main__':
-    print_best_prediction([0.3, 0.2])
-    print_best_prediction([0.3, 0.2], 0.57)
-    print_best_prediction([0.9, 0.6])
-    print_best_prediction([0.5, 0.4, 0.3, 0.35, 0.33, 0.31, 0.29, 0.27, 0.25, 0.20, 0.15, 0.10])
-    print_best_prediction([0.5, 0.4, 0.3, 0.35, 0.33, 0.31, 0.29, 0.27, 0.25, 0.20, 0.15, 0.10], 0.2)
+    # set a new seed to generate random numbers
+    ra2 = round(method + 31*method + 51*method) 
+    np.random.seed(ra2)
 
-    save_plot([0.45, 0.35, 0.31, 0.29, 0.27, 0.25, 0.22, 0.20, 0.17, 0.15, 0.10, 0.05, 0.02])
-    benchmark()
+    if (method==1):
+        r = MLPRegressor(hidden_layer_sizes=(3,), max_iter=50)
+ 
+    if (method==2):
+        r = MLPRegressor(hidden_layer_sizes=(4,), max_iter=30)
+ 
+    if (method==3):    
+        r = BayesianRidge(compute_score=True)
+
+    if (method==4):
+        r = BaggingRegressor(DecisionTreeRegressor(max_depth=5,max_features=0.85))        
+        
+    if (method==5):
+        r = GradientBoostingRegressor(n_estimators=75, max_depth=6, learning_rate = 0.04, 
+                                       random_state=ra2, verbose=0, warm_start=True,
+                                       subsample= 0.82, max_features = 0.7)        
+
+    r.fit(x1[col], y1)
+    
+    a2 = NWRMSLE(y2, r.predict(x2[col]), x2['perishable'])
+    # part of the output file name
+    N2 = str(a2)
+
+    print('Performance: NWRMSLE(1) = ',a1,'NWRMSLE(2) = ',a2)
+
+    test['unit_sales'] = r.predict(test[col])
+    cut = 0.+1e-12 # 0.+1e-15
+    
+    
+    test['unit_sales'] = (np.exp(test['unit_sales']) - 1).clip(lower=cut) # adopted in https://www.kaggle.com/the1owl/forecasting-favorites , version 10
+    
+    #test['unit_sales'] = (np.expm1(test['unit_sales']) - 1).clip(lower=cut) # if use log1p
+
+    output_file = 'sub 4regr v19 ' + str(str_method) + ' method ' + str(method) + N1 + ' - ' + N2 + '.csv'
+ 
+    test[['id','unit_sales']].to_csv(output_file, index=False, float_format='%.2f')
+
+
+print( "\nFinished ...")
+nm=(time.time() - start_time)/60
+print ("Total time %s min" % nm)

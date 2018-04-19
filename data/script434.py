@@ -1,200 +1,611 @@
 
 # coding: utf-8
 
-# In[2]:
+# This is a beginner's guide for using Keras MLP approach to build simple data analyis model. <br/>
+# It's also my first kernal written on Kaggle... haha<br/>
+# So if you have any comments or questions for me, feel free to leave a message~
+
+# # Outline of practicing machine learning<br/>
+# ## 1. Data observation <br/>
+# ## 2. Data pre-processing <br/>
+# ## 3. Model designing and training <br/>
+# ## 4. Model accuracy test <br/>
+
+# In[ ]:
 
 
-# Import libraries and set desired options
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-from __future__ import division, print_function
-# Disable Anaconda warnings
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+
+from subprocess import check_output
+print(check_output(["ls", "../input/kag_risk_factors_cervical_cancer.csv"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+
+# In[ ]:
+
+
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+sns.set_style('darkgrid')
+import numpy as np
+from scipy.stats import norm
+from sklearn.preprocessing import StandardScaler
+from scipy import stats
 import warnings
 warnings.filterwarnings('ignore')
 get_ipython().run_line_magic('matplotlib', 'inline')
-from matplotlib import pyplot as plt
-import seaborn as sns
-
-import pickle
-import numpy as np
-import pandas as pd
-from scipy.sparse import csr_matrix
-from scipy.sparse import hstack
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import roc_auc_score
-from sklearn.linear_model import LogisticRegression
 
 
-# ##### Approaching the Problem
-# We will be solving the intruder detection problem analyzing his behavior on the Internet. It is a complicated and interesting problem combining the data analysis and behavioral psychology.
-# 
-# For example: Yandex solves the mailbox intruder detection problem based on the user's behavior patterns. In a nutshell, intruder's behaviour pattern might differ from the owner's one: 
-# - the breaker might not delete emails right after they are read, as the mailbox owner might do
-# - the intruder might mark emails and even move the cursor differently
-# - etc.
-# 
-# So the intruder could be detected and thrown out from the mailbox proposing the owner to be authentificated via SMS-code.
-# This pilot project is described in the Habrahabr article.
-# 
-# Similar things are being developed in Google Analytics and described in scientific researches. You can find more on this topic by searching "Traversal Pattern Mining" and "Sequential Pattern Mining".
-# 
-# In this competition we are going to solve a similar problem: our algorithm is supposed to analyze the sequence of websites consequently visited by a particular person and to predict whether this person is Alice or an intruder (someone else). As a metric we will use [ROC AUC](https://en.wikipedia.org/wiki/Receiver_operating_characteristic). We will reveal who Alice is at the end of the course.
+# # 1. Data observation
 
-# ### 1. Data Downloading and Transformation
-# Register on [Kaggle](www.kaggle.com), if you have not done it before.
-# Go to the competition [page](https://inclass.kaggle.com/c/catch-me-if-you-can-intruder-detection-through-webpage-session-tracking2) and download the data.
-# 
-# First, read the training and test sets. Then explore the data and perform a couple of simple exercises:
+# Here our observation means to see the type and structure of the data or whether there are missing values . If we want to purely let machine learn by itself, then we should not look too deeply into the data in case the bias made by human intelligence.
 
-# In[4]:
+# Let's import the data
+
+# In[ ]:
 
 
-# Read the training and test data sets
-train_df = pd.read_csv('../input/train_sessions.csv',
-                       index_col='session_id')
-test_df = pd.read_csv('../input/test_sessions.csv',
-                      index_col='session_id')
-
-# Switch time1, ..., time10 columns to datetime type
-times = ['time%s' % i for i in range(1, 11)]
-train_df[times] = train_df[times].apply(pd.to_datetime)
-test_df[times] = test_df[times].apply(pd.to_datetime)
-
-# Sort the data by time
-train_df = train_df.sort_values(by='time1')
-
-# Look at the first rows of the training set
-train_df.head()
+df_full = pd.read_csv('../input/kag_risk_factors_cervical_cancer.csv')
 
 
-# The training data set contains the following features:
-# 
-# - **site1** – id of the first visited website in the session
-# - **time1** – visiting time for the first website in the session
-# - ...
-# - **site10** – id of the tenth visited website in the session
-# - **time10** – visiting time for the tenth website in the session
-# - **target** – target variable, possesses value of 1 for Alice's sessions, and 0 for the other users' sessions
-#     
-# User sessions are chosen in the way they are not longer than half an hour or/and contain more than ten websites. I.e. a session is considered as ended either if a user has visited ten websites or if a session has lasted over thirty minutes.
-# 
-# There are some empty values in the table, it means that some sessions contain less than ten websites. Replace empty values with 0 and change columns types to integer. Also load the websites dictionary and check how it looks like:
-
-# In[5]:
+# In[ ]:
 
 
-# Change site1, ..., site10 columns type to integer and fill NA-values with zeros
-sites = ['site%s' % i for i in range(1, 11)]
-train_df[sites] = train_df[sites].fillna(0).astype('int')
-test_df[sites] = test_df[sites].fillna(0).astype('int')
-
-# Load websites dictionary
-with open(r"../input/site_dic.pkl", "rb") as input_file:
-    site_dict = pickle.load(input_file)
-
-# Create dataframe for the dictionary
-sites_dict = pd.DataFrame(list(site_dict.keys()), index=list(site_dict.values()), columns=['site'])
-print(u'Websites total:', sites_dict.shape[0])
-sites_dict.head()
+df_full
 
 
-# In[6]:
+# In[ ]:
 
 
-# Answer
-print(test_df.shape, train_df.shape)
+df_full.info()
 
 
-# In[7]:
+# It seems there are some missing values named as '?', and made the whole column become an object. 
+# To do further computation, we have to replace '?' with NaN and turn the object type to numeric type.
+
+# In[ ]:
 
 
-# Our target variable
-y_train = train_df['target']
-
-# United dataframe of the initial data 
-full_df = pd.concat([train_df.drop('target', axis=1), test_df])
-
-# Index to split the training and test data sets
-idx_split = train_df.shape[0]
+df_fullna = df_full.replace('?', np.nan)
 
 
-# For the very basic model, we will use only the visited websites in the session (but we will not take into account timestamp features). The point behind this data selection is: *Alice has her favorite sites, and the more often you see these sites in the session, the higher probability that this is an Alice's session, and vice versa.*
-# 
-# Let us prepare the data, we will take only features `site1, site2, ... , site10` from the whole dataframe. Keep in mind that the missing values are replaced with zero. Here is how the first rows of the dataframe look like:
-
-# In[8]:
+# In[ ]:
 
 
-# Dataframe with indices of visited websites in session
-full_sites = full_df[sites]
-full_sites.head()
+df_fullna.isnull().sum() #check NaN counts in different columns
 
 
-# Sessions are the sequences of website indices, and data in this representation is inconvenient for linear methods. According to our hypothesis (Alice has favorite websites) we need to transform this dataframe so each website has corresponding feature (column) and its value is equal to number of this website visits in the session. It can be done in two lines:
+# # 2. Data-preprocessing
 
-# In[9]:
-
-
-# sequence of indices
-sites_flatten = full_sites.values.flatten()
-
-# and the matrix we are looking for
-full_sites_sparse = csr_matrix(([1] * sites_flatten.shape[0],
-                                sites_flatten,
-                                range(0, sites_flatten.shape[0]  + 10, 10)))[:, 1:]
+# In[ ]:
 
 
-# ### 3. Training the first model
-# 
-# So, we have an algorithm and data for it. Let us build our first model, using [logistic regression](http://scikit-learn.org/stable/modules/generated/sklearn.linear_model.LogisticRegression.html) implementation from ` Sklearn` with default parameters. We will use the first 90% of the data for training (the training data set is sorted by time), and the remaining 10% for validation. Let's write a simple function that returns the quality of the model and then train our first classifier:
-
-# In[10]:
+df = df_fullna  #making temporary save
 
 
-def get_auc_lr_valid(X, y, C=1.0, seed=17, ratio = 0.9):
-    # Split the data into the training and validation sets
-    idx = int(round(X.shape[0] * ratio))
-    # Classifier training
-    lr = LogisticRegression(C=C, random_state=seed, n_jobs=-1).fit(X[:idx, :], y[:idx])
-    # Prediction for validation set
-    y_pred = lr.predict_proba(X[idx:, :])[:, 1]
-    # Calculate the quality
-    score = roc_auc_score(y[idx:], y_pred)
+# In[ ]:
+
+
+df = df.convert_objects(convert_numeric=True) #turn data into numeric type for computation
+
+
+# In[ ]:
+
+
+df.info() # Now it's all numeric type, and we are ready for computation and fill NaN.
+
+
+# Now It's time to fill all the NaN values. <br/>
+# For continuous variable, we fill the median value.  (THX for the suggestion in comment)<br/>
+# For categorical variable, we fill 1.
+
+# In[ ]:
+
+
+# for continuous variable
+df['Number of sexual partners'] = df['Number of sexual partners'].fillna(df['Number of sexual partners'].median())
+df['First sexual intercourse'] = df['First sexual intercourse'].fillna(df['First sexual intercourse'].median())
+df['Num of pregnancies'] = df['Num of pregnancies'].fillna(df['Num of pregnancies'].median())
+df['Smokes'] = df['Smokes'].fillna(1)
+df['Smokes (years)'] = df['Smokes (years)'].fillna(df['Smokes (years)'].median())
+df['Smokes (packs/year)'] = df['Smokes (packs/year)'].fillna(df['Smokes (packs/year)'].median())
+df['Hormonal Contraceptives'] = df['Hormonal Contraceptives'].fillna(1)
+df['Hormonal Contraceptives (years)'] = df['Hormonal Contraceptives (years)'].fillna(df['Hormonal Contraceptives (years)'].median())
+df['IUD'] = df['IUD'].fillna(0) # Under suggestion
+df['IUD (years)'] = df['IUD (years)'].fillna(0) #Under suggestion
+df['STDs'] = df['STDs'].fillna(1)
+df['STDs (number)'] = df['STDs (number)'].fillna(df['STDs (number)'].median())
+df['STDs:condylomatosis'] = df['STDs:condylomatosis'].fillna(df['STDs:condylomatosis'].median())
+df['STDs:cervical condylomatosis'] = df['STDs:cervical condylomatosis'].fillna(df['STDs:cervical condylomatosis'].median())
+df['STDs:vaginal condylomatosis'] = df['STDs:vaginal condylomatosis'].fillna(df['STDs:vaginal condylomatosis'].median())
+df['STDs:vulvo-perineal condylomatosis'] = df['STDs:vulvo-perineal condylomatosis'].fillna(df['STDs:vulvo-perineal condylomatosis'].median())
+df['STDs:syphilis'] = df['STDs:syphilis'].fillna(df['STDs:syphilis'].median())
+df['STDs:pelvic inflammatory disease'] = df['STDs:pelvic inflammatory disease'].fillna(df['STDs:pelvic inflammatory disease'].median())
+df['STDs:genital herpes'] = df['STDs:genital herpes'].fillna(df['STDs:genital herpes'].median())
+df['STDs:molluscum contagiosum'] = df['STDs:molluscum contagiosum'].fillna(df['STDs:molluscum contagiosum'].median())
+df['STDs:AIDS'] = df['STDs:AIDS'].fillna(df['STDs:AIDS'].median())
+df['STDs:HIV'] = df['STDs:HIV'].fillna(df['STDs:HIV'].median())
+df['STDs:Hepatitis B'] = df['STDs:Hepatitis B'].fillna(df['STDs:Hepatitis B'].median())
+df['STDs:HPV'] = df['STDs:HPV'].fillna(df['STDs:HPV'].median())
+df['STDs: Time since first diagnosis'] = df['STDs: Time since first diagnosis'].fillna(df['STDs: Time since first diagnosis'].median())
+df['STDs: Time since last diagnosis'] = df['STDs: Time since last diagnosis'].fillna(df['STDs: Time since last diagnosis'].median())
+
+
+# In[ ]:
+
+
+# for categorical variable
+df = pd.get_dummies(data=df, columns=['Smokes','Hormonal Contraceptives','IUD','STDs',
+                                      'Dx:Cancer','Dx:CIN','Dx:HPV','Dx','Hinselmann','Citology','Schiller'])
+
+
+# In[ ]:
+
+
+df.isnull().sum() #No null left~
+
+
+# In[ ]:
+
+
+df 
+
+
+# Now, we have full data 'df' for computation.<br/>
+# We are ready for spliting data into train/test set, defining features and labels, and normalization.
+
+# In[ ]:
+
+
+df_data = df #making temporary save
+
+
+# ## Quick check for value range (especially when doing regression)
+
+# In[ ]:
+
+
+df.describe()
+
+
+# In[ ]:
+
+
+fig, (ax1,ax2,ax3,ax4,ax5,ax6,ax7) = plt.subplots(7,1,figsize=(20,40))
+sns.countplot(x='Age', data=df, ax=ax1)
+sns.countplot(x='Number of sexual partners', data=df, ax=ax2)
+sns.countplot(x='Num of pregnancies', data=df, ax=ax3)
+sns.countplot(x='Smokes (years)', data=df, ax=ax4)
+sns.countplot(x='Hormonal Contraceptives (years)', data=df, ax=ax5)
+sns.countplot(x='IUD (years)', data=df, ax=ax6)
+sns.countplot(x='STDs (number)', data=df, ax=ax7)
+
+
+# ## Shuffle the data, and split them into train set and test set.
+
+# In[ ]:
+
+
+#Shuffle
+np.random.seed(42)
+df_data_shuffle = df_data.iloc[np.random.permutation(len(df_data))]
+
+df_train = df_data_shuffle.iloc[1:686, :]
+df_test = df_data_shuffle.iloc[686: , :]
+
+
+# ## Defining features and labels
+
+# In[ ]:
+
+
+#分類feature/label
+df_train_feature = df_train[['Age', 'Number of sexual partners', 'First sexual intercourse',
+       'Num of pregnancies', 'Smokes (years)', 'Smokes (packs/year)',
+       'Hormonal Contraceptives (years)', 'IUD (years)', 'STDs (number)',
+       'STDs:condylomatosis', 'STDs:cervical condylomatosis',
+       'STDs:vaginal condylomatosis', 'STDs:vulvo-perineal condylomatosis',
+       'STDs:syphilis', 'STDs:pelvic inflammatory disease',
+       'STDs:genital herpes', 'STDs:molluscum contagiosum', 'STDs:AIDS',
+       'STDs:HIV', 'STDs:Hepatitis B', 'STDs:HPV', 'STDs: Number of diagnosis',
+       'STDs: Time since first diagnosis', 'STDs: Time since last diagnosis', 
+       'Smokes_0.0', 'Smokes_1.0',
+       'Hormonal Contraceptives_0.0', 'Hormonal Contraceptives_1.0', 'IUD_0.0',
+       'IUD_1.0', 'STDs_0.0', 'STDs_1.0', 'Dx:Cancer_0', 'Dx:Cancer_1',
+       'Dx:CIN_0', 'Dx:CIN_1', 'Dx:HPV_0', 'Dx:HPV_1', 'Dx_0', 'Dx_1',
+       'Hinselmann_0', 'Hinselmann_1', 'Citology_0', 'Citology_1','Schiller_0','Schiller_1']]
+
+train_label = np.array(df_train['Biopsy'])
+
+df_test_feature = df_test[['Age', 'Number of sexual partners', 'First sexual intercourse',
+       'Num of pregnancies', 'Smokes (years)', 'Smokes (packs/year)',
+       'Hormonal Contraceptives (years)', 'IUD (years)', 'STDs (number)',
+       'STDs:condylomatosis', 'STDs:cervical condylomatosis',
+       'STDs:vaginal condylomatosis', 'STDs:vulvo-perineal condylomatosis',
+       'STDs:syphilis', 'STDs:pelvic inflammatory disease',
+       'STDs:genital herpes', 'STDs:molluscum contagiosum', 'STDs:AIDS',
+       'STDs:HIV', 'STDs:Hepatitis B', 'STDs:HPV', 'STDs: Number of diagnosis',
+       'STDs: Time since first diagnosis', 'STDs: Time since last diagnosis', 
+       'Smokes_0.0', 'Smokes_1.0',
+       'Hormonal Contraceptives_0.0', 'Hormonal Contraceptives_1.0', 'IUD_0.0',
+       'IUD_1.0', 'STDs_0.0', 'STDs_1.0', 'Dx:Cancer_0', 'Dx:Cancer_1',
+       'Dx:CIN_0', 'Dx:CIN_1', 'Dx:HPV_0', 'Dx:HPV_1', 'Dx_0', 'Dx_1',
+       'Hinselmann_0', 'Hinselmann_1', 'Citology_0', 'Citology_1','Schiller_0','Schiller_1']]
+
+test_label = np.array(df_test['Biopsy'])
+
+
+# ## Data normalization
+
+# In[ ]:
+
+
+#Normalization
+from sklearn import preprocessing
+minmax_scale = preprocessing.MinMaxScaler(feature_range=(0, 1))
+train_feature = minmax_scale.fit_transform(df_train_feature)
+test_feature = minmax_scale.fit_transform(df_test_feature)
+
+
+# In[ ]:
+
+
+#Make sure if it's the shape what we want!
+print(train_feature[0])
+print(train_label[0])
+print(test_feature[0])
+print(test_label[0])
+
+
+# In[ ]:
+
+
+train_feature.shape
+
+
+# Now, we are ready to run keras model.
+
+# # 3. (Keras) Model designing/training/visualization
+
+# ### A very simple, quick and effective MLP approach to solve binary classification problem
+
+# In[ ]:
+
+
+import matplotlib.pyplot as plt
+def show_train_history(train_history,train,validation):
+    plt.plot(train_history.history[train])
+    plt.plot(train_history.history[validation])
+    plt.title('Train History')
+    plt.ylabel(train)
+    plt.xlabel('Epoch')
+    plt.legend(['train', 'validation'], loc='best')
+    plt.show()
+
+
+######################### Model designing
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.layers import Dropout
+
+model = Sequential() 
+
+#Input layer
+model.add(Dense(units=500, 
+                input_dim=46, 
+                kernel_initializer='uniform', 
+                activation='relu'))
+model.add(Dropout(0.5))
+
+#Hidden layer 1
+model.add(Dense(units=200,  
+                kernel_initializer='uniform', 
+                activation='relu'))
+model.add(Dropout(0.5))
+
+#Output layer
+model.add(Dense(units=1,
+                kernel_initializer='uniform', 
+                activation='sigmoid'))
+
+print(model.summary()) #for showing the structure and parameters
+
+# Defining how to measure performance
+model.compile(loss='binary_crossentropy',   
+              optimizer='adam', metrics=['accuracy'])
+
+# Train the model
+# Verbose=2, showing loss and accuracy change timely
+train_history = model.fit(x=train_feature, y=train_label,  
+                          validation_split=0.2, epochs=20, 
+                          batch_size=200, verbose=2) 
+
+#visualize the loss and accuracy after each epoch
+show_train_history(train_history,'acc','val_acc')
+show_train_history(train_history,'loss','val_loss')
+
+#For saving weights
+#model.save_weights("Savemodels/Cervical_ca(Kaggles)_MLP.h5")
+#print('model saved to disk')
+
+
+#  The model should run very fast because the data was really small.
+
+# PS. The reason I don't want to train this model too many times is because the training set and validation set loss seems to deviate, which is a sign of overfitting.
+
+# # 4. Model prediction accuracy
+
+# ## In test data
+
+# In[ ]:
+
+
+scores = model.evaluate(test_feature, test_label)
+print('\n')
+print('accuracy=',scores[1])
+
+
+# In[ ]:
+
+
+# Answer sheet
+prediction = model.predict_classes(test_feature)
+
+
+# In[ ]:
+
+
+# Create a dataframe for prediction and correct answer
+df_ans = pd.DataFrame({'Biopsy' :test_label})
+df_ans['Prediction'] = prediction
+
+
+# In[ ]:
+
+
+df_ans
+
+
+# See what's going wrong
+
+# In[ ]:
+
+
+df_ans[ df_ans['Biopsy'] != df_ans['Prediction'] ]
+
+
+# In[ ]:
+
+
+df_ans['Prediction'].value_counts()
+
+
+# In[ ]:
+
+
+df_ans['Biopsy'].value_counts()
+
+
+# ## Confusion matrix
+
+# Make confusion matrix to evaluate the performance of the prediction model.
+
+# In[ ]:
+
+
+cols = ['Biopsy_1','Biopsy_0']  #Gold standard
+rows = ['Prediction_1','Prediction_0'] #diagnostic tool (our prediction)
+
+B1P1 = len(df_ans[(df_ans['Prediction'] == df_ans['Biopsy']) & (df_ans['Biopsy'] == 1)])
+B1P0 = len(df_ans[(df_ans['Prediction'] != df_ans['Biopsy']) & (df_ans['Biopsy'] == 1)])
+B0P1 = len(df_ans[(df_ans['Prediction'] != df_ans['Biopsy']) & (df_ans['Biopsy'] == 0)])
+B0P0 = len(df_ans[(df_ans['Prediction'] == df_ans['Biopsy']) & (df_ans['Biopsy'] == 0)])
+
+conf = np.array([[B1P1,B0P1],[B1P0,B0P0]])
+df_cm = pd.DataFrame(conf, columns = [i for i in cols], index = [i for i in rows])
+
+f, ax= plt.subplots(figsize = (5, 5))
+sns.heatmap(df_cm, annot=True, ax=ax) 
+ax.xaxis.set_ticks_position('top') #Making x label be on top is common in textbooks.
+
+print('total test case number: ', np.sum(conf))
+
+
+# ### Calculating sensitivity, specificity, false_positive_rate and false_negative_rate
+
+# In[ ]:
+
+
+def model_efficacy(conf):
+    total_num = np.sum(conf)
+    sen = conf[0][0]/(conf[0][0]+conf[1][0])
+    spe = conf[1][1]/(conf[1][0]+conf[1][1])
+    false_positive_rate = conf[0][1]/(conf[0][1]+conf[1][1])
+    false_negative_rate = conf[1][0]/(conf[0][0]+conf[1][0])
     
-    return score
+    print('total_num: ',total_num)
+    print('G1P1: ',conf[0][0]) #G = gold standard; P = prediction
+    print('G0P1: ',conf[0][1])
+    print('G1P0: ',conf[1][0])
+    print('G0P0: ',conf[1][1])
+    print('##########################')
+    print('sensitivity: ',sen)
+    print('specificity: ',spe)
+    print('false_positive_rate: ',false_positive_rate)
+    print('false_negative_rate: ',false_negative_rate)
+    
+    return total_num, sen, spe, false_positive_rate, false_negative_rate
+
+model_efficacy(conf)
+    
 
 
-# In[11]:
+# You can also do the same analysis with train data. Try it~
+
+# # Appendix: Dealing with original data (Human learning)
+
+# ## Let's see some categorical variable property
+
+# ### Age
+
+# In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', '# Select the training set from the united dataframe (where we have the answers)\nX_train = full_sites_sparse[:idx_split, :]\n\n# Calculate metric on the validation set\nprint(get_auc_lr_valid(X_train, y_train))')
+import seaborn as sns
+sns.jointplot(x='Age', y='Biopsy', data=df, alpha=0.1) 
+#By adding alpha, we can see the density of the scattered spots clearly.
 
 
-# The first model demonstrated the quality  of 0.91952 on the validation set. Let's take it as the first baseline and starting point. To make a prediction on the test data set ** we need to train the model again on the entire training data set ** (until this moment, our model used only part of the data for training), which will increase its generalizing ability:
-
-# In[12]:
+# In[ ]:
 
 
-# Function for writing predictions to a file
-def write_to_submission_file(predicted_labels, out_file,
-                             target='target', index_label="session_id"):
-    predicted_df = pd.DataFrame(predicted_labels,
-                                index = np.arange(1, predicted_labels.shape[0] + 1),
-                                columns=[target])
-    predicted_df.to_csv(out_file, index_label=index_label)
+fig, (ax1,ax2,ax3) = plt.subplots(3,1,figsize=(15,12))
+sns.countplot(x='Age', data=df, ax=ax1)
+sns.countplot(x='Biopsy', data=df, ax=ax2)
+sns.barplot(x='Age', y='Biopsy', data=df, ax=ax3)
+
+#Stratified
+facet = sns.FacetGrid(df, hue='Biopsy',aspect=4)
+facet.map(sns.kdeplot,'Age',shade= True)
+facet.set(xlim=(0, df['Age'].max()))
+facet.add_legend()
 
 
-# In[13]:
+# ### Number of sexual partners
+
+# In[ ]:
 
 
-# Train the model on the whole training data set
-# Use random_state=17 for repeatability
-# Parameter C=1 by default, but here we set it explicitly
-lr = LogisticRegression(C=1.0, random_state=17).fit(X_train, y_train)
+import seaborn as sns
+sns.jointplot(x='Number of sexual partners', y='Biopsy', data=df, alpha=0.1) 
+#By adding alpha, we can see the density of the scattered spots clearly.
 
-# Make a prediction for test data set
-X_test = full_sites_sparse[idx_split:,:]
-y_test = lr.predict_proba(X_test)[:, 1]
 
-# Write it to the file which could be submitted
-write_to_submission_file(y_test, 'baseline_1.csv')
+# In[ ]:
 
+
+fig, (ax1,ax2) = plt.subplots(2,1,figsize=(15,8))
+sns.countplot(x='Number of sexual partners', data=df, ax=ax1)
+sns.barplot(x='Number of sexual partners', y='Biopsy', data=df, ax=ax2) #categorical to categorical
+
+#continuous to categorical
+facet = sns.FacetGrid(df, hue='Biopsy',aspect=4)
+facet.map(sns.kdeplot,'Number of sexual partners',shade= True)
+facet.set(xlim=(0, df['Number of sexual partners'].max()))
+facet.add_legend()
+
+
+# The people having more than 10 sexual partners got biopsy(-)...hmm...
+
+# ### Num of pregnancies
+
+# In[ ]:
+
+
+import seaborn as sns
+sns.jointplot(x='Num of pregnancies', y='Biopsy', data=df, alpha=0.1) 
+
+
+# In[ ]:
+
+
+sns.factorplot('Num of pregnancies','Biopsy',data=df, size=5, aspect=3)
+
+
+# In[ ]:
+
+
+#continuous to categorical
+facet = sns.FacetGrid(df, hue='Biopsy',aspect=4)
+facet.map(sns.kdeplot,'Num of pregnancies',shade= True)
+facet.set(xlim=(0, df['Num of pregnancies'].max()))
+facet.add_legend()
+
+
+# ### Cytology
+
+# In[ ]:
+
+
+import seaborn as sns
+sns.jointplot(x='Citology_1', y='Biopsy', data=df, alpha=0.1) 
+# Hard do see anything...
+
+
+# In[ ]:
+
+
+fig, (axis1,axis2,axis3) = plt.subplots(1,3,figsize=(15,5))
+sns.countplot(x='Citology_1', data=df, ax=axis1)
+sns.countplot(x='Biopsy', data=df, ax=axis2)
+sns.barplot(x='Citology_1', y='Biopsy', data=df, ax=axis3)  #categorical to categorical
+
+
+# ### Schiller
+
+# In[ ]:
+
+
+fig, (axis1,axis2,axis3) = plt.subplots(1,3,figsize=(15,5))
+sns.countplot(x='Schiller_1', data=df, ax=axis1)
+sns.countplot(x='Biopsy', data=df, ax=axis2)
+sns.barplot(x='Schiller_1', y='Biopsy', data=df, ax=axis3) #categorical to categorical
+
+
+# ## See the correlation between the elements (df) 
+
+# Fastest way to get contour of the data
+
+# In[ ]:
+
+
+corrmat = df.corr()
+f, ax = plt.subplots(figsize=(12, 9))
+sns.heatmap(corrmat, vmax=1, square=True, cmap='rainbow')
+
+
+# In[ ]:
+
+
+df['STDs:cervical condylomatosis'].value_counts()
+
+
+# In[ ]:
+
+
+df['STDs:AIDS'].value_counts()
+
+
+# The correlation was actually quite low.
+
+# ## List the heatmap of top correlation
+
+# In[ ]:
+
+
+k = 15 #number of variables for heatmap
+cols = corrmat.nlargest(k, 'Biopsy')['Biopsy'].index
+cm = np.corrcoef(df[cols].values.T)
+
+plt.figure(figsize=(9,9)) #可以調整大小
+
+sns.set(font_scale=1.25)
+hm = sns.heatmap(cm, cbar=True, annot=True, square=True, fmt='.2f', annot_kws={'size': 10},
+                 yticklabels = cols.values, xticklabels = cols.values)
+plt.show()
+
+
+# ## Conclusion: <br/>
+
+# It seems that 'Schiller_1', 'Hinselmann_1' and 'cytology_1' had the highest correlation with biopsy(+). <br/>
+# The result matched the common sense of the medical knowldege: High specificity diagnositic tool would have low false positive error. 

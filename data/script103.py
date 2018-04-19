@@ -1,7 +1,7 @@
 
 # coding: utf-8
 
-# ## Exploration of the date features ##
+# *This Kernel is under construction! More notes and plots will be added in the future *
 
 # In[ ]:
 
@@ -9,141 +9,181 @@
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
+import matplotlib
+import sys, re
+import seaborn as sns
+from sklearn import preprocessing
+from subprocess import check_output
+#print(check_output(["ls", "input"]).decode("utf8"))
 get_ipython().run_line_magic('matplotlib', 'inline')
+plt.style.use('ggplot')
+font = {'family' : 'sans-serif',
+        'weight' : 'normal',
+        'size'   : 12}
+matplotlib.rc('font', **font)
+matplotlib.rcParams['xtick.major.pad']='10'
+matplotlib.rcParams['ytick.major.pad']='10'
 
 
 # In[ ]:
 
 
-train = pd.read_csv('../input/act_train.csv', parse_dates=['date'])
-test = pd.read_csv('../input/act_test.csv', parse_dates=['date'])
-ppl = pd.read_csv('../input/people.csv', parse_dates=['date'])
-
-df_train = pd.merge(train, ppl, on='people_id')
-df_test = pd.merge(test, ppl, on='people_id')
-del train, test, ppl
-
-
-# First just so we know what we're dealing with, let's take a look at the range of the two date variables
-
-# In[ ]:
-
-
-for d in ['date_x', 'date_y']:
-    print('Start of ' + d + ': ' + str(df_train[d].min().date()))
-    print('  End of ' + d + ': ' + str(df_train[d].max().date()))
-    print('Range of ' + d + ': ' + str(df_train[d].max() - df_train[d].min()) + '\n')
-
-
-# So we can see that all the dates are a few years in the future, all the way until 2023! Although we now though that [this is because the data was anonymised](https://www.kaggle.com/c/predicting-red-hat-business-value/forums/t/22642/data-question/130058#post130058), so we can essentially treat these as if they were the last few years instead.
-# 
-# We can also see that date_x is on the order of 1 year, while date_y is 3 times longer, even though they both end on the same day (the date before they stopped collecting the dataset perhaps?)
-# 
-# ----
-# 
-# We'll go on more into looking at how the two features relate to each other later, but first let's look at the structure of the features separately.
-# 
-# ### Feature structure ###
-# 
-# Here I'm grouping the activities by date, and then for each date working out the number of activities that happened on that day as well as the probability of class 1 on that day.
-
-# In[ ]:
-
-
-date_x = pd.DataFrame()
-date_x['Class probability'] = df_train.groupby('date_x')['outcome'].mean()
-date_x['Frequency'] = df_train.groupby('date_x')['outcome'].size()
-date_x.plot(secondary_y='Frequency', figsize=(20, 10))
-
-
-# This plot shows some very interesting findings. There appears to be a very apparent weekly pattern, where on weekends there are much less events, as well as the probability of a event being a '1' class being much lower. 
-# 
-# We can see that during the week the classes are pretty balanced at ~0.5 while on weekends they drop to 0.4-0.3 (this could be very useful information). 
-# 
-# We can also see some very big peaks in number of activities around the September-October time frame, which we will look into later in the EDA. But first, let's do the same with the other date feature, date_y!
-
-# In[ ]:
-
-
-date_y = pd.DataFrame()
-date_y['Class probability'] = df_train.groupby('date_y')['outcome'].mean()
-date_y['Frequency'] = df_train.groupby('date_y')['outcome'].size()
-# We need to split it into multiple graphs since the time-scale is too long to show well on one graph
-i = int(len(date_y) / 3)
-date_y[:i].plot(secondary_y='Frequency', figsize=(20, 5), title='date_y Year 1')
-date_y[i:2*i].plot(secondary_y='Frequency', figsize=(20, 5), title='date_y Year 2')
-date_y[2*i:].plot(secondary_y='Frequency', figsize=(20, 5), title='date_y Year 3')
-
-
-# There also appears to be a weekly structure to the date_y variable, although it isn't as cleanly visible. However, the class probabilities appear to swing much lower (reaching 0.2 on a weekly basis)
-# 
-# We have to take these class probabilities with a grain of salt however, since we are hitting very low numbers of samples in each day with the date_y (in the hundreds).
-# 
-# ----
-# 
-# ### Test set ###
-# 
-# However, all of this information is useless if the same pattern doesn't emerge in the test set - let's find out if this is the case!
-# 
-# Since we don't know the true class values, we can't check if the same class probability appears in the test set, however we can check that the distribution of samples is the same.
-
-# In[ ]:
-
-
-date_x_freq = pd.DataFrame()
-date_x_freq['Training set'] = df_train.groupby('date_x')['activity_id'].count()
-date_x_freq['Testing set'] = df_test.groupby('date_x')['activity_id'].count()
-date_x_freq.plot(secondary_y='Testing set', figsize=(20, 8), 
-                 title='Comparison of date_x distribution between training/testing set')
-date_y_freq = pd.DataFrame()
-date_y_freq['Training set'] = df_train.groupby('date_y')['activity_id'].count()
-date_y_freq['Testing set'] = df_test.groupby('date_y')['activity_id'].count()
-date_y_freq[:i].plot(secondary_y='Testing set', figsize=(20, 8), 
-                 title='Comparison of date_y distribution between training/testing set (first year)')
-date_y_freq[2*i:].plot(secondary_y='Testing set', figsize=(20, 8), 
-                 title='Comparison of date_y distribution between training/testing set (last year)')
+df_train = pd.read_csv('../input/train.csv')
+df_test = pd.read_csv('../input/test.csv')
+df_train_survived = df_train['Survived']
+df_all = pd.concat([df_train.drop(['Survived'], axis=1), df_test])
+#df_all.info()
 
 
 # In[ ]:
 
 
-print('Correlation of date_x distribution in training/testing sets: ' + str(np.corrcoef(date_x_freq.T)[0,1]))
-print('Correlation of date_y distribution in training/testing sets: ' + str(np.corrcoef(date_y_freq.fillna(0).T)[0,1]))
+fig, axes = plt.subplots(1,8, figsize=(15,8))
+F_count = df_train.groupby(['Sex'])['Name'].count()[0]
+M_count = df_train.groupby(['Sex'])['Name'].count()[1]
+
+df_train['FamilySize'] = df_train['SibSp'] + df_train['Parch']
+df_temp = df_train.groupby(['Survived','Sex']).size().to_frame(name='Count').reset_index()
+df_temp.loc[(df_temp['Sex']=='male'),'Count'] = df_temp[(df_temp['Sex']=='male')]['Count']/M_count
+df_temp.loc[(df_temp['Sex']=='female'),'Count'] = df_temp[(df_temp['Sex']=='female')]['Count']/F_count
+df_temp2 = df_temp.pivot(index='Sex', columns='Survived', values='Count')
+
+ax = df_temp2.plot(ax=axes[0], kind='bar', stacked=True,legend=False)#, figsize=(1,6))#, color=('black','limegreen'))
+ax.set_title('gender')
+
+gender_list = ['male','female']
+for gender in gender_list:
+    gender_count = df_train[df_train['Sex']==gender].groupby(['Pclass'])['Name'].count()
+    df_temp = df_train[df_train['Sex']==gender].groupby(['Pclass','Survived']).size().to_frame(name='Count').reset_index()
+    for i in range(1,4):
+        df_temp.loc[(df_temp['Pclass']==i),'Count'] = df_temp[(df_temp['Pclass']==i)]['Count']/gender_count[i]
+    df_temp
+    df_temp2 = df_temp.pivot(index='Pclass', columns='Survived', values='Count')
+    ax = df_temp2.plot(ax=axes[gender_list.index(gender)+1], kind='bar', stacked=True,legend=False)#, figsize=(1,6))#, color=('black','limegreen'))
+    ax.set_title(gender)
+    
+    
+df_train['AgeCat']=pd.cut(df_train['Age'], bins=[0, 18, 100], include_lowest=True, labels=[1, 2])
+df_test['AgeCat']=pd.cut(df_test['Age'], bins=[0, 18, 100], include_lowest=True, labels=[1, 2])
+
+for gender in gender_list:
+    gender_count = df_train[df_train['Sex']==gender].groupby(['AgeCat'])['Name'].count()
+    df_temp = df_train[df_train['Sex']==gender].groupby(['AgeCat','Survived']).size().to_frame(name='Count').reset_index()
+    for i in range(1,3):
+        df_temp.loc[(df_temp['AgeCat']==i),'Count'] = df_temp[(df_temp['AgeCat']==i)]['Count']/gender_count[i]
+    df_temp
+    df_temp2 = df_temp.pivot(index='AgeCat', columns='Survived', values='Count')
+    ax = df_temp2.plot(ax=axes[gender_list.index(gender)+3], kind='bar', stacked=True,legend=False)#, figsize=(1,6))#, color=('black','limegreen'))
+    ax.set_title(gender)
+
+df_train['FareCat']=pd.cut(df_train['Fare'],bins=[0, 25, 90, 1000], include_lowest=True, labels=[1,2,3])
+df_test['FareCat']=pd.cut(df_test['Fare'],bins=[0, 25, 90, 1000], include_lowest=True, labels=[1,2,3])
+
+for gender in gender_list:
+    gender_count = df_train[df_train['Sex']==gender].groupby(['FareCat'])['Name'].count()
+    df_temp = df_train[df_train['Sex']==gender].groupby(['FareCat','Survived']).size().to_frame(name='Count').reset_index()
+    for i in range(1,4):
+        df_temp.loc[(df_temp['FareCat']==i),'Count'] = df_temp[(df_temp['FareCat']==i)]['Count']/gender_count[i]
+    df_temp
+    df_temp2 = df_temp.pivot(index='FareCat', columns='Survived', values='Count')
+    ax = df_temp2.plot(ax=axes[gender_list.index(gender)+5], kind='bar', stacked=True,legend=False)#, figsize=(1,6))#, color=('black','limegreen'))
+    ax.set_title(gender)
+
+df_train['FamCat']=pd.cut(df_train['FamilySize'],bins=[0,1, 4, 20], include_lowest=True, labels=[1,2,3])
 
 
-# This gives us some interesting results. For date_x, we observe in the graph (and also in the high correlation value) that the training and testing sets have a very similar structure - this provides strong evidence that the training and testing sets are split based on people, and not based on time or some other unknown factor. Once again, we also observe the peaks (outliers?) in the September/October region.
-# 
-# However, the date_y is less clear cut. There is a low correlation between the two sets, although there is definitely some relationship that we can see visually. There appears to be very many spikes in the test set in the first year (what could this mean?) That being said, in the last year of date_y the relationship between the two sets is much more apparent. Let's try looking at the correlations over the years.
+gender_count = df_train.groupby(['FamCat'])['Name'].count()
+df_temp = df_train.groupby(['FamCat','Survived']).size().to_frame(name='Count').reset_index()
+for i in range(1,4):
+    df_temp.loc[(df_temp['FamCat']==i),'Count'] = df_temp[(df_temp['FamCat']==i)]['Count']/gender_count[i]
+    df_temp
+    df_temp2 = df_temp.pivot(index='FamCat', columns='Survived', values='Count')
+ax = df_temp2.plot(ax=axes[7], kind='bar', stacked=True)#, figsize=(1,6))#, color=('black','limegreen'))
+
+ax.set_title('family size')
+gender_count
+#df_temp2
+leg = plt.legend(bbox_to_anchor=(1, 1), loc='upper left', ncol=1)
+leg.set_title('Survived', prop={'size': 18, 'weight': 'normal'})
+
+fig.tight_layout()
+
 
 # In[ ]:
 
 
-print('date_y correlation in year 1: ' + str(np.corrcoef(date_y_freq[:i].fillna(0).T)[0,1]))
-print('date_y correlation in year 2: ' + str(np.corrcoef(date_y_freq[i:2*i].fillna(0).T)[0,1]))
-print('date_y correlation in year 3: ' + str(np.corrcoef(date_y_freq[2*i:].fillna(0).T)[0,1]))
+matplotlib.pyplot.figure(figsize=(12, 6))
+df_temp = df_train.groupby(['Survived','Sex']).size().to_frame(name='Count').reset_index()
+sns.swarmplot(x="Sex", y="Age", hue='Survived', data=df_train,dodge=True)#, jitter=True);
 
-
-# Wow, that is definitely a huge improvement over time! Something about the structure of the first year of date_y doesn't match up, so we should keep that in mind (If anyone has any theories I would love to hear them).
-# 
-# ----
-# ### Probability features ###
-# 
-# To wrap up the first part of this EDA, I'm going to try turning the date class probabilities into features that we could use in our model, and then we can take a look at the AUCs that they give.
 
 # In[ ]:
 
 
-from sklearn.metrics import roc_auc_score
-features = pd.DataFrame()
-features['date_x_prob'] = df_train.groupby('date_x')['outcome'].transform('mean')
-features['date_y_prob'] = df_train.groupby('date_y')['outcome'].transform('mean')
-features['date_x_count'] = df_train.groupby('date_x')['outcome'].transform('count')
-features['date_y_count'] = df_train.groupby('date_y')['outcome'].transform('count')
-_=[print(f.ljust(12) + ' AUC: ' + str(round(roc_auc_score(df_train['outcome'], features[f]), 6))) for f in features.columns]
+sns.factorplot(x="Pclass", y="Age", hue='Survived', data=df_train,
+               col="Sex", kind="swarm", dodge=True, size=5, aspect=1); #, jitter=True);
 
 
-# It looks like the date probability features have very high predictive power! I think we might be onto something here.
-# 
-# Anyway, that's all I've got for now. I'll be back with more graphs and text soon, in the meantime if anyone has any theories or questions feel free to ask/discuss in the comments.
-# 
-# **Make sure to upvote if this was useful (and motivate me to make more!)**
+# In[ ]:
+
+
+sns.factorplot(x="Pclass", y="Fare", hue='Survived', data=df_train,
+               col="Sex", kind="swarm",size=5, aspect=1, dodge=True); 
+
+
+# In[ ]:
+
+
+matplotlib.pyplot.figure(figsize=(12, 6))
+df_train['Title'] = df_train.Name.apply(lambda x: re.search(' ([A-Z][a-z]+)\.', x).group(1))
+sns.swarmplot(x="Title", y="Age", hue='Survived', data=df_train, size=5); 
+plt.xticks(rotation=90)
+
+
+# In[ ]:
+
+
+df_train['Title'] = df_train['Title'].replace({'Mlle':'Miss', 'Mme':'Mrs', 'Ms':'Miss'})
+df_train['Title'] = df_train['Title'].replace(['Don', 'Dona', 'Rev', 'Dr',
+                                            'Major', 'Lady', 'Sir', 'Col',
+                                            'Capt', 'Countess', 'Jonkheer'],'VIP')
+
+
+# In[ ]:
+
+
+matplotlib.pyplot.figure(figsize=(12, 6))
+sns.swarmplot(x="Title", y="Age", hue='Survived', data=df_train, dodge=True); 
+plt.xticks(rotation=90);
+
+
+# In[ ]:
+
+
+matplotlib.pyplot.figure(figsize=(12, 6))
+sns.swarmplot(x="Title", y="Fare", hue='Survived', data=df_train, dodge=True); 
+plt.xticks(rotation=90);
+
+
+# In[ ]:
+
+
+df_train['Has_Cabin'] = ~df_train.Cabin.isnull()
+
+fig, axes = plt.subplots(1,5, figsize=(8,8))
+title_list = df_train['Title'].unique().tolist()
+cabin_list = [False,True]
+
+for title in title_list:
+    title_count = df_train[df_train['Title']==title].groupby(['Has_Cabin'])['Name'].count()
+    df_temp = df_train[df_train['Title']==title].groupby(['Has_Cabin','Survived']).size().to_frame(name='Count').reset_index()
+    for cabin in cabin_list:
+        df_temp.loc[(df_temp['Has_Cabin']==cabin),'Count'] = df_temp[(df_temp['Has_Cabin']==cabin)]['Count']/int(title_count[cabin_list.index(cabin)])
+        df_temp2 = df_temp.pivot(index='Has_Cabin', columns='Survived', values='Count')
+    ax = df_temp2.plot(ax=axes[title_list.index(title)], kind='bar', stacked=True,legend=False)#, figsize=(1,6))#, color=('black','limegreen'))
+    ax.set_title(title)
+
+leg = plt.legend(bbox_to_anchor=(1, 1), loc='upper left', ncol=1)
+leg.set_title('Survived', prop={'size': 18, 'weight': 'normal'})
+fig.tight_layout()
+

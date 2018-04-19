@@ -1,254 +1,185 @@
 
 # coding: utf-8
 
-# Here we use a simple linear model and article content with `CountVectorizer`.
+# Some basic dataset exploration.
 
-# Import libraries.
-
-# In[1]:
+# In[ ]:
 
 
-import os
-import numpy as np
-import pandas as pd
-from matplotlib import pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-import json
-from tqdm import tqdm_notebook
-from sklearn.feature_extraction.text import CountVectorizer
-from sklearn.metrics import mean_absolute_error
+#Importing the libraries
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import matplotlib.pyplot as plt # basic plotting
+import seaborn as sns # more plotting
 
-
-# The following code will help to throw away all HTML tags from an article content.
-
-# In[2]:
-
-
-from html.parser import HTMLParser
-
-class MLStripper(HTMLParser):
-    def __init__(self):
-        self.reset()
-        self.strict = False
-        self.convert_charrefs= True
-        self.fed = []
-    def handle_data(self, d):
-        self.fed.append(d)
-    def get_data(self):
-        return ''.join(self.fed)
-
-def strip_tags(html):
-    s = MLStripper()
-    s.feed(html)
-    return s.get_data()
-
-
-# In[3]:
-
-
-PATH_TO_DATA = '../input/'
-
-
-# Assume you have all data downloaded from competition's [page](https://www.kaggle.com/c/how-good-is-your-medium-article/data) in the PATH_TO_DATA folder and `.gz` files are ungzipped.
-
-# In[4]:
-
-
-get_ipython().system('ls -l $PATH_TO_DATA')
-
-
-# Supplementary function to read a JSON line without crashing on escape characters. 
-
-# In[5]:
-
-
-def read_json_line(line=None):
-    result = None
-    try:        
-        result = json.loads(line)
-    except Exception as e:      
-        # Find the offending character index:
-        idx_to_replace = int(str(e).split(' ')[-1].replace(')',''))      
-        # Remove the offending character:
-        new_line = list(line)
-        new_line[idx_to_replace] = ' '
-        new_line = ''.join(new_line)     
-        return read_json_line(line=new_line)
-    return result
-
-
-# This function takes a JSON and forms a txt file leaving only article content. When you resort to feature engineering and extract various features from articles, a good idea is to modify this function.
-
-# In[6]:
-
-
-def preprocess(path_to_inp_json_file):
-    output_list = []
-    with open(path_to_inp_json_file, encoding='utf-8') as inp_file:
-        for line in tqdm_notebook(inp_file):
-            json_data = read_json_line(line)
-            content = json_data['content'].replace('\n', ' ').replace('\r', ' ')
-            content_no_html_tags = strip_tags(content)
-            output_list.append(content_no_html_tags)
-    return output_list
+#Importing the data
+events = pd.read_csv('../input/events.csv')
+ginf = pd.read_csv('../input/ginf.csv')
 
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', "train_raw_content = preprocess(path_to_inp_json_file=os.path.join(PATH_TO_DATA, \n                                                                  'train.json'),)")
+events.info() # First, let's take a look at what kind of info we have.
 
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', "test_raw_content = preprocess(path_to_inp_json_file=os.path.join(PATH_TO_DATA, \n                                                                  'test.json'),)")
-
-
-# We'll use a linear model (`Ridge`) with a very simple feature extractor – `CountVectorizer`, meaning that we resort to the Bag-of-Words approach. For now, we are leaving only 50k features. 
-
-# In[ ]:
-
-
-cv = CountVectorizer(max_features=50000)
-
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'X_train = cv.fit_transform(train_raw_content)')
+# I manually converted the ../input/dictionary.txt to python dicts
+event_types = {1:'Attempt', 2:'Corner', 3:'Foul', 4:'Yellow card', 5:'Second yellow card', 6:'Red card', 7:'Substitution', 8:'Free kick won', 9:'Offside', 10:'Hand ball', 11:'Penalty conceded'}
+event_types2 = {12:'Key Pass', 13:'Failed through ball', 14:'Sending off', 15:'Own goal'}
+sides = {1:'Home', 2:'Away'}
+shot_places = {1:'Bit too high', 2:'Blocked', 3:'Bottom left corner', 4:'Bottom right corner', 5:'Centre of the goal', 6:'High and wide', 7:'Hits the bar', 8:'Misses to the left', 9:'Misses to the right', 10:'Too high', 11:'Top centre of the goal', 12:'Top left corner', 13:'Top right corner'}
+shot_outcomes = {1:'On target', 2:'Off target', 3:'Blocked', 4:'Hit the bar'}
+locations = {1:'Attacking half', 2:'Defensive half', 3:'Centre of the box', 4:'Left wing', 5:'Right wing', 6:'Difficult angle and long range', 7:'Difficult angle on the left', 8:'Difficult angle on the right', 9:'Left side of the box', 10:'Left side of the six yard box', 11:'Right side of the box', 12:'Right side of the six yard box', 13:'Very close range', 14:'Penalty spot', 15:'Outside the box', 16:'Long range', 17:'More than 35 yards', 18:'More than 40 yards', 19:'Not recorded'}
+bodyparts = {1:'right foot', 2:'left foot', 3:'head'}
+assist_methods = {0:np.nan, 1:'Pass', 2:'Cross', 3:'Headed pass', 4:'Through ball'}
+situations = {1:'Open play', 2:'Set piece', 3:'Corner', 4:'Free kick'}
 
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', 'X_test = cv.transform(test_raw_content)')
+# Mapping the dicts onto the events dataframe
+events['event_type'] = events['event_type'].map(event_types)
+events['event_type2'] = events['event_type2'].map(event_types2)
+events['side'] = events['side'].map(sides)
+events['shot_place'] = events['shot_place'].map(shot_places)
+events['shot_outcome'] = events['shot_outcome'].map(shot_outcomes)
+events['location'] = events['location'].map(locations)
+events['bodypart'] = events['bodypart'].map(bodyparts)
+events['assist_method'] = events['assist_method'].map(assist_methods)
+events['situation'] = events['situation'].map(situations)
 
 
 # In[ ]:
 
 
-X_train.shape, X_test.shape
-
-
-# Read targets from file.
-
-# In[ ]:
-
-
-train_target = pd.read_csv(os.path.join(PATH_TO_DATA, 'train_log1p_recommends.csv'), 
-                           index_col='id')
+# Notice that a lot of the objects are in fact categoricals, which are much easier to work with
+# We can fix this with Pandas' astype function
+cats = ['id_odsp', 'event_type', 'player', 'player2', 'event_team', 'opponent', 'shot_place', 'shot_outcome', 'location', 'bodypart', 'assist_method', 'situation']
+d = dict.fromkeys(cats,'category')
+events = events.astype(d)
+events['is_goal'] = events['is_goal'].astype('bool') # this is a bool, we can fix that too while we're at it
+events.info() # much better
 
 
 # In[ ]:
 
 
-train_target.shape
+goals = events[events['is_goal'] == True] # events where a goal resulted
 
 
 # In[ ]:
 
 
-y_train = train_target['log_recommends'].values
+# When do the goals occur?
+plt.hist(goals.time, 100)
+plt.xlabel("Time")
+plt.ylabel("Number of Goals at Time")
+plt.title("When Goals Occur")
+plt.show()
 
 
-# Make a 30%-holdout set. 
-
-# In[ ]:
-
-
-train_part_size = int(0.7 * train_target.shape[0])
-X_train_part = X_train[:train_part_size, :]
-y_train_part = y_train[:train_part_size]
-X_valid =  X_train[train_part_size:, :]
-y_valid = y_train[train_part_size:]
-
-
-# Now we are ready to fit a linear model.
+# Very interesting that there's a spike in goals just before halftime and just at the end. I'm guessing that this is measuring added time goals, though perhaps for some of the data, all goals from a half are reported in its final minute.
+# 
+# I know that there's the added pressure of wanting to score at the end of the game, and by the end of the half, but I definitely would not expect it to be that immediate or dramatic. Perhaps some of the data only knows what half the goal was scored in, and is reported as the end of the half. Most likely, scores are counting added time goals. We can do a little bit of testing of this hypothesis.
 
 # In[ ]:
 
 
-from sklearn.linear_model import Ridge
-
-
-# In[ ]:
-
-
-ridge = Ridge(random_state=17)
+ninetiethMin = goals[goals['time'] == 90]
+eightyNinthMin =  goals[goals['time'] == 89]
+ninetiethMin['dupes'] = ninetiethMin['id_odsp'].duplicated(keep=False)
+eightyNinthMin['dupes'] = eightyNinthMin['id_odsp'].duplicated(keep=False)
+multiNinetiethGoals = ninetiethMin[ninetiethMin['dupes'] == True]
+multiEightyNinthGoals = eightyNinthMin[eightyNinthMin['dupes'] == True]
+# I'm ignoring this warning for now, because it doesn't really matter for our purposes.
 
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', 'ridge.fit(X_train_part, y_train_part);')
+print("There were " + str(len(ninetiethMin)) + " goals in the 90th minute vs. " + str(len(eightyNinthMin)) + " in the 89th.\n" + str(len(multiNinetiethGoals)) + " times, there were multiple goals in the 90th minute, vs. " + str(len(multiEightyNinthGoals)) + " multiples in the 89th.")
+
+
+# It would be pretty obsurd for there to be 120x more instances of multiple goals in one minute over the previous minute, so we can safely assume that the hypothesis is relatively correct. It would be interesting to probe the extra time blips after this, to see if that's consistent, but that's for another notebook.
+# 
+# Next, let's look at when in the game various events occur.
+
+# In[ ]:
+
+
+yellowCards = events[events['event_type'] == ('Yellow card' or 'Second yellow card')] # selects yellow cards
+redCards = events[events['event_type'] == 'Red card'] # selects red cards
+substitutions = events[events['event_type'] == 'Substitution'] # selects substitutions
 
 
 # In[ ]:
 
 
-ridge_pred = ridge.predict(X_valid)
+# When do the substitutions occur?
+plt.hist(substitutions.time, 100)
+plt.xlabel("Time")
+plt.ylabel("Substitutions")
+plt.title("When Substitutions Occur")
+plt.show()
 
 
-# Let's plot predictions and targets for the holdout set. Recall that these are #recommendations (= #claps) of Medium articles with the `np.log1p` transformation.
-
-# In[ ]:
-
-
-plt.hist(y_valid, bins=30, alpha=.5, color='red', label='true', range=(0,10));
-plt.hist(ridge_pred, bins=30, alpha=.5, color='green', label='pred', range=(0,10));
-plt.legend();
-
-
-# As we can see, the prediction is far from perfect, and we get MAE $\approx$ 1.3 that corresponds to $\approx$ 2.7 error in #recommendations.
+# Looks like coaches like to make some adjustments at half time, and otherwise it seems like it's relatively normally distributed in the final 30 minutes. Again, it seems like for some pieces of data we only know the half.
 
 # In[ ]:
 
 
-valid_mae = mean_absolute_error(y_valid, ridge_pred)
-valid_mae, np.expm1(valid_mae)
-
-
-# Finally, train the model on the full accessible training set, make predictions for the test set and form a submission file. 
-
-# In[ ]:
-
-
-get_ipython().run_cell_magic('time', '', 'ridge.fit(X_train, y_train);')
+# When do the red cards occur?
+reds = plt.hist(redCards.time, 100, color="red")
+plt.xlabel("Time")
+plt.ylabel("Red Cards")
+plt.title("When Red Cards Occur")
+plt.show()
 
 
 # In[ ]:
 
 
-get_ipython().run_cell_magic('time', '', 'ridge_test_pred = ridge.predict(X_test)')
+# Or, breaking it into slightly larger chunks, which seems to paint a different picture
+reds = plt.hist(redCards.time, 10, color="red")
+plt.xlabel("Time")
+plt.ylabel("Red Cards")
+plt.title("When Red Cards Occur")
+plt.show()
 
 
-# In[ ]:
-
-
-def write_submission_file(prediction, filename,
-    path_to_sample=os.path.join(PATH_TO_DATA, 'sample_submission.csv')):
-    submission = pd.read_csv(path_to_sample, index_col='id')
-    
-    submission['log_recommends'] = prediction
-    submission.to_csv(filename)
-
+# Keep in mind that the dataset distinguishes between red cards and second yellow cards (which I count below as yellows, although it remains to be seen whether they're distributed more like straight reds or yellows). Refs are more likely to give red cards later in the game, especially after 80 minutes.
 
 # In[ ]:
 
 
-write_submission_file(prediction=ridge_test_pred, 
-                      filename='first_ridge.csv')
+# When do the yellow cards occur?
+yellows = plt.hist(yellowCards.time, 100, color="yellow")
+plt.xlabel("Time")
+plt.ylabel("Yellow Cards")
+plt.title("When Yellow Cards Occur")
+plt.show()
 
 
-# With this, you'll get 1.91185 on [public leaderboard](https://www.kaggle.com/c/how-good-is-your-medium-article/leaderboard). This is much higher than our validation MAE. This indicates that the target distribution in test set somewhat differs from that of the training set (recent Medium articles are more popular). This shouldn't confuse us as long as we see a correlation between local improvements and improvements on the leaderboard. 
+# Yellow cards, too, appear less likely early in the game. From about 25 minutes on, there's a similar distribution, but it looks almost logarithmic.
+# 
+# Finally, let's add a variable that says whether the home team or the away team won.
 
-# Some ideas for improvement:
-# - Engineer good features, this is the key to success. Some simple features will be based on publication time, authors, content length and so on
-# - You may not ignore HTML and extract some features from there
-# - You'd better experiment with your validation scheme. You should see a correlation between your local improvements and LB score
-# - Try TF-IDF, ngrams, Word2Vec and GloVe embeddings
-# - Try various NLP techniques like stemming and lemmatization
-# - Tune hyperparameters. In our example, we've left only 50k features and used `C`=1 as a regularization parameter, this can be changed 
-# - SGD and Vowpal Wabbit will learn much faster
-# - In our course, we don't cover neural nets. But it's not obliged to use GRUs or LSTMs in this competition. 
+# In[ ]:
+
+
+def defineWinner(row):
+    if row['fthg'] > row['ftag']:
+        row['result'] = 'Home win'
+    elif row['ftag'] > row['fthg']:
+        row['result'] = 'Away win'
+    elif row['fthg'] == row['ftag']:
+        row['result'] = 'Draw'
+    else: # For when scores are missing, etc (should be none)
+        row['result'] = None
+    return row
+ginf = ginf.apply(defineWinner, axis=1)
+

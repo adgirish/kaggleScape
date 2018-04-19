@@ -1,366 +1,313 @@
 
 # coding: utf-8
 
-# # Contents
-
-# I published a post explaining a bit of data definitions and relationships in the following link:
-# https://www.kaggle.com/usdot/flight-delays/discussion/29308
-# For anyone interested to check out.
+# # Plotting with seaborn
 # 
-# Thanks for some of the inspirations by the awesome kernel from FabienDaniel:    
-# https://www.kaggle.com/fabiendaniel/predicting-flight-delays-tutorial 
+# <table>
+# <tr>
+# <td><img src="https://i.imgur.com/3cYy56H.png" width="350px"/></td>
+# <td><img src="https://i.imgur.com/V9jAreo.png" width="350px"/></td>
+# <td><img src="https://i.imgur.com/5a6dwtm.png" width="350px"/></td>
+# <td><img src="https://i.imgur.com/ZSsHzrA.png" width="350px"/></td>
+# </tr>
+# <tr>
+# <td style="font-weight:bold; font-size:16px;">Count (Bar) Plot</td>
+# <td style="font-weight:bold; font-size:16px;">KDE Plot</td>
+# <td style="font-weight:bold; font-size:16px;">Joint (Hex) Plot</td>
+# <td style="font-weight:bold; font-size:16px;">Violin Plot</td>
+# </tr>
+# <tr>
+# <td>sns.countplot()</td>
+# <td>sns.kdeplot()</td>
+# <td>sns.jointplot()</td>
+# <td>sns.violinplot()</td>
+# </tr>
+# <tr>
+# <td>Good for nominal and small ordinal categorical data.</td>
+# <td>Good for interval data.</td>
+# <td>Good for interval and some nominal categorical data.</td>
+# <td>Good for interval data and some nominal categorical data.</td>
+# </tr>
+# </table>
 # 
-# # Library Import & Initial Data Explore
+# In the previous two sections we explored data visualization using the `pandas` built-in plotting tools. In this section, we'll do the same with `seaborn`.
+# 
+# `seaborn` is a standalone data visualization package that provides many extremely valuable data visualizations in a single package. It is generally a much more powerful tool than `pandas`; let's see why.
 
-# In[ ]:
+# In[2]:
 
 
 import pandas as pd
-import numpy as np
+reviews = pd.read_csv("../input/wine-reviews/winemag-data_first150k.csv", index_col=0)
 import seaborn as sns
-import plotly.plotly as py
-import plotly.graph_objs as go
-from plotly import tools
-import matplotlib.pyplot as plt
-sns.set(style="whitegrid")
-get_ipython().run_line_magic('matplotlib', 'inline')
-import datetime, warnings, scipy 
-import matplotlib as mpl
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from matplotlib.patches import ConnectionPatch
-from collections import OrderedDict
-from matplotlib.gridspec import GridSpec
-from mpl_toolkits.basemap import Basemap
-from scipy.optimize import curve_fit
-plt.rcParams["patch.force_edgecolor"] = True
-plt.style.use('fivethirtyeight')
-mpl.rc('patch', edgecolor = 'dimgray', linewidth=1)
-from IPython.core.interactiveshell import InteractiveShell
-InteractiveShell.ast_node_interactivity = "last_expr"
-pd.options.display.max_columns = 50
-warnings.filterwarnings("ignore")
 
 
-# In[ ]:
-
-
-airlines = pd.read_csv('../input/airlines.csv')
-airports= pd.read_csv('../input/airports.csv')
-flights = pd.read_csv('../input/flights.csv', low_memory=False)
-print (airlines.shape)
-print (airports.shape)
-print (flights.shape)
-
-
-# Let's explore a bit further on the last portion of the missing data - cancellation reason & various delays
-
-# In[ ]:
-
-
-print (flights.shape[0]*flights.CANCELLED.mean())
-print (flights.shape[0] - flights.CANCELLATION_REASON.isnull().sum().sum())
-
-
-# The two numbers match up, which infers that only the cancelled flights have a cancellation reason. Intuitive!
-
-# In[ ]:
-
-
-print (flights['ARRIVAL_DELAY'][flights['ARRIVAL_DELAY'] >= 15].count())
-print (flights.shape[0] - flights.AIR_SYSTEM_DELAY.isnull().sum().sum())
-
-
-# The two numbers match up, which infers that only the flights with arrival delay >= 15 minutes having a detailed delay breakdown (e.g. air system, airline, weather).
+# ## Countplot
 # 
-# Join the airline data to get started for the analysis
+# The `pandas` bar chart becomes a `seaborn` `countplot`.
 
-# In[ ]:
-
-
-flights_v1 = pd.merge(flights, airlines, left_on='AIRLINE', right_on='IATA_CODE', how='left')
-flights_v1.drop('IATA_CODE', axis=1, inplace=True)
-flights_v1.rename(columns={'AIRLINE_x': 'AIRLINE_CODE','AIRLINE_y': 'AIRLINE'}, inplace=True)
+# In[3]:
 
 
-# # Delay Plots
-
-# In[ ]:
+sns.countplot(reviews['points'])
 
 
-airport_mean_delays = pd.DataFrame(pd.Series(flights['ORIGIN_AIRPORT'].unique()))
-airport_mean_delays.set_index(0, drop = True, inplace = True)
-abbr_companies = airlines.set_index('IATA_CODE')['AIRLINE'].to_dict()
-identify_airport = airports.set_index('IATA_CODE')['CITY'].to_dict()
-
-# function that extract statistical parameters from a grouby objet:
-def get_stats(group):
-    return {'min': group.min(), 'max': group.max(),
-            'count': group.count(), 'mean': group.mean()}
-#___________________________________________________________
-
-for carrier in abbr_companies.keys():
-    fg1 = flights[flights['AIRLINE'] == carrier]
-    test = fg1['DEPARTURE_DELAY'].groupby(flights['ORIGIN_AIRPORT']).apply(get_stats).unstack()
-    airport_mean_delays[carrier] = test.loc[:, 'mean'] 
-
-
-# In[ ]:
-
-
-sns.set(context="paper")
-fig = plt.figure(1, figsize=(12,12))
-
-ax = fig.add_subplot(1,2,1)
-subset = airport_mean_delays.iloc[:50,:].rename(columns = abbr_companies)
-subset = subset.rename(index = identify_airport)
-mask = subset.isnull()
-sns.heatmap(subset, linewidths=0.05, cmap="YlGnBu", mask=mask, vmin = 0, vmax = 30)
-plt.setp(ax.get_xticklabels(), fontsize=12, rotation = 88) ;
-ax.yaxis.label.set_visible(False)
-
-ax = fig.add_subplot(1,2,2)    
-subset = airport_mean_delays.iloc[50:100,:].rename(columns = abbr_companies)
-subset = subset.rename(index = identify_airport)
-fig.text(0.5, 1.02, "Scale of Delays from origin airport", ha='center', fontsize = 20)
-mask = subset.isnull()
-sns.heatmap(subset, linewidths=0.05, cmap="YlGnBu", mask=mask, vmin = 0, vmax = 30)
-plt.setp(ax.get_xticklabels(), fontsize=12, rotation = 88) ;
-ax.yaxis.label.set_visible(False)
-
-plt.tight_layout()
-
-
-# Looks like the airlines with most number of flights in 2015 are Southwest (1.2M flights - ranked No.1), Delta, American and Skywest, which also have relatively low cancellation rate. American Eagle has the highest cancellation rate - around 5%. 
+# Comparing this chart with the bar chart from two notebooks ago, we find that, unlike `pandas`, `seaborn` doesn't require us to shape the data for it via `value_counts`; the `countplot` (true to its name) aggregates the data for us!
 # 
-# Also, the divertation rate seems positively correlated with the flight volume. Overall the divertion rate is less than 1%.
+# `seaborn` doesn't have a direct analogue to the line or area chart. Instead, the package provides a `kdeplot`:
 
-# In[ ]:
+# ## KDE Plot
 
-
-font = {'family' : 'normal', 'weight' : 'bold', 'size'   : 15}
-mpl.rc('font', **font)
-import matplotlib.patches as mpatches
-#__________________________________________________________________
-# extract a subset of columns and redefine the airlines labeling 
-fg2 = flights.loc[:, ['AIRLINE', 'DEPARTURE_DELAY']]
-fg2['AIRLINE'] = fg2['AIRLINE'].replace(abbr_companies)
-fig = plt.figure(1, figsize=(16,16))
-gs=GridSpec(1,2)             
-ax1=fig.add_subplot(gs[0,0]) 
-ax2=fig.add_subplot(gs[0,1]) 
-
-global_stats_d=flights['DEPARTURE_DELAY'].groupby(flights['AIRLINE']).apply(get_stats).unstack()
-global_stats_d=global_stats_d.sort_values('count')
-
-global_stats_a=flights['ARRIVAL_DELAY'].groupby(flights['AIRLINE']).apply(get_stats).unstack()
-global_stats_a=global_stats_a.sort_values('count')
-
-#----------------------------------------
-# Pie chart nº1: mean delay at departure
-#----------------------------------------
-labels = [s for s in  global_stats_d.index]
-sizes  = global_stats_d['mean'].values
-sizes  = [max(s,0) for s in sizes]
-explode = [0.0 if sizes[i] < 20000 else 0.01 for i in range(len(abbr_companies))]
-patches, texts, autotexts = ax1.pie(sizes, explode = explode, labels = labels, shadow=False, startangle=0, 
-                                    autopct = lambda p :  '{:.0f}'.format(p * sum(sizes) / 100))
-for i in range(len(abbr_companies)): 
-    texts[i].set_fontsize(18)
-ax1.axis('equal')
-ax1.set_title('Mean delay at departure', bbox={'facecolor':'midnightblue', 'pad':10},
-              color='w', fontsize=18)
-
-#----------------------------------------
-# Pie chart nº2: mean delay at arrival
-#----------------------------------------
-labels = [s for s in  global_stats_a.index]
-sizes  = global_stats_a['mean'].values
-sizes  = [max(s,0) for s in sizes]
-explode = [0.0 if sizes[i] < 20000 else 0.01 for i in range(len(abbr_companies))]
-patches, texts, autotexts = ax2.pie(sizes, explode = explode, labels = labels, shadow=False, startangle=0,
-                                     autopct = lambda p :  '{:.0f}'.format(p * sum(sizes) / 100))
-for i in range(len(abbr_companies)): 
-    texts[i].set_fontsize(18)
-ax2.axis('equal')
-ax2.set_title('Mean delay at arrival', bbox={'facecolor':'midnightblue', 'pad':10},
-              color='w', fontsize=18)
+# In[4]:
 
 
-# In[ ]:
+sns.kdeplot(reviews.query('price < 200').price)
 
 
-airlines
-
-
-# # Look into the airline delay breakdown structure
-
-# In[ ]:
-
-
-airline_rank_v09 = pd.DataFrame(flights_v1.groupby(['AIRLINE'])['AIR_SYSTEM_DELAY', 'AIRLINE_DELAY', 'LATE_AIRCRAFT_DELAY', 'WEATHER_DELAY'].sum()).reset_index()
-airline_rank_v09['total'] = airline_rank_v09['AIR_SYSTEM_DELAY'] + airline_rank_v09['AIRLINE_DELAY'] + airline_rank_v09['LATE_AIRCRAFT_DELAY'] + airline_rank_v09['WEATHER_DELAY']
-airline_rank_v09['pcnt_LATE_AIRCRAFT_DELAY'] = (airline_rank_v09['LATE_AIRCRAFT_DELAY']/airline_rank_v09['total'])
-airline_rank_v09['pcnt_AIRLINE_DELAY'] = (airline_rank_v09['AIRLINE_DELAY']/airline_rank_v09['total'])
-airline_rank_v09['pcnt_AIR_SYSTEM_DELAY'] = (airline_rank_v09['AIR_SYSTEM_DELAY']/airline_rank_v09['total'])
-airline_rank_v09['pcnt_WEATHER_DELAY'] = (airline_rank_v09['WEATHER_DELAY']/airline_rank_v09['total'])
-
-
-# In[ ]:
-
-
-get_ipython().run_line_magic('load_ext', 'Pymagic')
-get_ipython().run_line_magic('load_ext', 'Cython')
-%% HTML
-<iframe width="790" height="790" frameborder="0" scrolling="yes" src="https://plot.ly/~dongxu027/36.embed"></iframe>
-
-
-# The security system delay constitute less than 0.5% accross all delay components, so I removed it from analysis below - Just look at the other 4 types of delays. 
+# KDE, short for "kernel density estimate", is a statistical technique for smoothing out data noise. It addresses an important fundamental weakness of a line chart: it will buff out outlier or "in-betweener" values which would cause a line chart to suddenly dip.
 # 
-# Based on the above analysis, the late aircraft delay, the airline delay and air system delay consists of most of the arrival delays. 
-# - The late aircraft delay consists of almost one third of the delays accross all airlines, with the Southwest Airlines being half of delays. 
-# - The airline delay consists of 25~33% of all the delays, with Hawaiian Airlines the factor is the 58% of all the delays.
-# - the air system delay is around 20~30% of all the delays, with Spirit Airlines being the most dominant factor and Hawaiian Airlines only 1.8%.
-# - the weather delay factor varies among all the airlines and should be tied to weather conditions
+# For example, suppose that there was just one wine priced 19.93\$, but several hundred prices 20.00\$. If we were to plot the value counts in a line chart, our line would dip very suddenly down to 1 and then back up to around 1000 again, creating a strangely "jagged" line. The line chart with the same data, shown below for the purposes of comparison, has exactly this problem!
 
-# # Flight Volume, Cancellation & Divertion Rate
-
-# In[ ]:
+# In[5]:
 
 
-count_flights = flights['ORIGIN_AIRPORT'].value_counts()
-#___________________________
-plt.figure(figsize=(16,16))
-#________________________________________
-# define properties of markers and labels
-colors = ['lightblue', 'yellow', 'orange', 'purple', 'red' ]
-size_limits = [1, 100, 1000, 10000, 100000, 1000000]
-labels = []
-for i in range(len(size_limits)-1):
-    labels.append("{} <.< {}".format(size_limits[i], size_limits[i+1])) 
-#____________________________________________________________
-map = Basemap(resolution='h',llcrnrlon=-124.7844079, urcrnrlon=-66.9513812,
-              llcrnrlat=24.7433195, urcrnrlat=49.3457868, lat_0=0, lon_0=0,)
-map.shadedrelief()
-map.drawcoastlines()
-map.drawcountries(linewidth = 3)
-map.drawstates(color='1')
-#_____________________
-# put airports on map
-for index, (code, y,x) in airports[['IATA_CODE', 'LATITUDE', 'LONGITUDE']].iterrows():
-    x, y = map(x, y)
-    isize = [i for i, val in enumerate(size_limits) if val < count_flights[code]]
-    ind = isize[-1]
-    map.plot(x, y, marker='o', markersize = ind+3, 
-             markeredgewidth = 1.5, color = colors[ind], label = labels[ind])
-
-#_____________________________________________
-# remove duplicate labels and set their order
-handles, labels = plt.gca().get_legend_handles_labels()
-by_label = OrderedDict(zip(labels, handles))
-key_order = ('1 <.< 100', '100 <.< 1000', '1000 <.< 10000',
-             '10000 <.< 100000', '100000 <.< 1000000')
-new_label = OrderedDict()
-for key in key_order:
-    new_label[key] = by_label[key]
-plt.legend(new_label.values(), new_label.keys(), loc = 4, prop= {'size':14},
-           title='Number of flights in 2015', frameon = True, framealpha = 1)
-plt.show()
+reviews[reviews['price'] < 200]['price'].value_counts().sort_index().plot.line()
 
 
-# In[ ]:
-
-
-airline_rank_v01 = pd.DataFrame({'flight_volume' : flights_v1.groupby(['AIRLINE'])['FLIGHT_NUMBER'].count()}).reset_index()
-airline_rank_v01.sort_values("flight_volume", ascending=True, inplace=True)
-flight_volume_total = airline_rank_v01['flight_volume'].sum()
-airline_rank_v01['flight_pcnt'] = airline_rank_v01['flight_volume']/flight_volume_total
-
-
-# In[ ]:
-
-
-airline_rank_v02 = pd.DataFrame({'cancellation_rate' : flights_v1.groupby(['AIRLINE'])['CANCELLED'].mean()}).reset_index()
-airline_rank_v02.sort_values("cancellation_rate", ascending=False, inplace=True)
-airline_rank_v03 = pd.DataFrame({'divertion_rate' : flights_v1.groupby(['AIRLINE'])['DIVERTED'].mean()}).reset_index()
-airline_rank_v03.sort_values("divertion_rate", ascending=False, inplace=True)
-airline_rank_v1 = pd.merge(airline_rank_v01, airline_rank_v02, left_on='AIRLINE', right_on='AIRLINE', how='left')
-airline_rank_v1 = pd.merge(airline_rank_v1, airline_rank_v03, left_on='AIRLINE', right_on='AIRLINE', how='left')
-
-
-# In[ ]:
-
-
-airline_rank_v1
-
-
-# # Taxi-in & Taxi-out Time 
-
-# In[ ]:
-
-
-airline_rank_v04 = pd.DataFrame({'taxi_out_time' : flights_v1.groupby(['AIRLINE'])['TAXI_OUT'].mean()}).reset_index()
-airline_rank_v05 = pd.DataFrame({'taxi_in_time' : flights_v1.groupby(['AIRLINE'])['TAXI_IN'].mean()}).reset_index()
-
-
-# In[ ]:
-
-
-ax = plt.subplots()
-sns.set_color_codes("pastel")
-sns.set_context("notebook", font_scale=1.5)
-ax = sns.barplot(x="taxi_out_time", y="AIRLINE", data=airline_rank_v04, color="g")
-ax = sns.barplot(x="taxi_in_time", y="AIRLINE", data=airline_rank_v05, color="b")
-ax.set(xlabel="taxi_time (taxi_in: blue, taxi_out: green)")
-
-
-# Interestingly, we can see that overall taxi in time is less than taxi out time for all the airlines. All airlines have an average taxi_in time less than 10 minutes, while all taxi out time are greater than 10 minutes. Also, it seems Southwest has the shortest taxi-in and taxi-out time (at least among the shortest).
-
-# # Airline Flight Speed (miles/hour)
-
-# In[ ]:
-
-
-flights_v1['fly_speed'] = 60*flights_v1['DISTANCE']/flights_v1['AIR_TIME']
-sns.set_context("notebook", font_scale=2.5)
-sns.set(style="ticks", palette="muted", color_codes=True)
-ax = sns.violinplot(x="fly_speed", y="AIRLINE", data=flights_v1);
-sns.despine(trim=True)
-
-
-# Based on the violinplot, we can see that in average, the majority of flying speed accross airlines are close to 400~450 miles per hour; with the Hawaiian Airlines Inc. is the slowest airline and also large variation (by simply looking at the data shape distribution). 
+# A KDE plot is better than a line chart for getting the "true shape" of interval data. In fact, I recommend always using it instead of a line chart for such data.
 # 
-# It is intersting to see that in some rare cases, an aircraft can go as high as 800 miles per hour in average during a flight trip (recall how I calculate this value). United Airlines seems the fastest, while Hawaiian Airlines seems at the bottom.
+# However, it's a worse choice for ordinal categorical data. A KDE plot expects that if there are 200 wine rated 85 and 400 rated 86, then the values in between, like 85.5, should smooth out to somewhere in between (say, 300). However, if the value in between can't occur (wine ratings of 85.5 are not allowed), then the KDE plot is fitting to something that doesn't exist. In these cases, use a line chart instead.
 # 
+# KDE plots can also be used in two dimensions.
 
-# # Arrival & Departure Delays
-
-# In[ ]:
-
-
-airline_rank_v07 = pd.DataFrame({'avg_arrival_delay' : flights_v1.groupby(['AIRLINE'])['ARRIVAL_DELAY'].mean()}).reset_index()
-airline_rank_v08 = pd.DataFrame({'avg_departure_delay' : flights_v1.groupby(['AIRLINE'])['DEPARTURE_DELAY'].mean()}).reset_index()
+# In[6]:
 
 
-# In[ ]:
+sns.kdeplot(reviews[reviews['price'] < 200].loc[:, ['price', 'points']].dropna().sample(5000))
 
 
-airline_rank_v1 = pd.merge(airline_rank_v1, airline_rank_v07, left_on='AIRLINE', right_on='AIRLINE', how='left')
-airline_rank_v1 = pd.merge(airline_rank_v1, airline_rank_v08, left_on='AIRLINE', right_on='AIRLINE', how='left')
+# Bivariate KDE plots like this one are a great alternative to scatter plots and hex plots. They solve the same data overplotting issue that scatter plots suffer from and hex plots address, in a different but similarly visually appealing. However, note that bivariate KDE plots are very computationally intensive. We took a sample of 5000 points in this example to keep compute time reasonable.
 
-
-# In[ ]:
-
-
-ax = sns.set_color_codes("pastel")
-sns.set_context("notebook", font_scale=1.5)
-ax = sns.barplot(x="avg_departure_delay", y="AIRLINE", data=airline_rank_v08,
-            label="accuracy", color="b")
-ax = sns.barplot(x="avg_arrival_delay", y="AIRLINE", data=airline_rank_v07,
-            label="accuracy", color="r")
-ax.set(xlabel="delay_time (arrival: red, departure: blue)")
-
-
-# Based on this analysis, looks like all the lines have longer departure delays than arrival delays, except for Hawwaiian Airlines. My intuition is that the flights can adjust speed to catch up time while departure delay sometimes are out of control.
+# ## Distplot
 # 
-# Spirit Airlines and Frontier Airlines are among the longest arrival and departure delay airlines. It is worth noting that Alaska Airlines is the only airline among all to arrive the destination earlier than scheduled in average.
+# The `seaborn` equivalent to a `pandas` histogram is the `distplot`. Here's an example:
+
+# In[7]:
+
+
+sns.distplot(reviews['points'], bins=10, kde=False)
+
+
+# The `distplot` is a composite plot type. In the example above we've turned off the `kde` that's included by default, and manually set the number of bins to 10 (two possible ratings per bin), to get a clearer picture.
+
+# ## Scatterplot and hexplot
+
+# To plot two variables against one another in `seaborn`, we use `jointplot`.
+
+# In[8]:
+
+
+sns.jointplot(x='price', y='points', data=reviews[reviews['price'] < 100])
+
+
+# Notice that this plot comes with some bells and whistles: a correlation coefficient is provided, along with histograms on the sides. These kinds of composite plots are a recurring theme in `seaborn`. Other than that, the `jointplot` is just like the `pandas` scatter plot.
+# 
+# As in `pandas`, we can use a hex plot (by simply passing `kind='hex'`) to deal with overplotting:
+
+# In[9]:
+
+
+sns.jointplot(x='price', y='points', data=reviews[reviews['price'] < 100], kind='hex', 
+              gridsize=20)
+
+
+# ## Boxplot and violin plot
+# 
+# `seaborn` provides a boxplot function. It creates a statistically useful plot that looks like this:
+
+# In[10]:
+
+
+df = reviews[reviews.variety.isin(reviews.variety.value_counts().head(5).index)]
+
+sns.boxplot(
+    x='variety',
+    y='points',
+    data=df
+)
+
+
+# The center of the distributions shown above is the "box" in boxplot. The top of the box is the 75th percentile, while the bottom is the 25th percentile. In other words, half of the data is distributed within the box! The green line in the middle is the median.
+# 
+# The other part of the plot, the "whiskers", shows the extent of the points beyond the center of the distribution. Individual circles beyond *that* are outliers.
+# 
+# This boxplot shows us that although all five wines recieve broadly similar ratings, Bordeaux-style wines tend to be rated a little higher than a Chardonnay.
+# 
+# Boxplots are great for summarizing the shape of many datasets. They also don't have a limit in terms of numeracy: you can place as many boxes in the plot as you feel comfortable squeezing onto the page.
+# 
+# However, they only work for interval variables and nominal variables with a large number of possible values; they assume your data is roughly normally distributed (otherwise their design doesn't make much sense); and they don't carry any information about individual values, only treating the distribution as a whole.
+# 
+# I find the slightly more advanced `violinplot` to be more visually enticing, in most cases:
+
+# In[11]:
+
+
+sns.violinplot(
+    x='variety',
+    y='points',
+    data=reviews[reviews.variety.isin(reviews.variety.value_counts()[:5].index)]
+)
+
+
+# A `violinplot` cleverly replaces the box in the boxplot with a kernel density estimate for the data. It shows basically the same data, but is harder to misinterpret and much prettier than the utilitarian boxplot.
+
+# ## Why seaborn?
+# 
+# Having now seen both `pandas` plotting and the `seaborn` library in action, we are now in a position to compare the two and decide when to use which for what.
+# 
+# Recall the data we've been working with in this tutorial is in:
+
+# In[12]:
+
+
+reviews.head()
+
+
+# This data is in a "record-oriented" format. Each individual row is a single record (a review); in aggregate, the list of all rows is the list of all records (all reviews). This is the format of choice for the most kinds of data: data corresponding with individual, unit-identifiable "things" ("records"). The majority of the simple data that gets generated is created in this format, and data that isn't can almost always be converted over. This is known as a "tidy data" format.
+# 
+# `seaborn` is designed to work with this kind of data out-of-the-box, for all of its plot types, with minimal fuss. This makes it an incredibly convenient workbench tool.
+# 
+# `pandas` is not designed this way. In `pandas`, every plot we generate is tied very directly to the input data. In essence, `pandas` expects your data being in exactly the right *output* shape, regardless of what the input is.
+# 
+# <!--
+# In the previous section of this tutorial, we purposely evaded this issue by using supplemental datasets in a "just right" shape. Starting from the data that we already have, here's what it would take to generate a simple histogram:
+# 
+# ```python
+# import numpy as np
+# top_five_wines_scores = (
+#     reviews
+#         .loc[np.where(reviews.variety.isin(reviews.variety.value_counts().head(5).index))]
+#         .loc[:, ['variety', 'points']]
+#         .groupby('variety')
+#         .apply(lambda df: pd.Series(df.points.values))
+#         .unstack()
+#         .T
+# )
+# top_five_wines_scores.plot.hist()
+# ```
+# 
+# As we demonstrated above, to do the same thing in `seaborn`, all we need is:
+# 
+# ```python
+# sns.distplot(reviews.points, bins=10, kde=False)
+# ```
+# 
+# The difference is stark!
+# -->
+# 
+# Hence, in practice, despite its simplicity, the `pandas` plotting tools are great for the initial stages of exploratory data analytics, but `seaborn` really becomes your tool of choice once you start doing more sophisticated explorations.
+# 
+# <!--
+# My recommendations are:
+# * Bar plot: 
+#   * `pd.Series.plot.bar`
+#   * `sns.countplot`
+# * Scatter plot:
+#   * `pd.Series.plot.scatter`
+#   * `sns.jointplot`
+# * Hex plot:
+#   * `pd.Series.plot.hex`
+#   * `sns.jointplot`
+# * Line/KDE plot:
+#   * `pd.Series.plot.line` for nominal categorical variables
+#   * `sns.kdeplot` for interval variables
+# * Box/Violin plot:
+#   * `sns.boxplot`
+#   * `sns.violinplot`
+# * Histogram:
+#    * `sns.distplot`
+# -->
+
+# # Examples
+# 
+# As in previous notebooks, let's now test ourselves by answering some questions about the plots we've used in this section. Once you have your answers, click on "Output" button below to show the correct answers.
+# 
+# 1. A `seaborn` `countplot` is equivalent to what in `pandas`?
+# 2. A `seaborn` `jointplot` is equivalent to a what in `pandas`?
+# 3. Why might a `kdeplot` not work very well for ordinal categorical data?
+# 4. What does the "box" in a `boxplot` represent?
+
+# In[13]:
+
+
+from IPython.display import HTML
+HTML("""
+<ol>
+<li>A seaborn countplot is like a pandas bar plot.</li>
+<li>A seaborn jointplot is like a pandas hex plot.</li>
+<li>KDEPlots work by aggregating data into a smooth curve. This is great for interval data but doesn't always work quite as well for ordinal categorical data.</li>
+<li>The top of the box is the 75th percentile. The bottom of the box is the 25th percentile. The median, the 50th percentile, is the line in the center of the box. So 50% of the data in the distribution is located within the box!</li>
+</ol>
+""")
+
+
+# Next, try forking this kernel, and see if you can replicate the following plots. To see the answers, click the "Input" button to unhide the code and see the answers. Here's the dataset we've been working with:
+
+# In[14]:
+
+
+pokemon = pd.read_csv("../input/pokemon/Pokemon.csv", index_col=0)
+pokemon.head()
+
+
+# And now, the plots:
+
+# In[15]:
+
+
+sns.countplot(pokemon['Generation'])
+
+
+# In[16]:
+
+
+sns.distplot(pokemon['HP'])
+
+
+# In[17]:
+
+
+sns.jointplot(x='Attack', y='Defense', data=pokemon)
+
+
+# In[18]:
+
+
+sns.jointplot(x='Attack', y='Defense', data=pokemon, kind='hex')
+
+
+# Hint: for the next exercise, use the variables `HP` and `Attack`.
+
+# In[22]:
+
+
+sns.kdeplot(pokemon['HP'], pokemon['Attack'])
+
+
+# In[20]:
+
+
+sns.boxplot(x='Legendary', y='Attack', data=pokemon)
+
+
+# In[21]:
+
+
+sns.violinplot(x='Legendary', y='Attack', data=pokemon)
+
+
+# ## Conclusion
+# 
+# `seaborn` is one of the most important, if not *the* most important, data visualization tool in the Python data viz ecosystem. In this notebook we looked at what features and capacities `seaborn` brings to the table. There's plenty more that you can do with the library that we won't cover here or elsewhere in the tutorial; I highly recommend browsing the terrific `seaborn` [Gallery page](https://seaborn.pydata.org/examples/index.html) to see more beautiful examples of the library in action.
+# 
+# [Click here to go to the next section, "Faceting with seaborn"](https://www.kaggle.com/residentmario/faceting-with-seaborn).

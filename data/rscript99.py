@@ -1,275 +1,219 @@
-# Version 5 of this kernel is a Python version of Pranav Pandya's R LightGBM:
-#    https://www.kaggle.com/pranav84/single-lightgbm-in-r-with-75-mln-rows-lb-0-9690
+'''
+Based on https://www.kaggle.com/CVxTz/keras-baseline-feature-hashing-cnn
+I add some new functions.
+1. Do some data preprocessing.
+2. Use crawl-300d-2M.vec
+3. Use GRU before CNN layer
+'''
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
-# Version 6 increases MAX_ROUNDS to get early stopping
-# Version 7 runs without validation based on the result of version 6
-# Version 9 (still trying to run full training)
-#           gets rid of AUC evals, to maybe speed it up
-# Version 10 runs validation with shuffle=False
-#            (since there is a relevant time element
-#             which will leak in shuffled validation)
-# Version 11 runs without validation based on result of version 11
-# Version 12 adds 'day' restriction to all aggregations
-#            (to make train and test sets more comparable)
-# Version 13 attempts to expand the data back by 25 million records
-# Version 14 runs without validation based on result of version 13
-# Version 15 even more records
-# Version 16 OK, not quite so many records
-# Version 17 reverts to version 14 (LB=.9694)
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 
-VALIDATE = False
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-MAX_ROUNDS = 1000
-EARLY_STOP = 50
-OPT_ROUNDS = 680
+import os
+print(os.listdir("../input"))
+os.environ['PYTHONHASHSEED'] = '10000'
+np.random.seed(10001)
+import random
+import tensorflow as tf
+random.seed(10002)
+session_conf = tf.ConfigProto(intra_op_parallelism_threads=6, inter_op_parallelism_threads=5)
+from keras import backend
 
-FULL_OUTFILE = 'sub_lgbm_r_to_python_nocv.csv'
-VALID_OUTFILE = 'sub_lgbm_r_to_python_withcv.csv'
+tf.set_random_seed(10003)
+backend.set_session(tf.Session(graph=tf.get_default_graph(), config=session_conf))
+# Any results you write to the current directory are saved as output.
 
-import pandas as pd
-import time
-import numpy as np
-from sklearn.model_selection import train_test_split 
-import lightgbm as lgb
+train = pd.read_csv("../input/donorschoose-application-screening/train.csv")
+test = pd.read_csv("../input/donorschoose-application-screening/test.csv")
+resources = pd.read_csv("../input/donorschoose-application-screening/resources.csv")
+train = train.sort_values(by="project_submitted_datetime")
 
-path = '../input/'
+teachers_train = list(set(train.teacher_id.values))
+teachers_test = list(set(test.teacher_id.values))
+inter = set(teachers_train).intersection(teachers_test)
 
-dtypes = {
-        'ip'            : 'uint32',
-        'app'           : 'uint16',
-        'device'        : 'uint16',
-        'os'            : 'uint16',
-        'channel'       : 'uint16',
-        'is_attributed' : 'uint8',
-        'click_id'      : 'uint32'
-        }
+char_cols = ['project_subject_categories', 'project_subject_subcategories',
+       'project_title', 'project_essay_1', 'project_essay_2',
+       'project_essay_3', 'project_essay_4', 'project_resource_summary']
+       
 
-print('load train...')
-train_cols = ['ip','app','device','os', 'channel', 'click_time', 'is_attributed']
-train_df = pd.read_csv(path+"train.csv", skiprows=range(1,84903891), nrows=100000000,dtype=dtypes, usecols=train_cols)
+#https://www.kaggle.com/mmi333/beat-the-benchmark-with-one-feature
+resources['total_price'] = resources.quantity * resources.price
 
-import gc
+mean_total_price = pd.DataFrame(resources.groupby('id').total_price.mean()) 
+sum_total_price = pd.DataFrame(resources.groupby('id').total_price.sum()) 
+count_total_price = pd.DataFrame(resources.groupby('id').total_price.count())
+mean_total_price['id'] = mean_total_price.index
+sum_total_price['id'] = mean_total_price.index
+count_total_price['id'] = mean_total_price.index
 
-len_train = len(train_df)
-
-gc.collect()
-
-print('data prep...')
-
-most_freq_hours_in_test_data = [4, 5, 9, 10, 13, 14]
-least_freq_hours_in_test_data = [6, 11, 15]
-
-
-def prep_data( df ):
+def create_features(df):
     
-    df['hour'] = pd.to_datetime(df.click_time).dt.hour.astype('uint8')
-    df['day'] = pd.to_datetime(df.click_time).dt.day.astype('uint8')
-    df.drop(['click_time'], axis=1, inplace=True)
-    gc.collect()
+
+    df = pd.merge(df, mean_total_price, on='id')
+    df = pd.merge(df, sum_total_price, on='id')
+    df = pd.merge(df, count_total_price, on='id')
+    df['year'] = df.project_submitted_datetime.apply(lambda x: x.split("-")[0])
+    df['month'] = df.project_submitted_datetime.apply(lambda x: x.split("-")[1])
+    for col in char_cols:
+        df[col] = df[col].fillna("NA")
+    df['text'] = df.apply(lambda x: " ".join(x[col] for col in char_cols), axis=1)
+    return df
+
+train = create_features(train)
+test = create_features(test)
+
+cat_features = ["teacher_prefix", "school_state", "year", "month", "project_grade_category", "project_subject_categories", "project_subject_subcategories"]
+#"teacher_id", 
+num_features = ["teacher_number_of_previously_posted_projects", "total_price_x", "total_price_y", "total_price"]
+cat_features_hash = [col+"_hash" for col in cat_features]
+
+max_size=15000#0
+def feature_hash(df, max_size=max_size):
+    for col in cat_features:
+        df[col+"_hash"] = df[col].apply(lambda x: hash(x)%max_size)
+    return df
+
+train = feature_hash(train)
+test = feature_hash(test)
+
+from sklearn.preprocessing import StandardScaler
+#from sklearn.feature_extraction.text import TfidfVectorizer
+from keras.preprocessing import text, sequence
+import re
+
+max_features = 100000#50000
+maxlen = 300
+scaler = StandardScaler()
+X_train_num = scaler.fit_transform(train[num_features])
+X_test_num = scaler.transform(test[num_features])
+X_train_cat = np.array(train[cat_features_hash], dtype=np.int)
+X_test_cat = np.array(test[cat_features_hash], dtype=np.int)
+tokenizer = text.Tokenizer(num_words=max_features)
+
+def preprocess1(string):
+    '''
+    :param string:
+    :return:
+    '''
+    #去掉一些特殊符号
+    string = re.sub(r'(\")', ' ', string)
+    string = re.sub(r'(\r)', ' ', string)
+    string = re.sub(r'(\n)', ' ', string)
+    string = re.sub(r'(\r\n)', ' ', string)
+    string = re.sub(r'(\\)', ' ', string)
+    string = re.sub(r'\t', ' ', string)
+    string = re.sub(r'\:', ' ', string)
+    string = re.sub(r'\"\"\"\"', ' ', string)
+    string = re.sub(r'_', ' ', string)
+    string = re.sub(r'\+', ' ', string)
+    string = re.sub(r'\=', ' ', string)
+
+    return string
+
+train["text"]=train["text"].apply(preprocess1)
+test["text"]=test["text"].apply(preprocess1)
+
+tokenizer.fit_on_texts(train["text"].tolist()+test["text"].tolist())
+list_tokenized_train = tokenizer.texts_to_sequences(train["text"].tolist())
+list_tokenized_test = tokenizer.texts_to_sequences(test["text"].tolist())
+X_train_words = sequence.pad_sequences(list_tokenized_train, maxlen=maxlen)
+X_test_words = sequence.pad_sequences(list_tokenized_test, maxlen=maxlen)
+
+
+X_train_target = train.project_is_approved
+#../input/fatsttext-common-crawl/crawl-300d-2M/*
+EMBEDDING_FILE = '../input/fatsttext-common-crawl/crawl-300d-2M/crawl-300d-2M.vec'
+embed_size=300
+embeddings_index = {}
+with open(EMBEDDING_FILE,encoding='utf8') as f:
+    for line in f:
+        values = line.rstrip().rsplit(' ')
+        word = values[0]
+        coefs = np.asarray(values[1:], dtype='float32')
+        embeddings_index[word] = coefs
+
+word_index = tokenizer.word_index
+#prepare embedding matrix
+num_words = min(max_features, len(word_index) + 1)
+embedding_matrix = np.zeros((num_words, embed_size))
+for word, i in word_index.items():
+    if i >= max_features:
+        continue
+    embedding_vector = embeddings_index.get(word)
+    if embedding_vector is not None:
+        # words not found in embedding index will be all-zeros.
+        embedding_matrix[i] = embedding_vector
+
+
+from keras.layers import Input, Dense, Embedding, Flatten, concatenate, Dropout, Convolution1D, \
+GlobalMaxPool1D,SpatialDropout1D,CuDNNGRU,Bidirectional,PReLU,GRU
+from keras.models import Model
+from keras import optimizers
+
+def get_model3():
+    input_cat = Input((len(cat_features_hash), ))
+    input_num = Input((len(num_features), ))
+    input_words = Input((maxlen, ))
     
-    df['in_test_hh'] = (   3 
-                         - 2*df['hour'].isin(  most_freq_hours_in_test_data ) 
-                         - 1*df['hour'].isin( least_freq_hours_in_test_data ) ).astype('uint8')
-    print( df.info() )
-
-    print('group by : ip_day_test_hh')
-    gp = df[['ip', 'day', 'in_test_hh', 'channel']].groupby(by=['ip', 'day',
-             'in_test_hh'])[['channel']].count().reset_index().rename(index=str, 
-             columns={'channel': 'nip_day_test_hh'})
-    df = df.merge(gp, on=['ip','day','in_test_hh'], how='left')
-    del gp
-    df.drop(['in_test_hh'], axis=1, inplace=True)
-    print( "nip_day_test_hh max value = ", df.nip_day_test_hh.max() )
-    df['nip_day_test_hh'] = df['nip_day_test_hh'].astype('uint32')
-    gc.collect()
-    print( df.info() )
-
-    print('group by : ip_day_hh')
-    gp = df[['ip', 'day', 'hour', 'channel']].groupby(by=['ip', 'day', 
-             'hour'])[['channel']].count().reset_index().rename(index=str, 
-             columns={'channel': 'nip_day_hh'})
-    df = df.merge(gp, on=['ip','day','hour'], how='left')
-    del gp
-    print( "nip_day_hh max value = ", df.nip_day_hh.max() )
-    df['nip_day_hh'] = df['nip_day_hh'].astype('uint16')
-    gc.collect()
-    print( df.info() )
-
-    print('group by : ip_hh_os')
-    gp = df[['ip', 'day', 'os', 'hour', 'channel']].groupby(by=['ip', 'os', 'day',
-             'hour'])[['channel']].count().reset_index().rename(index=str, 
-             columns={'channel': 'nip_hh_os'})
-    df = df.merge(gp, on=['ip','os','hour','day'], how='left')
-    del gp
-    print( "nip_hh_os max value = ", df.nip_hh_os.max() )
-    df['nip_hh_os'] = df['nip_hh_os'].astype('uint16')
-    gc.collect()
-    print( df.info() )
-
-    print('group by : ip_hh_app')
-    gp = df[['ip', 'app', 'hour', 'day', 'channel']].groupby(by=['ip', 'app', 'day',
-             'hour'])[['channel']].count().reset_index().rename(index=str, 
-             columns={'channel': 'nip_hh_app'})
-    df = df.merge(gp, on=['ip','app','hour','day'], how='left')
-    del gp
-    print( "nip_hh_app max value = ", df.nip_hh_app.max() )
-    df['nip_hh_app'] = df['nip_hh_app'].astype('uint16')
-    gc.collect()
-    print( df.info() )
-
-    print('group by : ip_hh_dev')
-    gp = df[['ip', 'device', 'hour', 'day', 'channel']].groupby(by=['ip', 'device', 'day',
-             'hour'])[['channel']].count().reset_index().rename(index=str, 
-             columns={'channel': 'nip_hh_dev'})
-    df = df.merge(gp, on=['ip','device','day','hour'], how='left')
-    del gp
-    print( "nip_hh_dev max value = ", df.nip_hh_dev.max() )
-    df['nip_hh_dev'] = df['nip_hh_dev'].astype('uint32')
-    gc.collect()
-    print( df.info() )
-
-    df.drop( ['ip','day'], axis=1, inplace=True )
-    gc.collect()
-    print( df.info() )
+    x_cat = Embedding(max_size, 10)(input_cat)
     
-    return( df )
-
-#---------------------------------------------------------------------------------
-
-print( "Train info before: ")
-print( train_df.info() )
-train_df = prep_data( train_df )
-gc.collect()
-print( "Train info after: ")
-print( train_df.info() )
-
-print("vars and data type: ")
-train_df.info()
-
-metrics = 'auc'
-lgb_params = {
-        'boosting_type': 'gbdt',
-        'objective': 'binary',
-        'metric':metrics,
-        'learning_rate': 0.1,
-        'num_leaves': 7,  # we should let it be smaller than 2^(max_depth)
-        'max_depth': 4,  # -1 means no limit
-        'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
-        'max_bin': 100,  # Number of bucketed bin for feature values
-        'subsample': 0.7,  # Subsample ratio of the training instance.
-        'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
-        'colsample_bytree': 0.7,  # Subsample ratio of columns when constructing each tree.
-        'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-        'min_split_gain': 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
-        'nthread': 8,
-        'verbose': 0,
-        'scale_pos_weight':99.7, # because training data is extremely unbalanced 
-        'metric':metrics
-}
-
-target = 'is_attributed'
-predictors = ['app','device','os', 'channel', 'hour', 'nip_day_test_hh', 'nip_day_hh',
-              'nip_hh_os', 'nip_hh_app', 'nip_hh_dev']
-categorical = ['app', 'device', 'os', 'channel', 'hour']
-
-print(train_df.head(5))
-
-if VALIDATE:
-
-    train_df, val_df = train_test_split( train_df, train_size=.95, shuffle=False )
-
-    print(train_df.info())
-    print(val_df.info())
-
-    print("train size: ", len(train_df))
-    print("valid size: ", len(val_df))
-
-    gc.collect()
-
-    print("Training...")
-
-    num_boost_round=MAX_ROUNDS
-    early_stopping_rounds=EARLY_STOP
-
-    xgtrain = lgb.Dataset(train_df[predictors].values, label=train_df[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical
-                          )
-    del train_df
-    gc.collect()
-
-    xgvalid = lgb.Dataset(val_df[predictors].values, label=val_df[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical
-                          )
-    del val_df
-    gc.collect()
-
-    evals_results = {}
-
-    bst = lgb.train(lgb_params, 
-                     xgtrain, 
-                     valid_sets= [xgvalid], 
-                     valid_names=['valid'], 
-                     evals_result=evals_results, 
-                     num_boost_round=num_boost_round,
-                     early_stopping_rounds=early_stopping_rounds,
-                     verbose_eval=10, 
-                     feval=None)
-
-    n_estimators = bst.best_iteration
-
-    print("\nModel Report")
-    print("n_estimators : ", n_estimators)
-    print(metrics+":", evals_results['valid'][metrics][n_estimators-1])
+    x_cat = SpatialDropout1D(0.3)(x_cat)
+    x_cat = Flatten()(x_cat)
     
-    outfile = VALID_OUTFILE
+    x_words = Embedding(max_features, 300,
+                            weights=[embedding_matrix],
+                            trainable=False)(input_words)
+    x_words = SpatialDropout1D(0.3)(x_words)
+    x_words =Bidirectional(GRU(50, return_sequences=True))(x_words)
+    x_words = Convolution1D(100, 3, activation="relu")(x_words)
+    x_words = GlobalMaxPool1D()(x_words)
+
     
-    del xgvalid
+    x_cat = Dense(100, activation="relu")(x_cat)
+    x_num = Dense(100, activation="relu")(input_num)
 
-else:
+    x = concatenate([x_cat, x_num, x_words])
 
-    print(train_df.info())
+    x = Dense(50, activation="relu")(x)
+    x = Dropout(0.25)(x)
+    predictions = Dense(1, activation="sigmoid")(x)
+    model = Model(inputs=[input_cat, input_num, input_words], outputs=predictions)
+    model.compile(optimizer=optimizers.Adam(0.0005, decay=1e-6),
+              loss='binary_crossentropy',
+              metrics=['accuracy'])
 
-    print("train size: ", len(train_df))
+    return model
 
-    gc.collect()
+model = get_model3()
+# model = get_model4()
+# model = get_model3_v2()
+from keras.callbacks import *
+from sklearn.metrics import roc_auc_score
+file_path='simpleRNN3.h5'
+checkpoint = ModelCheckpoint(file_path, monitor='val_loss', verbose=2, save_best_only=True, save_weights_only=True,
+                                     mode='min')
 
-    print("Training...")
+early = EarlyStopping(monitor="val_loss", mode="min", patience=4)
+lr_reduced = ReduceLROnPlateau(monitor='val_loss',
+                               factor=0.1,
+                               patience=2,
+                               verbose=1,
+                               epsilon=1e-4,
+                               mode='min')
+callbacks_list = [checkpoint, early, lr_reduced]
+history = model.fit([X_train_cat, X_train_num, X_train_words], X_train_target, validation_split=0.1,
+                    verbose=2,callbacks=callbacks_list,
+          epochs=5, batch_size=256)
+del X_train_cat, X_train_num, X_train_words,X_train_target
+model.load_weights(file_path)
+pred_test = model.predict([X_test_cat, X_test_num, X_test_words], batch_size=2000)
 
-    num_boost_round=OPT_ROUNDS
-
-    xgtrain = lgb.Dataset(train_df[predictors].values, label=train_df[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical
-                          )
-    del train_df
-    gc.collect()
-
-    bst = lgb.train(lgb_params, 
-                     xgtrain, 
-                     num_boost_round=num_boost_round,
-                     verbose_eval=10, 
-                     feval=None)
-                     
-    outfile = FULL_OUTFILE
-
-del xgtrain
-gc.collect()
-
-print('load test...')
-test_cols = ['ip','app','device','os', 'channel', 'click_time', 'click_id']
-test_df = pd.read_csv(path+"test.csv", dtype=dtypes, usecols=test_cols)
-
-test_df = prep_data( test_df )
-gc.collect()
-
-sub = pd.DataFrame()
-sub['click_id'] = test_df['click_id']
-
-print("Predicting...")
-sub['is_attributed'] = bst.predict(test_df[predictors])
-print("writing...")
-sub.to_csv(outfile, index=False, float_format='%.9f')
-print("done...")
-print(sub.info())
+test["project_is_approved"] = pred_test
+test[['id', 'project_is_approved']].to_csv("gru_cnn_submission.csv", index=False)

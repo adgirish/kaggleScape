@@ -1,96 +1,104 @@
-import pandas as pd
-from os import getcwd
-from os.path import join
-import matplotlib.pyplot as plt
-from haversine import haversine
-import sqlite3
+import cv2
+import io
+import numpy as np
+import random
+import math
+import csv as csv
+import json
+import zipfile
 
+def getDist(posStart,posEnd):
+    dispair = (posStart-posEnd)*[83.818,111.23] # distance in kilometers for longitude and latitude
+    return np.sqrt(np.power(dispair[0],2)+np.power(dispair[1],2))
 
-plt.rcParams['font.size'] = 12
-plt.rcParams['figure.figsize'] = [16, 12]
-north_pole = (90,0)
-weight_limit = 1000.0
+def drawTrips(image,data,border):
+    minlat,maxlon,maxlat,minlon = border
+    absLat = abs(minlat-maxlat)
+    absLon = abs(minlon-maxlon)
+    for i in range(len(data)):
+        if (data[i][7] != False): # only if there are no missing gps datas
+            gpsTrack = np.array(json.loads(data[i][8]))
+            if len(gpsTrack) > 0: # the gpsTrack must be longer than 0s
+                for p in range(len(gpsTrack)-1):
+                    # get the correct px values for the current gps position
+                    pxXS = np.rint((gpsTrack[p][0]-minlon)*(np.shape(image)[1]/absLon))-1
+                    pxYS = np.rint((maxlat-gpsTrack[p][1])*(np.shape(image)[0]/absLat))-1
 
-f_ = 0.0
-t_ = 0
-d_ = 0.0
+                    # and for the following one
+                    pxXE = np.rint((gpsTrack[p+1][0]-minlon)*(np.shape(image)[1]/absLon))-1
+                    pxYE = np.rint((maxlat-gpsTrack[p+1][1])*(np.shape(image)[0]/absLat))-1
 
-gifts = pd.read_csv("../input/gifts.csv").fillna(" ")
-c = sqlite3.connect(":memory:")
-gifts.to_sql("gifts",c)
-cu = c.cursor()
-cu.execute("ALTER TABLE gifts ADD COLUMN 'TripId' INT;")
-cu.execute("ALTER TABLE gifts ADD COLUMN 'i' INT;")
-cu.execute("ALTER TABLE gifts ADD COLUMN 'j' INT;")
-c.commit()
+                    # px is an array of all pixels that are between the current gps position and the following one
+                    px = [[pxYS,pxXS]]
+                    # calculate the shortest path between the current pos and the following one
+                    while(px[-1] != [pxYE,pxXE]):
+                        # calculate the distance between the last point and the end pos (the next real gps pos)
+                        dX = pxXE-px[-1][1]
+                        dY = pxYE-px[-1][0]
+                        if abs(dY) < abs(dX):
+                            if (dX > 0):
+                                px.append([px[-1][0],px[-1][1]+1])
+                            else:
+                                px.append([px[-1][0],px[-1][1]-1])
+                        else:
+                            if (dY > 0):
+                                px.append([px[-1][0]+1,px[-1][1]])
+                            else:
+                                px.append([px[-1][0]-1,px[-1][1]])
 
-i_ = 0
-j_ = 0
-n = 90
-for i in range(90,-90,int(-180/n)):
-    i_ += 1
-    j_ = 0
-    for j in range(180,-180,int(-360/n)):
-        j_ += 1
-        cu = c.cursor()
-        cu.execute("UPDATE gifts SET i=" + str(i_) + ", j=" + str(j_) + " WHERE ((Latitude BETWEEN " + str(i - (180/n)) + " AND  " + str(i) + ") AND (Longitude BETWEEN " + str(j - (360/n)) + " AND  " + str(j) + "));")
-        c.commit()
+                    # calculate the distance of the current gpsTrack part (in km)
+                    dist = getDist(gpsTrack[p],gpsTrack[p+1])
+                    # the distance shouldn't be longer than 0.5 km cause that would be 120km/h
+                    if (dist > 0.5):
+                        break
+                    else:
+                        # save the distance for each pixel in the px array
+                        for pi in range(len(px)):
+                            pxY = px[pi][0]
+                            pxX = px[pi][1]
+                            # we are only analysing the points which are near the city of Porto (ignore the other ones)
+                            if pxX >= 0 and pxX < np.shape(image)[1] and pxY >= 0 and pxY < np.shape(image)[0]:
+                                image[pxY,pxX]+=[0,1,dist]
+    return image
 
-trips = pd.read_sql("SELECT * FROM (SELECT * FROM gifts WHERE TripId IS NULL ORDER BY j DESC, Longitude ASC, Latitude ASC LIMIT 94) ORDER BY Latitude DESC",c)
+# generate a 4000 x 4000 image in RGB mode
+image = np.zeros((4000,4000,3))
 
+minlat = 41 # most southern part
+minlon = -8.8
+maxlat = 41.3 # most northern part
+maxlon = -8.4
 
-while len(trips.GiftId)>0:
-    g = []
-    t_ += 1
-    w_ = 0.0
-    l_ = north_pole
-    for i in range(len(trips.GiftId)):
-        if (w_ + float(trips.Weight[i]))<= weight_limit:
-            w_ += float(trips.Weight[i])
-            d_ += haversine(l_, (trips.Latitude[i],trips.Longitude[i]))
-            f_ += d_ * trips.Weight[i]
-            l_ = (trips.Latitude[i],trips.Longitude[i])
-            g.append(trips.GiftId[i])
-    d_ += haversine(l_, north_pole)
-    f_ += d_ * 10  # sleigh weight for whole trip
-    # print(t_,d_,f_)
-    cu = c.cursor()
-    cu.execute("UPDATE gifts SET TripId = " + str(t_) + " WHERE GiftId IN(" + (",").join(map(str,g)) + ");")
-    c.commit()
+zf = zipfile.ZipFile("../input/train.csv.zip")
+f = io.TextIOWrapper(zf.open("train.csv", "rU"))
+r = csv.reader(f)
+header = r.__next__()
 
-    trips = pd.read_sql("SELECT * FROM (SELECT * FROM gifts WHERE TripId IS NULL ORDER BY j DESC, Longitude ASC, Latitude ASC LIMIT 94) ORDER BY Latitude DESC",c)
-    d_ = 0.0
-    #break
+data=[] 	# Create a variable to hold the data
+# use only the first 5000 trips
+for i in range(5000):
+    row=r.__next__()
+    data.append(row[0:]) 								# adding each row to the data variable
+    
+    if i%1000==999:
+        data = np.array(data) 								
+        # do the cool stuff here  
+        image = drawTrips(image,data,[minlat,maxlon,maxlat,minlon])
+        data = []
 
-all_trips = pd.read_sql("SELECT * FROM gifts ORDER BY TripId ASC, Latitude DESC;",c)
-fig = plt.figure()
-plt.scatter(all_trips['Longitude'], all_trips['Latitude'], c=all_trips['TripId'], cmap= plt.cm.viridis, alpha=0.8, s=8, linewidths=0)
-for t in all_trips.TripId.unique():
-    trip = all_trips[all_trips['TripId'] == t]
-    plt.plot(trip['Longitude'], trip['Latitude'], 'k.-', alpha=0.1)
+f.close()
 
-plt.colorbar()
-plt.grid()
-plt.title('Trips')
-plt.tight_layout()
-fig.savefig('Trips.png', dpi=300)
+old_settings = np.seterr(divide='ignore',invalid='ignore')
 
-fig = plt.figure()
-plt.scatter(all_trips['Longitude'].values, all_trips['Latitude'].values, c='k', alpha=0.1, s=1, linewidths=0)
-for t in all_trips.TripId.unique():
-    previous_location = north_pole
-    trip = all_trips[all_trips['TripId'] == t]
-    i = 0
-    for _, gift in trip.iterrows():
-        plt.plot([previous_location[1], gift['Longitude']], [previous_location[0], gift['Latitude']],
-                 color=plt.cm.copper_r(i/90.), alpha=0.1)
-        previous_location = tuple(gift[['Latitude', 'Longitude']])
-        i += 1
-    plt.scatter(gift['Longitude'], gift['Latitude'], c='k', alpha=0.5, s=20, linewidths=0)
+image[:,:,2] = np.nan_to_num(image[:,:,2]/image[:,:, 1])
+image[:,:,1] = 0
+image[:,:,0] = 0
 
-plt.scatter(gift['Longitude'], gift['Latitude'], c='k', alpha=0.5, s=20, linewidths=0, label='TripEnds')
-plt.legend(loc='upper right')
-plt.grid()
-plt.title('TripOrder')
-plt.tight_layout()
-fig.savefig('TripsinOrder.png', dpi=300)
+# get the maximum accumlated distance and set that one to 255
+maxF = np.max(image[:,:,2])
+image[:,:,2] *= 255/maxF
+image[:,:,1]  = image[:,:,2]
+image[:,:,0] = image[:,:,2]
+image[:,:,1][image[:,:,1] < 50] = 0 # really slow => change to red
+image[:,:,0][image[:,:,0] < 150] = 0 # kind of slow => orange/yellow
+cv2.imwrite("image.png", image)

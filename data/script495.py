@@ -1,481 +1,345 @@
 
 # coding: utf-8
 
+# # Data Science Bowl 2017
+# 
+# The yearly tradition continues! - this time with another computer vision problem. we have to classify whether someone will be diagnosed with **lung cancer** at some point during the next year. We are given DICOM files, which is a format that is often used for medical scans. Using CT scans from 1400 patients in the training set, we have to build a model which can predict on the patients in the test set.
+# 
+# **Shameless plug:** If you have any questions or want to discuss competitions/hardware/games/anything with other Kagglers, then join the [KaggleNoobs Slack channel](https://goo.gl/gGWFXe)! I feel like it could use a lot more users :)
+# 
+# **And as always, if this helped you, some upvotes would be very much appreciated! :D**
+
 # In[ ]:
 
-
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
 
 import numpy as np # linear algebra
 import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
 import matplotlib.pyplot as plt
-get_ipython().run_line_magic('matplotlib', 'inline')
-import plotly.offline as py
-py.init_notebook_mode(connected=True)
-import plotly.graph_objs as go
-import plotly.tools as tls
 import seaborn as sns
-import warnings
-warnings.filterwarnings('ignore')
-# Input data files are available in the "../input/" directory.
-# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
+import os
+import glob
+get_ipython().run_line_magic('matplotlib', 'inline')
+p = sns.color_palette()
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
-
-# Any results you write to the current directory are saved as output.
+os.listdir('../input')
 
 
-# ### Is The Temperature Really Rising??
-
-# In[ ]:
-
-
-global1=pd.read_csv('../input/GlobalTemperatures.csv')
-global1=global1[['dt','LandAverageTemperature']]
-global1.dropna(inplace=True)
-global1['dt']=pd.to_datetime(global1.dt).dt.strftime('%d/%m/%Y')
-global1['dt']=global1['dt'].apply(lambda x:x[6:])
-global1=global1.groupby(['dt'])['LandAverageTemperature'].mean().reset_index()
-trace=go.Scatter(
-    x=global1['dt'],
-    y=global1['LandAverageTemperature'],
-    mode='lines',
-    )
-data=[trace]
-
-py.iplot(data, filename='line-mode')
-
-
-# **Hover over the graph for interactivity **
+# It looks like this time, we have been given the sample submission, the labels for the training set, and a sample submission for a test set.
 # 
-# So the answer is clearly visible---**THE MERCURY IS RISING**.  Matter of Concern!!!!
+# # The image data
 # 
-# One thing to note is that is data for the years in the 1750's seems to be dirty as there is a huge drop in the temperature.
-
-# ### Let's Compare for any 2 months
+# First, let's look at the sample images!
 
 # In[ ]:
 
 
-global2=pd.read_csv('../input/GlobalTemperatures.csv')
-global2=global2[['dt','LandAverageTemperature']]
-global2.dropna(inplace=True)
-global2['dt']=pd.to_datetime(global2.dt).dt.strftime('%d/%m/%Y')
-global2['month']=global2['dt'].apply(lambda x:x[3:5])
-global2['year']=global2['dt'].apply(lambda x:x[6:])
-global2=global2[['month','year','LandAverageTemperature']]
-global2['month']=global2['month'].map({'01':'Jan','02':'Feb','03':'Mar','04':'Apr','05':'May','06':'Jun','07':'Jul','08':'Aug','09':'Sep','10':'Oct','11':'Nov','12':'Dec'})
-def plot_month(month1,month2):
-    a=global2[global2['month']==month1]
-    b=global2[global2['month']==month2]
-    trace0 = go.Scatter(
-    x = a['year'],
-    y = a['LandAverageTemperature'],
-    mode = 'lines',
-    name = month1
-    )
+for d in os.listdir('../input/sample_images'):
+    print("Patient '{}' has {} scans".format(d, len(os.listdir('../input/sample_images/' + d))))
+print('----')
+print('Total patients {} Total DCM files {}'.format(len(os.listdir('../input/sample_images')), 
+                                                      len(glob.glob('../input/sample_images/*/*.dcm'))))
+
+
+# In[ ]:
+
+
+patient_sizes = [len(os.listdir('../input/sample_images/' + d)) for d in os.listdir('../input/sample_images')]
+plt.hist(patient_sizes, color=p[2])
+plt.ylabel('Number of patients')
+plt.xlabel('DICOM files')
+plt.title('Histogram of DICOM count per patient')
+
+
+# We can see that the sample_images directory is made up of a bunch of subdirectories, each representing a single patient ID and containing about 100-300 DICOM files inside (except one with over 400).
+# 
+# What about file size?
+
+# In[ ]:
+
+
+sizes = [os.path.getsize(dcm)/1000000 for dcm in glob.glob('../input/sample_images/*/*.dcm')]
+print('DCM file sizes: min {:.3}MB max {:.3}MB avg {:.3}MB std {:.3}MB'.format(np.min(sizes), 
+                                                       np.max(sizes), np.mean(sizes), np.std(sizes)))
+
+
+# We can see here that basically all the DICOM files are the same 0.525MB size - which makes it seem like they are uncompressed files with the same amount of information.
+# 
+# We'll come back to images to load them in a second, but first let's look at the other two files.
+# 
+# # Training set
+
+# In[ ]:
+
+
+df_train = pd.read_csv('../input/stage1_labels.csv')
+df_train.head()
+
+
+# Simple enough. Let's look at the data stats:
+
+# In[ ]:
+
+
+print('Number of training patients: {}'.format(len(df_train)))
+print('Cancer rate: {:.4}%'.format(df_train.cancer.mean()*100))
+
+
+# Here we can see that in the training set we have a total of just under 1400 patients, of which just over a quarter have had lung cancer diagnosed in the year after these scans were taken.
+# 
+# Let's see if we can exploit this information to beat the benchmark on the leaderboard!
+# 
+# ### Naive Submission
+# 
+# Since the evaluation metric used in this competition is [LogLoss](https://www.kaggle.com/wiki/LogarithmicLoss) and not something like [AUC](https://www.kaggle.com/wiki/AreaUnderCurve), this means that we can often gain an improvement just by aligning the probabilities of our sample submission to that of the training set.
+# 
+# Before I try making a naive submission, I will calculate what the score of this submission would be on the training set to get a comparison.
+
+# In[ ]:
+
+
+from sklearn.metrics import log_loss
+logloss = log_loss(df_train.cancer, np.zeros_like(df_train.cancer) + df_train.cancer.mean())
+print('Training logloss is {}'.format(logloss))
+
+
+# Wow, not bad. Let's turn it into a submission.
+
+# In[ ]:
+
+
+sample = pd.read_csv('../input/stage1_sample_submission.csv')
+sample['cancer'] = df_train.cancer.mean()
+sample.to_csv('naive_submission.csv', index=False)
+
+
+# This submission scores **0.60235** on the leaderboard - you can try it out for yourself by heading over to the **Output** tab at the top of the kernel.
+# 
+# The fact that the score is worse here shows us that we have [overfitted](https://xkcd.com/605/) to our training data. The mean of the test set is different than the mean of the training set, and while this may only be a small difference, it is the reason why the score is worse on the leaderboard. But we won't be winning any prizes for this submission anyway, so it's time to move on :)
+# 
+# ### Leakbusters
+# 
+# Just as a quick sanity check, I'm going to check to see whether there's any observable relationship between Patient ID and whether they have cancer or not. Let's hope they used better random seeds than TalkingData #neverforget
+# 
+# Note that in the following graph, it is also in order of PatientID as the rows have been presorted.
+
+# In[ ]:
+
+
+targets = df_train['cancer']
+plt.plot(pd.rolling_mean(targets, window=10), label='Sliding Window 10')
+plt.plot(pd.rolling_mean(targets, window=50), label='Sliding Window 50')
+plt.xlabel('rowID')
+plt.ylabel('Mean cancer')
+plt.title('Mean target over rowID - sliding mean')
+plt.legend()
+
+
+# In[ ]:
+
+
+print('Accuracy predicting no cancer: {}%'.format((df_train['cancer'] == 0).mean()))
+print('Accuracy predicting with last value: {}%'.format((df_train['cancer'] == df_train['cancer'].shift()).mean()))
+
+
+# There no leak here which is immediately apparent to me - it looks well sorted. Feel free to disagree if you've noticed something!
+
+# # Test set (Stage 1)
+# 
+# After looking at the training file for a bit, let's take a brief look at the test set/sample submission.
+
+# In[ ]:
+
+
+sample = pd.read_csv('../input/stage1_sample_submission.csv')
+sample.head()
+
+
+# In[ ]:
+
+
+print('The test file has {} patients'.format(len(sample)))
+
+
+# Nothing out of the ordinary here, the submission file is arranged very similarly to the training csv, except that we submit a probability instead of a class predction. There are less than 200 samples, which means that we need to watch out for overfitting on the leaderboard.
+# 
+# It is actually possible to get a perfect score only through brute force in Stage 1 - as we have 200 samples and over 200 submissions to test on the LB. So expect lots of overfitting. [Trust no one, not even yourself.](http://i1.kym-cdn.com/entries/icons/original/000/017/046/BptVE1JIEAAA3dT.jpg)
+
+# # DICOMs
+# 
+# The dicom package was finally added! Here's some quick exploration of the files and what they contain.
+# 
+# First, I'll just load a random image from the lot.
+
+# In[ ]:
+
+
+import dicom
+
+
+# In[ ]:
+
+
+dcm = '../input/sample_images/0a38e7597ca26f9374f8ea2770ba870d/4ec5ef19b52ec06a819181e404d37038.dcm'
+print('Filename: {}'.format(dcm))
+dcm = dicom.read_file(dcm)
+
+
+# Now I've read a random image, let's view the information inside.
+
+# In[ ]:
+
+
+dcm
+
+
+# It looks this data has been intentionally anonymised in order to keep this a computer vision problem. Notably, the birth date has been anonymised to January 1st, 1900. Age could otherwise be an important feature for predicting lung cancer.
+# 
+# There are two things here that I think are significant, slice location (this sounds like it could be the z-position of the scan?) and the 'Pixel Data'.
+# 
+# We can retrieve a image as a **numpy array** by calling `dcm.pixel_array`, and we can then replace the -2000s, which are essentially NAs, with 0s (thanks r4m0n).
+
+# In[ ]:
+
+
+img = dcm.pixel_array
+img[img == -2000] = 0
+
+plt.axis('off')
+plt.imshow(img)
+plt.show()
+
+plt.axis('off')
+plt.imshow(-img) # Invert colors with -
+plt.show()
+
+
+# Let's plot a few more images at random:
+
+# In[ ]:
+
+
+def dicom_to_image(filename):
+    dcm = dicom.read_file(filename)
+    img = dcm.pixel_array
+    img[img == -2000] = 0
+    return img
+
+
+# In[ ]:
+
+
+files = glob.glob('../input/sample_images/*/*.dcm')
+
+f, plots = plt.subplots(4, 5, sharex='col', sharey='row', figsize=(10, 8))
+for i in range(20):
+    plots[i // 5, i % 5].axis('off')
+    plots[i // 5, i % 5].imshow(dicom_to_image(np.random.choice(files)), cmap=plt.cm.bone)
+
+
+# This gives us some idea with the sort of images we're dealing with. Now, let's try to reconstruct the layers of the body from which the images were taken, by taking a single patient and sorting his scans by Slice Location.
+
+# In[ ]:
+
+
+def get_slice_location(dcm):
+    return float(dcm[0x0020, 0x1041].value)
+
+# Returns a list of images for that patient_id, in ascending order of Slice Location
+def load_patient(patient_id):
+    files = glob.glob('../input/sample_images/{}/*.dcm'.format(patient_id))
+    imgs = {}
+    for f in files:
+        dcm = dicom.read_file(f)
+        img = dcm.pixel_array
+        img[img == -2000] = 0
+        sl = get_slice_location(dcm)
+        imgs[sl] = img
+        
+    # Not a very elegant way to do this
+    sorted_imgs = [x[1] for x in sorted(imgs.items(), key=lambda x: x[0])]
+    return sorted_imgs
+
+
+# In[ ]:
+
+
+pat = load_patient('0a38e7597ca26f9374f8ea2770ba870d')
+
+
+# Now that we have the images of a patient sorted by position in the body, we can plot them to see how this varies.
+# 
+# It's worth noting that this patient does **not** have cancer.
+# 
+# ### Sorted Slices of Patient 0a38e7597ca26f9374f8ea2770ba870d - No cancer
+
+# In[ ]:
+
+
+f, plots = plt.subplots(11, 10, sharex='all', sharey='all', figsize=(10, 11))
+# matplotlib is drunk
+#plt.title('Sorted Slices of Patient 0a38e7597ca26f9374f8ea2770ba870d - No cancer')
+for i in range(110):
+    plots[i // 10, i % 10].axis('off')
+    plots[i // 10, i % 10].imshow(pat[i], cmap=plt.cm.bone)
+
+
+# ### Sorted Slices of Patient 0acbebb8d463b4b9ca88cf38431aac69 - Cancer
+
+# In[ ]:
+
+
+pat = load_patient('0acbebb8d463b4b9ca88cf38431aac69')
+f, plots = plt.subplots(21, 10, sharex='all', sharey='all', figsize=(10, 21))
+for i in range(203):
+    plots[i // 10, i % 10].axis('off')
+    plots[i // 10, i % 10].imshow(pat[i], cmap=plt.cm.bone)
+
+
+# Okay, so it looks like my theory that "Slice Position" refers to the z-position of the scan was correct (it probably said this in the documentation but who reads documentation??).
+# 
+# We can actually use this to reconstruct a 3D model of the of the torso by simply concatenating the images together. Then something like a 3D convolutional network could be applied on top in order to identify points of interest in 3D space. Interesting stuff.
+# 
+# I'm going to try to make an animated gif/video now, which should show this better than a bunch of plots. I've so far found no way to do this in python :(
+
+# In[ ]:
+
+
+# This function takes in a single frame from the DICOM and returns a single frame in RGB format.
+def normalise(img):
+    normed = (img / 14).astype(np.uint8) # Magic number, scaling to create int between 0 and 255
+    img2 = np.zeros([*img.shape, 3], dtype=np.uint8)
+    for i in range(3):
+        img2[:, :, i] = normed
+    return img2
+
+
+# In[ ]:
+
+
+npat = [normalise(p) for p in pat]
+
+
+# In[ ]:
+
+
+pat = load_patient('0acbebb8d463b4b9ca88cf38431aac69')
+
+import matplotlib.animation as animation
+def animate(pat, gifname):
+    # Based on @Zombie's code
+    fig = plt.figure()
+    anim = plt.imshow(pat[0], cmap=plt.cm.bone)
+    def update(i):
+        anim.set_array(pat[i])
+        return anim,
     
-    trace1 = go.Scatter(
-    x = b['year'],
-    y = b['LandAverageTemperature'],
-    mode = 'lines',
-    name = month2
-    )
-    data = [trace0,trace1]
-    py.iplot(data, filename='line-mode')
-plot_month('Aug','Nov')
-
-
-# We see a similar trend for the months also. There is a continous increase in the temperatures in individual months too. We can check for any two months by just replacing the month names in the function.
-
-# ### Average Temperature By Country (Interactive Map)
-
-# In[ ]:
-
-
-temp_country=pd.read_csv('../input/GlobalLandTemperaturesByCountry.csv')
-
-
-# In[ ]:
-
-
-temp_country['Country'].replace({'Denmark (Europe)':'Denmark','France (Europe)':'France','Netherlands (Europe)':'Netherlands','United Kingdom (Europe)':'Europe'},inplace=True)
-temp_country.fillna(0,inplace=True)
-
-
-# In[ ]:
-
-
-temp_country1=temp_country.groupby(['Country'])['AverageTemperature'].mean().reset_index()
-
-
-# In[ ]:
-
-
-l1=list(['Afghanistan', 'Albania', 'Algeria', 'American Samoa', 'Andorra','Angola', 'Anguilla', 'Antigua and Barbuda', 'Argentina', 'Armenia','Aruba', 'Australia', 'Austria', 'Azerbaijan', 'Bahamas, The',
-       'Bahrain', 'Bangladesh', 'Barbados', 'Belarus', 'Belgium', 'Belize','Benin', 'Bermuda', 'Bhutan', 'Bolivia', 'Bosnia and Herzegovina','Botswana', 'Brazil', 'British Virgin Islands', 'Brunei',
-       'Bulgaria', 'Burkina Faso', 'Burma', 'Burundi', 'Cabo Verde','Cambodia', 'Cameroon', 'Canada', 'Cayman Islands','Central African Republic', 'Chad', 'Chile', 'China', 'Colombia',
-       'Comoros', 'Congo, Democratic Republic of the','Congo, Republic of the', 'Cook Islands', 'Costa Rica',"Cote d'Ivoire", 'Croatia', 'Cuba', 'Curacao', 'Cyprus','Czech Republic', 'Denmark', 'Djibouti', 'Dominica','Dominican Republic', 'Ecuador', 'Egypt', 'El Salvador',
-       'Equatorial Guinea', 'Eritrea', 'Estonia', 'Ethiopia','Falkland Islands (Islas Malvinas)', 'Faroe Islands', 'Fiji','Finland', 'France', 'French Polynesia', 'Gabon', 'Gambia, The',
-       'Georgia', 'Germany', 'Ghana', 'Gibraltar', 'Greece', 'Greenland','Grenada', 'Guam', 'Guatemala', 'Guernsey', 'Guinea-Bissau','Guinea', 'Guyana', 'Haiti', 'Honduras', 'Hong Kong', 'Hungary',
-       'Iceland', 'India', 'Indonesia', 'Iran', 'Iraq', 'Ireland','Isle of Man', 'Israel', 'Italy', 'Jamaica', 'Japan', 'Jersey','Jordan', 'Kazakhstan', 'Kenya', 'Kiribati', 'Korea, North',
-       'Korea, South', 'Kosovo', 'Kuwait', 'Kyrgyzstan', 'Laos', 'Latvia','Lebanon', 'Lesotho', 'Liberia', 'Libya', 'Liechtenstein', 'Lithuania', 'Luxembourg', 'Macau', 'Macedonia', 'Madagascar','Malawi', 'Malaysia', 'Maldives', 'Mali', 'Malta',
-       'Marshall Islands', 'Mauritania', 'Mauritius', 'Mexico','Micronesia, Federated States of', 'Moldova', 'Monaco', 'Mongolia',
-       'Montenegro', 'Morocco', 'Mozambique', 'Namibia', 'Nepal','Netherlands', 'New Caledonia', 'New Zealand', 'Nicaragua','Nigeria', 'Niger', 'Niue', 'Northern Mariana Islands', 'Norway',
-       'Oman', 'Pakistan', 'Palau', 'Panama', 'Papua New Guinea','Paraguay', 'Peru', 'Philippines', 'Poland', 'Portugal','Puerto Rico', 'Qatar', 'Romania', 'Russia', 'Rwanda','Saint Kitts and Nevis', 'Saint Lucia', 'Saint Martin','Saint Pierre and Miquelon', 'Saint Vincent and the Grenadines','Samoa', 'San Marino', 'Sao Tome and Principe', 'Saudi Arabia','Senegal', 'Serbia', 'Seychelles', 'Sierra Leone', 'Singapore',
-       'Sint Maarten', 'Slovakia', 'Slovenia', 'Solomon Islands','Somalia', 'South Africa', 'South Sudan', 'Spain', 'Sri Lanka','Sudan', 'Suriname', 'Swaziland', 'Sweden', 'Switzerland', 'Syria',
-       'Taiwan', 'Tajikistan', 'Tanzania', 'Thailand', 'Timor-Leste', 'Togo', 'Tonga', 'Trinidad and Tobago', 'Tunisia', 'Turkey','Turkmenistan', 'Tuvalu', 'Uganda', 'Ukraine',
-       'United Arab Emirates', 'United Kingdom', 'United States','Uruguay', 'Uzbekistan', 'Vanuatu', 'Venezuela', 'Vietnam',
-       'Virgin Islands', 'West Bank', 'Yemen', 'Zambia', 'Zimbabwe']) #Country names
-
-l2=list(['AFG', 'ALB', 'DZA', 'ASM', 'AND', 'AGO', 'AIA', 'ATG', 'ARG','ARM', 'ABW', 'AUS', 'AUT', 'AZE', 'BHM', 'BHR', 'BGD', 'BRB','BLR', 'BEL', 'BLZ', 'BEN', 'BMU', 'BTN', 'BOL', 'BIH', 'BWA','BRA', 'VGB', 'BRN', 'BGR', 'BFA', 'MMR', 'BDI', 'CPV', 'KHM',
-       'CMR', 'CAN', 'CYM', 'CAF', 'TCD', 'CHL', 'CHN', 'COL', 'COM','COD', 'COG', 'COK', 'CRI', 'CIV', 'HRV', 'CUB', 'CUW', 'CYP','CZE', 'DNK', 'DJI', 'DMA', 'DOM', 'ECU', 'EGY', 'SLV', 'GNQ',
-       'ERI', 'EST', 'ETH', 'FLK', 'FRO', 'FJI', 'FIN', 'FRA', 'PYF','GAB', 'GMB', 'GEO', 'DEU', 'GHA', 'GIB', 'GRC', 'GRL', 'GRD','GUM', 'GTM', 'GGY', 'GNB', 'GIN', 'GUY', 'HTI', 'HND', 'HKG',
-       'HUN', 'ISL', 'IND', 'IDN', 'IRN', 'IRQ', 'IRL', 'IMN', 'ISR','ITA', 'JAM', 'JPN', 'JEY', 'JOR', 'KAZ', 'KEN', 'KIR', 'KOR',
-       'PRK', 'KSV', 'KWT', 'KGZ', 'LAO', 'LVA', 'LBN', 'LSO', 'LBR','LBY', 'LIE', 'LTU', 'LUX', 'MAC', 'MKD', 'MDG', 'MWI', 'MYS','MDV', 'MLI', 'MLT', 'MHL', 'MRT', 'MUS', 'MEX', 'FSM', 'MDA',
-       'MCO', 'MNG', 'MNE', 'MAR', 'MOZ', 'NAM', 'NPL', 'NLD', 'NCL','NZL', 'NIC', 'NGA', 'NER', 'NIU', 'MNP', 'NOR', 'OMN', 'PAK','PLW', 'PAN', 'PNG', 'PRY', 'PER', 'PHL', 'POL', 'PRT', 'PRI',
-       'QAT', 'ROU', 'RUS', 'RWA', 'KNA', 'LCA', 'MAF', 'SPM', 'VCT','WSM', 'SMR', 'STP', 'SAU', 'SEN', 'SRB', 'SYC', 'SLE', 'SGP',
-       'SXM', 'SVK', 'SVN', 'SLB', 'SOM', 'ZAF', 'SSD', 'ESP', 'LKA','SDN', 'SUR', 'SWZ', 'SWE', 'CHE', 'SYR', 'TWN', 'TJK', 'TZA',
-       'THA', 'TLS', 'TGO', 'TON', 'TTO', 'TUN', 'TUR', 'TKM', 'TUV','UGA', 'UKR', 'ARE', 'GBR', 'USA', 'URY', 'UZB', 'VUT', 'VEN',
-       'VNM', 'VGB', 'WBG', 'YEM', 'ZMB', 'ZWE']) #Country Codes
-
-df=pd.DataFrame(l1,l2)
-df.reset_index(inplace=True)
-df.columns=[['Code','Country']]
-temp_country1=temp_country1.merge(df,left_on='Country',right_on='Country',how='left')
-temp_country1.dropna(inplace=True)
-
-
-# In[ ]:
-
-
-data = [ dict(
-        type = 'choropleth',
-        autocolorscale = False,
-        colorscale = 'RdYlGn',
-        reversescale = True,
-        showscale = True,
-        locations = temp_country1['Code'],
-        z = temp_country1['AverageTemperature'],
-        locationmode = 'Code',
-        text = temp_country1['Country'].unique(),
-        marker = dict(
-            line = dict(color = 'rgb(200,200,200)', width = 0.5)),
-            colorbar = dict(autotick = True, tickprefix = '', 
-            title = 'Temperature')
-            )
-       ]
-
-layout = dict(
-    title = 'Average Temperature By Country',
-    geo = dict(
-        showframe = True,
-        showocean = True,
-        oceancolor = 'rgb(0,255,255)',
-        projection = dict(
-        type = 'Mercator',
-            
-        ),
-            ),
-        )
-fig = dict(data=data, layout=layout)
-py.iplot(fig, validate=False, filename='worldmap2010')
-
-
-# ### Top 10 Hottest And Coldest Countries
-
-# In[ ]:
-
-
-hot=temp_country1.sort_values(by='AverageTemperature',ascending=False)[:10]
-cold=temp_country1.sort_values(by='AverageTemperature',ascending=True)[:10]
-top_countries=pd.concat([hot,cold])
-top_countries.sort_values('AverageTemperature',ascending=False,inplace=True)
-f,ax=plt.subplots(figsize=(12,8))
-sns.barplot(y='Country',x='AverageTemperature',data=top_countries,palette='cubehelix',ax=ax).set_title('Top Hottest And Coldest Countries')
-plt.xlabel('Mean Temperture')
-plt.ylabel('Country')
-
-
-# ### Trend In Temperatures for the Top Economies
-
-# In[ ]:
-
-
-countries=temp_country.copy()
-countries['dt']=pd.to_datetime(countries.dt).dt.strftime('%d/%m/%Y')
-countries['dt']=countries['dt'].apply(lambda x: x[6:])
-countries=countries[countries['AverageTemperature']!=0]
-countries.drop('AverageTemperatureUncertainty',axis=1,inplace=True)
-li=['United States','China','India','Japan','Germany','United Kingdom']
-countries=countries[countries['Country'].isin(li)]
-countries=countries.groupby(['Country','dt'])['AverageTemperature'].mean().reset_index()
-countries=countries[countries['dt'].astype(int)>1850]
-abc=countries.pivot('dt','Country','AverageTemperature')
-f,ax=plt.subplots(figsize=(20,10))
-abc.plot(ax=ax)
-
-
-# ### Maximum Temperature Differences
-
-# In[ ]:
-
-
-try1=temp_country.copy()
-try1['dt']=try1['dt'].apply(lambda x:x[6:])
-try2=try1[try1['dt']>'1850'].groupby('Country')['AverageTemperature'].max().reset_index()
-try3=try1[try1['dt']>'1850'].groupby('Country')['AverageTemperature'].min().reset_index()
-try2=try2.merge(try3,left_on='Country',right_on='Country',how='left')
-try2.columns=[['Country','Max Temp','Mean Temp']]
-try2['difference']=try2['Max Temp']-try2['Mean Temp']
-try2=try2.sort_values(by='difference',ascending=False)
-sns.barplot(x='difference',y='Country',data=try2[:10],palette='RdYlGn').set_title('Countries with Highest Difference between Max And Mean Temperture')
-plt.xlabel('Temperature Difference')
-
-
-# ### Temperature Difference By Country
-
-# In[ ]:
-
-
-try2=try2.merge(df,left_on='Country',right_on='Country',how='left')
-try2.dropna(inplace=True)
-
-data = [ dict(
-        type = 'choropleth',
-        autocolorscale = False,
-        colorscale = 'Viridis',
-        reversescale = True,
-        showscale = True,
-        locations = try2['Code'],
-        z = try2['difference'],
-        locationmode = 'Code',
-        text = try2['Country'].unique(),
-        marker = dict(
-            line = dict(color = 'rgb(200,200,200)', width = 0.5)),
-            colorbar = dict(autotick = True, tickprefix = '', 
-            title = 'Temperature Difference')
-            )
-       ]
-
-layout = dict(
-    title = 'Temperature Difference By Country',
-    geo = dict(
-        showframe = True,
-        showocean = True,
-        oceancolor = 'rgb(0,255,255)',
-        projection = dict(
-        type = 'Mercator',
-            
-        ),
-            ),
-        )
-fig = dict(data=data, layout=layout)
-py.iplot(fig, validate=False, filename='worldmap2010')
-
-
-# The above geomap shows the difference between the maximum and minimum temperatures for each country.
-
-# ### Temperatures By States
-
-# In[ ]:
-
-
-states=pd.read_csv('../input/GlobalLandTemperaturesByState.csv')
-states.dropna(inplace=True)
-states['dt']=pd.to_datetime(states.dt).dt.strftime('%d/%m/%Y')
-
-
-# In[ ]:
-
-
-f,ax=plt.subplots(figsize=(15,8))
-top_states=states.groupby(['State','Country'])['AverageTemperature'].mean().reset_index().sort_values(by='AverageTemperature',ascending=False)
-top_states=top_states.drop_duplicates(subset='Country',keep='first')
-top_states.set_index('Country',inplace=True)
-top_states['AverageTemperature']=top_states['AverageTemperature'].round(decimals=2)
-top_states.plot.barh(width=0.8,color='#0154ff',ax=ax)
-for i, p in enumerate(zip(top_states.State, top_states['AverageTemperature'])):
-    plt.text(s=p,x=1,y=i,fontweight='bold',color='white')
-
-
-# ### Temperature Trends in Hottest States
-
-# In[ ]:
-
-
-top_states1=states.copy()
-top_states1['dt']=top_states1['dt'].apply(lambda x:x[6:])
-top_states1=top_states1[top_states1['State'].isin(list(top_states.State))]
-top_states1=top_states1.groupby(['State','dt'])['AverageTemperature'].mean().reset_index()
-top_states1=top_states1[top_states1['dt'].astype(int)>1900]
-f,ax=plt.subplots(figsize=(18,8))
-top_states1.pivot('dt','State','AverageTemperature').plot(ax=ax)
-plt.xlabel('Year')
-
-
-# ### USA Map For State Temperatures
-
-# In[ ]:
-
-
-USA=states[states['Country']=='United States']
-USA.dropna(inplace=True)
-USA['State'].replace({'Georgia (State)':'Georgia','District Of Columbia':'Columbia'},inplace=True)
-USA=USA[['AverageTemperature','State']]
-USA=USA.groupby('State')['AverageTemperature'].mean().reset_index()
-dummy=['Alabama', 'AL','Alaska', 'AK','American Samoa', 'AS','Arizona', 'AZ','Arkansas', 'AR','California', 'CA','Colorado', 'CO'
-,'Connecticut', 'CT','Delaware', 'DE','Columbia', 'DC','Florida', 'FL','Georgia', 'GA','Guam', 'GU','Hawaii', 'HI'
-,'Idaho', 'ID','Illinois', 'IL','Indiana', 'IN','Iowa', 'IA','Kansas', 'KS','Kentucky', 'KY'
-,'Louisiana', 'LA','Maine', 'ME','Maryland', 'MD','Marshall Islands', 'MH','Massachusetts', 'MA','Michigan', 'MI','Micronesia', 'FM'
-,'Minnesota', 'MN','Mississippi', 'MS','Missouri', 'MO','Montana', 'MT','Nebraska', 'NE','Nevada', 'NV','New Hampshire', 'NH','New Jersey', 'NJ'
-,'New Mexico', 'NM','New York', 'NY','North Carolina', 'NC','North Dakota', 'ND','Northern Marianas', 'MP'
-,'Ohio', 'OH','Oklahoma', 'OK','Oregon', 'OR','Palau', 'PW','Pennsylvania', 'PA','Puerto Rico', 'PR','Rhode Island', 'RI'
-,'South Carolina', 'SC','South Dakota', 'SD','Tennessee', 'TN','Texas', 'TX'
-,'Utah', 'UT','Vermont', 'VT','Virginia', 'VA','Virgin Islands', 'VI','Washington', 'WA'
-,'West Virginia', 'WV','Wisconsin', 'WI','Wyoming', 'WY']
-code=dummy[1::2]
-del dummy[1::2]
-usa=pd.DataFrame(dummy,code)
-usa.reset_index(inplace=True)
-usa.columns=[['Code','State']]
-USA=USA.merge(usa,left_on='State',right_on='State',how='left')
-
-
-# In[ ]:
-
-
-data = [ dict(
-        type='choropleth',
-        colorscale = 'Viridis',
-        autocolorscale = False,
-        locations = USA['Code'],
-        z = USA['AverageTemperature'].astype(float),
-        locationmode = 'USA-states',
-        text =USA['State'],
-        marker = dict(
-            line = dict (
-                color = 'rgb(255,255,255)',
-                width = 2
-            ) ),
-        colorbar = dict(
-            title = "Average Temperature")
-        ) ]
-
-layout = dict(
-        title = 'Average Temperature for USA States',
-        geo = dict(
-            scope='usa',
-            projection=dict( type='albers usa' ),
-            showlakes = True,
-            lakecolor = 'rgb(255, 255, 255)'),
-             )
+    a = animation.FuncAnimation(fig, update, frames=range(len(pat)), interval=50, blit=True)
+    a.save(gifname, writer='imagemagick')
     
-fig = dict( data=data, layout=layout )
-py.iplot( fig, filename='d3-cloropleth-map' )
+animate(pat, 'test.gif')
 
 
-# ### Temperatures By Cities
-
-# In[ ]:
-
-
-cities=pd.read_csv('../input/GlobalLandTemperaturesByCity.csv')
-cities.dropna(inplace=True)
-cities['year']=cities['dt'].apply(lambda x: x[:4])
-cities['month']=cities['dt'].apply(lambda x: x[5:7])
-cities.drop('dt',axis=1,inplace=True)
-cities=cities[['year','month','AverageTemperature','City','Country','Latitude','Longitude']]
-cities['Latitude']=cities['Latitude'].str.strip('N')
-cities['Longitude']=cities['Longitude'].str.strip('E')
-cities.head()
-
-
-# ### Hottest Cities By Country
-
-# In[ ]:
-
-
-temp_city=cities.groupby(['City','Country'])['AverageTemperature'].mean().reset_index().sort_values(by='AverageTemperature',ascending=False)
-temp_city=temp_city.drop_duplicates(subset='Country',keep='first')
-temp_city=temp_city.set_index(['City','Country'])
-plt.subplots(figsize=(8,30))
-sns.barplot(y=temp_city.index,x='AverageTemperature',data=temp_city,palette='RdYlGn').set_title('Hottest Cities By Country')
-plt.xlabel('Average Temperature')
-
-
-# ### Average Temperature Of Major Indian Cities By Month
-
-# In[ ]:
-
-
-indian_cities=cities[cities['Country']=='India']
-indian_cities=indian_cities[indian_cities['year']>'1850']
-major_cities=indian_cities[indian_cities['City'].isin(['Bombay','New Delhi','Bangalore','Hyderabad','Calcutta','Pune','Madras','Ahmadabad'])]
-heatmap=major_cities.groupby(['City','month'])['AverageTemperature'].mean().reset_index()
-trace = go.Heatmap(z=heatmap['AverageTemperature'],
-                   x=heatmap['month'],
-                   y=heatmap['City'],
-                  colorscale='Viridis')
-data=[trace]
-layout = go.Layout(
-    title='Average Temperature Of Major Cities By Month',
-)
-fig = go.Figure(data=data, layout=layout)
-py.iplot(fig, filename='labelled-heatmap')
-
-
-# ### Trends in Major Cities
-
-# In[ ]:
-
-
-graph=major_cities[major_cities['year']>'1900']
-graph=graph.groupby(['City','year'])['AverageTemperature'].mean().reset_index()
-graph=graph.pivot('year','City','AverageTemperature').fillna(0)
-graph.plot()
-fig=plt.gcf()
-fig.set_size_inches(18,8)
-
-
-# ### Indian Cities Temperatures
-
-# In[ ]:
-
-
-cities=indian_cities.groupby(['City'])[['AverageTemperature']].mean().reset_index()
-cities=cities.merge(indian_cities,left_on='City',right_on='City',how='left')
-cities=cities.drop_duplicates(subset=['City'],keep='first')
-cities=cities[['City','AverageTemperature_x','Latitude','Longitude']]
-
-
-# ## City Temperatures in India(Folium)
-
-# In[ ]:
-
-
-import folium
-import folium.plugins
-location=cities[['Latitude','Longitude']]
-location=location.astype(float)
-def color_point(x):
-    if x>=28:
-        color='red'
-    elif ((x>15 and x<28)):
-        color='blue'
-    else:
-        color='green'
-    return color   
-map1 = folium.Map(location=[20.59, 78.96],tiles='CartoDB dark_matter',zoom_start=4.5)
-for point in location.index:
-    folium.CircleMarker(list(location.loc[point].values),popup='<b>City: </b>'+str(cities.City[point]+'<br><b>Avg Temperature:</b>'+str(cities.AverageTemperature_x[point])),                        radius=1,color=color_point(cities.AverageTemperature_x[point])).add_to(map1)
-map1
-
-
-# Drag the map to find more cities. Click on each point to find more information about each point.
-
-# ### Stay Tuned!!
-# ### Do Upvote If You Like it
+# ![enter image description here][1]
+# 
+# 
+#   [1]: https://www.kaggle.io/svf/994809/5129153ac3ef32ff6abf72dc3b19dca5/test.gif

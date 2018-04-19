@@ -1,120 +1,124 @@
-import itertools
+# This Python 3 environment comes with many helpful analytics libraries installed
+# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
+# For example, here's several helpful packages to load in 
 
 import numpy as np
 import pandas as pd
 
-from matplotlib import pyplot as plt
-import seaborn as sns
+# Input data files are available in the "../input/" directory.
+# For example, running this (by clicking run or pressing Shift+Enter) will list the files in the input directory
 
-from sklearn.feature_selection import VarianceThreshold
-from sklearn.preprocessing import normalize
-from sklearn.decomposition import PCA
+from subprocess import check_output
+print(check_output(["ls", "../input"]).decode("utf8"))
+
+# Any results you write to the current directory are saved as output.
+
+english_phone_brands_mapping = {
+    "三星": "samsung",
+    "天语": "Ktouch",
+    "海信": "hisense",
+    "联想": "lenovo",
+    "欧比": "obi",
+    "爱派尔": "ipair",
+    "努比亚": "nubia",
+    "优米": "youmi",
+    "朵唯": "dowe",
+    "黑米": "heymi",
+    "锤子": "hammer",
+    "酷比魔方": "koobee",
+    "美图": "meitu",
+    "尼比鲁": "nibilu",
+    "一加": "oneplus",
+    "优购": "yougo",
+    "诺基亚": "nokia",
+    "糖葫芦": "candy",
+    "中国移动": "ccmc",
+    "语信": "yuxin",
+    "基伍": "kiwu",
+    "青橙": "greeno",
+    "华硕": "asus",
+    "夏新": "panosonic",
+    "维图": "weitu",
+    "艾优尼": "aiyouni",
+    "摩托罗拉": "moto",
+    "乡米": "xiangmi",
+    "米奇": "micky",
+    "大可乐": "bigcola",
+    "沃普丰": "wpf",
+    "神舟": "hasse",
+    "摩乐": "mole",
+    "飞秒": "fs",
+    "米歌": "mige",
+    "富可视": "fks",
+    "德赛": "desci",
+    "梦米": "mengmi",
+    "乐视": "lshi",
+    "小杨树": "smallt",
+    "纽曼": "newman",
+    "邦华": "banghua",
+    "E派": "epai",
+    "易派": "epai",
+    "普耐尔": "pner",
+    "欧新": "ouxin",
+    "西米": "ximi",
+    "海尔": "haier",
+    "波导": "bodao",
+    "糯米": "nuomi",
+    "唯米": "weimi",
+    "酷珀": "kupo",
+    "谷歌": "google",
+    "昂达": "ada",
+    "聆韵": "lingyun",
+    "小米": "Xiaomi",
+    "华为": "Huawei",
+    "魅族": "Meizu",
+    "中兴": "ZTE",
+    "酷派": "Coolpad",
+    "金立": "Gionee",
+    "SUGAR": "SUGAR",
+    "OPPO": "OPPO",
+    "vivo": "vivo",
+    "HTC": "HTC",
+    "LG": "LG",
+    "ZUK": "ZUK",
+    "TCL": "TCL",
+    "LOGO": "LOGO",
+    "SUGAR": "SUGAR",
+    "Lovme": "Lovme",
+    "PPTV": "PPTV",
+    "ZOYE": "ZOYE",
+    "MIL": "MIL",
+    "索尼" : "Sony",
+    "欧博信" : "Opssom",
+    "奇酷" : "Qiku",
+    "酷比" : "CUBE",
+    "康佳" : "Konka",
+    "亿通" : "Yitong",
+    "金星数码" : "JXD",
+    "至尊宝" : "Monkey King",
+    "百立丰" : "Hundred Li Feng",
+    "贝尔丰" : "Bifer",
+    "百加" : "Bacardi",
+    "诺亚信" : "Noain",
+    "广信" : "Kingsun",
+    "世纪天元" : "Ctyon",
+    "青葱" : "Cong",
+    "果米" : "Taobao",
+    "斐讯" : "Phicomm",
+    "长虹" : "Changhong",
+    "欧奇" : "Oukimobile",
+    "先锋" : "XFPLAY",
+    "台电" : "Teclast",
+    "大Q" : "Daq",
+    "蓝魔" : "Ramos",
+    "奥克斯" : "AUX"
+}
+
+phone_brand_device_model = pd.read_csv('../input/phone_brand_device_model.csv')
+print(phone_brand_device_model.head(n=50))
+phone_brand_device_model.phone_brand = phone_brand_device_model.phone_brand.map(pd.Series(english_phone_brands_mapping), na_action='ignore')
+print(phone_brand_device_model.head(n=50))
+
+print(phone_brand_device_model.isnull().sum())
 
 
-def principal_component_analysis(x_train):
-
-    """
-    Principal Component Analysis (PCA) identifies the combination
-    of attributes (principal components, or directions in the feature space)
-    that account for the most variance in the data.
-
-    Let's calculate the 2 first principal components of the training data,
-    and then create a scatter plot visualizing the training data examples
-    projected on the calculated components.
-    """
-
-    # Extract the variable to be predicted
-    y_train = x_train["TARGET"]
-    x_train = x_train.drop(labels="TARGET", axis=1)
-    classes = np.sort(np.unique(y_train))
-    labels = ["Satisfied customer", "Unsatisfied customer"]
-
-    # Normalize each feature to unit norm (vector length)
-    x_train_normalized = normalize(x_train, axis=0)
-    
-    # Run PCA
-    pca = PCA(n_components=2)
-    x_train_projected = pca.fit_transform(x_train_normalized)
-
-    # Visualize
-    fig = plt.figure(figsize=(10, 7))
-    ax = fig.add_subplot(1, 1, 1)
-    colors = [(0.0, 0.63, 0.69), 'black']
-    markers = ["o", "D"]
-    for class_ix, marker, color, label in zip(
-            classes, markers, colors, labels):
-        ax.scatter(x_train_projected[np.where(y_train == class_ix), 0],
-                   x_train_projected[np.where(y_train == class_ix), 1],
-                   marker=marker, color=color, edgecolor='whitesmoke',
-                   linewidth='1', alpha=0.9, label=label)
-        ax.legend(loc='best')
-    plt.title(
-        "Scatter plot of the training data examples projected on the "
-        "2 first principal components")
-    plt.xlabel("Principal axis 1 - Explains %.1f %% of the variance" % (
-        pca.explained_variance_ratio_[0] * 100.0))
-    plt.ylabel("Principal axis 2 - Explains %.1f %% of the variance" % (
-        pca.explained_variance_ratio_[1] * 100.0))
-    plt.show()
-
-    plt.savefig("pca.pdf", format='pdf')
-    plt.savefig("pca.png", format='png')
-
-
-def remove_feat_constants(data_frame):
-    # Remove feature vectors containing one unique value,
-    # because such features do not have predictive value.
-    print("")
-    print("Deleting zero variance features...")
-    # Let's get the zero variance features by fitting VarianceThreshold
-    # selector to the data, but let's not transform the data with
-    # the selector because it will also transform our Pandas data frame into
-    # NumPy array and we would like to keep the Pandas data frame. Therefore,
-    # let's delete the zero variance features manually.
-    n_features_originally = data_frame.shape[1]
-    selector = VarianceThreshold()
-    selector.fit(data_frame)
-    # Get the indices of zero variance feats
-    feat_ix_keep = selector.get_support(indices=True)
-    orig_feat_ix = np.arange(data_frame.columns.size)
-    feat_ix_delete = np.delete(orig_feat_ix, feat_ix_keep)
-    # Delete zero variance feats from the original pandas data frame
-    data_frame = data_frame.drop(labels=data_frame.columns[feat_ix_delete],
-                                 axis=1)
-    # Print info
-    n_features_deleted = feat_ix_delete.size
-    print("  - Deleted %s / %s features (~= %.1f %%)" % (
-        n_features_deleted, n_features_originally,
-        100.0 * (np.float(n_features_deleted) / n_features_originally)))
-    return data_frame
-
-
-def remove_feat_identicals(data_frame):
-    # Find feature vectors having the same values in the same order and
-    # remove all but one of those redundant features.
-    print("")
-    print("Deleting identical features...")
-    n_features_originally = data_frame.shape[1]
-    # Find the names of identical features by going through all the
-    # combinations of features (each pair is compared only once).
-    feat_names_delete = []
-    for feat_1, feat_2 in itertools.combinations(
-            iterable=data_frame.columns, r=2):
-        if np.array_equal(data_frame[feat_1], data_frame[feat_2]):
-            feat_names_delete.append(feat_2)
-    feat_names_delete = np.unique(feat_names_delete)
-    # Delete the identical features
-    data_frame = data_frame.drop(labels=feat_names_delete, axis=1)
-    n_features_deleted = len(feat_names_delete)
-    print("  - Deleted %s / %s features (~= %.1f %%)" % (
-        n_features_deleted, n_features_originally,
-        100.0 * (np.float(n_features_deleted) / n_features_originally)))
-    return data_frame
-
-
-if __name__ == "__main__":
-    x_train = pd.read_csv(filepath_or_buffer="../input/train.csv",
-                          index_col=0, sep=',')
-    x_train = remove_feat_constants(x_train)
-    x_train = remove_feat_identicals(x_train)
-    principal_component_analysis(x_train)

@@ -1,600 +1,690 @@
 
 # coding: utf-8
 
+# # Titanic data: Learning from disaster
+# 
+# **Task**: predict survival of a passage giving his/her ticket class class, name, gender, age, number of siblings / spouses aboard,  number of parents / children aboard, ticket number, cabin number and Port of embarkation
+# 
+# **Notes:**
+#  
+# - Based on the tutorial 
+# - Fix some bugs
+# - Add cross-validation and grid search
+# - Add Validation and Learning curves
+# 
+# Part I : Exploratory Data Analysis
+# -------------------------
+
 # In[ ]:
 
 
-# Based on https://www.kaggle.com/benhamner/d/uciml/iris/python-data-visualizations/notebook
-# First, we'll import pandas, a data processing and CSV file I/O library
+# data analysis and wrangling
 import pandas as pd
 import numpy as np
+import random as rnd
 
-# We'll also import seaborn, a Python graphing library
-import warnings # current version of seaborn generates a bunch of warnings that we'll ignore
-warnings.filterwarnings("ignore")
+# visualization
 import seaborn as sns
-
 import matplotlib.pyplot as plt
-sns.set(style="white", color_codes=True)
 
-# Next, we'll load the train and test dataset, which is in the "../input/" directory
-train = pd.read_csv("../input/train.csv") # the train dataset is now a Pandas DataFrame
-test = pd.read_csv("../input/test.csv") # the train dataset is now a Pandas DataFrame
+# machine learning
+from sklearn.linear_model import LogisticRegression
+from sklearn.svm import SVC, LinearSVC
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.naive_bayes import GaussianNB
+from sklearn.linear_model import Perceptron
+from sklearn.linear_model import SGDClassifier
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import cross_val_score
+from sklearn.ensemble import VotingClassifier
+from sklearn.model_selection import GridSearchCV
 
-# Let's see what's in the trainings data - Jupyter notebooks print the result of the last thing you do
-train.head()
+#Learning curve
+from sklearn.model_selection import learning_curve
+from sklearn.model_selection import ShuffleSplit
+from sklearn.model_selection import cross_val_predict
+from sklearn.model_selection import validation_curve
 
-# Press shift+enter to execute this cell
+
+# ## Step 1: Load data
+
+# In[ ]:
+
+
+#-----------------------------------------------------------
+# Step 01: load data using panda
+#-----------------------------------------------------------
+train_df = pd.read_csv('../input/train.csv')  # train set
+test_df  = pd.read_csv('../input/test.csv')   # test  set
+combine  = [train_df, test_df]
+
+
+# ## Step 2: Acquire and clean data
+
+# In[ ]:
+
+
+#-----------------------------------------------------------
+# Step 02: Acquire and clean data
+#-----------------------------------------------------------
+train_df.head(5)
 
 
 # In[ ]:
 
 
-# happy customers have TARGET==0, unhappy custormers have TARGET==1
-# A little less then 4% are unhappy => unbalanced dataset
-df = pd.DataFrame(train.TARGET.value_counts())
-df['Percentage'] = 100*df['TARGET']/train.shape[0]
-df
-
-
-# # var3: nationality of the customer
-
-# In[ ]:
-
-
-# Top-10 most common values
-train.var3.value_counts()[:10]
+train_df.info()
 
 
 # In[ ]:
 
 
-# 116 values in column var3 are -999999
-# var3 is suspected to be the nationality of the customer
-# -999999 would mean that the nationality of the customer is unknown
-train.loc[train.var3==-999999].shape
+train_df.describe()
 
 
 # In[ ]:
 
 
-# Replace -999999 in var3 column with most common value 2 
-# See https://www.kaggle.com/cast42/santander-customer-satisfaction/debugging-var3-999999
-# for details
-train = train.replace(-999999,2)
-train.loc[train.var3==-999999].shape
+train_df.describe(include=['O'])
 
 
-# # Add feature that counts the number of zeros in a row
-
-# In[ ]:
-
-
-X = train.iloc[:,:-1]
-y = train.TARGET
-
-X['n0'] = (X==0).sum(axis=1)
-train['n0'] = X['n0']
-
-
-# # num_var4 : number of bank products
-
-# In[ ]:
-
-
-# According to dmi3kno (see https://www.kaggle.com/cast42/santander-customer-satisfaction/exploring-features/comments#115223)
-# num_var4 is the number of products. Let's plot the distribution:
-train.num_var4.hist(bins=100)
-plt.xlabel('Number of bank products')
-plt.ylabel('Number of customers in train')
-plt.title('Most customers have 1 product with the bank')
-plt.show()
-
-
-# In[ ]:
-
-
-# Let's look at the density of the of happy/unhappy customers in function of the number of bank products
-sns.FacetGrid(train, hue="TARGET", size=6)    .map(plt.hist, "num_var4")    .add_legend()
-plt.title('Unhappy cosutomers have less products')
-plt.show()
-
-
-# In[ ]:
-
-
-train[train.TARGET==1].num_var4.hist(bins=6)
-plt.title('Amount of unhappy customers in function of the number of products');
-
-
-# # Var38
-# var38 is important according to XGBOOST
-# see https://www.kaggle.com/cast42/santander-customer-satisfaction/xgboost-with-early-stopping/files
+# Training data statistics:
 # 
-# Also RFC thinks var38 is important
-# see https://www.kaggle.com/tks0123456789/santander-customer-satisfaction/data-exploration/notebook
-# 
-# Var38 is suspected to be the mortage value with the bank. If the mortage is with another bank the national
-# average is used. 
-# See https://www.kaggle.com/c/santander-customer-satisfaction/forums/t/19895/var38-is-mortgage-value
-# 
-# [dmi3kno](https://www.kaggle.com/dmi3kno) says that var38 is value of the customer: [https://www.kaggle.com/cast42/santander-customer-satisfaction/exploring-features/comments#115223](https://www.kaggle.com/cast42/santander-customer-satisfaction/exploring-features/comments#115223)
+#  - 891 training samples
+#  - Age, Cabin, Embarked: incomplete data
+#  - Data type:
+#       - object: Name, Sex, Ticket, Cabin, Embarked
+#       - int64: PassengerId, Survived, Pclass, SibSp, Parch
+#       - float64: Age, Fare
+#  - Survive rate: 0.383838
 
 # In[ ]:
 
 
-train.var38.describe()
-
-
-# In[ ]:
-
-
-# How is var38 looking when customer is unhappy ?
-train.loc[train['TARGET']==1, 'var38'].describe()
-
-
-# In[ ]:
-
-
-# Histogram for var 38 is not normal distributed
-train.var38.hist(bins=1000);
-
-
-# In[ ]:
-
-
-train.var38.map(np.log).hist(bins=1000);
+# remove Features: Ticket, Cabin
+#train_df = train_df.drop(['Ticket', 'Cabin'], axis=1)
+#test_df  = test_df.drop(['Ticket', 'Cabin'], axis=1)
+#combine  = [train_df, test_df]
+for dataset in combine:
+   dataset['Cabin'] = dataset['Cabin'].fillna('U')
+   dataset['Cabin'] = dataset.Cabin.str.extract('([A-Za-z])', expand=False)
+   
+for dataset in combine:
+   dataset['Cabin'] = dataset['Cabin'].map( {'A': 0, 'B': 0, 'C': 0, 'D': 0, 'E':0, 
+                                           'F':0, 'G':0, 'T':0, 'U':1} ).astype(int)
+   
+train_df.head()
+   
 
 
 # In[ ]:
 
 
-# where is the spike between 11 and 12  in the log plot ?
-train.var38.map(np.log).mode()
+train_df = train_df.drop(['Ticket'], axis=1)
+test_df  = test_df.drop(['Ticket'], axis=1)
+combine  = [train_df, test_df]
+
+
+# survival rate distribtion as a function of Pclass
+train_df[['Pclass', 'Survived']].groupby(['Pclass'], as_index=False).mean().sort_values(by='Survived', ascending=False)
 
 
 # In[ ]:
 
 
-# What are the most common values for var38 ?
-train.var38.value_counts()
+# obtain Title from name (Mr, Mrs, Miss etc)
+for dataset in combine:
+    dataset['Title'] = dataset.Name.str.extract(' ([A-Za-z]+)\.', expand=False)
 
 
-# the value 117310.979016 appears 14868 times in colum var38
+for dataset in combine:
+    dataset['Title'] = dataset['Title'].replace(['Lady', 'Countess', 'Dona'],'Royalty')
+    dataset['Title'] = dataset['Title'].replace(['Mme'], 'Mrs')
+    dataset['Title'] = dataset['Title'].replace(['Mlle','Ms'], 'Miss')
+    dataset['Title'] = dataset['Title'].replace(['Capt', 'Col', 'Major','Rev'], 'Officer')
+    dataset['Title'] = dataset['Title'].replace(['Jonkheer', 'Don','Sir'], 'Royalty')
+    dataset.loc[(dataset.Sex == 'male')   & (dataset.Title == 'Dr'),'Title'] = 'Mr'
+    dataset.loc[(dataset.Sex == 'female') & (dataset.Title == 'Dr'),'Title'] = 'Mrs'
 
-# In[ ]:
-
-
-# the most common value is very close to the mean of the other values
-train.var38[train['var38'] != 117310.979016494].mean()
-
-
-# In[ ]:
-
-
-# what if we exclude the most common value
-train.loc[~np.isclose(train.var38, 117310.979016), 'var38'].value_counts()
-
-
-# In[ ]:
-
-
-# Look at the distribution
-train.loc[~np.isclose(train.var38, 117310.979016), 'var38'].map(np.log).hist(bins=100);
+#: count survived rate for different titles
+train_df[['Title', 'Survived']].groupby(['Title'], as_index=False).mean().sort_values(by='Survived', ascending=False)
 
 
 # In[ ]:
 
 
-# Above plot suggest we split up var38 into two variables
-# var38mc == 1 when var38 has the most common value and 0 otherwise
-# logvar38 is log transformed feature when var38mc is 0, zero otherwise
-train['var38mc'] = np.isclose(train.var38, 117310.979016)
-train['logvar38'] = train.loc[~train['var38mc'], 'var38'].map(np.log)
-train.loc[train['var38mc'], 'logvar38'] = 0
+# Covert 'Title' to numbers (Mr->1, Miss->2 ...)
+title_mapping = {"Mr": 1, "Miss": 2, "Mrs": 3, "Master": 4, "Royalty":5, "Officer": 6}
+for dataset in combine:
+    dataset['Title'] = dataset['Title'].map(title_mapping)
+    dataset['Title'] = dataset['Title'].fillna(0)
+
+# Remove 'Name' and 'PassengerId' in training data, and 'Name' in testing data
+train_df = train_df.drop(['Name', 'PassengerId'], axis=1)
+test_df = test_df.drop(['Name'], axis=1)
+combine = [train_df, test_df]
+
+# if age < 16, set 'Sex' to Child
+for dataset in combine:
+    dataset.loc[(dataset.Age < 16),'Sex'] = 'Child'
+    
+# Covert 'Sex' to numbers (female:1, male:2)
+for dataset in combine:
+    dataset['Sex'] = dataset['Sex'].map( {'female': 1, 'male': 0, 'Child': 2} ).astype(int)
+
+train_df.head()
 
 
 # In[ ]:
 
 
-#Check for nan's
-print('Number of nan in var38mc', train['var38mc'].isnull().sum())
-print('Number of nan in logvar38',train['logvar38'].isnull().sum())
-
-
-# # var15
-
-# The most important feature for XGBoost is var15. According to [a Kaggle form post](https://www.kaggle.com/c/santander-customer-satisfaction/forums/t/19291/data-dictionary/110414#post110414)
-#     var15 is the age of the customer. Let's explore var15
-
-# In[ ]:
-
-
-train['var15'].describe()
+# Age distribution for different values of Pclass and gender
+#grid = sns.FacetGrid(train_df, row='Pclass', col='Sex', size=2.2, aspect=1.6)
+#grid.map(plt.hist, 'Age', bins=20)
+#grid.add_legend()
 
 
 # In[ ]:
 
 
-#Looks more normal, plot the histogram
-train['var15'].hist(bins=100);
+# Guess age values using median values for age across set of Pclass and gender frature combinations
+for dataset in combine:
+    dataset['Age']=dataset.groupby(['Sex', 'Pclass'])['Age'].transform(lambda x: x.fillna(x.mean())).astype(int)
+
+# create Age bands and determine correlations with Survived
+train_df['AgeBand'] = pd.cut(train_df['Age'], 5)
+train_df[['AgeBand', 'Survived']].groupby(['AgeBand'], as_index=False).mean().sort_values(by='AgeBand', ascending=True)
 
 
 # In[ ]:
 
 
-# Let's look at the density of the age of happy/unhappy customers
-sns.FacetGrid(train, hue="TARGET", size=6)    .map(sns.kdeplot, "var15")    .add_legend()
-plt.title('Unhappy customers are slightly older');
+for dataset in combine:
+    dataset.loc[ dataset['Age'] <= 16, 'Age'] = 0
+    dataset.loc[(dataset['Age'] > 16) & (dataset['Age'] <= 32), 'Age'] = 1
+    dataset.loc[(dataset['Age'] > 32) & (dataset['Age'] <= 48), 'Age'] = 2
+    dataset.loc[(dataset['Age'] > 48) & (dataset['Age'] <= 64), 'Age'] = 3
+    dataset.loc[ dataset['Age'] > 64, 'Age'] = 4
 
-
-# # saldo_var30
-
-# In[ ]:
-
-
-train.saldo_var30.hist(bins=100)
-plt.xlim(0, train.saldo_var30.max());
-
-
-# In[ ]:
-
-
-# improve the plot by making the x axis logarithmic
-train['log_saldo_var30'] = train.saldo_var30.map(np.log)
+train_df = train_df.drop(['AgeBand'], axis=1)
+combine = [train_df, test_df]
+train_df.head()
 
 
 # In[ ]:
 
 
-# Let's look at the density of the age of happy/unhappy customers for saldo_var30
-sns.FacetGrid(train, hue="TARGET", size=6)    .map(sns.kdeplot, "log_saldo_var30")    .add_legend();
+# Create family size from 'sibsq + parch + 1'
+for dataset in combine:
+    dataset['FamilySize'] = dataset['SibSp'] + dataset['Parch'] + 1
 
+train_df[['FamilySize', 'Survived']].groupby(['FamilySize'], as_index=False).mean().sort_values(by='Survived', ascending=False)
 
-# # Explore the interaction between var15 (age) and var38
+#create another feature called IsAlone
+for dataset in combine:
+    dataset['IsAlone'] = 0
+    dataset.loc[(dataset['FamilySize'] == 1), 'IsAlone'] = 1
+    dataset.loc[(dataset['FamilySize'] > 4),  'IsAlone'] = 2
 
-# In[ ]:
+train_df[['IsAlone','Survived']].groupby(['IsAlone'], as_index=False).mean()
 
-
-sns.FacetGrid(train, hue="TARGET", size=10)    .map(plt.scatter, "var38", "var15")    .add_legend();
-
-
-# In[ ]:
-
-
-sns.FacetGrid(train, hue="TARGET", size=10)    .map(plt.scatter, "logvar38", "var15")    .add_legend()
-plt.ylim([0,120]); # Age must be positive ;-)
-
-
-# In[ ]:
-
-
-# Exclude most common value for var38 
-sns.FacetGrid(train[~train.var38mc], hue="TARGET", size=10)    .map(plt.scatter, "logvar38", "var15")    .add_legend()
-plt.ylim([0,120]);
+#drop Parch, SibSp, and FamilySize features in favor of IsAlone
+train_df = train_df.drop(['Parch', 'SibSp', 'FamilySize'], axis=1)
+test_df = test_df.drop(['Parch', 'SibSp', 'FamilySize'], axis=1)
+combine = [train_df, test_df]
+train_df.head()
 
 
 # In[ ]:
 
 
-# What is distribution of the age when var38 has it's most common value ?
-sns.FacetGrid(train[train.var38mc], hue="TARGET", size=6)    .map(sns.kdeplot, "var15")    .add_legend();
+# Create an artfical feature combinbing PClass and Age.
+for dataset in combine:
+    dataset['Age*Class'] = dataset.Age * dataset.Pclass
+
+train_df.loc[:, ['Age*Class', 'Age', 'Pclass']].head()
 
 
 # In[ ]:
 
 
-# What is density of n0 ?
-sns.FacetGrid(train, hue="TARGET", size=6)    .map(sns.kdeplot, "n0")    .add_legend()
-plt.title('Unhappy customers have a lot of features that are zero');
+# fill the missing values of Embarked feature with the most common occurance
+freq_port = train_df.Embarked.dropna().mode()[0]
+for dataset in combine:
+    dataset['Embarked'] = dataset['Embarked'].fillna(freq_port)
+train_df[['Embarked', 'Survived']].groupby(['Embarked'], as_index=False).mean().sort_values(by='Survived', ascending=False)
 
+for dataset in combine:
+    dataset['Embarked'] = dataset['Embarked'].map( {'S': 0, 'C': 1, 'Q': 2} ).astype(int)
 
-# # Select the most important features
-
-# In[ ]:
-
-
-from sklearn.feature_selection import SelectPercentile
-from sklearn.feature_selection import f_classif,chi2
-from sklearn.preprocessing import Binarizer, scale
-
-# First select features based on chi2 and f_classif
-p = 3
-
-X_bin = Binarizer().fit_transform(scale(X))
-selectChi2 = SelectPercentile(chi2, percentile=p).fit(X_bin, y)
-selectF_classif = SelectPercentile(f_classif, percentile=p).fit(X, y)
-
-chi2_selected = selectChi2.get_support()
-chi2_selected_features = [ f for i,f in enumerate(X.columns) if chi2_selected[i]]
-print('Chi2 selected {} features {}.'.format(chi2_selected.sum(),
-   chi2_selected_features))
-f_classif_selected = selectF_classif.get_support()
-f_classif_selected_features = [ f for i,f in enumerate(X.columns) if f_classif_selected[i]]
-print('F_classif selected {} features {}.'.format(f_classif_selected.sum(),
-   f_classif_selected_features))
-selected = chi2_selected & f_classif_selected
-print('Chi2 & F_classif selected {} features'.format(selected.sum()))
-features = [ f for f,s in zip(X.columns, selected) if s]
-print (features)
+train_df.head()
 
 
 # In[ ]:
 
 
-# Make a dataframe with the selected features and the target variable
-X_sel = train[features+['TARGET']]
+# fill the missing values of Fare
+test_df['Fare'].fillna(test_df['Fare'].dropna().median(), inplace=True)
 
+# Create FareBand
+train_df['FareBand'] = pd.qcut(train_df['Fare'], 4)
+train_df[['FareBand', 'Survived']].groupby(['FareBand'], as_index=False).mean().sort_values(by='FareBand', ascending=True)
 
-# # var36
+# Convert the Fare feature to ordinal values based on the FareBand
+for dataset in combine:
+    dataset.loc[ dataset['Fare'] <= 7.91, 'Fare'] = 0
+    dataset.loc[(dataset['Fare'] > 7.91) & (dataset['Fare'] <= 14.454), 'Fare'] = 1
+    dataset.loc[(dataset['Fare'] > 14.454) & (dataset['Fare'] <= 31), 'Fare']   = 2
+    dataset.loc[ dataset['Fare'] > 31, 'Fare'] = 3
+    dataset['Fare'] = dataset['Fare'].astype(int)
 
-# In[ ]:
-
-
-X_sel['var36'].value_counts()
-
-
-# var36 is most of the times 99 or [0,1,2,3]
-
-# In[ ]:
-
-
-# Let's plot the density in function of the target variabele
-sns.FacetGrid(train, hue="TARGET", size=6)    .map(sns.kdeplot, "var36")    .add_legend()
-plt.title('If var36 is 0,1,2 or 3 => less unhappy customers');
-
-
-# In above plot we see that the density of unhappy custormers is lower when var36 is not 99
-
-# In[ ]:
-
-
-# var36 in function of var38 (most common value excluded) 
-sns.FacetGrid(train[~train.var38mc], hue="TARGET", size=10)    .map(plt.scatter, "var36", "logvar38")    .add_legend();
-
-
-# Let's seperate that in two plots
-
-# In[ ]:
-
-
-sns.FacetGrid(train[(~train.var38mc) & (train.var36 < 4)], hue="TARGET", size=10)    .map(plt.scatter, "var36", "logvar38")    .add_legend()
-plt.title('If var36==0, only happy customers');
+train_df = train_df.drop(['FareBand'], axis=1)
+combine = [train_df, test_df]
+train_df.head()
 
 
 # In[ ]:
 
 
-# Let's plot the density in function of the target variabele, when var36 = 99
-sns.FacetGrid(train[(~train.var38mc) & (train.var36 ==99)], hue="TARGET", size=6)    .map(sns.kdeplot, "logvar38")    .add_legend();
-
-
-# # num_var5
-
-# In[ ]:
-
-
-train.num_var5.value_counts()
+train_df.describe()
 
 
 # In[ ]:
 
 
-train[train.TARGET==1].num_var5.value_counts()
+#correlation matrix
+f, ax = plt.subplots(figsize=(12, 9))
+sns.heatmap(train_df.corr(), vmax=.8, square=True);
+
+
+# Part II : Learning Model
+# -------------------
+
+# In[ ]:
+
+
+#------------------------------------------------------------------
+# Step 03: Learning model
+#------------------------------------------------------------------
+
+X_data = train_df.drop("Survived", axis=1)          # data: Features
+Y_data = train_df["Survived"]                       # data: Labels
+X_test_kaggle  = test_df.drop("PassengerId", axis=1).copy() # test data (kaggle)
+
+cv = ShuffleSplit(n_splits=100, test_size=0.2, random_state=0)
 
 
 # In[ ]:
 
 
-train[train.TARGET==0].num_var5.value_counts()
+# grid search
+def grid_search_model(X, Y, model, parameters, cv):
+    CV_model = GridSearchCV(estimator=model, param_grid=parameters, cv=cv)
+    CV_model.fit(X, Y)
+    CV_model.cv_results_
+    print("Best Score:", CV_model.best_score_," / Best parameters:", CV_model.best_params_)
+    
 
 
 # In[ ]:
 
 
-sns.FacetGrid(train, hue="TARGET", size=6)    .map(plt.hist, "num_var5")    .add_legend();
+#validation curve
+def validation_curve_model(X, Y, model, param_name, parameters, cv, ylim, log=True):
+
+    train_scores, test_scores = validation_curve(model, X, Y, param_name=param_name, param_range=parameters,cv=cv, scoring="accuracy")
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std = np.std(train_scores, axis=1)
+    test_scores_mean = np.mean(test_scores, axis=1)
+    test_scores_std = np.std(test_scores, axis=1)
+
+    plt.figure()
+    plt.title("Validation curve")
+    plt.fill_between(parameters, train_scores_mean - train_scores_std,train_scores_mean + train_scores_std, alpha=0.1,
+                     color="r")
+    plt.fill_between(parameters, test_scores_mean - test_scores_std,test_scores_mean + test_scores_std, alpha=0.1, color="g")
+
+    if log==True:
+        plt.semilogx(parameters, train_scores_mean, 'o-', color="r",label="Training score")
+        plt.semilogx(parameters, test_scores_mean, 'o-', color="g",label="Cross-validation score")
+    else:
+        plt.plot(parameters, train_scores_mean, 'o-', color="r",label="Training score")
+        plt.plot(parameters, test_scores_mean, 'o-', color="g",label="Cross-validation score")
+
+    #plt.ylim([0.55, 0.9])
+    if ylim is not None:
+        plt.ylim(*ylim)
+
+    plt.ylabel('Score')
+    plt.xlabel('Parameter C')
+    plt.legend(loc="best")
+    
+    return plt
 
 
 # In[ ]:
 
 
-sns.FacetGrid(train, hue="TARGET", size=6)    .map(sns.kdeplot, "num_var5")    .add_legend();
+# Learning curve
+def Learning_curve_model(X, Y, model, cv, train_sizes):
+
+    plt.figure()
+    plt.title("Learning curve")
+    plt.xlabel("Training examples")
+    plt.ylabel("Score")
+
+
+    train_sizes, train_scores, test_scores = learning_curve(model, X, Y, cv=cv, n_jobs=4, train_sizes=train_sizes)
+
+    train_scores_mean = np.mean(train_scores, axis=1)
+    train_scores_std  = np.std(train_scores, axis=1)
+    test_scores_mean  = np.mean(test_scores, axis=1)
+    test_scores_std   = np.std(test_scores, axis=1)
+    plt.grid()
+    
+    plt.fill_between(train_sizes, train_scores_mean - train_scores_std,train_scores_mean + train_scores_std, alpha=0.1,
+                     color="r")
+    plt.fill_between(train_sizes, test_scores_mean - test_scores_std,test_scores_mean + test_scores_std, alpha=0.1, color="g")
+    plt.plot(train_sizes, train_scores_mean, 'o-', color="r",label="Training score")
+    plt.plot(train_sizes, test_scores_mean, 'o-', color="g",label="Cross-validation score")
+                     
+    plt.legend(loc="best")
+    return plt
 
 
 # In[ ]:
 
 
-sns.pairplot(train[['var15','var36','logvar38','TARGET']], hue="TARGET", size=2, diag_kind="kde");
+# lrearning, prediction and printing results
+def predict_model(X, Y, model, Xtest, submit_name):
+    model.fit(X, Y)
+    Y_pred  = model.predict(Xtest)
+    score   = cross_val_score(model, X, Y, cv=cv)
+
+    submission = pd.DataFrame({
+            "PassengerId": test_df["PassengerId"],
+            "Survived": Y_pred
+        })
+    submission.to_csv(submit_name, index=False)
+    
+    return score 
+
+
+# ###  Logistic Regression
+
+# In[ ]:
+
+
+search_param = 0   # 1 -- grid search / 0 -- don't search
+plot_vc      = 0   # 1--display validation curve/ 0-- don't display
+plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
 
 
 # In[ ]:
 
 
-train[['var15','var36','logvar38','TARGET']].boxplot(by="TARGET", figsize=(12, 6));
+#grid search: Logistic Regression
+model = LogisticRegression()
+if search_param==1:
+    
+    param_range = np.logspace(-6, 5, 12)
+    param_grid = dict(C=param_range)
+    grid_search_model(X_data, Y_data, model, param_grid, cv)
 
 
 # In[ ]:
 
 
-# A final multivariate visualization technique pandas has is radviz
-# Which puts each feature as a point on a 2D plane, and then simulates
-# having each sample attached to those points through a spring weighted
-# by the relative value for that feature
-from pandas.tools.plotting import radviz
-radviz(train[['var15','var36','logvar38','TARGET']], "TARGET");
-
-
-# # now look at all 8 features together
-
-# In[ ]:
-
-
-features
+#Validation Curve: Logistic Regression
+if plot_vc == 1:
+    param_range = np.logspace(-6, 3, 10)
+    param_name="C"
+    ylim=[0.55, 0.9]
+    validation_curve_model(X_data, Y_data, model, "C", param_range, cv, ylim)
 
 
 # In[ ]:
 
 
-radviz(train[features+['TARGET']], "TARGET");
+#learn curve
+logreg  = LogisticRegression(C=1000)
+
+if plot_lc==1:
+    train_size=np.linspace(.1, 1.0, 15)
+    Learning_curve_model(X_data, Y_data, logreg, cv, train_size)
 
 
 # In[ ]:
 
 
-sns.pairplot(train[features+['TARGET']], hue="TARGET", size=2, diag_kind="kde");
+# Logistic Regression 
+acc_log = predict_model(X_data, Y_data, logreg, X_test_kaggle, 'submission_Logistic.csv')
 
 
-# # Correlations
-
-# In[ ]:
-
-
-cor_mat = X.corr()
-
+# ###  Support Vector Machines
 
 # In[ ]:
 
 
-f, ax = plt.subplots(figsize=(15, 12))
-# Draw the heatmap with the mask and correct aspect ratio
-sns.heatmap(cor_mat,linewidths=.5, ax=ax);
+search_param = 0   # 1 -- grid search / 0 -- don't search
+plot_vc      = 0   # 1--display validation curve/ 0-- don't display
+plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
 
 
 # In[ ]:
 
 
-cor_mat = X_sel.corr()
+
+
+#grid search: SVM
+search_param = 0
+if search_param==1:
+    param_range = np.linspace(0.5, 5, 9)
+    param_grid = dict(C=param_range)
+
+    grid_search_model(X_data, Y_data, SVC(), param_grid, cv)
 
 
 # In[ ]:
 
 
-f, ax = plt.subplots(figsize=(15, 12))
-# Draw the heatmap with the mask and correct aspect ratio
-sns.heatmap(cor_mat,linewidths=.5, ax=ax);
+#Validation Curve: SVC
+if plot_vc == 1:
+    param_range = np.linspace(0.1, 10, 10)
+    param_name="C"
+    ylim=[0.78, 0.90]
+    validation_curve_model(X_data, Y_data, SVC(), "C", param_range, cv, ylim, log=False)
 
 
 # In[ ]:
 
 
-# only important correlations and not auto-correlations
-threshold = 0.7
-important_corrs = (cor_mat[abs(cor_mat) > threshold][cor_mat != 1.0])     .unstack().dropna().to_dict()
-unique_important_corrs = pd.DataFrame(
-    list(set([(tuple(sorted(key)), important_corrs[key]) \
-    for key in important_corrs])), columns=['attribute pair', 'correlation'])
-# sorted by absolute value
-unique_important_corrs = unique_important_corrs.ix[
-    abs(unique_important_corrs['correlation']).argsort()[::-1]]
-unique_important_corrs
+#learn curve: SVC
+svc = SVC(C=1, probability=True)
 
-
-# # Clusters 
-
-# In[ ]:
-
-
-# Recipe from https://github.com/mgalardini/python_plotting_snippets/blob/master/notebooks/clusters.ipynb
-import matplotlib.patches as patches
-from scipy.cluster import hierarchy
-from scipy.stats.mstats import mquantiles
-from scipy.cluster.hierarchy import dendrogram, linkage
+if plot_lc == 1:
+    train_size=np.linspace(.1, 1.0, 15)
+    Learning_curve_model(X_data, Y_data, svc, cv, train_size)
 
 
 # In[ ]:
 
 
-# Correlate the data
-# also precompute the linkage
-# so we can pick up the 
-# hierarchical thresholds beforehand
+# Support Vector Machines
+acc_svc = predict_model(X_data, Y_data, svc, X_test_kaggle, 'submission_SVM.csv')
 
-from sklearn.preprocessing import scale
-from sklearn.preprocessing import StandardScaler
 
-# scale to mean 0, variance 1
-train_std = pd.DataFrame(scale(X_sel))
-train_std.columns = X_sel.columns
-m = train_std.corr()
-l = linkage(m, 'ward')
+# ### KNN
+
+# In[ ]:
+
+
+search_param = 0   # 1 -- grid search / 0 -- don't search
+plot_vc      = 0   # 1--display validation curve/ 0-- don't display
+plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
 
 
 # In[ ]:
 
 
-# Plot the clustermap
-# Save the returned object for further plotting
-mclust = sns.clustermap(m,
-               linewidths=0,
-               cmap=plt.get_cmap('RdBu'),
-               vmax=1,
-               vmin=-1,
-               figsize=(14, 14),
-               row_linkage=l,
-               col_linkage=l)
+#grid search: KNN
+if search_param==1:
+    param_range = (np.linspace(1, 10, 10)).astype(int)
+    param_grid = dict(n_neighbors=param_range)
+
+    grid_search_model(X_data, Y_data, KNeighborsClassifier(), param_grid, cv)
 
 
 # In[ ]:
 
 
-# Threshold 1: median of the
-# distance thresholds computed by scipy
-t = np.median(hierarchy.maxdists(l))
+#Validation Curve: KNN
+if plot_vc==1:
+    param_range = np.linspace(2, 20, 10).astype(int)
+    param_name="n_neighbors"
+    ylim=[0.75, 0.90]
+    validation_curve_model(X_data, Y_data, KNeighborsClassifier(), "n_neighbors", param_range, cv, ylim, log=False)
 
 
 # In[ ]:
 
 
-# Plot the clustermap
-# Save the returned object for further plotting
-mclust = sns.clustermap(m,
-               linewidths=0,
-               cmap=plt.get_cmap('RdBu'),
-               vmax=1,
-               vmin=-1,
-               figsize=(12, 12),
-               row_linkage=l,
-               col_linkage=l)
+#learn curve: KNN
+knn = KNeighborsClassifier(n_neighbors = 10)
 
-# Draw the threshold lines
-mclust.ax_col_dendrogram.hlines(t,
-                               0,
-                               m.shape[0]*10,
-                               colors='r',
-                               linewidths=2,
-                               zorder=1)
-mclust.ax_row_dendrogram.vlines(t,
-                               0,
-                               m.shape[0]*10,
-                               colors='r',
-                               linewidths=2,
-                               zorder=1)
-
-# Extract the clusters
-clusters = hierarchy.fcluster(l, t, 'distance')
-for c in set(clusters):
-    # Retrieve the position in the clustered matrix
-    index = [x for x in range(m.shape[0])
-             if mclust.data2d.columns[x] in m.index[clusters == c]]
-    # No singletons, please
-    if len(index) == 1:
-        continue
-
-    # Draw a rectangle around the cluster
-    mclust.ax_heatmap.add_patch(
-        patches.Rectangle(
-            (min(index),
-             m.shape[0] - max(index) - 1),
-                len(index),
-                len(index),
-                facecolor='none',
-                edgecolor='r',
-                lw=3)
-        )
-
-plt.title('Cluster matrix')
-
-pass
+if plot_lc==1:
+    train_size=np.linspace(.1, 1.0, 15)
+    Learning_curve_model(X_data, Y_data, knn, cv, train_size)
 
 
-# For clustering with more features, have a look at: [https://www.kaggle.com/cast42/santander-customer-satisfaction/correlation-pairs](https://www.kaggle.com/cast42/santander-customer-satisfaction/correlation-pairs)
+# In[ ]:
+
+
+# KNN
+acc_knn = predict_model(X_data, Y_data, knn, X_test_kaggle, 'submission_KNN.csv')
+
+
+# ###  Naive Bayes
+
+# In[ ]:
+
+
+# Gaussian Naive Bayes
+gaussian = GaussianNB()
+acc_gaussian = predict_model(X_data, Y_data, gaussian, X_test_kaggle, 'submission_Gassian_Naive_Bayes.csv')
+
+
+# ### Perceptron
+
+# In[ ]:
+
+
+# Perceptron
+perceptron = Perceptron()
+acc_perceptron = predict_model(X_data, Y_data, perceptron, X_test_kaggle, 'submission_Perception.csv')
+
+
+# ###  Linear SVC
+
+# In[ ]:
+
+
+# Linear SVC
+linear_svc = LinearSVC()
+acc_linear_svc = predict_model(X_data, Y_data, linear_svc, X_test_kaggle, 'submission_Linear_SVC.csv')
+
+
+# ### Stochastic Gradient Descent
+
+# In[ ]:
+
+
+# Stochastic Gradient Descent
+sgd = SGDClassifier()
+acc_sgd = predict_model(X_data, Y_data, sgd, X_test_kaggle, 'submission_stochastic_Gradient_Descent.csv')
+
+
+# ### Decision Tree
+
+# In[ ]:
+
+
+# Decision Tree
+decision_tree = DecisionTreeClassifier()
+acc_decision_tree = predict_model(X_data, Y_data, decision_tree, X_test_kaggle, 'submission_Decision_Tree.csv')
+
+
+# ### Random Forest
+
+# In[ ]:
+
+
+search_param = 0   # 1 -- grid search / 0 -- don't search
+plot_vc      = 0   # 1--display validation curve/ 0-- don't display
+plot_lc      = 1   # 1--display learning curve/ 0 -- don't display
+
+
+# In[ ]:
+
+
+#grid search: KNN (This step is very slow)
+#param_range = (np.linspace(10, 110, 10)).astype(int)
+#param_leaf = (np.linspace(1, 2, 2)).astype(int)
+#param_grid = {'n_estimators':param_range, 'min_samples_leaf':param_leaf}
+
+#grid_search_model(X_data, Y_data, RandomForestClassifier(), param_grid, cv)
+
+
+# In[ ]:
+
+
+if plot_vc==1:
+    param_range = np.linspace(10, 110, 10).astype(int)
+    ylim=[0.75, 0.90]
+    validation_curve_model(X_data, Y_data, RandomForestClassifier(min_samples_leaf=12), "n_estimators", param_range, cv, ylim, log=False)
+
+
+# In[ ]:
+
+
+if plot_vc==1:
+    param_range = np.linspace(1, 21, 10).astype(int)
+    ylim=[0.75, 0.90]
+    validation_curve_model(X_data, Y_data, RandomForestClassifier(n_estimators=80), "min_samples_leaf", param_range, cv, ylim, log=False)
+
+
+# In[ ]:
+
+
+# Random Forest
+random_forest = RandomForestClassifier(n_estimators=80, random_state =0, min_samples_leaf = 12)
+acc_random_forest = predict_model(X_data, Y_data, random_forest, X_test_kaggle, 'submission_random_forest.csv')
+
+
+# ### Ensemble votring
+
+# In[ ]:
+
+
+#ensemble votring
+ensemble_voting = VotingClassifier(estimators=[('lg', logreg), ('sv', svc), ('rf', random_forest),('kn',knn)], voting='soft')
+acc_ensemble_voting = predict_model(X_data, Y_data, ensemble_voting, X_test_kaggle, 'submission_ensemble_voting.csv')
+
+
+# In[ ]:
+
+
+models = pd.DataFrame({'Model': ['Support Vector Machines', 'KNN', 'Logistic Regression',
+                                'Random Forest', 'Naive Bayes', 'Perceptron',
+                                'Stochastic Gradient Decent', 'Linear SVC',
+                                'Decision Tree', 'ensemble_voting'],'KFoldScore': [acc_svc.mean(), acc_knn.mean(), acc_log.mean(),
+                                acc_random_forest.mean(), acc_gaussian.mean(), acc_perceptron.mean(),
+                                acc_sgd.mean(), acc_linear_svc.mean(), acc_decision_tree.mean(), acc_ensemble_voting.mean()],
+                                'Std': [acc_svc.std(), acc_knn.std(), acc_log.std(),
+                                acc_random_forest.std(), acc_gaussian.std(), acc_perceptron.std(),
+                                acc_sgd.std(), acc_linear_svc.std(), acc_decision_tree.std(), acc_ensemble_voting.std()]})
+
+models.sort_values(by='KFoldScore', ascending=False)
+

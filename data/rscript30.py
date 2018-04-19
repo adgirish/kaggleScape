@@ -1,327 +1,256 @@
-"""
-A non-blending lightGBM model that incorporates portions and ideas from various public kernels
-This kernel gives LB: 0.977 when the parameter 'debug' below is set to 0 but this implementation requires a machine with ~32 GB of memory
-"""
-
-import pandas as pd
+import gc
 import time
 import numpy as np
-from sklearn.cross_validation import train_test_split
+import pandas as pd
+from scipy.sparse import csr_matrix, hstack
+
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.preprocessing import LabelBinarizer
+from sklearn.model_selection import train_test_split
 import lightgbm as lgb
-import gc
-import matplotlib.pyplot as plt
-import os
 
-debug=1 
-if debug:
-    print('*** debug parameter set: this is a test run for debugging purposes ***')
+import sys
 
-def lgb_modelfit_nocv(params, dtrain, dvalid, predictors, target='target', objective='binary', metrics='auc',
-                 feval=None, early_stopping_rounds=20, num_boost_round=3000, verbose_eval=10, categorical_features=None):
-    lgb_params = {
-        'boosting_type': 'gbdt',
-        'objective': objective,
-        'metric':metrics,
-        'learning_rate': 0.2,
-        #'is_unbalance': 'true',  #because training data is unbalance (replaced with scale_pos_weight)
-        'num_leaves': 31,  # we should let it be smaller than 2^(max_depth)
-        'max_depth': -1,  # -1 means no limit
-        'min_child_samples': 20,  # Minimum number of data need in a child(min_data_in_leaf)
-        'max_bin': 255,  # Number of bucketed bin for feature values
-        'subsample': 0.6,  # Subsample ratio of the training instance.
-        'subsample_freq': 0,  # frequence of subsample, <=0 means no enable
-        'colsample_bytree': 0.3,  # Subsample ratio of columns when constructing each tree.
-        'min_child_weight': 5,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-        'subsample_for_bin': 200000,  # Number of samples for constructing bin
-        'min_split_gain': 0,  # lambda_l1, lambda_l2 and min_gain_to_split to regularization
-        'reg_alpha': 0,  # L1 regularization term on weights
-        'reg_lambda': 0,  # L2 regularization term on weights
-        'nthread': 4,
-        'verbose': 0,
-        'metric':metrics
-    }
+###Add https://www.kaggle.com/anttip/wordbatch to your kernel Data Sources, 
+###until Kaggle admins fix the wordbatch pip package installation
+###sys.path.insert(0, '../input/wordbatch/wordbatch/')
+import wordbatch
 
-    lgb_params.update(params)
+from wordbatch.extractors import WordBag, WordHash
+from wordbatch.models import FTRL, FM_FTRL
 
-    print("preparing validation datasets")
+from nltk.corpus import stopwords
+import re
 
-    xgtrain = lgb.Dataset(dtrain[predictors].values, label=dtrain[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical_features
-                          )
-    xgvalid = lgb.Dataset(dvalid[predictors].values, label=dvalid[target].values,
-                          feature_name=predictors,
-                          categorical_feature=categorical_features
-                          )
+NUM_BRANDS = 4500
+NUM_CATEGORIES = 1290
 
-    evals_results = {}
+develop = False
+# develop= True
 
-    bst1 = lgb.train(lgb_params, 
-                     xgtrain, 
-                     valid_sets=[xgtrain, xgvalid], 
-                     valid_names=['train','valid'], 
-                     evals_result=evals_results, 
-                     num_boost_round=num_boost_round,
-                     early_stopping_rounds=early_stopping_rounds,
-                     verbose_eval=10, 
-                     feval=feval)
+def rmsle(y, y0):
+    assert len(y) == len(y0)
+    return np.sqrt(np.mean(np.power(np.log1p(y) - np.log1p(y0), 2)))
 
-    print("\nModel Report")
-    print("bst1.best_iteration: ", bst1.best_iteration)
-    print(metrics+":", evals_results['valid'][metrics][bst1.best_iteration-1])
 
-    return (bst1,bst1.best_iteration)
+def split_cat(text):
+    try:
+        return text.split("/")
+    except:
+        return ("No Label", "No Label", "No Label")
 
-def DO(frm,to,fileno):
-    dtypes = {
-            'ip'            : 'uint32',
-            'app'           : 'uint16',
-            'device'        : 'uint16',
-            'os'            : 'uint16',
-            'channel'       : 'uint16',
-            'is_attributed' : 'uint8',
-            'click_id'      : 'uint32',
-            }
 
-    print('loading train data...',frm,to)
-    train_df = pd.read_csv("../input/train.csv", parse_dates=['click_time'], skiprows=range(1,frm), nrows=to-frm, dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'is_attributed'])
+def handle_missing_inplace(dataset):
+    dataset['general_cat'].fillna(value='missing', inplace=True)
+    dataset['subcat_1'].fillna(value='missing', inplace=True)
+    dataset['subcat_2'].fillna(value='missing', inplace=True)
+    dataset['brand_name'].fillna(value='missing', inplace=True)
+    dataset['item_description'].fillna(value='missing', inplace=True)
 
-    print('loading test data...')
-    if debug:
-        test_df = pd.read_csv("../input/test.csv", nrows=100000, parse_dates=['click_time'], dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'click_id'])
-    else:
-        test_df = pd.read_csv("../input/test.csv", parse_dates=['click_time'], dtype=dtypes, usecols=['ip','app','device','os', 'channel', 'click_time', 'click_id'])
 
-    len_train = len(train_df)
-    train_df=train_df.append(test_df)
+def cutting(dataset):
+    pop_brand = dataset['brand_name'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_BRANDS]
+    dataset.loc[~dataset['brand_name'].isin(pop_brand), 'brand_name'] = 'missing'
+    pop_category1 = dataset['general_cat'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    pop_category2 = dataset['subcat_1'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    pop_category3 = dataset['subcat_2'].value_counts().loc[lambda x: x.index != 'missing'].index[:NUM_CATEGORIES]
+    dataset.loc[~dataset['general_cat'].isin(pop_category1), 'general_cat'] = 'missing'
+    dataset.loc[~dataset['subcat_1'].isin(pop_category2), 'subcat_1'] = 'missing'
+    dataset.loc[~dataset['subcat_2'].isin(pop_category3), 'subcat_2'] = 'missing'
 
-    del test_df
-    gc.collect()
-    
-    print('Extracting new features...')
-    train_df['hour'] = pd.to_datetime(train_df.click_time).dt.hour.astype('uint8')
-    train_df['day'] = pd.to_datetime(train_df.click_time).dt.day.astype('uint8')
-    
-    gc.collect()
-    
-    naddfeat=9
-    for i in range(0,naddfeat):
-        if i==0: selcols=['ip', 'channel']; QQ=4;
-        if i==1: selcols=['ip', 'device', 'os', 'app']; QQ=5;
-        if i==2: selcols=['ip', 'day', 'hour']; QQ=4;
-        if i==3: selcols=['ip', 'app']; QQ=4;
-        if i==4: selcols=['ip', 'app', 'os']; QQ=4;
-        if i==5: selcols=['ip', 'device']; QQ=4;
-        if i==6: selcols=['app', 'channel']; QQ=4;
-        if i==7: selcols=['ip', 'os']; QQ=5;
-        if i==8: selcols=['ip', 'device', 'os', 'app']; QQ=4;
-        print('selcols',selcols,'QQ',QQ)
-        
-        filename='X%d_%d_%d.csv'%(i,frm,to)
-        
-        if os.path.exists(filename):
-            if QQ==5: 
-                gp=pd.read_csv(filename,header=None)
-                train_df['X'+str(i)]=gp
-            else: 
-                gp=pd.read_csv(filename)
-                train_df = train_df.merge(gp, on=selcols[0:len(selcols)-1], how='left')
-        else:
-            if QQ==0:
-                gp = train_df[selcols].groupby(by=selcols[0:len(selcols)-1])[selcols[len(selcols)-1]].count().reset_index().\
-                    rename(index=str, columns={selcols[len(selcols)-1]: 'X'+str(i)})
-                train_df = train_df.merge(gp, on=selcols[0:len(selcols)-1], how='left')
-            if QQ==1:
-                gp = train_df[selcols].groupby(by=selcols[0:len(selcols)-1])[selcols[len(selcols)-1]].mean().reset_index().\
-                    rename(index=str, columns={selcols[len(selcols)-1]: 'X'+str(i)})
-                train_df = train_df.merge(gp, on=selcols[0:len(selcols)-1], how='left')
-            if QQ==2:
-                gp = train_df[selcols].groupby(by=selcols[0:len(selcols)-1])[selcols[len(selcols)-1]].var().reset_index().\
-                    rename(index=str, columns={selcols[len(selcols)-1]: 'X'+str(i)})
-                train_df = train_df.merge(gp, on=selcols[0:len(selcols)-1], how='left')
-            if QQ==3:
-                gp = train_df[selcols].groupby(by=selcols[0:len(selcols)-1])[selcols[len(selcols)-1]].skew().reset_index().\
-                    rename(index=str, columns={selcols[len(selcols)-1]: 'X'+str(i)})
-                train_df = train_df.merge(gp, on=selcols[0:len(selcols)-1], how='left')
-            if QQ==4:
-                gp = train_df[selcols].groupby(by=selcols[0:len(selcols)-1])[selcols[len(selcols)-1]].nunique().reset_index().\
-                    rename(index=str, columns={selcols[len(selcols)-1]: 'X'+str(i)})
-                train_df = train_df.merge(gp, on=selcols[0:len(selcols)-1], how='left')
-            if QQ==5:
-                gp = train_df[selcols].groupby(by=selcols[0:len(selcols)-1])[selcols[len(selcols)-1]].cumcount()
-                train_df['X'+str(i)]=gp.values
-            
-            if not debug:
-                 gp.to_csv(filename,index=False)
-            
-        del gp
-        gc.collect()    
 
-    print('doing nextClick')
-    predictors=[]
-    
-    new_feature = 'nextClick'
-    filename='nextClick_%d_%d.csv'%(frm,to)
+def to_categorical(dataset):
+    dataset['general_cat'] = dataset['general_cat'].astype('category')
+    dataset['subcat_1'] = dataset['subcat_1'].astype('category')
+    dataset['subcat_2'] = dataset['subcat_2'].astype('category')
+    dataset['item_condition_id'] = dataset['item_condition_id'].astype('category')
 
-    if os.path.exists(filename):
-        print('loading from save file')
-        QQ=pd.read_csv(filename).values
-    else:
-        D=2**26
-        train_df['category'] = (train_df['ip'].astype(str) + "_" + train_df['app'].astype(str) + "_" + train_df['device'].astype(str) \
-            + "_" + train_df['os'].astype(str)).apply(hash) % D
-        click_buffer= np.full(D, 3000000000, dtype=np.uint32)
 
-        train_df['epochtime']= train_df['click_time'].astype(np.int64) // 10 ** 9
-        next_clicks= []
-        for category, t in zip(reversed(train_df['category'].values), reversed(train_df['epochtime'].values)):
-            next_clicks.append(click_buffer[category]-t)
-            click_buffer[category]= t
-        del(click_buffer)
-        QQ= list(reversed(next_clicks))
+# Define helpers for text normalization
+stopwords = {x: 1 for x in stopwords.words('english')}
+non_alphanums = re.compile(u'[^A-Za-z0-9]+')
 
-        if not debug:
-            print('saving')
-            pd.DataFrame(QQ).to_csv(filename,index=False)
 
-    train_df[new_feature] = QQ
-    predictors.append(new_feature)
+def normalize_text(text):
+    return u" ".join(
+        [x for x in [y for y in non_alphanums.sub(' ', text).lower().strip().split(" ")] \
+         if len(x) > 1 and x not in stopwords])
 
-    train_df[new_feature+'_shift'] = pd.DataFrame(QQ).shift(+1).values
-    predictors.append(new_feature+'_shift')
-    
-    del QQ
-    gc.collect()
 
-    print('grouping by ip-day-hour combination...')
-    gp = train_df[['ip','day','hour','channel']].groupby(by=['ip','day','hour'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_tcount'})
-    train_df = train_df.merge(gp, on=['ip','day','hour'], how='left')
-    del gp
-    gc.collect()
-
-    print('grouping by ip-app combination...')
-    gp = train_df[['ip', 'app', 'channel']].groupby(by=['ip', 'app'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_app_count'})
-    train_df = train_df.merge(gp, on=['ip','app'], how='left')
-    del gp
-    gc.collect()
-
-    print('grouping by ip-app-os combination...')
-    gp = train_df[['ip','app', 'os', 'channel']].groupby(by=['ip', 'app', 'os'])[['channel']].count().reset_index().rename(index=str, columns={'channel': 'ip_app_os_count'})
-    train_df = train_df.merge(gp, on=['ip','app', 'os'], how='left')
-    del gp
-    gc.collect()
-
-    # Adding features with var and mean hour (inspired from nuhsikander's script)
-    print('grouping by : ip_day_chl_var_hour')
-    gp = train_df[['ip','day','hour','channel']].groupby(by=['ip','day','channel'])[['hour']].var().reset_index().rename(index=str, columns={'hour': 'ip_tchan_count'})
-    train_df = train_df.merge(gp, on=['ip','day','channel'], how='left')
-    del gp
-    gc.collect()
-
-    print('grouping by : ip_app_os_var_hour')
-    gp = train_df[['ip','app', 'os', 'hour']].groupby(by=['ip', 'app', 'os'])[['hour']].var().reset_index().rename(index=str, columns={'hour': 'ip_app_os_var'})
-    train_df = train_df.merge(gp, on=['ip','app', 'os'], how='left')
-    del gp
-    gc.collect()
-
-    print('grouping by : ip_app_channel_var_day')
-    gp = train_df[['ip','app', 'channel', 'day']].groupby(by=['ip', 'app', 'channel'])[['day']].var().reset_index().rename(index=str, columns={'day': 'ip_app_channel_var_day'})
-    train_df = train_df.merge(gp, on=['ip','app', 'channel'], how='left')
-    del gp
-    gc.collect()
-
-    print('grouping by : ip_app_chl_mean_hour')
-    gp = train_df[['ip','app', 'channel','hour']].groupby(by=['ip', 'app', 'channel'])[['hour']].mean().reset_index().rename(index=str, columns={'hour': 'ip_app_channel_mean_hour'})
-    print("merging...")
-    train_df = train_df.merge(gp, on=['ip','app', 'channel'], how='left')
-    del gp
-    gc.collect()
-
-    print("vars and data type: ")
-    train_df.info()
-    train_df['ip_tcount'] = train_df['ip_tcount'].astype('uint16')
-    train_df['ip_app_count'] = train_df['ip_app_count'].astype('uint16')
-    train_df['ip_app_os_count'] = train_df['ip_app_os_count'].astype('uint16')
-
-    target = 'is_attributed'
-    predictors.extend(['app','device','os', 'channel', 'hour', 'day', 
-                  'ip_tcount', 'ip_tchan_count', 'ip_app_count',
-                  'ip_app_os_count', 'ip_app_os_var',
-                  'ip_app_channel_var_day','ip_app_channel_mean_hour'])
-    categorical = ['app', 'device', 'os', 'channel', 'hour', 'day']
-    for i in range(0,naddfeat):
-        predictors.append('X'+str(i))
-        
-    print('predictors',predictors)
-
-    test_df = train_df[len_train:]
-    val_df = train_df[(len_train-val_size):len_train]
-    train_df = train_df[:(len_train-val_size)]
-
-    print("train size: ", len(train_df))
-    print("valid size: ", len(val_df))
-    print("test size : ", len(test_df))
-
-    sub = pd.DataFrame()
-    sub['click_id'] = test_df['click_id'].astype('int')
-
-    gc.collect()
-
-    print("Training...")
+def main():
     start_time = time.time()
+    from time import gmtime, strftime
+    print(strftime("%Y-%m-%d %H:%M:%S", gmtime()))
+
+    # if 1 == 1:
+    ###train = pd.read_table('../input/mercari-price-suggestion-challenge/train.tsv', engine='c')
+    ###test = pd.read_table('../input/mercari-price-suggestion-challenge/test.tsv', engine='c')
+
+    train = pd.read_table('../input/mercari-price-suggestion-challenge/train.tsv', engine='c')
+    test = pd.read_table('../input/mercari-price-suggestion-challenge/test.tsv', engine='c')
+
+    print('[{}] Finished to load data'.format(time.time() - start_time))
+    print('Train shape: ', train.shape)
+    print('Test shape: ', test.shape)
+    nrow_test = train.shape[0]  # -dftt.shape[0]
+    dftt = train[(train.price < 1.0)]
+    train = train.drop(train[(train.price < 1.0)].index)
+    del dftt['price']
+    nrow_train = train.shape[0]
+    # print(nrow_train, nrow_test)
+    y = np.log1p(train["price"])
+    merge: pd.DataFrame = pd.concat([train, dftt, test])
+    submission: pd.DataFrame = test[['test_id']]
+
+    del train
+    del test
+    gc.collect()
+
+    merge['general_cat'], merge['subcat_1'], merge['subcat_2'] = \
+        zip(*merge['category_name'].apply(lambda x: split_cat(x)))
+    merge.drop('category_name', axis=1, inplace=True)
+    print('[{}] Split categories completed.'.format(time.time() - start_time))
+
+    handle_missing_inplace(merge)
+    print('[{}] Handle missing completed.'.format(time.time() - start_time))
+
+    cutting(merge)
+    print('[{}] Cut completed.'.format(time.time() - start_time))
+
+    to_categorical(merge)
+    print('[{}] Convert categorical completed'.format(time.time() - start_time))
+
+    wb = wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 2, "hash_ngrams_weights": [1.5, 1.0],
+                                                                  "hash_size": 2 ** 29, "norm": None, "tf": 'binary',
+                                                                  "idf": None,
+                                                                  }), procs=8)
+    wb.dictionary_freeze= True
+    X_name = wb.fit_transform(merge['name'])
+    del(wb)
+    X_name = X_name[:, np.array(np.clip(X_name.getnnz(axis=0) - 1, 0, 1), dtype=bool)]
+    print('[{}] Vectorize `name` completed.'.format(time.time() - start_time))
+
+    wb = CountVectorizer()
+    X_category1 = wb.fit_transform(merge['general_cat'])
+    X_category2 = wb.fit_transform(merge['subcat_1'])
+    X_category3 = wb.fit_transform(merge['subcat_2'])
+    print('[{}] Count vectorize `categories` completed.'.format(time.time() - start_time))
+
+    # wb= wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 3, "hash_ngrams_weights": [1.0, 1.0, 0.5],
+    wb = wordbatch.WordBatch(normalize_text, extractor=(WordBag, {"hash_ngrams": 2, "hash_ngrams_weights": [1.0, 1.0],
+                                                                  "hash_size": 2 ** 29, "norm": "l2", "tf": 1.0,
+                                                                  "idf": None})
+                             , procs=8)
+    wb.dictionary_freeze= True
+    X_description = wb.fit_transform(merge['item_description'])
+    del(wb)
+    X_description = X_description[:, np.array(np.clip(X_description.getnnz(axis=0) - 1, 0, 1), dtype=bool)]
+    print('[{}] Vectorize `item_description` completed.'.format(time.time() - start_time))
+
+    lb = LabelBinarizer(sparse_output=True)
+    X_brand = lb.fit_transform(merge['brand_name'])
+    print('[{}] Label binarize `brand_name` completed.'.format(time.time() - start_time))
+
+    X_dummies = csr_matrix(pd.get_dummies(merge[['item_condition_id', 'shipping']],
+                                          sparse=True).values)
+    print('[{}] Get dummies on `item_condition_id` and `shipping` completed.'.format(time.time() - start_time))
+    print(X_dummies.shape, X_description.shape, X_brand.shape, X_category1.shape, X_category2.shape, X_category3.shape,
+          X_name.shape)
+    sparse_merge = hstack((X_dummies, X_description, X_brand, X_category1, X_category2, X_category3, X_name)).tocsr()
+
+    print('[{}] Create sparse merge completed'.format(time.time() - start_time))
+
+    #    pd.to_pickle((sparse_merge, y), "xy.pkl")
+    # else:
+    #    nrow_train, nrow_test= 1481661, 1482535
+    #    sparse_merge, y = pd.read_pickle("xy.pkl")
+
+    # Remove features with document frequency <=1
+    print(sparse_merge.shape)
+    mask = np.array(np.clip(sparse_merge.getnnz(axis=0) - 1, 0, 1), dtype=bool)
+    sparse_merge = sparse_merge[:, mask]
+    X = sparse_merge[:nrow_train]
+    X_test = sparse_merge[nrow_test:]
+    print(sparse_merge.shape)
+
+    gc.collect()
+    train_X, train_y = X, y
+    if develop:
+        train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size=0.05, random_state=100)
+
+    model = FTRL(alpha=0.01, beta=0.1, L1=0.00001, L2=1.0, D=sparse_merge.shape[1], iters=47, inv_link="identity", threads=1)
+
+    model.fit(train_X, train_y)
+    print('[{}] Train FTRL completed'.format(time.time() - start_time))
+    if develop:
+        preds = model.predict(X=valid_X)
+        print("FTRL dev RMSLE:", rmsle(np.expm1(valid_y), np.expm1(preds)))
+
+    predsF = model.predict(X_test)
+    print('[{}] Predict FTRL completed'.format(time.time() - start_time))
+
+    model = FM_FTRL(alpha=0.01, beta=0.1, L1=0.00001, L2=0.1, D=sparse_merge.shape[1], alpha_fm=0.01, L2_fm=0.0, init_fm=0.01,
+                    D_fm=200, e_noise=0.0001, iters=18, inv_link="identity", threads=4)
+
+    model.fit(train_X, train_y)
+    print('[{}] Train ridge v2 completed'.format(time.time() - start_time))
+    if develop:
+        preds = model.predict(X=valid_X)
+        print("FM_FTRL dev RMSLE:", rmsle(np.expm1(valid_y), np.expm1(preds)))
+
+    predsFM = model.predict(X_test)
+    print('[{}] Predict FM_FTRL completed'.format(time.time() - start_time))
 
     params = {
-        'learning_rate': 0.20,
-        #'is_unbalance': 'true', # replaced with scale_pos_weight argument
-        'num_leaves': 7,  # 2^max_depth - 1
-        'max_depth': 3,  # -1 means no limit
-        'min_child_samples': 100,  # Minimum number of data need in a child(min_data_in_leaf)
-        'max_bin': 100,  # Number of bucketed bin for feature values
-        'subsample': 0.7,  # Subsample ratio of the training instance.
-        'subsample_freq': 1,  # frequence of subsample, <=0 means no enable
-        'colsample_bytree': 0.9,  # Subsample ratio of columns when constructing each tree.
-        'min_child_weight': 0,  # Minimum sum of instance weight(hessian) needed in a child(leaf)
-        'scale_pos_weight':200 # because training data is extremely unbalanced 
+        'learning_rate': 0.57,
+        'application': 'regression',
+        'max_depth': 4,
+        'num_leaves': 31,
+        'verbosity': -1,
+        'metric': 'RMSE',
+        'data_random_seed': 1,
+        'bagging_fraction': 0.6,
+        'bagging_freq': 5,
+        'feature_fraction': 0.65,
+        'nthread': 4,
+        'min_data_in_leaf': 100,
+        'max_bin': 31
     }
-    (bst,best_iteration) = lgb_modelfit_nocv(params, 
-                            train_df, 
-                            val_df, 
-                            predictors, 
-                            target, 
-                            objective='binary', 
-                            metrics='auc',
-                            early_stopping_rounds=30, 
-                            verbose_eval=True, 
-                            num_boost_round=1000, 
-                            categorical_features=categorical)
 
-    print('[{}]: model training time'.format(time.time() - start_time))
-    del train_df
-    del val_df
-    gc.collect()
-    
-    print('Plot feature importances...')
-    ax = lgb.plot_importance(bst, max_num_features=100)
-    plt.show()
+    # Remove features with document frequency <=100
+    print(sparse_merge.shape)
+    mask = np.array(np.clip(sparse_merge.getnnz(axis=0) - 100, 0, 1), dtype=bool)
+    sparse_merge = sparse_merge[:, mask]
+    X = sparse_merge[:nrow_train]
+    X_test = sparse_merge[nrow_test:]
+    print(sparse_merge.shape)
 
-    print("Predicting...")
-    sub['is_attributed'] = bst.predict(test_df[predictors],num_iteration=best_iteration)
-    if not debug:
-        print("writing...")
-        sub.to_csv('sub_it%d.csv.gz'%(fileno),index=False,compression='gzip')
-    print("done...")
-    return sub
+    train_X, train_y = X, y
+    if develop:
+        train_X, valid_X, train_y, valid_y = train_test_split(X, y, test_size=0.05, random_state=100)
 
-nrows=184903891-1
-nchunk=40000000
-val_size=2500000
+    d_train = lgb.Dataset(train_X, label=train_y)
+    watchlist = [d_train]
+    if develop:
+        d_valid = lgb.Dataset(valid_X, label=valid_y)
+        watchlist = [d_train, d_valid]
 
-frm=nrows-75000000
-if debug:
-    frm=0
-    nchunk=100000
-    val_size=10000
+    model = lgb.train(params, train_set=d_train, num_boost_round=5500, valid_sets=watchlist, \
+                      early_stopping_rounds=1000, verbose_eval=1000)
 
-to=frm+nchunk
+    if develop:
+        preds = model.predict(valid_X)
+        print("LGB dev RMSLE:", rmsle(np.expm1(valid_y), np.expm1(preds)))
 
-sub=DO(frm,to,0)
+    predsL = model.predict(X_test)
+
+    print('[{}] Predict LGB completed.'.format(time.time() - start_time))
+
+    preds = (predsF * 0.1 + predsL * 0.22 + predsFM * 0.68)
+
+    submission['price'] = np.expm1(preds)
+    submission.to_csv("submission_wordbatch_ftrl_fm_lgb.csv", index=False)
+
+
+if __name__ == '__main__':
+    main()

@@ -1,186 +1,484 @@
 
 # coding: utf-8
 
-# # Detecting night photos
-# 
-# In the dataset, there are both day and night photos. Theoretically, it should be a good idea to train separate CNNs for them, as the color distribution is somewhat different, and, because of this, joining both types of photos in one dataset could be inefficient when it comes to training a CNN. The following notebook explores the idea of detecting day and night photos and separating them.
+# # Lets try to predict CRA of alzheimer disease
+
+# ![](http://yourcooladviser.in/wp-content/uploads/2017/06/stages-of-alzheimers-disease-21.jpg)
 
 # In[ ]:
 
 
-import numpy as np
+get_ipython().run_line_magic('matplotlib', 'inline')
+import keras
 import glob
-import random
+import seaborn as sns
+import pandas as pd
+import numpy as np
+import timeit
+import time
 import matplotlib.pyplot as plt
-import os
-from sklearn import cluster
-from sklearn import neighbors
-from scipy.misc import imread, imsave
+import matplotlib.patches as patches
 
-
-# It seems obvious that "night" photos are a little bit more greenish. Let's explore this a little more.
-# 
-# Let's plot some images alongside with mean of their components (R/G/B) below.
-
-# In[ ]:
-
-
-# load images
-imgs_to_load = 20
-
-preview_files = sorted(glob.glob('../input/train/*/*.jpg'), key=lambda x: random.random())[:imgs_to_load]
-preview = np.array([imread(img) for img in preview_files])
-
-def show_loaded_with_means(imgs):
-    rows_total = int(len(preview) / 4)
-    for i in range(rows_total):
-        _, img_ax = plt.subplots(1, 4, sharex='col', sharey='row', figsize=(8, 2))
-        _, imgmean_ax = plt.subplots(1, 4, sharex='col', sharey='row', figsize=(8, 2))
-        for j in range(4):
-            img = preview[i*4+j]
-            img_mean = np.mean(img, axis=(0,1))
-            # calculate squared means to amplify green dominance effect
-            img_mean = np.power(img_mean, 2)
-            
-            # show plots
-            img_ax[j].axis('off')
-            img_ax[j].imshow(img)
-            imgmean_ax[j].bar(range(3), img_mean, width=0.3, color='blue')
-            imgmean_ax[j].set_xticks(np.arange(3) + 0.3 / 2)
-            imgmean_ax[j].set_xticklabels(['R', 'G', 'B'])
-
-show_loaded_with_means(preview)
-plt.show()
-
-
-# It can be seen that in night photos, green component shows clear dominance over R/B components, when it comes to its mean. This is something that should be easily picked up by k-means algorithm.
-
-# Before applying it, let's first explore one more idea for representing each training image. If G component dominance is something that determines whether photo is day or night, we could, for mean of each component, store sum of differences between it and different component means. That way, dominance would mean higher number, and non-dominance would be punished.
-
-# In[ ]:
-
-
-imgs_to_load = 20
-
-preview_files = sorted(glob.glob('../input/train/*/*.jpg'), key=lambda x: random.random())[:imgs_to_load]
-preview = np.array([imread(img) for img in preview_files])
-
-def show_loaded_with_mean_differences(imgs):
-    rows_total = int(len(preview) / 4)
-    for i in range(rows_total):
-        _, img_ax = plt.subplots(1, 4, sharex='col', sharey='row', figsize=(8, 2))
-        _, imgmean_ax = plt.subplots(1, 4, sharex='col', sharey='row', figsize=(8, 2))
-        for j in range(4):
-            # calculate features of an image
-            img = preview[i*4+j]
-            img_mean = np.mean(img, axis=(0,1))
-            img_features = np.zeros(3)
-            img_features[0] = (img_mean[0] - img_mean[1]) + (img_mean[0] - img_mean[2])
-            img_features[1] = (img_mean[1] - img_mean[0]) + (img_mean[1] - img_mean[2])
-            img_features[2] = (img_mean[2] - img_mean[0]) + (img_mean[2] - img_mean[1])
-            
-            # display plots
-            img_ax[j].axis('off')
-            img_ax[j].imshow(img)
-            imgmean_ax[j].bar(range(3), img_features, width=0.3, color='blue')
-            imgmean_ax[j].set_xticks(np.arange(3) + 0.3 / 2)
-            imgmean_ax[j].set_xticklabels(['R', 'G', 'B'])
-
-show_loaded_with_mean_differences(preview)
-plt.show()
-
-
-# Looks promising - it seems high G component values are only achieved by night photos! This is the approach we'll use with k-means.
-
-# In[ ]:
-
-
-# one cluster will be day photos, the other one night photos
-knn_cls = 2
-# increase this number while training locally for better results
-training_imgs = 50
-
-training_files = sorted(glob.glob('../input/train/*/*.jpg'), key=lambda x: random.random())[:training_imgs]
-training = np.array([imread(img) for img in training_files])
-training_means = np.array([np.mean(img, axis=(0, 1)) for img in training])
-training_features = np.zeros((training_imgs, 3))
-for i in range(training_imgs):
-    training_features[i][0] = (training_means[i][0] - training_means[i][1])
-    training_features[i][0] += (training_means[i][0] - training_means[i][2])
-    training_features[i][1] = (training_means[i][1] - training_means[i][0])
-    training_features[i][1] += (training_means[i][1] - training_means[i][2])
-    training_features[i][2] = (training_means[i][2] - training_means[i][0])
-    training_features[i][2] += (training_means[i][2] - training_means[i][1])
-
-kmeans = cluster.KMeans(n_clusters=knn_cls).fit(training_features)
-print(np.bincount(kmeans.labels_))
+from pandas import read_csv
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import KFold
+from sklearn.preprocessing import LabelEncoder
+from sklearn.pipeline import Pipeline
+from keras.models import Sequential
+from keras.layers import Dense
+from keras.wrappers.scikit_learn import KerasClassifier
+from keras.utils import np_utils
 
 
 # In[ ]:
 
 
-def show_four(imgs, title):
-    _, ax = plt.subplots(1, 4, sharex='col', sharey='row', figsize=(8, 2))
-    plt.suptitle(title, size=8)
-    for i, img in enumerate(imgs[:4]):
-        ax[i].axis('off')
-        ax[i].imshow(img)
-
-for i in range(knn_cls):
-    cluster_i = training[np.where(kmeans.labels_ == i)]
-    show_four(cluster_i[:4], 'cluster' + str(i))
+cross1=pd.read_csv('../input/oasis_longitudinal.csv') 
+cross1 = cross1.fillna(method='ffill')
+cross2=pd.read_csv('../input/oasis_cross-sectional.csv')
+cross2 = cross2.fillna(method='ffill')
 
 
-# It seems like the clustering was successful. When training locally on more images, entire training data splits successfully between night and day photos, with ~1-2 photos being misclassified, which seems like a good result, as entire training dataset consists of ~3777 images.
-# 
-# Running the script below should generate 'clustered' directory inside training folder, which should contain split data.
+# In[ ]:
 
-#     batch = 100
-#     
-#     # now load all training examples and cluster them
-#     CLUSTER_FOLDER = os.path.abspath('./data/train/clustered')
-#     training_filenames = sorted(glob.glob('./data/train/*/*.jpg'))
-#     
-#     # make directories if they doesn't exist
-#     if not os.path.isdir(CLUSTER_FOLDER):
-#         os.makedirs(CLUSTER_FOLDER)
-#     
-#     for cluster_num in xrange(knn_cls):
-#         single_cluster_folder = os.path.join(CLUSTER_FOLDER, str(cluster_num))
-#         if not os.path.isdir(single_cluster_folder):
-#             os.mkdir(single_cluster_folder)
-#     
-#     saved_files = 0
-#     while saved_files < len(training_filenames):
-#         training_files = training_filenames[saved_files:saved_files+batch]
-#         training = np.array([imread(img) for img in training_files])
-#         training_means = np.array([np.mean(img, axis=(0, 1)) for img in training])
-#         training_features = np.zeros((training_imgs, 3))
-#         for i in xrange(len(training)):
-#             training_features[i][0] = (training_means[i][0] - training_means[i][1])
-#             training_features[i][0] += (training_means[i][0] - training_means[i][2])
-#             training_features[i][1] = (training_means[i][1] - training_means[i][0])
-#             training_features[i][1] += (training_means[i][1] - training_means[i][2])
-#             training_features[i][2] = (training_means[i][2] - training_means[i][0])
-#             training_features[i][2] += (training_means[i][2] - training_means[i][1])
-#             
-#         img_cls = kmeans.predict(training_features)
-#         
-#         for i, img in enumerate(training):
-#             cluster = img_cls[i]
-#             save_path = path.join(CLUSTER_FOLDER, str(cluster))
-#             class_name = path.basename(path.dirname(training_files[i]))
-#             save_path = path.join(save_path, class_name)
-#             if not path.isdir(save_path):
-#                 os.makedirs(save_path)
-#             save_path = path.join(save_path, path.basename(training_files[i]))
-#             print save_path
-#             imsave(save_path, img)
-#             saved_files += 1
-#         
-#         print str(saved_files) + "/" + str(len(training_filenames))
 
-# One idea that makes sense, would be to develop and apply some kind of "night" filter to make all images look like they come from same distribution (which should be easier than a "day" filter, as intuitively night photos contain less color information than day photos, and it is probably easier to "lose" some information than to "gain" it), but I have no experience in image processing and apart from simple heuristics, I can't come up with approach that would look natural.
-# 
-# This is my first take on a serious kaggle competition, and first kernel ever, so any feedback is welcome ;)
-# (I suspect some of my heuristics are a little more complicated than they should be,  and maybe some of them don't even make much sense...)
+cross1.head()
+
+
+# In[ ]:
+
+
+cross2.head()
+
+
+# In[ ]:
+
+
+cross1.info()
+
+
+# In[ ]:
+
+
+cross2.head()
+
+
+# In[ ]:
+
+
+cross2.info()
+
+
+# In[ ]:
+
+
+get_ipython().run_line_magic('pylab', 'inline')
+#lets plot some graphics from the first dataset
+
+from pylab import rcParams
+rcParams['figure.figsize'] = 8, 5
+cols = ['Age','MR Delay', 'EDUC', 'SES', 'MMSE', 'CDR','eTIV','nWBV','ASF']
+x=cross1.fillna('')
+sns_plot = sns.pairplot(x[cols])
+
+
+# In[ ]:
+
+
+#lets plot correleation matrix
+corr_matrix =cross1.corr()
+rcParams['figure.figsize'] = 15, 10
+sns.heatmap(corr_matrix)
+
+
+# In[ ]:
+
+
+cross1.drop(['MRI ID'], axis=1, inplace=True)
+cross1.drop(['Visit'], axis=1, inplace=True)
+
+
+# In[ ]:
+
+
+#cdr=cross1["CDR"]
+cross1['CDR'].replace(to_replace=0.0, value='A', inplace=True)
+cross1['CDR'].replace(to_replace=0.5, value='B', inplace=True)
+cross1['CDR'].replace(to_replace=1.0, value='C', inplace=True)
+cross1['CDR'].replace(to_replace=2.0, value='D', inplace=True)
+
+
+# In[ ]:
+
+
+from sklearn.preprocessing import LabelEncoder
+from sklearn.cross_validation import train_test_split
+for x in cross1.columns:
+    f = LabelEncoder()
+    cross1[x] = f.fit_transform(cross1[x])
+
+
+# In[ ]:
+
+
+cross1.head()
+
+
+# In[ ]:
+
+
+#cdr.replace(to_replace=0.0, value='A', inplace=True)
+#cdr.replace(to_replace=0.5, value='B', inplace=True)
+#cdr.replace(to_replace=1.0, value='C', inplace=True)
+#cdr.replace(to_replace=2.0, value='D', inplace=True)
+
+
+# In[ ]:
+
+
+#from sklearn.preprocessing import LabelBinarizer
+#encoder=LabelBinarizer()
+#z1=encoder.fit_transform(cdr)
+
+
+# In[ ]:
+
+
+#print(z1)
+
+
+# # Lets begin some machine learning
+
+# In[ ]:
+
+
+train, test = train_test_split(cross1, test_size=0.3)
+
+
+# In[ ]:
+
+
+X_train = train[['M/F', 'Age', 'EDUC', 'SES',  'eTIV', 'ASF']]
+y_train = train.CDR
+X_test = test[['M/F', 'Age', 'EDUC', 'SES',  'eTIV',  'ASF']]
+y_test = test.CDR
+
+
+# In[ ]:
+
+
+# Import `StandardScaler` from `sklearn.preprocessing`
+from sklearn.preprocessing import StandardScaler
+
+# Define the scaler 
+scaler = StandardScaler().fit(X_train)
+
+# Scale the train set
+X_train = scaler.transform(X_train)
+
+# Scale the test set
+X_test = scaler.transform(X_test)
+
+
+# In[ ]:
+
+
+y_train=np.ravel(y_train)
+X_train=np.asarray(X_train)
+
+y_test=np.ravel(y_test)
+X_test=np.asarray(X_test)
+
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegression
+classifier = LogisticRegression()
+classifier.fit(X_train, y_train)
+prediction = classifier.predict(X_test)
+
+
+# In[ ]:
+
+
+classifier.score(X_test, y_test)
+
+
+# In[ ]:
+
+
+classifier.score(X_train, y_train)
+
+
+# In[ ]:
+
+
+from sklearn.tree import DecisionTreeClassifier
+classifier = DecisionTreeClassifier(max_depth=12)
+classifier.fit(X_train, y_train)
+prediction = classifier.predict(X_test)
+print (classifier.score(X_train, y_train))
+print (classifier.score(X_test, y_test))
+
+
+# In[ ]:
+
+
+from sklearn.neighbors import KNeighborsClassifier
+knn = KNeighborsClassifier(n_neighbors=2)
+knn.fit(X_train, y_train)
+print(knn.score(X_train, y_train))
+prediction = knn.predict(X_test)
+print(knn.score(X_test, y_test))
+
+
+# In[ ]:
+
+
+from sklearn.svm import SVC
+svc=SVC(kernel="linear", C=0.01)
+svc.fit(X_train, y_train)
+prediction = svc.predict(X_test)
+
+
+# In[ ]:
+
+
+svc.score(X_test, y_test)
+
+
+# In[ ]:
+
+
+svc.score(X_train, y_train)
+
+
+# In[ ]:
+
+
+X_train.shape
+
+
+# ## Neural net tensorflow
+
+# ![](http://it-nowosti.ru/wp-content/uploads/2015/11/google-otkryvaet-isxodnyj-kod-si.jpg)
+
+# In[ ]:
+
+
+import tensorflow as tf
+from sklearn import metrics
+X_FEATURE = 'x'  # Name of the input feature.
+feature_columns = [
+      tf.feature_column.numeric_column(
+          X_FEATURE, shape=np.array(X_train).shape[1:])]
+
+classifier = tf.estimator.DNNClassifier(feature_columns=feature_columns, hidden_units=[35,70, 35], n_classes=4)
+
+  # Train.
+train_input_fn = tf.estimator.inputs.numpy_input_fn(x={X_FEATURE: X_train}, y=y_train, num_epochs=100, shuffle=False)
+classifier.train(input_fn=train_input_fn, steps=1000)
+
+  # Predict.
+test_input_fn = tf.estimator.inputs.numpy_input_fn(x={X_FEATURE: X_test}, y=y_test, num_epochs=1, shuffle=False)
+predictions = classifier.predict(input_fn=test_input_fn)
+y_predicted = np.array(list(p['class_ids'] for p in predictions))
+y_predicted = y_predicted.reshape(np.array(y_test).shape)
+
+  # Score with sklearn.
+score = metrics.accuracy_score(y_test, y_predicted)
+print('Accuracy (sklearn): {0:f}'.format(score))
+
+  # Score with tensorflow.
+scores = classifier.evaluate(input_fn=test_input_fn)
+print('Accuracy (tensorflow): {0:f}'.format(scores['accuracy']))
+
+
+#if __name__ == '__main__':
+   # tf.app.run()
+
+
+# In[ ]:
+
+
+y_train
+
+
+# # We need to concat both datasets because we have insufficient data
+
+# In[ ]:
+
+
+cross1.head()
+
+
+# In[ ]:
+
+
+cross2.head()
+
+
+# In[ ]:
+
+
+#lets encode second dataset
+for x in cross2.columns:
+    f = LabelEncoder()
+    cross2[x] = f.fit_transform(cross2[x])
+
+
+# In[ ]:
+
+
+#concanting both datasets
+df = pd.concat([cross1,cross2])
+
+
+# In[ ]:
+
+
+df = df.fillna(method='ffill')
+df.head()
+
+
+# In[ ]:
+
+
+train, test = train_test_split(cross1, test_size=0.3)
+X_train1 = train[['ASF', 'Age', 'EDUC', 'Group',  'Hand', 'M/F','MMSE','MR Delay','SES','eTIV','nWBV']]
+y_train1 = train.CDR
+X_test1 = test[['ASF', 'Age', 'EDUC', 'Group',  'Hand', 'M/F','MMSE','MR Delay','SES','eTIV','nWBV']]
+y_test1 = test.CDR
+
+
+# In[ ]:
+
+
+# Import `StandardScaler` from `sklearn.preprocessing`
+from sklearn.preprocessing import StandardScaler
+
+# Define the scaler 
+scaler = StandardScaler().fit(X_train1)
+
+# Scale the train set
+X_train1 = scaler.transform(X_train1)
+
+# Scale the test set
+X_test1 = scaler.transform(X_test1)
+
+
+# In[ ]:
+
+
+y_train1=np.ravel(y_train1)
+X_train1=np.asarray(X_train1)
+
+y_test1=np.ravel(y_test1)
+X_test1=np.asarray(X_test1)
+
+
+# In[ ]:
+
+
+X_train1
+
+
+# In[ ]:
+
+
+from sklearn.linear_model import LogisticRegression
+classifier = LogisticRegression()
+classifier.fit(X_train1, y_train1)
+prediction = classifier.predict(X_test1)
+print(classifier.score(X_train1, y_train1))
+print(classifier.score(X_test1, y_test1))
+
+
+# In[ ]:
+
+
+from sklearn.tree import DecisionTreeClassifier
+classifier = DecisionTreeClassifier(max_depth=5)
+classifier.fit(X_train1, y_train1)
+prediction = classifier.predict(X_test1)
+print (classifier.score(X_train1, y_train1))
+print (classifier.score(X_test1, y_test1))
+
+
+# In[ ]:
+
+
+from sklearn.neighbors import KNeighborsClassifier
+knn = KNeighborsClassifier(n_neighbors=5)
+knn.fit(X_train1, y_train1)
+print(knn.score(X_train1, y_train1))
+prediction = knn.predict(X_test1)
+print(knn.score(X_test1, y_test1))
+
+
+# In[ ]:
+
+
+import tensorflow as tf
+from sklearn import metrics
+X_FEATURE = 'x'  # Name of the input feature.
+feature_columns = [
+      tf.feature_column.numeric_column(
+          X_FEATURE, shape=np.array(X_train1).shape[1:])]
+
+classifier = tf.estimator.DNNClassifier(feature_columns=feature_columns, hidden_units=[35,70,35], n_classes=4)
+
+  # Train.
+train_input_fn = tf.estimator.inputs.numpy_input_fn(x={X_FEATURE: X_train1}, y=y_train1, num_epochs=100, shuffle=False)
+classifier.train(input_fn=train_input_fn, steps=1000)
+
+  # Predict.
+test_input_fn = tf.estimator.inputs.numpy_input_fn(x={X_FEATURE: X_test1}, y=y_test1, num_epochs=1, shuffle=False)
+predictions = classifier.predict(input_fn=test_input_fn)
+y_predicted = np.array(list(p['class_ids'] for p in predictions))
+y_predicted = y_predicted.reshape(np.array(y_test1).shape)
+
+  # Score with sklearn.
+score = metrics.accuracy_score(y_test1, y_predicted)
+print('Accuracy (sklearn): {0:f}'.format(score))
+
+  # Score with tensorflow.
+scores = classifier.evaluate(input_fn=test_input_fn)
+print('Accuracy (tensorflow): {0:f}'.format(scores['accuracy']))
+
+
+# In[ ]:
+
+
+import tensorflow as tf
+from sklearn import metrics
+X_FEATURE = 'x'  # Name of the input feature.
+feature_columns = [
+      tf.feature_column.numeric_column(
+          X_FEATURE, shape=np.array(X_train1).shape[1:])]
+
+classifier = tf.estimator.LinearClassifier(feature_columns=feature_columns, n_classes=4)
+
+  # Train.
+train_input_fn = tf.estimator.inputs.numpy_input_fn(x={X_FEATURE: X_train1}, y=y_train1, num_epochs=100, shuffle=False)
+classifier.train(input_fn=train_input_fn, steps=1000)
+
+  # Predict.
+test_input_fn = tf.estimator.inputs.numpy_input_fn(x={X_FEATURE: X_test1}, y=y_test1, num_epochs=1, shuffle=False)
+predictions = classifier.predict(input_fn=test_input_fn)
+#y_predicted = np.array(list(p['class_ids'] for p in predictions))
+y_predicted = y_predicted.reshape(np.array(y_test1).shape)
+
+  # Score with sklearn.
+score = metrics.accuracy_score(y_test1, y_predicted)
+print('Accuracy (sklearn): {0:f}'.format(score))
+
+  # Score with tensorflow.
+scores = classifier.evaluate(input_fn=test_input_fn)
+print('Accuracy (tensorflow): {0:f}'.format(scores['accuracy']))
+
+
+# ### And the winner is  DecisionTreeClassifier! 
+
+# ### Conclusion: we need more data for more precise analysis

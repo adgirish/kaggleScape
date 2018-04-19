@@ -1,83 +1,41 @@
-"""
-@author: Faron
-"""
-import numpy as np
+# All credits go to original authors!
+
 import pandas as pd
-from joblib import Parallel, delayed
-import multiprocessing
-from datetime import datetime
+import numpy as np
 
-'''
-Calculates (user, product) order_streak for the last n orders.
+print('2 momths are left to end this competition and **blends** are giving better results than single models.')
+print('looks like this competition will also end up like toxic comment classifier challenge. Blends, blends everywhere !!')
 
-- abs(order_streak) is length of streak
-- sgn(order_streak) encodes type of streak (non-ordered vs ordered)
-'''
+test_files = ['../input/lewis-undersampler-9562-version/pred.csv',
+              '../input/weighted-app-chanel-os/subnew.csv',
+              '../input/single-xgboost-lb-0-966/xgb_sub.csv',
+              '../input/swetha-s-xgboost-revised/xgb_sub5.csv',
+              '../input/lightgbm-fixing-unbalanced-data-lb-0-9680/sub_lgb_balanced99.csv',
+              '../input/lightgbm-with-count-features/sub_lgb_balanced99.csv',
+              '../input/deep-learning-support-imbalance-architect-9671/imbalanced_data.csv',
+              '../input/rank-averaging-on-talkingdata/rank_averaged_submission.csv',
+              '../input/lightgbm-smaller/submission.csv',
+              '../input/adding-to-the-blender-lb-0-9690/average_result.csv',
+              '../input/do-not-congratulate/sub_mix_logits_ranks.csv']
 
-DATA_DIR = "../input/"
-PRIOR_FILE = "order_products__prior"
-ORDERS_FILE = "orders"
+ll = []
+for test_file in test_files:
+    print('read ' + test_file)
+    ll.append(pd.read_csv(test_file, encoding='utf-8'))
+n_models = len(ll)
+pp = n_models
+weights = [0.2*0.05, 0.2*0.15, 0.2*0.12, 0.2*0.05, 0.2*0.33, 0.2*0.3, 0.2, 0.1, 0.05, 0.20, 0.25]
+cc = 'is_attributed'
+print(np.corrcoef([ll[pp - 5][cc], ll[pp - 4][cc], ll[pp - 3][cc], ll[pp - 2][cc], ll[pp - 1][cc]]))
+print('ALWAYS BLEND NON CORRELATED RESULTS TO PREVENT OVERFITTING..')
 
+print('predict')
+test_predict_column = [0.] * len(ll[0][cc])
+for ind in range(0, n_models):
+    test_predict_column += ll[ind][cc] * weights[ind]
 
-def load_input_data():
-    PATH = "{}{}{}".format(DATA_DIR, PRIOR_FILE, ".csv")
-    prior = pd.read_csv(PATH, dtype={'order_id': np.int32,
-                                     'product_id': np.uint16,
-                                     'add_to_cart_order': np.int16,
-                                     'reordered': np.int8})
-
-    PATH = "{}{}{}".format(DATA_DIR, ORDERS_FILE, ".csv")
-    orders = pd.read_csv(PATH, dtype={'order_id': np.int32,
-                                      'user_id': np.int64,
-                                      'order_number': np.int16,
-                                      'order_dow': np.int8,
-                                      'order_hour_of_day': np.int8,
-                                      'days_since_prior_order': np.float32})
-    return prior, orders
-
-
-def apply_parallel(df_groups, _func):
-    nthreads = multiprocessing.cpu_count() >> 1
-    print("nthreads: {}".format(nthreads))
-
-    res = Parallel(n_jobs=nthreads)(delayed(_func)(grp.copy()) for _, grp in df_groups)
-    return pd.concat(res)
-
-
-def add_order_streak(df):
-    tmp = df.copy()
-    tmp.user_id = 1
-
-    UP = tmp.pivot(index="product_id", columns='order_number').fillna(-1)
-    UP.columns = UP.columns.droplevel(0)
-
-    x = np.abs(UP.diff(axis=1).fillna(2)).values[:, ::-1]
-    df.set_index("product_id", inplace=True)
-    df['order_streak'] = np.multiply(np.argmax(x, axis=1) + 1, UP.iloc[:, -1])
-    df.reset_index(drop=False, inplace=True)
-    return df
-
-
-if __name__ == '__main__':
-    prior, orders = load_input_data()
-
-    print("orders: {}".format(orders.shape))
-    print("take only recent 5 orders per user:")
-    orders = orders.groupby(['user_id']).tail(5 + 1)
-    print("orders: {}".format(orders.shape))
-
-    prior = orders.merge(prior, how='inner', on="order_id")
-    prior = prior[['user_id', 'product_id', 'order_number']]
-    print("prior: {}".format(prior.shape))
-
-    user_groups = prior.groupby('user_id')
-    s = datetime.now()
-    df = apply_parallel(user_groups, add_order_streak)
-    e = datetime.now()
-    print("time elapsed: {}".format(e - s))
-
-    df = df.drop("order_number", axis=1).drop_duplicates().reset_index(drop=True)
-    df = df[['user_id', 'product_id', 'order_streak']]
-    print(df.head(n=10))
-    df.to_csv("order_streaks.csv", index=False)
-    print("order_streaks.csv has been written")
+print('make result')
+final_result = ll[0]['click_id']
+final_result = pd.concat((final_result, pd.DataFrame(
+    {cc: test_predict_column})), axis=1)
+final_result.to_csv("blend_3.csv", index=False)

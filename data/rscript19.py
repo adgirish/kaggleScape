@@ -1,163 +1,91 @@
-# This Python 3 environment comes with many helpful analytics libraries installed
-# It is defined by the kaggle/python docker image: https://github.com/kaggle/docker-python
-# For example, here's several helpful packages to load in 
+# -*- coding: utf-8 -*-
+import gc
+import pandas as pd
+from datetime import timedelta
 
-import numpy as np
-from sklearn.base import BaseEstimator,TransformerMixin, ClassifierMixin
-from sklearn.preprocessing import LabelEncoder
-import xgboost as xgb
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-from sklearn.linear_model import ElasticNetCV, LassoLarsCV
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.pipeline import make_pipeline, make_union
-from sklearn.utils import check_array
-from sklearn.preprocessing import StandardScaler
-from sklearn.tree import DecisionTreeRegressor
-from sklearn.random_projection import GaussianRandomProjection
-from sklearn.random_projection import SparseRandomProjection
-from sklearn.decomposition import PCA, FastICA
-from sklearn.decomposition import TruncatedSVD
-from sklearn.metrics import r2_score
+dtypes = {'id':'uint32', 'item_nbr':'int32', 'store_nbr':'int8', 'unit_sales':'float32'}
 
+train = pd.read_csv('../input/train.csv', usecols=[1,2,3,4], dtype=dtypes, parse_dates=['date'],
+                    skiprows=range(1, 101688779)  # 2017-01-01
+                    )
 
+train.loc[(train.unit_sales<0),'unit_sales'] = 0 # eliminate negatives
+train['unit_sales'] =  train['unit_sales'].apply(pd.np.log1p) #logarithm conversion
 
-class StackingEstimator(BaseEstimator, TransformerMixin):
-    
-    def __init__(self, estimator):
-        self.estimator = estimator
-
-    def fit(self, X, y=None, **fit_params):
-        self.estimator.fit(X, y, **fit_params)
-        return self
-    def transform(self, X):
-        X = check_array(X)
-        X_transformed = np.copy(X)
-        # add class probabilities as a synthetic feature
-        if issubclass(self.estimator.__class__, ClassifierMixin) and hasattr(self.estimator, 'predict_proba'):
-            X_transformed = np.hstack((self.estimator.predict_proba(X), X))
-
-        # add class prodiction as a synthetic feature
-        X_transformed = np.hstack((np.reshape(self.estimator.predict(X), (-1, 1)), X_transformed))
-
-        return X_transformed
-
-
-train = pd.read_csv('../input/train.csv')
-test = pd.read_csv('../input/test.csv')
-
-for c in train.columns:
-    if train[c].dtype == 'object':
-        lbl = LabelEncoder()
-        lbl.fit(list(train[c].values) + list(test[c].values))
-        train[c] = lbl.transform(list(train[c].values))
-        test[c] = lbl.transform(list(test[c].values))
-
-
-
-n_comp = 12
-
-# tSVD
-tsvd = TruncatedSVD(n_components=n_comp, random_state=420)
-tsvd_results_train = tsvd.fit_transform(train.drop(["y"], axis=1))
-tsvd_results_test = tsvd.transform(test)
-
-# PCA
-pca = PCA(n_components=n_comp, random_state=420)
-pca2_results_train = pca.fit_transform(train.drop(["y"], axis=1))
-pca2_results_test = pca.transform(test)
-
-# ICA
-ica = FastICA(n_components=n_comp, random_state=420)
-ica2_results_train = ica.fit_transform(train.drop(["y"], axis=1))
-ica2_results_test = ica.transform(test)
-
-# GRP
-grp = GaussianRandomProjection(n_components=n_comp, eps=0.1, random_state=420)
-grp_results_train = grp.fit_transform(train.drop(["y"], axis=1))
-grp_results_test = grp.transform(test)
-
-# SRP
-srp = SparseRandomProjection(n_components=n_comp, dense_output=True, random_state=420)
-srp_results_train = srp.fit_transform(train.drop(["y"], axis=1))
-srp_results_test = srp.transform(test)
-
-#save columns list before adding the decomposition components
-
-usable_columns = list(set(train.columns) - set(['y']))
-
-# Append decomposition components to datasets
-for i in range(1, n_comp + 1):
-    train['pca_' + str(i)] = pca2_results_train[:, i - 1]
-    test['pca_' + str(i)] = pca2_results_test[:, i - 1]
-
-    train['ica_' + str(i)] = ica2_results_train[:, i - 1]
-    test['ica_' + str(i)] = ica2_results_test[:, i - 1]
-
-    train['tsvd_' + str(i)] = tsvd_results_train[:, i - 1]
-    test['tsvd_' + str(i)] = tsvd_results_test[:, i - 1]
-
-    train['grp_' + str(i)] = grp_results_train[:, i - 1]
-    test['grp_' + str(i)] = grp_results_test[:, i - 1]
-
-    train['srp_' + str(i)] = srp_results_train[:, i - 1]
-    test['srp_' + str(i)] = srp_results_test[:, i - 1]
-
-#usable_columns = list(set(train.columns) - set(['y']))
-
-y_train = train['y'].values
-y_mean = np.mean(y_train)
-id_test = test['ID'].values
-#finaltrainset and finaltestset are data to be used only the stacked model (does not contain PCA, SVD... arrays) 
-finaltrainset = train[usable_columns].values
-finaltestset = test[usable_columns].values
-
-
-'''Train the xgb model then predict the test data'''
-
-xgb_params = {
-    'n_trees': 520, 
-    'eta': 0.0045,
-    'max_depth': 4,
-    'subsample': 0.93,
-    'objective': 'reg:linear',
-    'eval_metric': 'rmse',
-    'base_score': y_mean, # base prediction = mean(target)
-    'silent': 1
-}
-# NOTE: Make sure that the class is labeled 'class' in the data file
-
-dtrain = xgb.DMatrix(train.drop('y', axis=1), y_train)
-dtest = xgb.DMatrix(test)
-
-num_boost_rounds = 1250
-# train model
-model = xgb.train(dict(xgb_params, silent=0), dtrain, num_boost_round=num_boost_rounds)
-y_pred = model.predict(dtest)
-
-'''Train the stacked models then predict the test data'''
-
-stacked_pipeline = make_pipeline(
-    StackingEstimator(estimator=LassoLarsCV(normalize=True)),
-    StackingEstimator(estimator=GradientBoostingRegressor(learning_rate=0.001, loss="huber", max_depth=3, max_features=0.55, min_samples_leaf=18, min_samples_split=14, subsample=0.7)),
-    LassoLarsCV()
-
+# creating records for all items, in all markets on all dates
+# for correct calculation of daily unit sales averages.
+u_dates = train.date.unique()
+u_stores = train.store_nbr.unique()
+u_items = train.item_nbr.unique()
+train.set_index(['date', 'store_nbr', 'item_nbr'], inplace=True)
+train = train.reindex(
+    pd.MultiIndex.from_product(
+        (u_dates, u_stores, u_items),
+        names=['date','store_nbr','item_nbr']
+    )
 )
 
+del u_dates, u_stores, u_items
+gc.collect()
 
-stacked_pipeline.fit(finaltrainset, y_train)
-results = stacked_pipeline.predict(finaltestset)
+train.loc[:, 'unit_sales'].fillna(0, inplace=True) # fill NaNs
+train.reset_index(inplace=True) # reset index and restoring unique columns  
+lastdate = train.iloc[train.shape[0]-1].date
+train['dow'] = train['date'].dt.dayofweek
 
-'''R2 Score on the entire Train data when averaging'''
+#Unit sales mean by item and store 
+ma_is = train[['item_nbr','store_nbr','unit_sales']].groupby(['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('maisall')
 
-print('R2 score on train data:')
-print(r2_score(y_train,stacked_pipeline.predict(finaltrainset)*0.2855 + model.predict(dtrain)*0.7145))
+#Days of Week Means
+#By tarobxl: https://www.kaggle.com/c/favorita-grocery-sales-forecasting/discussion/42948
+ma_dw = train[['item_nbr','store_nbr','dow','unit_sales']].groupby(['item_nbr','store_nbr','dow'])['unit_sales'].mean().to_frame('madw')
+ma_dw.reset_index(inplace=True)
+train = train[train['date'].dt.year == 2017] 
+gc.collect()
+ma_wk = ma_dw[['item_nbr','store_nbr','madw']].groupby(['store_nbr', 'item_nbr'])['madw'].mean().to_frame('mawk')
+ma_wk.reset_index(inplace=True)
 
-'''Average the preditionon test data  of both models then save it on a csv file'''
+#Moving Averages
+for i in [112,56,28,14,7,3,1]:
+    tmp = train[train.date>lastdate-timedelta(int(i))]
+    tmpg = tmp.groupby(['item_nbr','store_nbr'])['unit_sales'].mean().to_frame('mais'+str(i))
+    ma_is = ma_is.join(tmpg, how='left')
 
-sub = pd.DataFrame()
-sub['ID'] = id_test
-sub['y'] = y_pred*0.75 + results*0.25
-sub.to_csv('stacked-models.csv', index=False)
+del tmp,tmpg
+gc.collect()
 
+ma_is['mais']=ma_is.median(axis=1)
+ma_is.reset_index(inplace=True)
 
-# Any results you write to the current directory are saved as output.
+#Load test
+test = pd.read_csv('../input/test.csv', dtype=dtypes, parse_dates=['date'])
+test['dow'] = test['date'].dt.dayofweek
+test = pd.merge(test, ma_is, how='left', on=['item_nbr','store_nbr'])
+test = pd.merge(test, ma_wk, how='left', on=['item_nbr','store_nbr'])
+test = pd.merge(test, ma_dw, how='left', on=['item_nbr','store_nbr','dow'])
+
+del ma_is, ma_wk, ma_dw
+gc.collect()
+
+#Forecasting Test
+test['unit_sales'] = test.mais
+pos_idx = test['mawk'] > 0
+test_pos = test.loc[pos_idx]
+test.loc[pos_idx, 'unit_sales'] = test_pos['mais'] * test_pos['madw'] / test_pos['mawk']
+test.loc[:,'unit_sales'].fillna(0, inplace=True)
+test['unit_sales'] = test['unit_sales'].apply(pd.np.expm1) # restoring unit values 
+
+#20% more for holidays
+#By nimesh: https://www.kaggle.com/nimesh280/ma-forecasting-with-holiday-effect-lb-0-529 
+holiday = pd.read_csv('../input/holidays_events.csv', parse_dates=['date'])
+holiday = holiday.loc[holiday['transferred'] == False]
+test = pd.merge(test, holiday, how = 'left', on =['date'] )
+test['transferred'].fillna(True, inplace=True)
+test.loc[test['transferred'] == False, 'unit_sales'] *= 1.2
+
+#50% more for promotion items
+#By tarobxl: https://www.kaggle.com/tarobxl/overfit-lb-0-532-log-ma
+test.loc[test['onpromotion'] == True, 'unit_sales'] *= 1.5
+
+#Make submit
+test[['id','unit_sales']].to_csv('ma8dspdays.csv', index=False, float_format='%.3f')

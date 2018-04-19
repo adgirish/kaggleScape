@@ -1,142 +1,237 @@
-# This is a script I applied early in toe competition ~ LB = 3. With bounding box regression  
-# (applying this to fishes rather than whole images achieves a much better score)
-# I used this script to learn about CNNs, feature extraction and using features learned by the InceptionV3 CNN
-# to perform classificaiton using a SVM architecture.
-# Inspired (adapted heavily) from: http://blog.christianperone.com/2015/08/convolutional-neural-networks-and-feature-extraction-with-python/
+"""
+Acknowledgements:
+    - This kernel was forked from Alexey Pronin's LightGBM code, so many thanks
+      for his work:
+          https://www.kaggle.com/graf10a/lightgbm-lb-0-9675/code
 
+What's new:
+    - Creation of a feature processing function to remove the need to append the
+      test and train sets for processing. I therefore don't need the (huge) test
+      set in memory whilst training the LightGBM model, and as such can load
+      more training data --> better generalisation.
 
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+    - Use of (optional) cross validation instead of a validation set to know when to 
+      stop boosting. This allows me to train on the full training set and also checks
+      performance against more than one fold --> even better generalisation.
 
-from subprocess import check_output
-print(check_output(["ls", "../input"]).decode("utf8"))
+    - Together, these two changes let me train on ~75m rows.
 
+    - Additional features tested:
+        - (REJECTED) n_ip_clicks: Count of clicks per IP address
+        - (REJECTED) day_section: 'hour' binned into morning, work hours etc.
+
+    - Hyperparameter optimisation. Changes are described where the lightgbm
+      parameters are set below.
+"""
 
 import os
-import re
-
-import tensorflow as tf
-import tensorflow.python.platform
-from tensorflow.python.platform import gfile
-import numpy as np
 import pandas as pd
-import sklearn
-from sklearn import cross_validation
-from sklearn.metrics import accuracy_score, confusion_matrix
-from sklearn.svm import SVC, LinearSVC
-import matplotlib.pyplot as plt
-import pickle
-from sklearn.calibration import CalibratedClassifierCV
-from sklearn import svm
+import numpy as np
+from sklearn.model_selection import train_test_split
+import lightgbm as lgb
+import gc
+os.environ['OMP_NUM_THREADS'] = '4'  # Number of threads on the Kaggle server
 
-model_dir = 'latest_submission/'
-# all training images
-images_dir = 'SVM_training_set/'
-list_images = [images_dir+f for f in os.listdir(images_dir) if re.search('jpg|JPG', f)]
+"""
+0. Run Params
+"""
+run_cv = False  # Run CV to get opt boost rounds
+OPT_BOOST_ROUNDS = 349  # Found through CV on my machine to save Kaggle server time
 
+"""
+1. Load data
+"""
 
-# setup tensorFlow graph initiation
-def create_graph():
-	with gfile.FastGFile(os.path.join(model_dir, 'output.pb'), 'rb') as f:
-		graph_def = tf.GraphDef()
-		graph_def.ParseFromString(f.read())
-		_ = tf.import_graph_def(graph_def, name='')
+path_train = os.path.join(os.pardir, 'input', 'train.csv')
+path_test = os.path.join(os.pardir, 'input', 'test.csv')
 
-# extract all features from pool layer of InceptionV3
-def extract_features(list_images):
-	nb_features = 2048
-	features = np.empty((len(list_images),nb_features))
-	labels = []
-	create_graph()
-	with tf.Session() as sess:
-		next_to_last_tensor = sess.graph.get_tensor_by_name('pool_3:0')
-		for ind, image in enumerate(list_images):
-			print('Processing %s...' % (image))
-			if not gfile.Exists(image):
-				tf.logging.fatal('File does not exist %s', image)
-			image_data = gfile.FastGFile(image, 'rb').read()
-			predictions = sess.run(next_to_last_tensor,
-			{'DecodeJpeg/contents:0': image_data})
-			features[ind,:] = np.squeeze(predictions)
-			labels.append(re.split('_\d+',image.split('/')[1])[0])
-		return features, labels
+train_cols = ['ip', 'app', 'device', 'os', 'channel', 'click_time', 'is_attributed']
+test_cols = ['ip', 'app', 'device', 'os', 'channel', 'click_time']
 
+dtypes = {
+    'ip'            : 'uint32',
+    'app'           : 'uint16',
+    'device'        : 'uint16',
+    'os'            : 'uint16',
+    'channel'       : 'uint16',
+    'is_attributed' : 'uint8',
+    'click_id'      : 'uint32'
+}
 
-features,labels = extract_features(list_images)
+n_rows_in_train_set = 184903891  # Roughly
+n_rows_to_skip = 110000000
 
-pickle.dump(features, open('features', 'wb'))
-pickle.dump(labels, open('labels', 'wb'))
+print('Loading the training data...')
+train = pd.read_csv(path_train, dtype=dtypes, skiprows = range(1, n_rows_to_skip), usecols=train_cols)
 
-features = pickle.load(open('features'))
-labels = pickle.load(open('labels'))
+len_train = len(train)
+print('The initial size of the train set is', len_train)
+gc.collect()
 
-# run a 10-fold CV SVM using probabilistic outputs. 
-X_train, X_test, y_train, y_test = cross_validation.train_test_split(features, labels, test_size=0.1, random_state=0)
-clf = svm.SVC(kernel='linear', C=1).fit(X_train, y_train)
-clf.score(X_test, y_test)
+"""
+2. Feature engineering function
+"""
 
-# probabalistic SVM
-clf =  sklearn.calibration.CalibratedClassifierCV(svm)
-clf.fit(X_train, y_train)
-y_pred = clf.predict_proba(X_test)
+def process_data(df):
 
+    print("Creating new time features: 'hour', 'day'")
+    df['hour'] = pd.to_datetime(df.click_time).dt.hour.astype('uint8')
+    df['day'] = pd.to_datetime(df.click_time).dt.day.astype('uint8')
+    day_section = 0
+    for start_time, end_time in zip([0, 6, 12, 18], [6, 12, 18, 24]):
+        df.loc[(df['hour'] >= start_time) & (df['hour'] < end_time), 'day_section'] = day_section
+        day_section += 1
+    df['day_section'] = df['day_section'].astype('uint8')
+    gc.collect()
 
-k_fold = KFold(len(labels),n_folds=10, shuffle=False, random_state=0)
-C_array=[0.001,0.01,0.1,1,10]
-C_scores=[]
+    print("Creating new click count features...")
 
-for k in C_array:
-	clf = svm.SVC(kernel='linear', C=k)
-	scores= cross_val_score(clf, features, labels, cv=k_fold, n_jobs=-1)
-	C_scores.append(scores.mean())
-	print C_scores
+    print('Computing the number of clicks associated with a given IP address...')
+    ip_clicks = df[['ip','channel']].groupby(by=['ip'])[['channel']]\
+        .count().reset_index().rename(columns={'channel': 'n_ip_clicks'})
 
-#C = 0.1 is best
+    print('Merging the IP clicks data with the main data set...')
+    df = df.merge(ip_clicks, on=['ip'], how='left')
+    del ip_clicks
+    gc.collect()
+    
+    print('Computing the number of clicks associated with a given app per hour...')
+    app_clicks = df[['app', 'day', 'hour', 'channel']].groupby(by=['app', 'day', 'hour'])[['channel']]\
+        .count().reset_index().rename(columns={'channel': 'n_app_clicks'})
 
-#clf = svm.LinearSVC(C=0.1)
-clf = svm.SVC(kernel='linear', C=0.1,probability=True)
-
-# final_model = clf.fit(features, labels)
-
-final_model = CalibratedClassifierCV(clf,cv=10,method='sigmoid')
-final_model = clf.fit(features, labels)
+    print('Merging the IP clicks data with the main data set...')
+    df = df.merge(app_clicks, on=['app', 'day', 'hour'], how='left')
+    del app_clicks
+    gc.collect()
 
 
-test_dir='latest_submission/test_stg1/test_stg1/'
-list_images = [test_dir+f for f in os.listdir(test_dir) if re.search('jpg|JPG', f)]
+    print('Computing the number of channels associated with\n'
+          'a given IP address within each hour...')
+    n_chans = df[['ip','day','hour','channel']].groupby(by=['ip','day',
+              'hour'])[['channel']].count().reset_index().rename(columns={'channel': 'n_channels'})
 
+    print('Merging the channels data with the main data set...')
+    df = df.merge(n_chans, on=['ip','day','hour'], how='left')
+    del n_chans
+    gc.collect()
 
-def extract_features(list_images):
-	nb_features = 2048
-	features = np.empty((len(list_images),nb_features))
-	create_graph()
-	with tf.Session() as sess:
-		next_to_last_tensor = sess.graph.get_tensor_by_name('pool_3:0')
-		for ind, image in enumerate(list_images):
-			print('Processing %s...' % (image))
-			if not gfile.Exists(image):
-				tf.logging.fatal('File does not exist %s', image)
-			image_data = gfile.FastGFile(image, 'rb').read()
-			predictions = sess.run(next_to_last_tensor,
-			{'DecodeJpeg/contents:0': image_data})
-			features[ind,:] = np.squeeze(predictions)
-		return features
+    print('Computing the number of channels associated with ')
+    print('a given IP address and app...')
+    n_chans = df[['ip','app', 'channel']].groupby(by=['ip',
+              'app'])[['channel']].count().reset_index().rename(columns={'channel': 'ip_app_count'})
 
+    print('Merging the channels data with the main data set...')
+    df = df.merge(n_chans, on=['ip','app'], how='left')
+    del n_chans
+    gc.collect()
 
-features_test = extract_features(list_images)
+    print('Computing the number of channels associated with ')
+    print('a given IP address, app, and os...')
+    n_chans = df[['ip','app', 'os', 'channel']].groupby(by=['ip', 'app',
+              'os'])[['channel']].count().reset_index().rename(columns={'channel': 'ip_app_os_count'})
 
-y_pred = final_model.predict_proba(features_test)
-#y_pred = final_model.predict(features_test)
-#y_pred = final_model.predict(features_test)
+    print('Merging the channels data with the main data set...')
+    df = df.merge(n_chans, on=['ip','app', 'os'], how='left')
+    del n_chans
+    gc.collect()
 
+    print("Adjusting the data types of the new count features... ")
+    df.info()
+    for feat in ['n_channels', 'ip_app_count', 'ip_app_os_count', 'n_ip_clicks']:
+        df[feat] = df[feat].astype('uint16')
 
-image_id = [i.split('/')[3] for i in list_images]
+    return df
 
-submit = open('submit.SVM.csv','w')
-submit.write('image,ALB,BET,DOL,LAG,NoF,OTHER,SHARK,YFT\n')
+"""
+3. Training & validation
+"""
 
-for idx, id_n in enumerate(image_id):
-	probs=['%s' % p for p in list(y_pred[idx, :])]
-	submit.write('%s,%s\n' % (str(image_id[idx]),','.join(probs)))
+# Apply processing function to the train set
+train = process_data(df=train)
 
-submit.close()
+target = 'is_attributed'
+train[target] = train[target].astype('uint8')
+train.info()
+
+predictors = ['ip', 'device', 'app', 'os', 'channel', 'hour', 'n_channels',
+    'ip_app_count', 'ip_app_os_count']
+categorical = ['ip', 'app', 'device', 'os', 'channel', 'hour']
+gc.collect()
+
+print("Preparing the datasets for training...")
+params = {
+    'boosting_type': 'gbdt',  # I think dart would be better, but takes too long to run
+    # 'drop_rate': 0.09,  # Rate at which to drop trees
+    'objective': 'binary',
+    'metric': 'auc',
+    'learning_rate': 0.1,
+    'num_leaves': 11,  # Was 255: Reduced to control overfitting
+    'max_depth': -1,  # Was 8: LightGBM splits leaf-wise, so control depth via num_leaves
+    'min_child_samples': 100,
+    'max_bin': 100,
+    'subsample': 0.9,  # Was 0.7
+    'subsample_freq': 1,
+    'colsample_bytree': 0.7,
+    'min_child_weight': 0,
+    'subsample_for_bin': 200000,
+    'min_split_gain': 0,
+    'reg_alpha': 0,
+    'reg_lambda': 0,
+    'nthread': 4,
+    'verbose': 0,
+    'scale_pos_weight': 99.76
+}
+
+dtrain = lgb.Dataset(train[predictors].values, label=train[target].values,
+                      feature_name=predictors,
+                      categorical_feature=categorical
+                      )
+del train
+gc.collect()
+print('Datasets ready.')
+
+if run_cv:
+    print('Cross validating...')
+    cv_results = lgb.cv(params=params,
+                        train_set=dtrain,
+                        nfold=3,
+                        num_boost_round=350,
+                        early_stopping_rounds=30,
+                        verbose_eval=20,
+                        categorical_feature=categorical)
+    OPT_BOOST_ROUNDS = np.argmax(cv_results['auc-mean'])
+    print('CV complete. Optimum boost rounds = {}'.format(OPT_BOOST_ROUNDS))
+
+print('Training model...')
+lgb_model = lgb.train(params=params, train_set=dtrain, num_boost_round=OPT_BOOST_ROUNDS,
+                      categorical_feature=categorical)
+print('Model trained.')
+
+# Feature names:
+print('Feature names:', lgb_model.feature_name())
+
+# Feature importances:
+print('Feature importances:', list(lgb_model.feature_importance()))
+
+"""
+4. Infer and submit
+"""
+
+# Clear up after training
+del dtrain
+gc.collect()
+
+print('Loading the test data...')
+test = pd.read_csv(path_test, dtype=dtypes, header=0, usecols=test_cols)
+test = process_data(test)
+
+print("Preparing data for submission...")
+submit = pd.read_csv(path_test, dtype='int', usecols=['click_id'])
+
+print("Predicting the submission data...")
+submit['is_attributed'] = lgb_model.predict(test[predictors], num_iteration=lgb_model.best_iteration)
+
+print("Writing the submission data into a csv file...")
+submit.to_csv('submission.csv', index=False)
+
+print("Writing complete.")

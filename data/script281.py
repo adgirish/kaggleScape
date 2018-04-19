@@ -1,263 +1,221 @@
 
 # coding: utf-8
 
-# # Starting kit for PyTorch Deep Learning
-# 
-# Welcome to this tutorial to get started on PyTorch for this competition.
-# PyTorch is a promising port of Facebook's Torch to Python.
-# 
-# It's only 3 months old but has an already promising feature set.
-# Unfortunately it's very very raw, and I had a lot of troubles to get started with very basic things:
-# - data loading
-# - building a basic CNN
-# - training
-# 
-# Hopefully this will help you getting started using PyTorch on this dataset.
-
-# ## Importing libraries
-# Please note that we do not import numpy but PyTorch wrapper for Numpy
+# Based on the1owl's [kernel](https://www.kaggle.com/the1owl/forza-baseline-lightgbm-example)
 
 # In[ ]:
 
 
+MAX_ROUNDS = 1200
+OPTIMIZE_ROUNDS = False
+LEARNING_RATE = 0.024
+
+
+# I recommend initially setting <code>MAX_ROUNDS</code> fairly high and using <code>OPTIMIZE_ROUNDS</code> to get an idea of the appropriate number of rounds (which, in my judgment, should be close to the maximum value of <code>best_iteration</code> among all folds, maybe even a bit higher if your model is adequately regularized...or alternatively, you can look at the detailed output from the boosting rounds and choose a value that seems like it would work OK for all folds).  Then I would turn off <code>OPTIMIZE_ROUNDS</code> and set <code>MAX_ROUNDS</code> to the appropraite number of total rounds.  The problem with "early stopping" by choosing the best round for each fold is that it overfits to the validation data.    It's therefore liable not to produce the optimal model for predicting test data, and if it's used to produce validation predictions for stacking/ensembling with other models, it would cause this one to have too much weight in the ensemble.
+
+# In[ ]:
+
+
+import numpy as np
 import pandas as pd
-from torch import np # Torch wrapper for Numpy
+from catboost import CatBoostClassifier
+from sklearn.model_selection import train_test_split
+from sklearn.model_selection import KFold
+from numba import jit
+from sklearn import *
+import lightgbm as lgb
+from multiprocessing import *
 
-import os
-from PIL import Image
-
-import torch
-from torch.utils.data.dataset import Dataset
-from torch.utils.data import DataLoader
-from torchvision import transforms
-from torch import nn
-import torch.nn.functional as F
-import torch.optim as optim
-from torch.autograd import Variable
-
-from sklearn.preprocessing import MultiLabelBinarizer
-
-
-# ## Setting up global variables
 
 # In[ ]:
 
 
-IMG_PATH = '../input/train-jpg/'
-IMG_EXT = '.jpg'
-TRAIN_DATA = '../input/train_v2.csv'
+# Compute gini
 
+# from CPMP's kernel https://www.kaggle.com/cpmpml/extremely-fast-gini-computation
+@jit
+def eval_gini(y_true, y_prob):
+    y_true = np.asarray(y_true)
+    y_true = y_true[np.argsort(y_prob)]
+    ntrue = 0
+    gini = 0
+    delta = 0
+    n = len(y_true)
+    for i in range(n-1, -1, -1):
+        y_i = y_true[i]
+        ntrue += y_i
+        gini += y_i * delta
+        delta += 1 - y_i
+    gini = 1 - 2 * gini / (ntrue * (n - ntrue))
+    return gini
 
-# ## Loading the data - first part - DataSet
-# 
-# This is probably the most obscure part of PyTorch. Most examples use well known datasets (MNIST ...) and have a custom loader or forces you to have a specific folder structure similar to this:
-# 
-# * data
-#     * train
-#           * dogs
-#           * cats
-#      * validation
-#           * dogs
-#           * cats
-#      * test
-#           * test
-# 
-# Data loading in PyTorch is in 2 parts
-# 
-# First the data must be wrapped in a __Dataset__ class with a getitem method that from an index return X_train[index] and y_train[index] and a length method. A Dataset is basically a data storage.
-# 
-# The following solution loads the image name from a CSV and file path + extension and can be adapted easily for most Kaggle challenges. You won't have to write your own ;).
-# 
-# The code will:
-# 
-# - Check that all images in CSV exist in the folder
-# - Use ScikitLearn MultiLabelBinarizer to OneHotEncode the labels, mlb.inverse_transform(predictions) can be used to get back the textual labels from the predictions
-# - Apply PIL transformations to the images. See [here](http://pytorch.org/docs/torchvision/transforms.html) for the supported list.
-# - Use ToTensor() to convert from an image with color scale 0-255 to a Tensor with color scale 0-1.
-# 
-# Note: We use PIL instead of OpenCV because it's Torch default image loader and is compatible with `ToTensor()` method. An fast loader called accimage is currently in development and was published 3 days ago [here](https://github.com/pytorch/accimage).
-# 
-# Note 2: This only provides a mapping to the data, **the data is not loaded in memory at this point**. The next part will show you how to load only what is needed for the batch in memory. This is a huge advantage compared to kernels that must load all images at once.
 
 # In[ ]:
 
 
-class KaggleAmazonDataset(Dataset):
-    """Dataset wrapping images and target labels for Kaggle - Planet Amazon from Space competition.
+def transform_df(df):
+    df = pd.DataFrame(df)
+    dcol = [c for c in df.columns if c not in ['id','target']]
+    df['ps_car_13_x_ps_reg_03'] = df['ps_car_13'] * df['ps_reg_03']
+    df['negative_one_vals'] = np.sum((df[dcol]==-1).values, axis=1)
+    for c in dcol:
+        if '_bin' not in c: #standard arithmetic
+            df[c+str('_median_range')] = (df[c].values > d_median[c]).astype(np.int)
+            df[c+str('_mean_range')] = (df[c].values > d_mean[c]).astype(np.int)
+    for c in one_hot:
+        if len(one_hot[c])>2 and len(one_hot[c]) < 7:
+            for val in one_hot[c]:
+                df[c+'_oh_' + str(val)] = (df[c].values == val).astype(np.int)
+    return df
 
-    Arguments:
-        A CSV file path
-        Path to image folder
-        Extension of images
-        PIL transforms
-    """
+def multi_transform(df):
+    p = Pool(cpu_count())
+    df = p.map(transform_df, np.array_split(df, cpu_count()))
+    df = pd.concat(df, axis=0, ignore_index=True).reset_index(drop=True)
+    p.close(); p.join()
+    return df
 
-    def __init__(self, csv_path, img_path, img_ext, transform=None):
+def gini_lgb(preds, dtrain):
+    y = list(dtrain.get_label())
+    score = eval_gini(y, preds) / eval_gini(y, y)
+    return 'gini', score, True
+
+
+
+# In[ ]:
+
+
+# Read data
+train_df = pd.read_csv('../input/train.csv') # .iloc[0:200,:]
+test_df = pd.read_csv('../input/test.csv')
+
+
+# In[ ]:
+
+
+# Process data
+col = [c for c in train_df.columns if c not in ['id','target']]
+col = [c for c in col if not c.startswith('ps_calc_')]
+
+id_test = test_df['id'].values
+id_train = train_df['id'].values
+
+y = train_df['target']
+X = train_df[col]
+y_valid_pred = 0*y
+X_test = test_df.drop(['id'], axis=1)
+y_test_pred = 0
+
+
+# In[ ]:
+
+
+# Set up folds
+K = 5
+kf = KFold(n_splits = K, random_state = 1, shuffle = True)
+
+
+# In[ ]:
+
+
+# Set up classifier
+params = {
+    'learning_rate': LEARNING_RATE, 
+    'max_depth': 4, 
+    'lambda_l1': 16.7,
+    'boosting': 'gbdt', 
+    'objective': 'binary', 
+    'metric': 'auc',
+    'feature_fraction': .7,
+    'is_training_metric': False, 
+    'seed': 99
+}
+
+
+# In[ ]:
+
+
+# Run CV
+
+for i, (train_index, test_index) in enumerate(kf.split(train_df)):
     
-        tmp_df = pd.read_csv(csv_path)
-        assert tmp_df['image_name'].apply(lambda x: os.path.isfile(img_path + x + img_ext)).all(), "Some images referenced in the CSV file were not found"
-        
-        self.mlb = MultiLabelBinarizer()
-        self.img_path = img_path
-        self.img_ext = img_ext
-        self.transform = transform
+    # Create data for this fold
+    y_train, y_valid = y.iloc[train_index].copy(), y.iloc[test_index].copy()
+    X_train, X_valid = X.iloc[train_index,:].copy(), X.iloc[test_index,:].copy()
+    test = test_df.copy()[col]
+    print( "\nFold ", i)
 
-        self.X_train = tmp_df['image_name']
-        self.y_train = self.mlb.fit_transform(tmp_df['tags'].str.split()).astype(np.float32)
+    # Transform data for this fold
+    one_hot = {c: list(X_train[c].unique()) for c in X_train.columns}
+    X_train = X_train.replace(-1, np.NaN)  # Get rid of -1 while computing summary stats
+    d_median = X_train.median(axis=0)
+    d_mean = X_train.mean(axis=0)
+    X_train = X_train.fillna(-1)  # Restore -1 for missing values
 
-    def __getitem__(self, index):
-        img = Image.open(self.img_path + self.X_train[index] + self.img_ext)
-        img = img.convert('RGB')
-        if self.transform is not None:
-            img = self.transform(img)
-        
-        label = torch.from_numpy(self.y_train[index])
-        return img, label
+    X_train = multi_transform(X_train)
+    X_valid = multi_transform(X_valid)
+    test = multi_transform(test)
 
-    def __len__(self):
-        return len(self.X_train.index)
+    # Run model for this fold
+    if OPTIMIZE_ROUNDS:
+        fit_model = lgb.train( 
+                               params, 
+                               lgb.Dataset(X_train, label=y_train), 
+                               MAX_ROUNDS, 
+                               lgb.Dataset(X_valid, label=y_valid), 
+                               verbose_eval=50, 
+                               feval=gini_lgb, 
+                               early_stopping_rounds=200 
+                             )
+        print( " Best iteration = ", fit_model.best_iteration )
+        pred = fit_model.predict(X_valid, num_iteration=fit_model.best_iteration)
+        test_pred = fit_model.predict(test[col], num_iteration=fit_model.best_iteration)
+    else:
+        fit_model = lgb.train( 
+                               params, 
+                               lgb.Dataset(X_train, label=y_train), 
+                               MAX_ROUNDS, 
+                               verbose_eval=50 
+                             )
+        pred = fit_model.predict(X_valid)
+        test_pred = fit_model.predict(test)
 
+    # Save validation predictions for this fold
+    print( "  Gini = ", eval_gini(y_valid, pred) )
+    y_valid_pred.iloc[test_index] = (np.exp(pred) - 1.0).clip(0,1)
+    
+    # Accumulate test set predictions
+    y_test_pred += (np.exp(test_pred) - 1.0).clip(0,1)
+    
+y_test_pred /= K  # Average test set predictions
 
-# In[ ]:
-
-
-transformations = transforms.Compose([transforms.Scale(32),transforms.ToTensor()])
-
-dset_train = KaggleAmazonDataset(TRAIN_DATA,IMG_PATH,IMG_EXT,transformations)
-
-
-# ## Loading the data - second part - DataLoader
-# 
-# As was said, loading the data is in 2 parts, we provided PyTorch with a data storage, and we have to tell it how to load it. This is done with __DataLoader__
-# 
-# The DataLoader defines how you retrieve the images + labels from the dataset. You can tell it to:
-# 
-# * Set the batch size.
-# * Shuffle and sample the data randomly, hence implementing __train_test_split__ (check SubsetRandomSampler [here](http://pytorch.org/docs/data.html?highlight=sampler))
-# * Improve performance by loading data via  separate thread `num_worker` and using `pin_memory` for CUDA. Documentation [here](http://pytorch.org/docs/notes/cuda.html?highlight=dataloader).
-
-# In[ ]:
-
-
-train_loader = DataLoader(dset_train,
-                          batch_size=256,
-                          shuffle=True,
-                          num_workers=4 # 1 for CUDA
-                         # pin_memory=True # CUDA only
-                         )
-
-
-# ## Creating your Neural Network
-# 
-# This is tricky, you need  to compute yourself the in_channels and out_channels of your filters hence the 2304 input for the Dense layer. The first input 3 corresponds to the number of channels of your image, the 17 output corresponds to the number of target labels.
-
-# In[ ]:
-
-
-class Net(nn.Module):
-    def __init__(self):
-        super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=3)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3)
-        self.conv2_drop = nn.Dropout2d()
-        self.fc1 = nn.Linear(2304, 256)
-        self.fc2 = nn.Linear(256, 17)
-
-    def forward(self, x):
-        x = F.relu(F.max_pool2d(self.conv1(x), 2))
-        x = F.relu(F.max_pool2d(self.conv2_drop(self.conv2(x)), 2))
-        x = x.view(x.size(0), -1) # Flatten layer
-        x = F.relu(self.fc1(x))
-        x = F.dropout(x, training=self.training)
-        x = self.fc2(x)
-        return F.sigmoid(x)
-
-model = Net() # On CPU
-# model = Net().cuda() # On GPU
-
-
-# ## Defining your training function
-
-# In[ ]:
-
-
-optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.5)
+print( "\nGini for full training set:" )
+eval_gini(y, y_valid_pred)
 
 
 # In[ ]:
 
 
-def train(epoch):
-    model.train()
-    for batch_idx, (data, target) in enumerate(train_loader):
-        # data, target = data.cuda(async=True), target.cuda(async=True) # On GPU
-        data, target = Variable(data), Variable(target)
-        optimizer.zero_grad()
-        output = model(data)
-        loss = F.binary_cross_entropy(output, target)
-        loss.backward()
-        optimizer.step()
-        if batch_idx % 10 == 0:
-            print('Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
-                epoch, batch_idx * len(data), len(train_loader.dataset),
-                100. * batch_idx / len(train_loader), loss.data[0]))
+# Save validation predictions for stacking/ensembling
+val = pd.DataFrame()
+val['id'] = id_train
+val['target'] = y_valid_pred.values
+val.to_csv('lgb_valid.csv', float_format='%.6f', index=False)
 
-
-# ## Training your model
 
 # In[ ]:
 
 
-for epoch in range(1, 2):
-    train(epoch)
+# Create submission file
+sub = pd.DataFrame()
+sub['id'] = id_test
+sub['target'] = y_test_pred
+sub.to_csv('lgb_submit.csv', float_format='%.6f', index=False)
 
 
-# # Thank you for your attention
-# 
-# Hopefully that will help you get started. I still have a lot to figure out in PyTorch like:
-# 
-# * Implementing the train / validation split
-# * Figure out data augmentation (and not just random transformations or images)
-# * Implementing early stopping
-# * Automating computation of intermediate layers
-# * Improving the display of each epochs
-# 
-# If you liked the kernel don't forget to vote and don't hesitate to comment.
-
-# ## Full code
-# 
-# I have published my full code of the competition in my [GitHub](https://github.com/mratsim/Amazon_Forest_Computer_Vision). (Note: I only worked on it in the first 2 weeks, so it probably lacks the latest findings)
-# 
-# You will find:
-#   - [A script that output the mean and stddev of your image if you want to train from scratch](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/compute-mean-std.py#L28)
-# 
-#   - [Using weighted loss function](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/main_pytorch.py#L61)
-# 
-#   - [Logging your experiment](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/main_pytorch.py#L89)
-# 
-#   - [Composing data augmentations](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/main_pytorch.py#L103), also [here](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p_data_augmentation.py#L181).
-# Note use [Pillow-SIMD](https://python-pillow.org/pillow-perf/) instead of PIL/Pillow. It is even faster than OpenCV
-# 
-#   - [Loading from a CSV that contains image path - 61 lines yeah](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p2_dataload.py#L23)
-# 
-#   - [Equivalent in Keras - 216 lines ugh](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/k_dataloader.py). Note: so much lines were needed because by default in Keras you either have the data augmentation with ImageDataGenerator or lazy loading of images with "flow_from_directory" and there is no flow_from_csv
-# 
-#   - [Model finetuning with custom PyCaffe weights](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p_neuro.py#L139)
-# 
-#   - Train_test_split, [PyTorch version](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p_model_selection.py#L4) and [Keras version](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/k_model_selection.py#L4)
-# 
-# - [Weighted sampling training so that the model view rare cases more often](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/main_pytorch.py#L131-L140)
-# 
-#  - [Custom Sampler creation, example for the balanced sampler](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p_sampler.py)
-# 
-#  - [Saving snapshots each epoch](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/main_pytorch.py#L171)
-# 
-#  - [Loading the best snapshot for prediction](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/pytorch_predict_only.py#L83)
-# 
-#  - [Failed word embeddings experiments](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/Embedding-RNN-Autoencoder.ipynb) to [combine image and text data](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/Dual_Feed_Image_Label.ipynb)
-# 
-#  - [Combined weighted loss function (softmax for unique weather tags, BCE for multilabel tags)](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p2_loss.py#L36)
-# 
-#  - [Selecting the best F2-threshold](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p2_metrics.py#L38) via stochastic search at the end of each epoch to [maximize validation score](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/526128239a6abcbb32fbf5b34ed8cc7a3cd87c4e/src/p2_validation.py#L49). This is then saved along model parameter.
-# 
-#   - [CNN-RNN combination (work in progress)](https://github.com/mratsim/Amazon_Forest_Computer_Vision/blob/master/src/p3_neuroRNN.py#L10)
+# version 8:  Resubmitting identical run because version 7 seems to have become invisible<br>
+# versions 9,10 (substantively identical): Set <code>lambda_l1=16.7</code>, sorted LB score improved but still reported as .282<br>
+# version 11: With <code>OPTIMIZE_ROUNDS</code>, negate gini score so LightGBM will minimize. <code>is_higher_better</code> not working.<br>
+# version 12: Un-negate gini score and set <code>is_higher_better</code> again. Maybe I misunderstood.<br>
+# version 14: Set <code>MAX_ROUNDS=1400</code> for prediction run.<br>
+# versions 15-21: Set <code>feature_fraction</code>. LB score goes up but still reported as .282

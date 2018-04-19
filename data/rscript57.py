@@ -1,75 +1,92 @@
+"""
+Fork of https://www.kaggle.com/antmarakis/bi-lstm-conv-layer?scriptVersionId=2789290
+Just replaced the data with Preprocessed data
+Public LB score 0.9833 => 0.9840
+
+"""
+
 import numpy as np
 import pandas as pd
-import lightgbm as lgb
-import gc
+from keras.layers import Dense, Input, LSTM, Bidirectional, Conv1D
+from keras.layers import Dropout, Embedding
+from keras.preprocessing import text, sequence
+from keras.layers import GlobalMaxPooling1D, GlobalAveragePooling1D, concatenate, SpatialDropout1D
+from keras.models import Model
 
-print('Loading data ...')
+EMBEDDING_FILE = '../input/glove840b300dtxt/glove.840B.300d.txt'
+train_x = pd.read_csv('../input/cleaned-toxic-comments/train_preprocessed.csv').fillna(" ")
+test_x = pd.read_csv('../input/cleaned-toxic-comments/test_preprocessed.csv').fillna(" ")
 
-train = pd.read_csv('../input/train_2016.csv')
-prop = pd.read_csv('../input/properties_2016.csv')
 
-for c, dtype in zip(prop.columns, prop.dtypes):	
-    if dtype == np.float64:		
-        prop[c] = prop[c].astype(np.float32)
 
-df_train = train.merge(prop, how='left', on='parcelid')
+max_features=100000
+maxlen=150
+embed_size=300
 
-x_train = df_train.drop(['parcelid', 'logerror', 'transactiondate', 'propertyzoningdesc', 'propertycountylandusecode'], axis=1)
-y_train = df_train['logerror'].values
-print(x_train.shape, y_train.shape)
+train_x['comment_text'].fillna(' ')
+test_x['comment_text'].fillna(' ')
+train_y = train_x[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']].values
+train_x = train_x['comment_text'].str.lower()
 
-train_columns = x_train.columns
+test_x = test_x['comment_text'].str.lower()
 
-for c in x_train.dtypes[x_train.dtypes == object].index.values:
-    x_train[c] = (x_train[c] == True)
 
-del df_train; gc.collect()
+# Vectorize text + Prepare GloVe Embedding
+tokenizer = text.Tokenizer(num_words=max_features, lower=True)
+tokenizer.fit_on_texts(list(train_x))
 
-split = 90000
-x_train, y_train, x_valid, y_valid = x_train[:split], y_train[:split], x_train[split:], y_train[split:]
-x_train = x_train.values.astype(np.float32, copy=False)
-x_valid = x_valid.values.astype(np.float32, copy=False)
+train_x = tokenizer.texts_to_sequences(train_x)
+test_x = tokenizer.texts_to_sequences(test_x)
 
-d_train = lgb.Dataset(x_train, label=y_train)
-d_valid = lgb.Dataset(x_valid, label=y_valid)
+train_x = sequence.pad_sequences(train_x, maxlen=maxlen)
+test_x = sequence.pad_sequences(test_x, maxlen=maxlen)
 
-params = {}
-params['learning_rate'] = 0.002
-params['boosting_type'] = 'gbdt'
-params['objective'] = 'regression'
-params['metric'] = 'mae'
-params['sub_feature'] = 0.5
-params['num_leaves'] = 60
-params['min_data'] = 500
-params['min_hessian'] = 1
+embeddings_index = {}
+with open(EMBEDDING_FILE, encoding='utf8') as f:
+    for line in f:
+        values = line.rstrip().rsplit(' ')
+        word = values[0]
+        coefs = np.asarray(values[1:], dtype='float32')
+        embeddings_index[word] = coefs
 
-watchlist = [d_valid]
-clf = lgb.train(params, d_train, 500, watchlist)
+word_index = tokenizer.word_index
+num_words = min(max_features, len(word_index) + 1)
+embedding_matrix = np.zeros((num_words, embed_size))
+for word, i in word_index.items():
+    if i >= max_features:
+        continue
+    
+    embedding_vector = embeddings_index.get(word)
+    if embedding_vector is not None:
+        embedding_matrix[i] = embedding_vector
 
-del d_train, d_valid; gc.collect()
-del x_train, x_valid; gc.collect()
 
-print("Prepare for the prediction ...")
-sample = pd.read_csv('../input/sample_submission.csv')
-sample['parcelid'] = sample['ParcelId']
-df_test = sample.merge(prop, on='parcelid', how='left')
-del sample, prop; gc.collect()
-x_test = df_test[train_columns]
-del df_test; gc.collect()
-for c in x_test.dtypes[x_test.dtypes == object].index.values:
-    x_test[c] = (x_test[c] == True)
-x_test = x_test.values.astype(np.float32, copy=False)
+# Build Model
+inp = Input(shape=(maxlen,))
 
-print("Start prediction ...")
-# num_threads > 1 will predict very slow in kernal
-clf.reset_parameter({"num_threads":1})
-p_test = clf.predict(x_test)
+x = Embedding(max_features, embed_size, weights=[embedding_matrix], trainable=True)(inp)
+x = SpatialDropout1D(0.35)(x)
 
-del x_test; gc.collect()
+x = Bidirectional(LSTM(128, return_sequences=True, dropout=0.15, recurrent_dropout=0.15))(x)
+x = Conv1D(64, kernel_size=3, padding='valid', kernel_initializer='glorot_uniform')(x)
 
-print("Start write result ...")
-sub = pd.read_csv('../input/sample_submission.csv')
-for c in sub.columns[sub.columns != 'ParcelId']:
-    sub[c] = p_test
+avg_pool = GlobalAveragePooling1D()(x)
+max_pool = GlobalMaxPooling1D()(x)
+x = concatenate([avg_pool, max_pool])
 
-sub.to_csv('lgb_starter.csv', index=False, float_format='%.4f')
+out = Dense(6, activation='sigmoid')(x)
+
+model = Model(inp, out)
+model.compile(loss='binary_crossentropy', optimizer='adam', metrics=['accuracy'])
+
+
+# Prediction
+batch_size = 32
+epochs = 1
+
+model.fit(train_x, train_y, batch_size=batch_size, epochs=epochs, verbose=1)
+predictions = model.predict(test_x, batch_size=batch_size, verbose=1)
+
+submission = pd.read_csv('../input/jigsaw-toxic-comment-classification-challenge/sample_submission.csv')
+submission[['toxic', 'severe_toxic', 'obscene', 'threat', 'insult', 'identity_hate']] = predictions
+submission.to_csv('submission.csv', index=False)
